@@ -81,6 +81,8 @@ try {
 
 `builtinPi()` uses Pi's normal environment and ambient provider authentication. An application that owns OAuth or API-key credentials can import `InMemoryCredentialStore` from `elenx/pi` and pass it as `builtinPi({ credentials })`; Elenx re-exports both implementations and their types directly from Pi. Built-in adapters keep credentials outside the persisted payload. A custom adapter is trusted to do the same.
 
+Configure gateway headers through Pi's provider settings. Pi `ModelRuntime` resolves provider-scoped `headers` in `models.json`. Applications that bypass `ModelRuntime` supply their own Pi headers or `transformHeaders` through the `models.streamSimple` adapter passed to `runPi`. The generic runner does not infer headers from Lab environment variables.
+
 Put the current task, changing guidance, and correction requests in `prompt`, which Pi sends as a user message. Use `system` for stable role definitions and contracts. Within a live call, send new directions as fresh user messages after the relevant tool receipt. Tool receipts report results and validation errors; keep the next work assignment in its own user message. A submission gate delivers its `continuationPrompt` through this user-message path.
 
 `returnedToolSubmission` requires one named tool call and its returned result. The application parses the durable input with the same submission schema and passes its verdict and evidence to `recordVerdict`; it supplies no second semantic value that could disagree with the model's submission. Tool output may differ from input, so the projection records both without equating them.

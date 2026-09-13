@@ -24,8 +24,6 @@ import {
   type Context,
   type Model,
   type Models,
-  type ModelsSimpleStreamOptions,
-  type ProviderHeaders,
   type ThinkingLevel,
   type Transport,
   type TSchema,
@@ -53,11 +51,6 @@ export { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 export { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
 
 type PiModels = Pick<Models, "streamSimple">;
-const codexLbUsageTagHeader = "X-Codex-LB-Usage-Tag";
-const codexLbRequiredCapabilityHeader = "X-Codex-LB-Required-Capability";
-const codexLbUsageTagCapability = "usage_tag_v1";
-const elenxLabUsageTagEnv = "ELENX_LAB_CODEX_LB_USAGE_TAG";
-const elenxLabBaseUrlEnv = "ELENX_LAB_CODEX_LB_BASE_URL";
 const reasoningLevels = [
   "minimal",
   "low",
@@ -1060,22 +1053,8 @@ function measuredStream(
         // Own a rejection even when the writer fails before entering its handler.
         void completion.promise.catch(() => {});
         try {
-          const modelOptions = requestOptions as
-            ModelsSimpleStreamOptions | undefined;
-          const usageTag = codexLbUsageTag(model);
-          const transformHeaders =
-            usageTag === undefined
-              ? modelOptions?.transformHeaders
-              : async (headers: ProviderHeaders) =>
-                  withCodexLbUsageTag(
-                    modelOptions?.transformHeaders === undefined
-                      ? headers
-                      : await modelOptions.transformHeaders(headers),
-                    usageTag,
-                  );
           const stream = models.streamSimple(model, context, {
             ...requestOptions,
-            ...(transformHeaders === undefined ? {} : { transformHeaders }),
             telemetryContext: span,
             onPayload: async (payload, requestModel) => {
               hookCalls += 1;
@@ -1210,68 +1189,6 @@ function measuredStream(
     forwarded.result = () => finished;
     return forwarded;
   };
-}
-
-function normalizedBaseUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    if (url.username || url.password || url.search || url.hash)
-      return undefined;
-    const path = url.pathname.replace(/\/+$/, "");
-    return `${url.origin}${path}`;
-  } catch {
-    return undefined;
-  }
-}
-
-function isOfficialOpenAiHost(value: string): boolean {
-  try {
-    const hostname = new URL(value).hostname.toLowerCase().replace(/\.+$/u, "");
-    return (
-      hostname === "openai.com" ||
-      hostname.endsWith(".openai.com") ||
-      hostname === "chatgpt.com" ||
-      hostname.endsWith(".chatgpt.com")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function withCodexLbUsageTag(
-  headers: ProviderHeaders,
-  usageTag: string,
-): ProviderHeaders {
-  const tagged: ProviderHeaders = {};
-  const reserved = new Set([
-    codexLbUsageTagHeader.toLowerCase(),
-    codexLbRequiredCapabilityHeader.toLowerCase(),
-  ]);
-  for (const [key, value] of Object.entries(headers)) {
-    if (!reserved.has(key.toLowerCase())) {
-      tagged[key] = value;
-    }
-  }
-  tagged[codexLbUsageTagHeader] = usageTag;
-  tagged[codexLbRequiredCapabilityHeader] = codexLbUsageTagCapability;
-  return tagged;
-}
-
-function codexLbUsageTag(model: Model<Api>): string | undefined {
-  const usageTag = process.env[elenxLabUsageTagEnv];
-  const expectedBaseUrl = process.env[elenxLabBaseUrlEnv];
-  if (usageTag === undefined || expectedBaseUrl === undefined) return undefined;
-  if (model.baseUrl === undefined) return undefined;
-  const normalizedModelBaseUrl = normalizedBaseUrl(model.baseUrl);
-  const normalizedExpectedBaseUrl = normalizedBaseUrl(expectedBaseUrl);
-  if (
-    normalizedModelBaseUrl === undefined ||
-    normalizedModelBaseUrl !== normalizedExpectedBaseUrl ||
-    isOfficialOpenAiHost(model.baseUrl)
-  ) {
-    return undefined;
-  }
-  return usageTag;
 }
 
 function withPromptCacheKey(payload: unknown, cacheKey: string | undefined) {

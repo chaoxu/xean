@@ -36,6 +36,19 @@ These profiles use public provider endpoints and Pi credentials. They require no
 
 For a private deployment, set `ELENX_MODELS_PATH` to the absolute path of a valid Pi `models.json` containing the provider override. Elenx reads a custom model registry only through that explicit setting. `OPENAI_BASE_URL` does not override Pi's model endpoints.
 
+Pi `ModelRuntime` resolves each provider's configured `headers`. For codex-lb attribution, add this field to the `codex-lb` provider in `models.json`:
+
+```json
+{
+  "headers": {
+    "X-Codex-LB-Usage-Tag": "$ELENX_LAB_CODEX_LB_USAGE_TAG",
+    "X-Codex-LB-Required-Capability": "usage_tag_v1"
+  }
+}
+```
+
+Set `ELENX_LAB_CODEX_LB_USAGE_TAG` to the attempt's stable usage tag before starting the solver. Pi rejects an unresolved configured tag before transport. The generic `runPi` runner does not inject these headers from the environment.
+
 ## Diagnose provider failures
 
 `No credential for provider(s): openai-codex` requires Pi login for **OpenAI Codex**. An `openai` credential error requires an OpenAI API credential or selection of the Codex subscription profile.

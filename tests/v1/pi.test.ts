@@ -11,8 +11,6 @@ import {
   type Context,
   type Model,
   type Models,
-  type ModelsSimpleStreamOptions,
-  type ProviderHeaders,
   type SimpleStreamOptions,
   type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
@@ -1156,100 +1154,6 @@ function invalidPayloadModels(calls: number): PiModels {
 }
 
 describe("thin Pi runner", () => {
-  test("adds the lab usage tag only for the exact codex-lb base URL", async () => {
-    const store = campaign();
-    const captured: ProviderHeaders[] = [];
-    const taggedModels: PiModels = {
-      streamSimple(requestModel, context, options) {
-        const stream = createAssistantMessageEventStream();
-        void (async () => {
-          const transform = (options as ModelsSimpleStreamOptions | undefined)
-            ?.transformHeaders;
-          captured.push(
-            transform === undefined
-              ? { Authorization: "Bearer local" }
-              : await transform({
-                  Authorization: "Bearer local",
-                  "x-codex-lb-usage-tag": "stale-lowercase-tag",
-                  "x-codex-lb-required-capability": "stale-capability",
-                  "X-Unrelated": "preserved",
-                }),
-          );
-          await options?.onPayload?.(
-            { model: requestModel.id, context },
-            requestModel,
-          );
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message: assistant([{ type: "text", text: "done" }], "stop"),
-          });
-        })();
-        return stream;
-      },
-    };
-    const usageTag = "guidance-v1/baseline--r02/attempt-1";
-    const oldTag = process.env.ELENX_LAB_CODEX_LB_USAGE_TAG;
-    const oldBaseUrl = process.env.ELENX_LAB_CODEX_LB_BASE_URL;
-    process.env.ELENX_LAB_CODEX_LB_USAGE_TAG = usageTag;
-    process.env.ELENX_LAB_CODEX_LB_BASE_URL = "https://codex-lb.test/v1/";
-    try {
-      await runPi(store, {
-        models: taggedModels,
-        model: { ...model, baseUrl: "https://codex-lb.test/v1" },
-        label: "usage-tag/matching",
-        prompt: "test",
-      });
-      await runPi(store, {
-        models: taggedModels,
-        model: { ...model, baseUrl: "https://api.openai.com/v1" },
-        label: "usage-tag/direct",
-        prompt: "test",
-      });
-      process.env.ELENX_LAB_CODEX_LB_BASE_URL = "https://api.openai.com/v1";
-      await runPi(store, {
-        models: taggedModels,
-        model: { ...model, baseUrl: "https://api.openai.com/v1" },
-        label: "usage-tag/direct-matching-config",
-        prompt: "test",
-      });
-      process.env.ELENX_LAB_CODEX_LB_BASE_URL =
-        "https://chatgpt.com/backend-api/codex";
-      await runPi(store, {
-        models: taggedModels,
-        model: { ...model, baseUrl: "https://chatgpt.com/backend-api/codex" },
-        label: "usage-tag/chatgpt-matching-config",
-        prompt: "test",
-      });
-      process.env.ELENX_LAB_CODEX_LB_BASE_URL = "https://api.openai.com./v1";
-      await runPi(store, {
-        models: taggedModels,
-        model: { ...model, baseUrl: "https://api.openai.com./v1" },
-        label: "usage-tag/direct-trailing-dot",
-        prompt: "test",
-      });
-    } finally {
-      if (oldTag === undefined) delete process.env.ELENX_LAB_CODEX_LB_USAGE_TAG;
-      else process.env.ELENX_LAB_CODEX_LB_USAGE_TAG = oldTag;
-      if (oldBaseUrl === undefined)
-        delete process.env.ELENX_LAB_CODEX_LB_BASE_URL;
-      else process.env.ELENX_LAB_CODEX_LB_BASE_URL = oldBaseUrl;
-    }
-
-    expect(captured).toEqual([
-      {
-        Authorization: "Bearer local",
-        "X-Unrelated": "preserved",
-        "X-Codex-LB-Usage-Tag": usageTag,
-        "X-Codex-LB-Required-Capability": "usage_tag_v1",
-      },
-      { Authorization: "Bearer local" },
-      { Authorization: "Bearer local" },
-      { Authorization: "Bearer local" },
-      { Authorization: "Bearer local" },
-    ]);
-  });
-
   test("hoists a leading developer system message into instructions", async () => {
     const store = campaign();
     const sent: unknown[] = [];
