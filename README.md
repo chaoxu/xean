@@ -73,7 +73,7 @@ The deterministic verifier example is [`examples/scripted-verifier.ts`](examples
 
 `xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The Explorer writes self-contained notes, the coordinator files notes and selects support, and verifiers record structured verdicts. The workflow derives notes, support closure, dead notes, verified candidates, phase, and result from journal records. It never treats model prose or process stdout as verification authority.
 
-Explorer continuation is an optional setting. When enabled, the Explorer can submit notes repeatedly in one context until it claims completion, submits an empty note set, or reaches its context budget. Each submission is journaled, and a fresh user message directs the next step. The context budget is bounded by model capacity. Provider retries, cancellation, output limits, and context overflow remain recorded outcomes with bounded handling.
+Explorer continuation is enabled by default. Set `explorerContinuation: false` for ordinary Explorer handoff. When enabled, the Explorer can submit notes repeatedly in one context until it claims completion, submits an empty note set, or reaches its context budget. Each submission is journaled, and a fresh user message directs the next step. The context budget is bounded by model capacity. Provider retries, cancellation, output limits, and context overflow remain recorded outcomes with bounded handling.
 
 ## Development
 

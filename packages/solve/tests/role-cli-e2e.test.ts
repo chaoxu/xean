@@ -43,7 +43,16 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
     turns: 2,
     note: { id: "n2" },
   });
-  expect(await recordedRequests(directory)).toHaveLength(10);
+  const requests = await recordedRequests(directory);
+  expect(requests).toHaveLength(10);
+  expect(requests[0]).toMatchObject({
+    tools: [
+      {
+        name: "submit_notes",
+        parameters: { properties: { solution: { type: "boolean" } } },
+      },
+    ],
+  });
 
   // Completed journals need neither the model registry nor native credentials.
   await rm(join(directory, "models.json"));

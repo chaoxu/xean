@@ -10,7 +10,7 @@ import {
 } from "../pi-roles";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
-import { applicationId } from "../roles";
+import { applicationId, jsonSnapshot } from "../roles";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -33,7 +33,7 @@ const input = {
 };
 const note = { text: "An alleged complete proof.", support: [] };
 
-test("Explorer continuation defaults off and only its enabled schema requires a solution claim", () => {
+test("Explorer continuation defaults on and only its enabled schema requires a solution claim", () => {
   const ordinary = explorerCall(input),
     off = explorerCall(input, false),
     on = explorerCall(input, true);
@@ -61,24 +61,24 @@ test("Explorer continuation defaults off and only its enabled schema requires a 
       solution,
     );
   expect(on.system).toContain("does not bypass mathematical verification");
-  expect(
-    solveSettings.parse(roleSettings()).explorerContinuation,
-  ).toBeUndefined();
+  const { explorerContinuation: _, ...settings } = roleSettings();
+  expect(solveSettings.parse(settings).explorerContinuation).toBe(true);
   expect(
     solveSettings.parse({ ...roleSettings(), explorerContinuation: false })
       .explorerContinuation,
   ).toBe(false);
 });
 
-test("only enabled Explorer calls receive the gate; a solution claim still goes through ordinary verification", async () => {
+test("omitted continuation enables only Explorer's gate; a solution claim still goes through ordinary verification", async () => {
+  const { explorerContinuation: _, ...defaults } = roleSettings();
   const path = campaignPath(),
     settings = {
-      ...roleSettings(),
+      ...defaults,
       maxExplorerTurns: 1,
-      explorerContinuation: true,
     };
   const config = workflowConfiguration({ task, settings }),
     campaign = createCampaign(path, applicationId, config);
+  expect(config.settings.explorerContinuation).toBe(true);
   const drive = dependencies([
     { submission: { notes: [note], solution: true } },
     {
@@ -351,6 +351,54 @@ test.each([
   expect(await init({ task, campaignPath: path, settings })).toMatchObject({
     created: false,
   });
+});
+
+test("omitted continuation is saved explicitly and matches an explicit true on resume", async () => {
+  const { explorerContinuation: _, ...settings } = roleSettings();
+  const path = campaignPath();
+  await init({ task, campaignPath: path, settings });
+  const campaign = openCampaign(path);
+  try {
+    expect(campaign.record(1)).toMatchObject({
+      config: { schemaVersion: 2, settings: { explorerContinuation: true } },
+    });
+  } finally {
+    campaign.close();
+  }
+  expect(
+    await init({
+      task,
+      campaignPath: path,
+      settings: { ...settings, explorerContinuation: true },
+    }),
+  ).toMatchObject({ created: false });
+});
+
+test("previous workflow declarations with an omitted default are rejected without changing the journal", async () => {
+  const { explorerContinuation: _, ...settings } = roleSettings();
+  const path = campaignPath();
+  createCampaign(
+    path,
+    applicationId,
+    jsonSnapshot({
+      kind: "workflow",
+      schemaVersion: 1,
+      task,
+      settings,
+    }),
+  ).close();
+  const before = await Bun.file(path).arrayBuffer();
+  await expect(
+    run(
+      { task, campaignPath: path, settings },
+      {
+        models: async () => {
+          throw new Error("must reject the schema before provider setup");
+        },
+      },
+    ),
+  ).rejects.toThrow("schemaVersion");
+  expect(await Bun.file(path).arrayBuffer()).toEqual(before);
 });
 
 test("a custom Explorer context budget reaches execution and journal replay", async () => {

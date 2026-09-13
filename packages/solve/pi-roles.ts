@@ -115,7 +115,7 @@ export const solveSettings = z.strictObject({
   reconstruction: piRoleProfile,
   maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
-  explorerContinuation: z.boolean().optional(),
+  explorerContinuation: z.boolean().default(true),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;

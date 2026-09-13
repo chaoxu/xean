@@ -61,6 +61,7 @@ function requestedTool(body: Record<string, unknown>): string {
 function submissionFor(tool: string, request: string): unknown {
   if (tool === "submit_notes") {
     return {
+      solution: true,
       notes: [
         {
           text: request.includes('\\"verdict\\": \\"FAIL\\"')

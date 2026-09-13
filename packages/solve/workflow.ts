@@ -42,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 1;
+export const workflowSchemaVersion = 2;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -521,7 +521,7 @@ export async function runWorkflow(
 
 export function workflowConfiguration(options: {
   readonly task: Task;
-  readonly settings: z.output<typeof solveSettings>;
+  readonly settings: z.input<typeof solveSettings>;
 }): WorkflowConfig & Readonly<Record<string, Json>> {
   // Omit absent optional settings before the declaration reaches the journal.
   return jsonSnapshot(

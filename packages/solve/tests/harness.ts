@@ -59,6 +59,7 @@ export function roleSettings(): SolveSettings {
   return {
     maxExplorerTurns: 4,
     window: 100_000,
+    explorerContinuation: false,
     explorer: profile,
     coordinator: profile,
     correctness: profile,
