@@ -22,7 +22,7 @@ import {
   deriveCandidateStatus,
   openReader,
   type Entry,
-} from "../../src";
+} from "../src";
 import {
   PI_TELEMETRY_SCHEMA_VERSIONS,
   derivePiSpend,
@@ -35,11 +35,11 @@ import {
   piTelemetry,
   runPi,
   type PiSubmissionGate,
-} from "../../src/pi";
+} from "../src/pi";
 import {
   inspectCoreCampaign,
   inspectCoreCampaignSummary,
-} from "../../src/observe";
+} from "../src/observe";
 
 test("forwards provider events before completion and cleans the logical session", async () => {
   const store = campaign();
@@ -156,7 +156,7 @@ test.each(["checkpoint", "provider-result"] as const)(
     const store = campaign();
     const call = store.call.bind(store);
     store.call = (options, runner) =>
-      failure === "checkpoint" && options.label === "elenx/pi-request"
+      failure === "checkpoint" && options.label === "xean/pi-request"
         ? Promise.reject(new Error("checkpoint rejected"))
         : call(options, runner);
     const provider = invalidPayloadModels(1);
@@ -242,7 +242,7 @@ afterEach(() => {
 });
 
 function campaign() {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-pi-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-pi-"));
   directories.push(directory);
   return createCampaign(join(directory, "campaign.db"), "pi-test", null);
 }
@@ -265,7 +265,7 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "elenx/pi-run/v1",
+        protocol: "xean/pi-run/v1",
         model: { provider: "fake", id: "test-v1", api: "openai-responses" },
         modelProfile: null,
         prompt: "test",
@@ -290,7 +290,7 @@ function spendEntries(
             {
               id: 1,
               parentId: null,
-              name: "elenx.pi.run",
+              name: "xean.pi.run",
               attributes: {},
               events: [],
               status: { status: "ok" },
@@ -1283,7 +1283,7 @@ describe("thin Pi runner", () => {
     ).toThrow("partial Pi usage measurement");
   });
 
-  test("ignores an ordinary call with the old Pi-shaped request", () => {
+  test("does not mistake an ordinary model-shaped request for a Pi call", () => {
     const entries = spendEntries({
       "pi.ai.provider": "fake",
       "pi.ai.model": "test-v1",
@@ -1340,15 +1340,15 @@ describe("thin Pi runner", () => {
     expect(requests.map((options) => options?.reasoning)).toEqual(["max"]);
     const [runSpan, requestSpan] = result.telemetry.spans;
     expect(runSpan).toMatchObject({
-      name: "elenx.pi.run",
+      name: "xean.pi.run",
       parentId: null,
       settled: true,
       status: { status: "ok" },
       attributes: {
-        "elenx.call.label": "answer/v1",
-        "elenx.candidate": candidate,
-        "elenx.pi.reasoning.requested": "max",
-        "elenx.pi.outcome": "succeeded",
+        "xean.call.label": "answer/v1",
+        "xean.candidate": candidate,
+        "xean.pi.reasoning.requested": "max",
+        "xean.pi.outcome": "succeeded",
       },
     });
     expect(requestSpan).toMatchObject({
@@ -1629,7 +1629,7 @@ describe("thin Pi runner", () => {
     expect(
       piRequestAttempts(store.records(), result.call).every(
         (attempt) =>
-          attempt.protocol === "elenx/pi-request/v2" &&
+          attempt.protocol === "xean/pi-request/v1" &&
           attempt.payload === undefined,
       ),
     ).toBe(true);
@@ -1660,10 +1660,10 @@ describe("thin Pi runner", () => {
   });
 
   test("keeps a pre-dispatch payload after a hard provider crash", () => {
-    const directory = mkdtempSync(join(tmpdir(), "elenx-pi-crash-"));
+    const directory = mkdtempSync(join(tmpdir(), "xean-pi-crash-"));
     directories.push(directory);
     const path = join(directory, "campaign.db");
-    const fixture = resolve("tests/v1/fixtures/crash-pi-request.ts");
+    const fixture = resolve("tests/fixtures/crash-pi-request.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path], {
       stdout: "pipe",
       stderr: "pipe",
@@ -1725,13 +1725,13 @@ describe("thin Pi runner", () => {
   });
 
   test("keeps completed request usage after a later continuation crashes", () => {
-    const directory = mkdtempSync(join(tmpdir(), "elenx-pi-usage-crash-"));
+    const directory = mkdtempSync(join(tmpdir(), "xean-pi-usage-crash-"));
     directories.push(directory);
     const path = join(directory, "campaign.db");
     const child = Bun.spawnSync(
       [
         process.execPath,
-        resolve("tests/v1/fixtures/crash-pi-request.ts"),
+        resolve("tests/fixtures/crash-pi-request.ts"),
         path,
         "after-first",
       ],
@@ -1797,7 +1797,7 @@ describe("thin Pi runner", () => {
   test("projects completed and unsettled request attempts", async () => {
     const store = campaign();
     await store.call(
-      { label: "elenx/pi-request", request: null },
+      { label: "xean/pi-request", request: null },
       async () => null,
     );
     let release!: () => void;
@@ -1809,7 +1809,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "elenx/pi-run/v1",
+          protocol: "xean/pi-run/v1",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",
@@ -1817,17 +1817,17 @@ describe("thin Pi runner", () => {
       },
       async ({ call }) => {
         const request = {
-          protocol: "elenx/pi-request/v2" as const,
+          protocol: "xean/pi-request/v1" as const,
           parent: call,
           model: { provider: model.provider, id: model.id, api: model.api },
           payloadRef: store.storePayload({ input: "test" }),
         };
         const internalRequest = {
-          label: "elenx/pi-request",
+          label: "xean/pi-request",
           request,
         };
         const completion = {
-          protocol: "elenx/pi-request-completion/v1",
+          protocol: "xean/pi-request-completion/v1",
           parent: call,
           operation: {
             provider: model.provider,
@@ -2056,7 +2056,7 @@ describe("thin Pi runner", () => {
       model,
       label: "audit/v1",
       prompt: "Audit",
-      maxRecoveries: 2,
+      maxLengthContinuations: 2,
     });
     expect(result).toMatchObject({
       state: "succeeded",
@@ -2101,6 +2101,31 @@ describe("thin Pi runner", () => {
     expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
       3,
     );
+  });
+
+  test("a provider recovery allowance does not enable length continuations", async () => {
+    let requests = 0;
+    const result = await runPi(campaign(), {
+      models: models(
+        [
+          assistant([{ type: "text", text: "partial" }], "length"),
+          assistant([{ type: "text", text: "must not run" }], "stop"),
+        ],
+        () => {
+          requests += 1;
+        },
+      ),
+      model,
+      label: "audit/v1",
+      prompt: "Audit",
+      maxRecoveries: 2,
+    });
+    expect(requests).toBe(1);
+    expect(result).toMatchObject({
+      state: "failed",
+      truncated: true,
+      error: "Pi stopped with length",
+    });
   });
 
   test("permits several length continuations under their own budget", async () => {
@@ -2452,7 +2477,7 @@ describe("thin Pi runner", () => {
     expect(assistants).toHaveLength(32);
   });
 
-  test("shares the thirty-two-turn cap across recovery loops", async () => {
+  test("shares the thirty-two-turn cap across length continuations", async () => {
     const echo = defineTool({
       name: "echo",
       description: "Echo",
@@ -2484,7 +2509,7 @@ describe("thin Pi runner", () => {
       label: "audit/v1",
       prompt: "Audit",
       tools: [echo],
-      maxRecoveries: 1,
+      maxLengthContinuations: 1,
     });
 
     expect(result.state).toBe("failed");
@@ -2495,7 +2520,7 @@ describe("thin Pi runner", () => {
     ).toHaveLength(32);
   });
 
-  test("does not recover after the thirty-second turn ends at length", async () => {
+  test("does not continue after the thirty-second turn ends at length", async () => {
     const echo = defineTool({
       name: "echo",
       description: "Echo",
@@ -2531,7 +2556,7 @@ describe("thin Pi runner", () => {
       label: "audit/v1",
       prompt: "Audit",
       tools: [echo],
-      maxRecoveries: 1,
+      maxLengthContinuations: 1,
     });
 
     expect(result).toMatchObject({ state: "failed", truncated: true });
@@ -2619,7 +2644,7 @@ describe("thin Pi runner", () => {
       label: "audit/v1",
       prompt: "Audit",
       tools: [echo],
-      maxRecoveries: 1,
+      maxLengthContinuations: 1,
     });
     expect(result).toMatchObject({ state: "succeeded", text: "partial done" });
   });
@@ -2634,7 +2659,7 @@ describe("thin Pi runner", () => {
       model,
       label: "audit/v1",
       prompt: "Audit",
-      maxRecoveries: 1,
+      maxLengthContinuations: 1,
     });
     expect(result).toMatchObject({
       state: "failed",
@@ -2716,7 +2741,7 @@ describe("thin Pi runner", () => {
     ).toBe(false);
   });
 
-  test("does not classify context overflow or old failed results as retryable", async () => {
+  test("does not classify context overflow or malformed failure records as retryable", async () => {
     let requests = 0;
     const overflow = await runPi(campaign(), {
       models: models(
@@ -2754,7 +2779,7 @@ describe("thin Pi runner", () => {
       piStoredResult.safeParse({
         state: "failed",
         text: "",
-        error: "legacy failure",
+        error: "incomplete failure record",
       }).success,
     ).toBe(false);
   });

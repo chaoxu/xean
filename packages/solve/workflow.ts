@@ -1,4 +1,4 @@
-import type { Campaign, Entry, EntryId, Json } from "elenx";
+import type { Campaign, Entry, EntryId, Json } from "xean";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
@@ -42,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 38;
+export const workflowSchemaVersion = 1;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -100,7 +100,7 @@ function parseConfig(declaration: Entry | undefined): WorkflowConfig {
     declaration?.kind !== "campaign" ||
     declaration.application !== applicationId
   ) {
-    throw new Error("not an Elenx workflow campaign");
+    throw new Error("not a Xean workflow campaign");
   }
   const parsed = workflowConfig.safeParse(declaration.config);
   if (!parsed.success) {

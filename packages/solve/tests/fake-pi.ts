@@ -1,15 +1,15 @@
-import type { Json } from "elenx";
+import type { Json } from "xean";
 import {
   PI_TELEMETRY_SCHEMA_VERSIONS,
   type PiRunOptions,
   type PiTelemetry,
-} from "elenx/pi";
+} from "xean/pi";
 
 type Outcome = "succeeded" | "failed" | "cancelled";
 
 export function fakePiRequest(options: PiRunOptions): Json {
   const request = {
-    protocol: "elenx/pi-run/v1",
+    protocol: "xean/pi-run/v1",
     model: {
       provider: options.model.provider,
       id: options.model.id,
@@ -55,13 +55,13 @@ export function fakePiTelemetry(
       {
         id: 1,
         parentId: null,
-        name: "elenx.pi.run",
+        name: "xean.pi.run",
         attributes: {
-          "elenx.call.label": options.label,
-          "elenx.pi.outcome": outcome,
+          "xean.call.label": options.label,
+          "xean.pi.outcome": outcome,
           ...(options.reasoning === undefined
             ? {}
-            : { "elenx.pi.reasoning.requested": options.reasoning }),
+            : { "xean.pi.reasoning.requested": options.reasoning }),
         },
         events: [],
         status: { status: outcome === "succeeded" ? "ok" : "error" },

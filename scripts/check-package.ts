@@ -18,9 +18,9 @@ async function reject(command: string[], cwd: string): Promise<void> {
 
 const root = process.cwd();
 const manifest = await Bun.file(join(root, "package.json")).json();
-const temporary = await mkdtemp(join(tmpdir(), "elenx-package-"));
+const temporary = await mkdtemp(join(tmpdir(), "xean-package-"));
 const consumer = join(temporary, "consumer");
-const archive = join(temporary, "elenx.tgz");
+const archive = join(temporary, "xean.tgz");
 try {
   await run(
     [
@@ -41,7 +41,7 @@ try {
       private: true,
       type: "module",
       dependencies: {
-        elenx: `file:${archive}`,
+        xean: `file:${archive}`,
         zod: manifest.dependencies.zod,
       },
       devDependencies: {
@@ -76,19 +76,19 @@ import {
   createCampaign, defineTool, deriveCandidateStatus, entryIdSchema,
   openCampaign, openReader, returnedToolSubmission, verdictSchema,
   type CallReceipt, type Campaign, type Entry, type Json, type Verdict,
-} from "elenx";
+} from "xean";
 import {
-  builtinPi, derivePiSpend, ELENX_PI_TELEMETRY_SCHEMA,
+  builtinPi, derivePiSpend, XEAN_PI_TELEMETRY_SCHEMA,
   InMemoryCredentialStore, piReasoning, piRequest,
   piRequestAttempts, piStoredResult, piResultRecord, readPiResult, storePiResult,
   PI_TELEMETRY_SCHEMA_VERSIONS, piTelemetry, runPi,
   type PiResult, type PiSpend,
-} from "elenx/pi";
+} from "xean/pi";
 import {
   inspectCoreCampaign, inspectCoreCampaignSummary,
   inspectCoreCallSummaries,
   type CoreCampaignObservationV1, type CoreCampaignSummaryV1,
-} from "elenx/observe";
+} from "xean/observe";
 import { z } from "zod";
 
 const campaign = createCampaign("consumer.db", "packed-consumer", null);
@@ -96,14 +96,14 @@ try {
   const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), ["v1"]);
   deriveCandidateStatus(campaign.records(), candidate);
   derivePiSpend(campaign.records());
-  piRequest.parse({ protocol: "elenx/pi-run/v1", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
+  piRequest.parse({ protocol: "xean/pi-run/v1", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
   piStoredResult.parse({ state: "succeeded", text: "x", transcript: [],
     telemetry: { schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS, spans: [] } });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), replay: "safe", async run() { return null; } });
   const native = await import(Bun.resolveSync(
     "@earendil-works/pi-ai/api/openai-codex-responses",
-    Bun.resolveSync("elenx/pi", import.meta.dir),
+    Bun.resolveSync("xean/pi", import.meta.dir),
   ));
   const proxyModel = {
     id: "packed-proxy", name: "Packed proxy fixture", api: "openai-codex-responses" as const,
@@ -152,7 +152,7 @@ try {
     throw new Error("Packed consumer did not receive the patched native Pi provider");
 } finally { campaign.close(); }
 void [entryIdSchema, verdictSchema, openCampaign, openReader,
-  returnedToolSubmission, ELENX_PI_TELEMETRY_SCHEMA, PI_TELEMETRY_SCHEMA_VERSIONS,
+  returnedToolSubmission, XEAN_PI_TELEMETRY_SCHEMA, PI_TELEMETRY_SCHEMA_VERSIONS,
   piReasoning, piRequestAttempts, piTelemetry, runPi];
 void (undefined as unknown as CallReceipt | Campaign | Entry | Json | Verdict |
   PiResult | PiSpend | CoreCampaignObservationV1 | CoreCampaignSummaryV1);
@@ -172,7 +172,7 @@ void [inspectCoreCampaign, inspectCoreCampaignSummary];
     consumer,
   );
   await reject(
-    [process.execPath, "-e", 'await import("elenx/src/campaign")'],
+    [process.execPath, "-e", 'await import("xean/src/campaign")'],
     consumer,
   );
   await run([process.execPath, "x", "tsc", "--noEmit"], consumer);

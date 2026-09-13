@@ -1,6 +1,6 @@
-# Elenx's philosophy
+# xean's philosophy
 
-Elenx aims to help strong models solve difficult mathematical problems. The explorer develops mathematics, verifiers check its claims, and a durable campaign preserves the work for later turns and external review.
+xean helps strong models solve difficult mathematical problems. The Explorer develops mathematics, verifiers check its claims, and a durable campaign preserves the work for later turns and external review.
 
 1. **Let the model choose the mathematics.** The explorer chooses subproblems, proposes lemmas, searches for counterexamples, and changes methods. The task and completion criteria stay fixed. The coordinator organizes notes, selects supporting texts, and recommends work for the next turn. People and other agents can also submit guidance. That guidance is fallible advice: the explorer may reject it or move beyond a suggested intermediate step. The framework supplies context and enforces workflow boundaries.
 
@@ -14,4 +14,4 @@ Elenx aims to help strong models solve difficult mathematical problems. The expl
 
 6. **Keep the framework simple and judge changes by mathematical results.** Internal acceptance records which checks passed. Evaluate methods through external review of the complete argument, including its supporting proofs. Compare success on held-out problems at comparable monetary cost. When diagnosing failures against known proofs, keep reference answers outside the run and turn the diagnosis into a general strategy hypothesis. Add a mechanism when evidence shows that the existing workflow cannot express a useful improvement. Strategy evaluation and external review belong outside the solver.
 
-The [workflow guide](../packages/solve/docs/role-runner.md) defines the role, verification, and replay rules. The [kernel specification](../SPEC.md) defines the durability guarantees, and the [external review procedure](../packages/solve/README.md#external-final-review) explains how to assess an accepted argument.
+The [xean-solve workflow guide](../packages/solve/docs/role-runner.md) defines the role, verification, and replay rules. The [core specification](../SPEC.md) defines durability guarantees, and the [external review procedure](../packages/solve/README.md#external-final-review) explains how to assess an accepted argument.

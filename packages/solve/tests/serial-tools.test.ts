@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { streamSimple as streamCodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
-import type { PiRunOptions } from "elenx/pi";
+import type { PiRunOptions } from "xean/pi";
 
 import { withSerialToolCalls } from "../serial-tools";
 import type { SolveModels } from "../solve";

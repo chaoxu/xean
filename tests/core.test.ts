@@ -12,12 +12,12 @@ import {
   returnedToolSubmission,
   type Tool,
   type ToolExecutionContext,
-} from "../../src";
+} from "../src";
 
 const directories: string[] = [];
 
 function database(): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-v1-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-v1-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }
@@ -546,7 +546,7 @@ describe("small kernel", () => {
 
   test("handles a detached tool rejection on the promise it returns", () => {
     const path = database();
-    const fixture = resolve("tests/v1/fixtures/detached-tool-rejection.ts");
+    const fixture = resolve("tests/fixtures/detached-tool-rejection.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path], {
       stdout: "pipe",
       stderr: "pipe",

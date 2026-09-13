@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, openCampaign, openReader, type Campaign } from "elenx";
+import { createCampaign, openCampaign, openReader, type Campaign } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import {
@@ -148,13 +148,13 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   ]);
   expect(phase.note).toMatchObject({ verified: true, dead: false });
   expect(drive.calls.map(({ label }) => label)).toEqual([
-    "elenx-solve/explorer",
-    "elenx-solve/coordinator",
-    "elenx-solve/verifier/correctness",
-    "elenx-solve/verifier/requirements",
-    "elenx-solve/verifier/reconstruction/statement",
-    "elenx-solve/verifier/reconstruction/proof",
-    "elenx-solve/verifier/reconstruction",
+    "xean-solve/explorer",
+    "xean-solve/coordinator",
+    "xean-solve/verifier/correctness",
+    "xean-solve/verifier/requirements",
+    "xean-solve/verifier/reconstruction/statement",
+    "xean-solve/verifier/reconstruction/proof",
+    "xean-solve/verifier/reconstruction",
   ]);
   expect(drive.calls[5]?.prompt).not.toContain(good.text);
   expect(drive.calls[5]?.prompt).toContain(
@@ -208,7 +208,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     }[];
   };
   expect(inspection.phase).toBe("accepted");
-  expect(inspection.result.schemaVersion).toBe(9);
+  expect(inspection.result.schemaVersion).toBe(1);
   expect(inspection.result.candidate).toBe(phase.candidate);
   expect(inspection.result.note.text).toBe(good.text);
   expect(inspection.notes[0]).toMatchObject({ verified: true, dead: false });
@@ -480,11 +480,11 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
   expect(phase.candidate).toBe(paused.candidate!);
   expect(rest.calls.map(({ label }) => label)).toEqual([
-    "elenx-solve/verifier/correctness",
-    "elenx-solve/verifier/requirements",
-    "elenx-solve/verifier/reconstruction/statement",
-    "elenx-solve/verifier/reconstruction/proof",
-    "elenx-solve/verifier/reconstruction",
+    "xean-solve/verifier/correctness",
+    "xean-solve/verifier/requirements",
+    "xean-solve/verifier/reconstruction/statement",
+    "xean-solve/verifier/reconstruction/proof",
+    "xean-solve/verifier/reconstruction",
   ]);
   expect(rest.codexCalls).toHaveLength(0);
   expect(phase.note.verdicts.map(({ report }) => report)).toEqual([
@@ -638,10 +638,10 @@ test("a Pi source profile runs the source verifier as a Pi call without web sear
   expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(drive.codexCalls).toHaveLength(0);
   expect(drive.calls.map(({ label }) => label)).toEqual([
-    "elenx-solve/explorer",
-    "elenx-solve/coordinator",
-    "elenx-solve/verifier/source",
-    "elenx-solve/verifier/correctness",
+    "xean-solve/explorer",
+    "xean-solve/coordinator",
+    "xean-solve/verifier/source",
+    "xean-solve/verifier/correctness",
   ]);
   expect(drive.calls[2]?.prompt).toContain("Verifier:\nsource");
   expect(drive.calls[2]?.prompt).toContain(
@@ -1219,11 +1219,11 @@ test("an interrupted later verification batch resumes on its own candidate witho
   });
   expect(rest.codexCalls).toHaveLength(0);
   expect(rest.calls.map(({ label }) => label)).toEqual([
-    "elenx-solve/verifier/correctness",
-    "elenx-solve/verifier/requirements",
-    "elenx-solve/verifier/reconstruction/statement",
-    "elenx-solve/verifier/reconstruction/proof",
-    "elenx-solve/verifier/reconstruction",
+    "xean-solve/verifier/correctness",
+    "xean-solve/verifier/requirements",
+    "xean-solve/verifier/reconstruction/statement",
+    "xean-solve/verifier/reconstruction/proof",
+    "xean-solve/verifier/reconstruction",
   ]);
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),

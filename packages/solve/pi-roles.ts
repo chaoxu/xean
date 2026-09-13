@@ -8,8 +8,8 @@ import {
   type EntryId,
   type Json,
   type Tool,
-} from "elenx";
-import { piReasoning, piRequest, runPi, type PiSubmissionGate } from "elenx/pi";
+} from "xean";
+import { piReasoning, piRequest, runPi, type PiSubmissionGate } from "xean/pi";
 import { z } from "zod";
 
 import {
@@ -190,7 +190,7 @@ const dependencyText =
   "State a nonroutine external theorem you will use as a separate note, with its exact hypotheses, conclusion, and source, then name that note as support. The theorem note may rely directly on its cited source and can precede its application in the same submission. Routine facts need no separate note.";
 
 const verdictText =
-  "Verdicts come from the source, correctness, requirements, and reconstruction verifiers, which run in that order on the notes that asked for them and stop at a note's first verdict that is not PASS. A note is verified over verified support when one verification passed source and correctness or its submitting system supplied external verification, so its result can be built on. The verification field identifies that external source, whose attestation is distinct from Elenx's verifier verdicts. A note is dead when correctness, source, or reconstruction failed it or a note in its support is dead: it can never be verified, and its verdicts say what went wrong. A requirements FAIL leaves a note verified but not accepted. INCONCLUSIVE means a check could not reach a conclusion and identifies the missing evidence. It ends that note's verification attempt without marking the note defective. The next explorer turn receives the report and can address the uncertainty in new notes.";
+  "Verdicts come from the source, correctness, requirements, and reconstruction verifiers, which run in that order on the notes that asked for them and stop at a note's first verdict that is not PASS. A note is verified over verified support when one verification passed source and correctness or its submitting system supplied external verification, so its result can be built on. The verification field identifies that external source, whose attestation is distinct from Xean's verifier verdicts. A note is dead when correctness, source, or reconstruction failed it or a note in its support is dead: it can never be verified, and its verdicts say what went wrong. A requirements FAIL leaves a note verified but not accepted. INCONCLUSIVE means a check could not reach a conclusion and identifies the missing evidence. It ends that note's verification attempt without marking the note defective. The next explorer turn receives the report and can address the uncertainty in new notes.";
 const completionText =
   "The requirements verifier decides whether a note meets the completion criteria, and a note is accepted when one verification passed all four verifiers.";
 
@@ -467,7 +467,7 @@ export async function sourceCall(
   return {
     label: verifierLabels.source,
     request: codexRequest.parse({
-      protocol: "elenx/codex-exec/v1",
+      protocol: "xean/codex-exec/v1",
       model: profile.model,
       reasoning: profile.reasoning,
       search: profile.search,

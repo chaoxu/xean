@@ -10,7 +10,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import type { Entry, EntryId, Json } from "elenx";
+import type { Entry, EntryId, Json } from "xean";
 import { z } from "zod";
 
 import { nonblank, returnedOutput } from "./roles";
@@ -30,7 +30,7 @@ export const codexReasoning = z.enum([
 ]);
 
 export const codexRequest = z.strictObject({
-  protocol: z.literal("elenx/codex-exec/v1"),
+  protocol: z.literal("xean/codex-exec/v1"),
   model: nonblank,
   reasoning: codexReasoning,
   search: z.boolean(),
@@ -278,7 +278,7 @@ export async function requireCodex(
   } = {},
 ): Promise<void> {
   const command = options.command ?? "codex";
-  const directory = await mkdtemp(join(tmpdir(), "elenx-source-"));
+  const directory = await mkdtemp(join(tmpdir(), "xean-source-"));
   try {
     const { env, hasAuth } = await sourceEnvironment(
       directory,
@@ -370,7 +370,7 @@ export function codexExec(
     let stderr = "";
     let exitCode: number | null | undefined;
     try {
-      directory = await mkdtemp(join(tmpdir(), "elenx-source-"));
+      directory = await mkdtemp(join(tmpdir(), "xean-source-"));
       const { env } = await sourceEnvironment(directory, inherited);
       const schemaPath = join(directory, "verdict.schema.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));

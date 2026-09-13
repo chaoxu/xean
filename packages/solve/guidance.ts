@@ -1,15 +1,15 @@
 import { Database } from "bun:sqlite";
 import { realpathSync } from "node:fs";
 
-import type { Campaign, Entry, EntryId } from "elenx";
+import type { Campaign, Entry, EntryId } from "xean";
 import { z } from "zod";
 
 import { nonblank, roleLabels } from "./roles";
 
 // Guidance and its delivery boundary live in the campaign. These local calls
 // make no provider request and leave the workflow's stopping rules unchanged.
-const guidanceLabel = "elenx-solve/guidance";
-const explorerGuidanceLabel = "elenx-solve/explorer-guidance";
+const guidanceLabel = "xean-solve/guidance";
+const explorerGuidanceLabel = "xean-solve/explorer-guidance";
 const guidanceRequest = z.strictObject({
   schemaVersion: z.literal(1),
   id: nonblank,

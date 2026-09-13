@@ -1,4 +1,4 @@
-import type { EntryId } from "elenx";
+import type { EntryId } from "xean";
 
 import { byId } from "./support";
 import {

@@ -4,8 +4,8 @@ import {
   deriveCandidateStatus,
   returnedToolSubmission,
   verdictSchema,
-} from "elenx";
-import { builtinPi, runPi } from "elenx/pi";
+} from "xean";
+import { builtinPi, runPi } from "xean/pi";
 import { z } from "zod";
 
 const verdictSubmission = z.strictObject({
@@ -25,7 +25,7 @@ const submitVerdict = defineTool({
 const [path, provider, modelId] = process.argv.slice(2);
 if (path === undefined || provider === undefined || modelId === undefined) {
   throw new Error(
-    "usage: bun examples/v1/pi-smoke.ts CAMPAIGN.db PROVIDER MODEL_ID",
+    "usage: bun examples/pi-smoke.ts CAMPAIGN.db PROVIDER MODEL_ID",
   );
 }
 

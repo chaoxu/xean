@@ -2,13 +2,13 @@ import { Database } from "bun:sqlite";
 import { realpathSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import type { Campaign, Entry, EntryId } from "elenx";
+import type { Campaign, Entry, EntryId } from "xean";
 import { z } from "zod";
 
 import { jsonSnapshot, nonblank, roleLabels, submittedNotes } from "./roles";
 
-const notesLabel = "elenx-solve/notes";
-const boundaryLabel = "elenx-solve/coordinator-notes";
+const notesLabel = "xean-solve/notes";
+const boundaryLabel = "xean-solve/coordinator-notes";
 const requestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   id: nonblank,
@@ -83,7 +83,7 @@ export async function appendSubmittedNotes(
   for (let attempt = 0; attempt < 3; attempt++) {
     const through = campaign.lastSequence();
     const records = campaign.records({
-        excludeLabels: ["elenx/pi-request"],
+        excludeLabels: ["xean/pi-request"],
         through,
       }),
       prior = existing(records);
@@ -137,7 +137,7 @@ export async function freezeSubmittedNotes(
         boundaryLabel,
         roleLabels.explorer,
         roleLabels.coordinator,
-        "elenx-solve/explorer-guidance",
+        "xean-solve/explorer-guidance",
       ],
       through,
     }),
@@ -152,7 +152,7 @@ export async function freezeSubmittedNotes(
         entry.seq > after &&
         (entry.label === roleLabels.explorer ||
           entry.label === roleLabels.coordinator ||
-          entry.label === "elenx-solve/explorer-guidance"),
+          entry.label === "xean-solve/explorer-guidance"),
     )
   )
     return false;

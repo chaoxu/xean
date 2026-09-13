@@ -5,9 +5,9 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 
-import { createCampaign, defineTool } from "../../../src";
+import { createCampaign, defineTool } from "../../src";
 import { z } from "zod";
-import { runPi } from "../../../src/pi";
+import { runPi } from "../../src/pi";
 
 const path = process.argv[2];
 if (path === undefined) throw new Error("missing database path");

@@ -1,86 +1,39 @@
-# Elenx
+# xean
 
-Elenx runs mathematical exploration with durable notes, verification, and guidance from people or other agents. The included solver saves its work in a SQLite campaign. You can inspect its progress, supply mathematical notes or advice, and resume an interrupted run from its recorded work.
+`xean` (pronounced “zine”) is a Bun and TypeScript toolkit for mathematical exploration with durable evidence. A campaign is a SQLite journal that records the task, model calls, tool activity, candidate material, verdicts, request checkpoints, and provider accounting. The journal lets an application inspect progress, add notes or guidance, and continue work after an interruption.
 
-The underlying kernel is also a library for agent applications. It stores exact candidate bytes, records calls, tool invocations, settled tool results, and unknown tool outcomes through an append-only campaign API, binds verdicts to fresh candidate-scoped calls, and derives verification status from the recorded evidence.
+The product family has clear boundaries:
 
-The bundled Pi runner executes application-selected models and Zod tools. Pi owns provider execution and credentials. Elenx records logical calls, pre-send request checkpoints, and settled telemetry. Within a live call, continuation extends an output-limited response using the existing transcript, frozen model profile, and tool contract. After a process restart, the application starts a fresh call from recorded work.
+| Package | Role |
+| --- | --- |
+| `xean` | Kernel, Pi runner, storage, observation, and accounting APIs |
+| `xean-solve` | Explorer, coordinator, and verifier workflow at `packages/solve` |
+| `xean-lab` | Experiment execution and provenance |
+| `xean-observe` | Read-only HTTP observation and rendering |
 
-The kernel enforces identity, durability, crash semantics, and accounting contracts. It records application-selected capabilities but does not sandbox the runner. The model owns reasoning strategy. Applications own context assembly, tools, budgets, verification methods, and publication. Verification status records which declared checks passed. Mathematical acceptance still needs [external review](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md#external-final-review).
+The kernel records facts and enforces journal, call, tool, candidate, verdict, and accounting contracts. The model chooses mathematical methods. Applications provide context, tools, budgets, verification policy, publication, and filesystem boundaries. A complete mathematical result requires independent verification of the candidate and its supporting work.
 
-## Try the solver
+## Install and run
 
-From a checkout, install dependencies with Bun 1.3.13 or newer. With a Codex subscription, authenticate through Pi:
+Use Bun 1.3.13 or newer on macOS or Linux. From a checkout:
 
 ```sh
 bun install --frozen-lockfile
-bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
-```
-
-In Pi, enter `/login`, choose **OpenAI Codex**, complete login, and exit. Elenx uses Pi's saved credential, which is separate from Codex CLI login. Then run the included task:
-
-```sh
+bun packages/solve/solve.ts contract
 bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
 bun packages/solve/solve.ts inspect campaign.db
 bun packages/solve/solve.ts export campaign.db
 ```
 
-This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role. Private endpoints require an explicit model registry. For an OpenAI API account, use `settings-openai.json` with `OPENAI_API_KEY` as described in [provider setup](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md#choose-a-provider).
-
-Settings select the model for each role and cap Explorer turns. Repeat the same `run` command after an interruption to continue. A completed campaign returns its recorded result.
-
-While a campaign is running or paused, another process can submit guidance:
+The Codex profile uses Pi's OpenAI Codex provider. Authenticate it with Pi:
 
 ```sh
-bun packages/solve/solve.ts guide --id try-direct-proof campaign.db packages/solve/examples/guidance.txt
-bun packages/solve/solve.ts inspect --include-guidance campaign.db
+bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
 ```
 
-Guidance is saved immediately and delivered to the next Explorer turn whose input has not been frozen. It applies to that turn only, including its retries. The task, completion criteria, and verification rules stay fixed. See [using Elenx from another agent](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md) for submission receipts, delivery, and recovery.
+Enter `/login`, choose **OpenAI Codex**, and exit. The OpenAI API profile uses `OPENAI_API_KEY` and `packages/solve/examples/settings-openai.json`. Provider access, credentials, and model availability come from Pi and the selected profile. The solver examples use public OpenAI endpoints and need no xean-lab service.
 
-To supply mathematical work before exploration, create the campaign and submit text notes first:
-
-```sh
-bun packages/solve/solve.ts init task.json campaign.db settings.json
-bun packages/solve/solve.ts submit --id initial-notes campaign.db notes.json
-bun packages/solve/solve.ts run task.json campaign.db settings.json
-```
-
-`init` and `submit` make no model calls. Submitted notes enter the coordinator for filing and verification. A caller can explicitly attach external verification to a supporting result. Acceptance of a complete proof still requires all four normal verifiers. The [note submission guide](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md#supply-mathematical-notes) gives the JSON format and explains how to add notes during a run.
-
-## Install
-
-For the packaged solver, follow [installation and provider setup](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md). Release `v0.10.0` includes kernel 0.10.0 and solver 0.36.0, with OpenAI API and Codex subscription examples.
-
-The v1 kernel requires Bun 1.3.13 or newer. Applications define tool schemas with Zod:
-
-```sh
-bun add --minimum-release-age 86400 github:chaoxu/elenx#v0.10.0 zod@4.5.4
-```
-
-Elenx exposes Pi types directly. Keep TypeScript's `skipLibCheck` enabled while Pi's provider SDK declarations require it.
-
-The API and campaign schema are experimental. Campaigns are accepted only when their schema matches the running package. Preserve an old campaign with its matching tagged package and write reruns to new artifacts.
-
-## Documentation
-
-| Question | Authority |
-| --- | --- |
-| Why is Elenx designed this way? | [`docs/philosophy.md`](https://github.com/chaoxu/elenx/blob/main/docs/philosophy.md) |
-| What does the kernel guarantee? | [`SPEC.md`](SPEC.md) |
-| Which words name which concepts? | [`docs/terms.md`](https://github.com/chaoxu/elenx/blob/main/docs/terms.md) |
-| How do I run the solver? | [`packages/solve/README.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md) |
-| How can another agent inspect a run, supply notes, or give advice? | [`packages/solve/docs/agent-usage.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md) |
-| How do the solver roles and replay behave? | [`packages/solve/docs/role-runner.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/role-runner.md) |
-| How do I build an application? | [`docs/application-author.md`](docs/application-author.md) |
-| How do I install packages and configure a provider? | [`packages/solve/docs/installation.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md) |
-| What changed in the published v0.10.0 release? | [`docs/releases/v0.10.0.md`](https://github.com/chaoxu/elenx/blob/main/docs/releases/v0.10.0.md) |
-
-The deterministic verifier example is [`examples/v1/scripted-verifier.ts`](examples/v1/scripted-verifier.ts). [`examples/v1/pi-smoke.ts`](examples/v1/pi-smoke.ts) exercises the LLM-verdict path with a real Pi model.
-
-## Solver
-
-[`packages/solve`](https://github.com/chaoxu/elenx/tree/main/packages/solve) supplies one durable task workflow. A task is one JSON object:
+The task is one JSON object:
 
 ```json
 {
@@ -89,25 +42,45 @@ The deterministic verifier example is [`examples/v1/scripted-verifier.ts`](examp
 }
 ```
 
-The explorer writes notes, and callers can submit additional notes. The coordinator files them, gives `explorerGuidance` for the next turn, selects supporting texts, and lists the notes to verify. The source, correctness, requirements, and reconstruction verifiers record verdicts on those notes. The workflow ends when all four pass one note, including a supplied proof verified before the first Explorer turn. `inspect` derives the phase, notes, and terminal result from the journal. The [solver guide](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md#run) documents the commands and their results.
+`run` creates a campaign or resumes the next missing workflow action after matching the task and settings recorded in its declaration. `inspect` derives the phase, notes, verdicts, result, and spend from the journal. `export` emits an accepted note with its transitive support.
+
+## Supply work and guidance
+
+Create a campaign and add mathematical notes before the first model call when useful:
+
+```sh
+bun packages/solve/solve.ts init task.json campaign.db settings.json
+bun packages/solve/solve.ts submit --id initial-work campaign.db notes.json
+bun packages/solve/solve.ts run task.json campaign.db settings.json
+```
+
+Add guidance while a campaign is active or paused:
+
+```sh
+bun packages/solve/solve.ts guide --id next-route campaign.db guidance.txt
+bun packages/solve/solve.ts inspect --include-guidance campaign.db
+```
+
+Notes and guidance are journaled immediately. Guidance reaches a later Explorer turn whose input is not frozen. Every note keeps its text and declared support; a correction creates a new note. The four verifiers check source use, correctness, task requirements, and reconstruction. A note is accepted only when all required checks pass over verified support.
+
+## Build an application
+
+The kernel API supports append-only campaigns, exact candidate bytes, structured tools, Pi calls, request checkpoints, result attachments, and derived verification status. Start with [`docs/application-author.md`](docs/application-author.md). The normative contract is [`SPEC.md`](SPEC.md). [`docs/philosophy.md`](docs/philosophy.md) explains the division of responsibility, and [`docs/terms.md`](docs/terms.md) defines the vocabulary.
+
+The deterministic verifier example is [`examples/scripted-verifier.ts`](examples/scripted-verifier.ts). [`examples/pi-smoke.ts`](examples/pi-smoke.ts) exercises an LLM verdict through Pi.
+
+## xean-solve workflow
+
+`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The Explorer writes self-contained notes, the coordinator files notes and selects support, and verifiers record structured verdicts. The workflow derives notes, support closure, dead notes, verified candidates, phase, and result from journal records. It never treats model prose or process stdout as verification authority.
+
+Explorer continuation is an optional setting. When enabled, the Explorer can submit notes repeatedly in one context until it claims completion, submits an empty note set, or reaches its context budget. Each submission is journaled, and a fresh user message directs the next step. The context budget is bounded by model capacity. Provider retries, cancellation, output limits, and context overflow remain recorded outcomes with bounded handling.
 
 ## Development
 
 ```sh
 bun install --frozen-lockfile
 bun run check:all
-```
-
-The check runs formatting, strict TypeScript, consumer compilation, both test suites, package checks, and the solver CLI smoke.
-
-Run the hermetic role boundary from the repository root:
-
-```sh
 bun run e2e:roles
 ```
 
-Documentation covers design philosophy, installation, usage, integration, and current contracts. Keep measurements, run logs, internal reviews, and research drafts in ignored local artifacts under `runs/`.
-
-## License
-
-Elenx and the solver are available under the [MIT license](LICENSE).
+Run logs, measurements, reviews, and research material belong in ignored `runs/` artifacts. The MIT license is in [`LICENSE`](LICENSE).

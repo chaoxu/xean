@@ -8,19 +8,19 @@ import {
   type Campaign,
   type EntryId,
   type Reader,
-} from "../../src";
+} from "../src";
 import {
   inspectCoreCampaign,
   inspectCoreCampaignRecords,
   inspectCoreCampaignSummary,
   inspectCoreCampaignSummaryRecords,
   inspectCoreCallSummaries,
-} from "../../src/observe";
+} from "../src/observe";
 import {
   PI_TELEMETRY_SCHEMA_VERSIONS,
   piStoredResult,
   storePiResult,
-} from "../../src/pi";
+} from "../src/pi";
 
 const directories: string[] = [];
 
@@ -31,14 +31,14 @@ afterEach(() => {
 });
 
 function campaignPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-observe-v1-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-observe-v1-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }
 
 function piRequest() {
   return {
-    protocol: "elenx/pi-run/v1" as const,
+    protocol: "xean/pi-run/v1" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",
@@ -68,7 +68,7 @@ function piResult(
           {
             id: 1,
             parentId: null,
-            name: "elenx.pi.run",
+            name: "xean.pi.run",
             attributes: {},
             events: [],
             status: { status: "ok" as const },
@@ -244,7 +244,7 @@ test("projects opaque application data, calls, candidates, and verdicts", async 
   }
 
   expect(inspectCoreCampaign(path)).toMatchObject({
-    schema: "elenx.core-observation/v1",
+    schema: "xean.core-observation/v1",
     application: "changing-workflow",
     applicationConfig: config,
     calls: [
@@ -428,7 +428,7 @@ test("summarizes without response, evidence, operation, or material payloads", a
 
   const summary = inspectCoreCampaignSummary(path);
   expect(summary).toMatchObject({
-    schema: "elenx.core-observation-summary/v1",
+    schema: "xean.core-observation-summary/v1",
     application: "changing-workflow",
     callCount: 1,
     candidateCount: 1,
@@ -786,7 +786,7 @@ test.each([
   async (attachment, corruption) => {
     const { Database } = await import("bun:sqlite");
     const { derivePiSpend, piResultRecord, readPiResult } =
-      await import("../../src/pi");
+      await import("../src/pi");
     const path = campaignPath();
     const campaign = createCampaign(path, "attachments", null);
     try {

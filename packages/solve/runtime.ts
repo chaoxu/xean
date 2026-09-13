@@ -4,7 +4,7 @@ import { access } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { openAIResponsesApi, openAICodexResponsesApi } from "elenx/pi";
+import { openAIResponsesApi, openAICodexResponsesApi } from "xean/pi";
 
 export type SolveModels = Pick<ModelRuntime, "getModel" | "streamSimple"> & {
   readonly checkAuth?: (provider: string) => Promise<unknown>;
@@ -30,7 +30,7 @@ export async function createModelRuntime(
     if (error !== undefined) throw new Error(error);
   }
   // The installed coding-agent can have its own pi-ai dependency. Bind the
-  // Responses adapters to Elenx's reviewed Pi distribution so request handling
+  // Responses adapters to Xean's reviewed Pi distribution so request handling
   // and session cleanup use the same native provider module.
   const responses = new Map([
     ["openai-responses", openAIResponsesApi()],
@@ -61,15 +61,15 @@ export async function createModelRuntime(
 }
 
 export function codexCommand(environment: NodeJS.ProcessEnv): string {
-  return environment["ELENX_CODEX_COMMAND"] ?? "codex";
+  return environment["XEAN_CODEX_COMMAND"] ?? "codex";
 }
 
 export function modelRegistryPath(
   environment: NodeJS.ProcessEnv,
 ): string | null {
-  const value = environment["ELENX_MODELS_PATH"];
+  const value = environment["XEAN_MODELS_PATH"];
   if (value === undefined) return null;
-  if (!isAbsolute(value)) throw new Error("ELENX_MODELS_PATH must be absolute");
+  if (!isAbsolute(value)) throw new Error("XEAN_MODELS_PATH must be absolute");
   return value;
 }
 

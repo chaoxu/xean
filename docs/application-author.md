@@ -1,9 +1,9 @@
-# Building an Elenx application
+# Building an xean application
 
-Install Elenx from GitHub:
+Install xean 1.0.0 from GitHub:
 
 ```sh
-bun add github:chaoxu/elenx zod@4.5.4
+bun add github:chaoxu/xean#v1.0.0 zod@4.5.4
 ```
 
 ## Create and verify a candidate
@@ -21,8 +21,8 @@ import {
   deriveCandidateStatus,
   returnedToolSubmission,
   verdictSchema,
-} from "elenx";
-import { builtinPi, runPi } from "elenx/pi";
+} from "xean";
+import { builtinPi, runPi } from "xean/pi";
 import { z } from "zod";
 
 const verdictSubmission = z.strictObject({
@@ -79,26 +79,26 @@ try {
 }
 ```
 
-`builtinPi()` uses Pi's normal environment and ambient provider authentication. An application that owns OAuth or API-key credentials can import `InMemoryCredentialStore` from `elenx/pi` and pass it as `builtinPi({ credentials })`; Elenx re-exports both implementations and their types directly from Pi. Built-in adapters keep credentials outside the persisted payload. A custom adapter is trusted to do the same.
+`builtinPi()` uses Pi's normal environment and ambient provider authentication. An application that owns OAuth or API-key credentials can import `InMemoryCredentialStore` from `xean/pi` and pass it as `builtinPi({ credentials })`; xean re-exports both implementations and their types directly from Pi. Built-in adapters keep credentials outside the persisted payload. A custom adapter is trusted to do the same.
 
-Configure gateway headers through Pi's provider settings. Pi `ModelRuntime` resolves provider-scoped `headers` in `models.json`. Applications that bypass `ModelRuntime` supply their own Pi headers or `transformHeaders` through the `models.streamSimple` adapter passed to `runPi`. The generic runner does not infer headers from Lab environment variables.
+Configure gateway headers through Pi's provider settings. Pi `ModelRuntime` resolves provider-scoped `headers` in `models.json`. Applications that bypass `ModelRuntime` supply their own Pi headers or `transformHeaders` through the `models.streamSimple` adapter passed to `runPi`. The generic runner does not infer headers from `xean-lab` environment variables.
 
 Put the current task, changing guidance, and correction requests in `prompt`, which Pi sends as a user message. Use `system` for stable role definitions and contracts. Within a live call, send new directions as fresh user messages after the relevant tool receipt. Tool receipts report results and validation errors; keep the next work assignment in its own user message. A submission gate delivers its `continuationPrompt` through this user-message path.
 
 `returnedToolSubmission` requires one named tool call and its returned result. The application parses the durable input with the same submission schema and passes its verdict and evidence to `recordVerdict`; it supplies no second semantic value that could disagree with the model's submission. Tool output may differ from input, so the projection records both without equating them.
 
-Use that structured path for an LLM verifier. An application-owned deterministic verifier adapter instead runs through `campaign.call`, validates its typed receipt, and applies one fixed mapping from that receipt to the verdict passed to `recordVerdict`. Elenx preserves the mapping's input and output; it does not establish that the verifier is sound. Never translate free-form model text into an application-selected verdict.
+Use that structured path for an LLM verifier. An application-owned deterministic verifier adapter instead runs through `campaign.call`, validates its typed receipt, and applies one fixed mapping from that receipt to the verdict passed to `recordVerdict`. xean preserves the mapping's input and output; it does not establish that the verifier is sound. Never translate free-form model text into an application-selected verdict.
 
 Use `stopAfterToolResult` when the verdict-submission tool is the call's only tool. Gather source inspections or other observations in earlier calls so finalization has one unambiguous submission.
 
-The candidate envelope is application-owned. Include every fact that must be audited together: statement revision, answer or proof, cited sources, imported assumptions, and dependency versions. `deriveCandidateStatus(records, candidate).verified` is derived from the supplied log snapshot; Elenx stores no promotion event. Publishing or adopting a verified candidate belongs to the application.
+The candidate envelope is application-owned. Include every fact that must be audited together: statement revision, answer or proof, cited sources, imported assumptions, and dependency versions. `deriveCandidateStatus(records, candidate).verified` is derived from the supplied log snapshot; xean stores no promotion event. Publishing or adopting a verified candidate belongs to the application.
 
 ## Give a model one narrow tool
 
 When a verifier needs one read-only source tool, run source inspection as a preliminary call and pass its recorded result into the verdict prompt. Keep the final verdict as the same verdict-only structured call shown above.
 
 ```ts
-import { defineTool, returnedToolSubmission } from "elenx";
+import { defineTool, returnedToolSubmission } from "xean";
 import { z } from "zod";
 
 const inspectedSource = z.strictObject({
@@ -167,7 +167,7 @@ The campaign artifact stores candidate bytes, requests, prompts, transcripts, to
 
 `inspectCoreCampaign` separates `spend.requests.first` from `spend.requests.continuation`, with `cachedInputShare` when measured input is available. `spend.recoveredRequestErrors` counts provider errors inside Pi calls that ultimately succeeded. Full call observations include `pi.accounting.recoveredErrors`, with the one-based request position and available saved error name and message. A healthy final call can contain recovered errors. Missing request usage remains unknown in both partitions.
 
-For per-call analysis, use `inspectCoreCallSummaries(records)` from `elenx/observe`. It returns timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from the same captured entry array, without loading response or transcript attachments or candidate material. Use `inspectCoreCampaignRecords(reader, records)` for full content and attachment integrity checks. These generic facts support Solver's mathematical workflow, Lab's experiments and provenance, and Observer's HTTP, caching, and rendering.
+For per-call analysis, use `inspectCoreCallSummaries(records)` from `xean/observe`. It returns timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from the same captured entry array, without loading response or transcript attachments or candidate material. Use `inspectCoreCampaignRecords(reader, records)` for full content and attachment integrity checks. These generic facts support `xean-solve`'s mathematical workflow, `xean-lab`'s experiments and provenance, and `xean-observe`'s HTTP, caching, and rendering.
 
 ## Resume and read safely
 
@@ -175,13 +175,13 @@ Use `openCampaign(path)` only after the prior writer has terminated or closed, t
 
 A `runPi` result that is still length-truncated after its bounded in-call recoveries is a dead end. Preserve it and start a fresh `runPi` call from explicit application state; a fresh model, profile, prompt, or context policy likewise starts another root call.
 
-Set `maxRecoveries` to allow bounded retries of transient provider failures. With a separate `maxLengthContinuations` budget, the failure count resets after a successful response. Every retryable provider failure, including `incomplete.max_messages` with new completed reasoning, consumes the error allowance. Valid completed reasoning is preserved for an admitted retry; remaining context is also required. Successful empty submissions are not provider errors. For the OpenAI Responses and Codex Responses adapters, Elenx carries completed encrypted reasoning items into the retry through Pi's serializer. Completion means Pi emitted `thinking_end` for a validated signed reasoning item, not merely a text delta or a finished summary. Failed attempts remain errors in the transcript and telemetry. Their text and tool calls stay out of model input and tool execution. Check `piRequestAttempts(records, call, reader)` to inspect the IDs and encrypted content supplied on each retry. This works within one live call, with compatible authentication, routing, and an endpoint that accepts reasoning-only replay. It does not recover unfinished items or survive a process restart. Treat encrypted reasoning and request checkpoints as sensitive campaign data, and treat missing usage on failed attempts as unknown spend. The [Pi runner contract](../SPEC.md#pi-runner) defines recovery admission and retry limits.
+Set `maxRecoveries` to allow bounded retries of transient provider failures. `maxLengthContinuations` separately bounds ordinary response-length continuations. Each allowance defaults to zero when omitted. The failure count resets after a successful response. Every retryable provider failure, including `incomplete.max_messages` with new completed reasoning, consumes the error allowance. Valid completed reasoning is preserved for an admitted retry; remaining context is also required. Successful empty submissions are not provider errors. For the OpenAI Responses and Codex Responses adapters, xean carries completed encrypted reasoning items into the retry through Pi's serializer. Completion means Pi emitted `thinking_end` for a validated signed reasoning item, not merely a text delta or a finished summary. Failed attempts remain errors in the transcript and telemetry. Their text and tool calls stay out of model input and tool execution. Check `piRequestAttempts(records, call, reader)` to inspect the IDs and encrypted content supplied on each retry. This works within one live call, with compatible authentication, routing, and an endpoint that accepts reasoning-only replay. It does not recover unfinished items or survive a process restart. Treat encrypted reasoning and request checkpoints as sensitive campaign data, and treat missing usage on failed attempts as unknown spend. The [Pi runner contract](../SPEC.md#pi-runner) defines recovery admission and retry limits.
 
 `runPi` writes through the supplied `Campaign.call` interface. A decorator around that interface is trusted application code and may observe or alter execution; the kernel does not claim an intra-process security boundary against its caller.
 
 ## Keep orchestration outside the kernel
 
-An application can maintain routes, task queues, source bundles, blind-review views, stopping policy, and human-readable reports in ordinary files or its own database. Use Elenx at the points where evidence becomes durable:
+An application can maintain routes, task queues, source bundles, blind-review views, stopping policy, and human-readable reports in ordinary files or its own database. Use xean at the points where evidence becomes durable:
 
 1. package exact output and sources into candidate bytes;
 2. submit the candidate with versioned verifier names;
@@ -189,4 +189,4 @@ An application can maintain routes, task queues, source bundles, blind-review vi
 4. for an LLM verifier, finalize exactly one returned structured submission; for an application-owned deterministic adapter, validate its receipt and apply its fixed verdict mapping; and
 5. publish or adopt the candidate in application code only when `deriveCandidateStatus(records, candidate).verified` is true.
 
-[`../examples/v1/scripted-verifier.ts`](../examples/v1/scripted-verifier.ts) shows the deterministic adapter path. [`../examples/v1/pi-smoke.ts`](../examples/v1/pi-smoke.ts) independently exercises the LLM-verdict path with a real Pi model.
+[`../examples/scripted-verifier.ts`](../examples/scripted-verifier.ts) shows the deterministic adapter path. [`../examples/pi-smoke.ts`](../examples/pi-smoke.ts) independently exercises the LLM-verdict path with a real Pi model.

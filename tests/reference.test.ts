@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { runScriptedVerifier } from "../../examples/v1/scripted-verifier";
+import { runScriptedVerifier } from "../examples/scripted-verifier";
 
 let directory: string | undefined;
 
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 test("scripted deterministic verifier records one candidate", async () => {
-  directory = mkdtempSync(join(tmpdir(), "elenx-reference-"));
+  directory = mkdtempSync(join(tmpdir(), "xean-reference-"));
   const report = await runScriptedVerifier(join(directory, "campaign.db"));
   expect(report).toMatchObject({ verdict: "PASS", verified: true });
 });

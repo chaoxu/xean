@@ -1,6 +1,6 @@
 {
-  "name": "elenx",
-  "version": "0.10.0",
+  "name": "xean",
+  "version": "1.0.0",
   "license": "MIT",
   "type": "module",
   "workspaces": [
@@ -18,7 +18,7 @@
     "README.md",
     "SPEC.md",
     "docs/application-author.md",
-    "examples/v1"
+    "examples"
   ],
   "exports": {
     ".": "./src/index.ts",
@@ -29,11 +29,11 @@
     "format": "prettier --write . --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .prettierignore",
     "typecheck": "tsc --noEmit",
-    "typecheck:consumer": "tsc --noEmit -p tests/v1/consumer/tsconfig.json",
-    "test": "bun test tests/v1 --path-ignore-patterns='runs/**'",
+    "typecheck:consumer": "tsc --noEmit -p tests/consumer/tsconfig.json",
+    "test": "bun test ./tests --path-ignore-patterns='runs/**'",
     "pack:check": "bun scripts/check-package.ts",
     "e2e:roles": "bun run --cwd packages/solve e2e:roles",
-    "debug": "bun ../elenx-lab/src/cli.ts debug --elenx-root .",
+    "debug": "bun ../xean-lab/src/cli.ts debug --xean-root .",
     "check": "bun run format:check && bun run typecheck && bun run typecheck:consumer && bun run test && bun run pack:check",
     "check:solve": "bun run --cwd packages/solve check",
     "check:all": "bun run check && bun run check:solve"
@@ -53,6 +53,6 @@
   ],
   "overrides": {
     "tar": "^7.5.7",
-    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.85.1-elenx.3.tgz"
+    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.85.1-xean.1.tgz"
   }
 }

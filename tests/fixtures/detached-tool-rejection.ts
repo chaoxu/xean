@@ -1,4 +1,4 @@
-import { createCampaign, defineTool } from "../../../src";
+import { createCampaign, defineTool } from "../../src";
 import { z } from "zod";
 
 const path = process.argv[2];

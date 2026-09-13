@@ -1,6 +1,6 @@
 {
-  "name": "elenx-solve",
-  "version": "0.36.0",
+  "name": "xean-solve",
+  "version": "1.0.0",
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -8,7 +8,7 @@
     "bun": ">=1.3.13"
   },
   "bin": {
-    "elenx-solve": "./solve.ts"
+    "xean-solve": "./solve.ts"
   },
   "exports": {
     ".": "./solve.ts",
@@ -35,16 +35,16 @@
     "zod": "4.5.4"
   },
   "peerDependencies": {
-    "elenx": "^0.10.0"
+    "xean": "^1.0.0"
   },
   "peerDependenciesMeta": {
-    "elenx": {
+    "xean": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
-    "elenx": "file:../..",
+    "xean": "file:../..",
     "prettier": "3.9.6",
     "typescript": "7.0.2"
   }

@@ -7,8 +7,8 @@ import {
   openCampaign,
   returnedToolSubmission,
   verdictSchema,
-} from "../../../src";
-import type { Campaign, Entry, EntryId, Json } from "../../../src";
+} from "../../src";
+import type { Campaign, Entry, EntryId, Json } from "../../src";
 
 // Reference coordinator for recovery testing. It implements the resume
 // contract from docs/design.md over the kernel: every session derives the

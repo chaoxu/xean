@@ -14,8 +14,8 @@ import {
   getOpenAICodexWebSocketDebugStats,
   streamSimple as streamCodex,
 } from "@earendil-works/pi-ai/api/openai-codex-responses";
-import { createCampaign } from "../../src";
-import { derivePiSpend, runPi } from "../../src/pi";
+import { createCampaign } from "../src";
+import { derivePiSpend, runPi } from "../src/pi";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -38,7 +38,7 @@ const model: Model<"openai-codex-responses"> = {
 };
 const apiKey = "offline-proxy-api-key";
 function campaign() {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-provider-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-provider-"));
   directories.push(directory);
   return createCampaign(join(directory, "campaign.db"), "provider-test", null);
 }

@@ -1,12 +1,12 @@
-# Use Elenx from another agent
+# Use Xean from another agent
 
-An agent operates Elenx through command-line calls and JSON output. It can read progress, supply mathematical notes, and append Explorer guidance while a run is active. Elenx stores the submissions and their delivery boundaries in the campaign database.
+An agent operates Xean through command-line calls and JSON output. It can read progress, supply mathematical notes, and append Explorer guidance while a run is active. Xean stores the submissions and their delivery boundaries in the campaign database.
 
-The examples below run from the repository root with Bun. [Installation](installation.md) covers released packages and provider credentials. In an installed project, use `bun run elenx-solve` in place of `bun packages/solve/solve.ts`, and find the examples under `node_modules/elenx-solve/examples/`.
+The examples below run from the repository root with Bun. [Installation](installation.md) covers released packages and provider credentials. In an installed project, use `bun run xean-solve` in place of `bun packages/solve/solve.ts`, and find the examples under `node_modules/xean-solve/examples/`.
 
 ## Start and inspect
 
-Create a task containing `problem` and `completionCriteria`, and select model profiles in a settings file. The example below uses the public Codex endpoint with Pi's **OpenAI Codex** login. [Provider setup](installation.md#choose-a-provider) also covers OpenAI API credentials and explicit private registries through `ELENX_MODELS_PATH`.
+Create a task containing `problem` and `completionCriteria`, and select model profiles in a settings file. The example below uses the public Codex endpoint with Pi's **OpenAI Codex** login. [Provider setup](installation.md#choose-a-provider) also covers OpenAI API credentials and explicit private registries through `XEAN_MODELS_PATH`.
 
 ```sh
 bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
@@ -74,7 +74,7 @@ bun packages/solve/solve.ts submit --id initial-results campaign.db - < notes.js
 ```
 
 ```ts
-import { submitNotes } from "elenx-solve";
+import { submitNotes } from "xean-solve";
 
 const receipt = await submitNotes(
   "campaign.db",
@@ -85,7 +85,7 @@ const receipt = await submitNotes(
 
 The receipt contains `call`, `atMs`, `schemaVersion`, `id`, and `notes`. Repeating the same id with the same note texts, support, and verification returns the original receipt. A changed submission with that id fails. Omitting the id creates a new submission on every call. Keep a stable id when retrying after an interrupted command.
 
-The caller prepares text from PDFs, CSVs, retrieved sources, datasets, or prior runs and includes enough statements, evidence, and limitations for its intended use. Elenx accepts text notes. Conversion, retrieval, and data analysis remain with the caller and add no model role to the solver.
+The caller prepares text from PDFs, CSVs, retrieved sources, datasets, or prior runs and includes enough statements, evidence, and limitations for its intended use. Xean accepts text notes. Conversion, retrieval, and data analysis remain with the caller and add no model role to the solver.
 
 ## When notes take effect
 
@@ -137,7 +137,7 @@ The receipt acknowledges durable storage. Repeating the same id and exact text r
 In TypeScript, the installed solver also exports the same operation:
 
 ```ts
-import { guideCampaign } from "elenx-solve";
+import { guideCampaign } from "xean-solve";
 
 const receipt = await guideCampaign(
   "campaign.db",
@@ -162,7 +162,7 @@ The added `guidance` array contains each external receipt, `calls` listing the E
 
 The original task and completion criteria remain the authority for acceptance. Guidance cannot establish a lemma, change a verifier's verdict, or increase the turn cap. `guide` records advice without starting or resuming execution. Advice recorded after completion, or too late for another Explorer turn, remains pending. The terminal result stays unchanged.
 
-## Pause, resume, and compatibility
+## Pause and resume
 
 Send one `SIGINT` or `SIGTERM` to pause after the active role call settles. A second signal interrupts the active call. Resume with the same task, campaign, and settings:
 
@@ -172,11 +172,13 @@ bun packages/solve/solve.ts run task.json campaign.db settings.json
 
 Guidance and submitted notes are already in the campaign. Leave the original settings file unchanged. The command resumes the first missing role call and preserves completed work. Durability supports continuation from recorded state. Rewinding a campaign or reopening a terminal result is outside this command's behavior.
 
-Workflow schema 38 drains the requested verification batches before another Explorer turn or the cap. The optional `explorerContinuation` setting remains available, and a gated submission rejected by schema validation can be corrected in the same call. It is off by default. With it enabled, every valid `submit_notes` call saves new notes and its receipt carries the actual result `{noteIds}` only, while Explorer continues in the same call until it claims a complete solution, submits an empty notes array, or reaches its estimated context threshold. Every nonempty nonterminal submission is followed after the receipt by a fresh user message exactly `Keep trying, you can do it.`. At the threshold the call finalizes. The first empty submission ends it immediately and gives the coordinator all saved notes and its existing `emptySubmission: true` notice asking for a different promising approach. Explorer chooses its route, and the message requires no separate planning submission. Explorer enables the generic kernel gate's `emptyArgument: "notes"` guard. Structured support is validated without scanning note text; mathematical verification checks for undeclared dependencies. Inspection includes these notes before handoff and after interruption. A fresh retry receives the saved texts with stable IDs and the same guidance. Every retryable provider error, including `incomplete.max_messages`, consumes the existing `maxRecoveries` allowance while preserving completed reasoning. Empty submissions are successful handoffs and do not consume error recoveries. See [Explorer continuation](../README.md#explorer-continuation) for headroom and comparison semantics. `explorerGuidance` remains per-turn advice, and inconclusive verification returns its report to Explorer. Preserve older journals with the exact implementation that wrote them. The updated solver deliberately refuses to replay them against changed prompts. Start a fresh campaign to use the new role contract.
+The workflow drains requested verification batches before another Explorer turn or the cap. `explorerContinuation` is off by default. With it enabled, every valid `submit_notes` call saves new notes and returns their `{noteIds}`. A submission rejected by schema validation can be corrected in the same call. Every nonempty nonterminal submission receives a fresh user message exactly `Keep trying, you can do it.` after its receipt. Explorer continues until it claims a complete solution, submits an empty notes array, or reaches its estimated context threshold. The first empty submission hands all saved notes to the coordinator with `emptySubmission: true`, asking for a different promising approach.
 
-The `run` arguments stay unchanged. Execution-contract schema 9 adds optional external `verification` on notes and permits accepted results with zero Explorer turns. Consumers that read coordinator submissions should use `explorerGuidance`. `--include-guidance` and `--include-submissions` are explicit inspection options. Runs with no external input add no delivery records for it.
+Inspection includes saved notes before handoff and after interruption. A fresh retry receives their full texts with stable IDs and the same guidance. Every retryable provider error, including `incomplete.max_messages`, consumes the `maxRecoveries` allowance while preserving completed reasoning. Empty submissions are successful handoffs and do not consume error recoveries. See [Explorer continuation](../README.md#explorer-continuation) for context headroom. Coordinator advice uses `explorerGuidance`, and inconclusive verification returns its report to Explorer. Resuming requires the task, settings, and request contracts recorded in the campaign.
 
-All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/elenx/blob/main/SPEC.md) for recovery and copy rules.
+The workflow declaration and execution contract both use schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result with zero Explorer turns after all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
+
+All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/xean/blob/main/SPEC.md) for recovery and copy rules.
 
 ## Export and review
 
@@ -184,4 +186,4 @@ All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner
 bun packages/solve/solve.ts export campaign.db
 ```
 
-Export contains the accepted note and every supporting proof it relies on. Give this text and the frozen task to an external reviewer, following the [review procedure](../README.md#external-final-review). An internal `accepted` result reports that Elenx's declared checks passed.
+Export contains the accepted note and every supporting proof it relies on. Give this text and the frozen task to an external reviewer, following the [review procedure](../README.md#external-final-review). An internal `accepted` result reports that Xean's declared checks passed.

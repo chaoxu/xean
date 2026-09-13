@@ -41,7 +41,7 @@ async function fixture(
   } = {},
 ) {
   const directory = await mkdtemp(
-    join(tmpdir(), "elenx-source-preflight-test-"),
+    join(tmpdir(), "xean-source-preflight-test-"),
   );
   directories.push(directory);
   const authHome = join(
@@ -127,7 +127,7 @@ test("preflight and execution share the isolated auth and environment boundary",
   await requireCodex(setup.options);
   const prompt = "Exact prompt bytes.\n☃\n";
   const result = await codexExec(setup.options)({
-    protocol: "elenx/codex-exec/v1",
+    protocol: "xean/codex-exec/v1",
     model: "fixture-model",
     reasoning: "low",
     search: true,

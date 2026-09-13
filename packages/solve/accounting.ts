@@ -1,5 +1,5 @@
-import type { Entry } from "elenx";
-import { derivePiSpend, type PiSpend } from "elenx/pi";
+import type { Entry } from "xean";
+import { derivePiSpend, type PiSpend } from "xean/pi";
 
 import { codexRequest } from "./source";
 

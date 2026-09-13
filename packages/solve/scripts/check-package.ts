@@ -20,10 +20,10 @@ async function reject(command: string[], cwd: string): Promise<void> {
 
 const solver = process.cwd();
 const kernel = resolve(solver, "../..");
-const temporary = await mkdtemp(join(tmpdir(), "elenx-solve-package-"));
+const temporary = await mkdtemp(join(tmpdir(), "xean-solve-package-"));
 const consumer = join(temporary, "consumer");
-const kernelArchive = join(temporary, "elenx.tgz");
-const solverArchive = join(temporary, "elenx-solve.tgz");
+const kernelArchive = join(temporary, "xean.tgz");
+const solverArchive = join(temporary, "xean-solve.tgz");
 try {
   await run(
     [
@@ -56,8 +56,8 @@ try {
       private: true,
       type: "module",
       dependencies: {
-        elenx: `file:${kernelArchive}`,
-        "elenx-solve": `file:${solverArchive}`,
+        xean: `file:${kernelArchive}`,
+        "xean-solve": `file:${solverArchive}`,
       },
     }),
   );
@@ -66,23 +66,23 @@ try {
     consumer,
   );
   await run(
-    [process.execPath, "run", "node_modules/elenx-solve/solve.ts", "--help"],
+    [process.execPath, "run", "node_modules/xean-solve/solve.ts", "--help"],
     consumer,
   );
   await Bun.write(
     join(consumer, "check-runtime.ts"),
     `${await Bun.file(join(solver, "tests/fixtures/no-coding-agent-entrypoint.ts")).text()}
-import { createModelRuntime } from "./node_modules/elenx-solve/runtime.ts";
-const bundledPi = Bun.resolveSync("@earendil-works/pi-ai", Bun.resolveSync("elenx/pi", import.meta.dir));
-const codingAgent = Bun.resolveSync("@earendil-works/pi-coding-agent", Bun.resolveSync("elenx-solve", import.meta.dir));
+import { createModelRuntime } from "./node_modules/xean-solve/runtime.ts";
+const bundledPi = Bun.resolveSync("@earendil-works/pi-ai", Bun.resolveSync("xean/pi", import.meta.dir));
+const codingAgent = Bun.resolveSync("@earendil-works/pi-coding-agent", Bun.resolveSync("xean-solve", import.meta.dir));
 if (bundledPi === Bun.resolveSync("@earendil-works/pi-ai", codingAgent))
   throw new Error("consumer fixture requires separate bundled and transitive Pi copies");
 await createModelRuntime({ modelsPath: null, authPath: "./auth.json", refreshOnCreate: false });
 `,
   );
   await run([process.execPath, "run", "check-runtime.ts"], consumer);
-  const runtimeTest = "node_modules/elenx-solve/tests/model-runtime.test.ts";
-  await mkdir(join(consumer, "node_modules/elenx-solve/tests"));
+  const runtimeTest = "node_modules/xean-solve/tests/model-runtime.test.ts";
+  await mkdir(join(consumer, "node_modules/xean-solve/tests"));
   await Bun.write(
     join(consumer, runtimeTest),
     Bun.file(join(solver, "tests/model-runtime.test.ts")),
@@ -92,24 +92,24 @@ await createModelRuntime({ modelsPath: null, authPath: "./auth.json", refreshOnC
     [
       process.execPath,
       "-e",
-      'import { executionContract } from "elenx-solve"; if (typeof executionContract !== "object") process.exit(1);',
+      'import { executionContract } from "xean-solve"; if (typeof executionContract !== "object") process.exit(1);',
     ],
     consumer,
   );
   await reject(
-    [process.execPath, "-e", 'await import("elenx-solve/pi-roles");'],
+    [process.execPath, "-e", 'await import("xean-solve/pi-roles");'],
     consumer,
   );
   await run(
     [
       process.execPath,
       "-e",
-      'import * as roles from "elenx-solve/roles"; if (Object.keys(roles).length !== 0) process.exit(1);',
+      'import * as roles from "xean-solve/roles"; if (Object.keys(roles).length !== 0) process.exit(1);',
     ],
     consumer,
   );
   await run(
-    [process.execPath, "run", "node_modules/elenx-solve/solve.ts", "contract"],
+    [process.execPath, "run", "node_modules/xean-solve/solve.ts", "contract"],
     consumer,
   );
 } finally {

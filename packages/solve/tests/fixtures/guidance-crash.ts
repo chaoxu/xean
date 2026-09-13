@@ -1,4 +1,4 @@
-import { openCampaign } from "elenx";
+import { openCampaign } from "xean";
 
 const path = process.argv[2];
 const mode = process.argv[3];
@@ -9,8 +9,8 @@ await campaign.call(
   {
     label:
       mode === "submit"
-        ? "elenx-solve/guidance"
-        : "elenx-solve/explorer-guidance",
+        ? "xean-solve/guidance"
+        : "xean-solve/explorer-guidance",
     request:
       mode === "submit"
         ? {

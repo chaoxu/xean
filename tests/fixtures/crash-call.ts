@@ -1,4 +1,4 @@
-import { createCampaign } from "../../../src";
+import { createCampaign } from "../../src";
 
 const path = process.argv[2];
 if (path === undefined) throw new Error("missing database path");

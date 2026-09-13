@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AuditedTool, Campaign, Json } from "elenx";
-import { storePiResult, type PiResult, type PiRunOptions } from "elenx/pi";
+import type { AuditedTool, Campaign, Json } from "xean";
+import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 
 import type { SolveSettings } from "../pi-roles";
 import type { SolveModels } from "../runtime";
@@ -39,7 +39,7 @@ export interface Reply {
 const directories: string[] = [];
 
 export function campaignPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-solve-test-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-solve-test-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }

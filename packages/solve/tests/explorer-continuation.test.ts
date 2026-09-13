@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign, openCampaign } from "elenx";
+import { createCampaign, openCampaign } from "xean";
 import { z } from "zod";
 
 import {

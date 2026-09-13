@@ -4,8 +4,8 @@ import {
   type EntryId,
   type Json,
   type Reader,
-} from "elenx";
-import { piRequest } from "elenx/pi";
+} from "xean";
+import { piRequest } from "xean/pi";
 import { z } from "zod";
 
 import { byId, supportClosure } from "./support";
@@ -15,12 +15,12 @@ export const nonblank = z.string().refine((value) => value.trim().length > 0, {
 });
 const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 
-export const applicationId = "elenx-solve";
+export const applicationId = "xean-solve";
 export const workflowProtocol = "workflow";
 
 /** Workflow semantics use role calls and receipts, never provider checkpoint payloads. */
 export function workflowRecords(reader: Reader): readonly Entry[] {
-  return reader.records({ excludeLabels: ["elenx/pi-request"] });
+  return reader.records({ excludeLabels: ["xean/pi-request"] });
 }
 
 /** One role call's durable submission and settlement, without other calls' outputs. */

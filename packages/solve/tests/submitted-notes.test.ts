@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { openReader } from "elenx";
+import { openReader } from "xean";
 
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
@@ -101,13 +101,13 @@ function coordinatorNotes(prompt: string): Note[] {
 
 test("init creates only a workflow declaration without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(38);
+  expect(workflowSchemaVersion).toBe(1);
   const before = records(path);
   expect(before).toHaveLength(1);
   expect(before[0]).toMatchObject({
     kind: "campaign",
-    application: "elenx-solve",
-    config: { schemaVersion: 38, task },
+    application: "xean-solve",
+    config: { schemaVersion: 1, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -305,16 +305,16 @@ test("external verification establishes support without inventing verdicts or ac
     note: { id: "n2" },
   });
   expect(
-    drive.calls.filter((call) => call.label === "elenx-solve/verifier/source"),
+    drive.calls.filter((call) => call.label === "xean-solve/verifier/source"),
   ).toHaveLength(1);
   expect(
     drive.calls.filter(
-      (call) => call.label === "elenx-solve/verifier/correctness",
+      (call) => call.label === "xean-solve/verifier/correctness",
     ),
   ).toHaveLength(1);
   expect(
     drive.calls.find(
-      (call) => call.label === "elenx-solve/verifier/reconstruction/proof",
+      (call) => call.label === "xean-solve/verifier/reconstruction/proof",
     )!.prompt,
   ).toContain(externalText);
   const notes = (await inspect(path)).notes;
@@ -355,13 +355,13 @@ test("a supplied complete proof still needs all four checks and accepts with zer
     note: { id: "n1" },
   });
   expect(drive.calls.map((call) => call.label)).toEqual([
-    "elenx-solve/coordinator",
-    "elenx-solve/verifier/source",
-    "elenx-solve/verifier/correctness",
-    "elenx-solve/verifier/requirements",
-    "elenx-solve/verifier/reconstruction/statement",
-    "elenx-solve/verifier/reconstruction/proof",
-    "elenx-solve/verifier/reconstruction",
+    "xean-solve/coordinator",
+    "xean-solve/verifier/source",
+    "xean-solve/verifier/correctness",
+    "xean-solve/verifier/requirements",
+    "xean-solve/verifier/reconstruction/statement",
+    "xean-solve/verifier/reconstruction/proof",
+    "xean-solve/verifier/reconstruction",
   ]);
   expect((await inspect(path)).notes[0]!.verdicts).toHaveLength(4);
 });

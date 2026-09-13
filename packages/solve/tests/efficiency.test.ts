@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign, type RecordQuery } from "elenx";
+import { createCampaign, type RecordQuery } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import { Projection } from "../projection";

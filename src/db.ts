@@ -13,7 +13,8 @@ import {
 } from "./schemas";
 import type { Entry, EntryDraft, EntryId, Json, RecordQuery } from "./types";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 1;
+const APPLICATION_ID = 0x7865616e; // SQLite product identity: ASCII "xean".
 const ENTRY_KIND_SQL = Object.values(ENTRY_KINDS)
   .map((kind) => `'${kind}'`)
   .join(", ");
@@ -60,6 +61,7 @@ const SCHEMA = `
   CREATE TRIGGER payload_inputs_no_delete BEFORE DELETE ON payload_inputs BEGIN SELECT RAISE(ABORT, 'payload inputs are append-only'); END;
   CREATE TRIGGER payloads_no_update BEFORE UPDATE ON payloads BEGIN SELECT RAISE(ABORT, 'payloads are append-only'); END;
   CREATE TRIGGER payloads_no_delete BEFORE DELETE ON payloads BEGIN SELECT RAISE(ABORT, 'payloads are append-only'); END;
+  PRAGMA application_id = ${APPLICATION_ID};
   PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
@@ -135,7 +137,7 @@ function storedVersion(path: string): number {
     if (lstatSync(path + suffix, { throwIfNoEntry: false }))
       throw new Error("unsupported campaign WAL state");
   const descriptor = openSync(path, constants.O_RDONLY);
-  const header = Buffer.alloc(64);
+  const header = Buffer.alloc(72);
   try {
     const invalid =
       readSync(descriptor, header, 0, header.length, 0) !== header.length ||
@@ -143,6 +145,9 @@ function storedVersion(path: string): number {
     if (invalid) throw new Error("invalid campaign artifact");
     if (header[18] === 2 || header[19] === 2)
       throw new Error("unsupported campaign WAL mode");
+    const application = header.readUInt32BE(68);
+    if (application !== APPLICATION_ID)
+      throw new Error(`unsupported campaign application: ${application}`);
     return header.readUInt32BE(60);
   } finally {
     closeSync(descriptor);

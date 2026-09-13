@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { deriveCandidateStatus, openReader } from "../../src";
-import type { Entry } from "../../src";
+import { deriveCandidateStatus, openReader } from "../src";
+import type { Entry } from "../src";
 import {
   countingModel,
   deriveNextAction,
@@ -16,7 +16,7 @@ import {
 const directories: string[] = [];
 
 function temporaryPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-recovery-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-recovery-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }
@@ -128,7 +128,7 @@ describe("campaign recovery", () => {
 
   test("a torn explorer call resumes as a fresh call without repeating committed rounds", async () => {
     const path = temporaryPath();
-    const fixture = resolve("tests/v1/fixtures/crash-explore.ts");
+    const fixture = resolve("tests/fixtures/crash-explore.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path], {
       stdout: "pipe",
       stderr: "pipe",
@@ -181,7 +181,7 @@ describe("campaign recovery", () => {
 
   test("a torn verifier call is unresolved even though its tool submission committed", async () => {
     const path = temporaryPath();
-    const fixture = resolve("tests/v1/fixtures/crash-verifier.ts");
+    const fixture = resolve("tests/fixtures/crash-verifier.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path], {
       stdout: "pipe",
       stderr: "pipe",

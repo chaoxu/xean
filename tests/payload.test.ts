@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign, openCampaign, openReader, type Json } from "../../src";
+import { createCampaign, openCampaign, openReader, type Json } from "../src";
 
 const directories: string[] = [];
 function temporaryPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-payload-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-payload-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }

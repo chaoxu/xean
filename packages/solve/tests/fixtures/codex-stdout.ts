@@ -1,4 +1,4 @@
-import type { Json } from "elenx";
+import type { Json } from "xean";
 
 /** The JSONL a Codex run prints for one turn that ends in the given message. */
 export function codexStdout(message: Json, searched = true): string {

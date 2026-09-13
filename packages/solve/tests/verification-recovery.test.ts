@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, openCampaign } from "elenx";
+import { createCampaign, openCampaign } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import {
@@ -121,7 +121,7 @@ test.each([...verifierNames])(
         ),
       ).toMatchObject({ kind: "turn-limit", turns: 2 });
       expect(drive.calls).toHaveLength(replies.length);
-      expect(drive.calls[nextExplorer]?.label).toBe("elenx-solve/explorer");
+      expect(drive.calls[nextExplorer]?.label).toBe("xean-solve/explorer");
       expect(drive.calls[nextExplorer]?.prompt).toContain(
         "Check inconclusive.",
       );
@@ -205,7 +205,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
       createPiRoles(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 2, note: { id: "n2" } });
-  expect(resumed.calls[0]?.label).toBe("elenx-solve/explorer");
+  expect(resumed.calls[0]?.label).toBe("xean-solve/explorer");
   expect(resumed.calls[0]?.prompt).toContain("Check inconclusive.");
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),
@@ -213,7 +213,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   campaign.close();
   expect(await inspectCampaign(path)).toMatchObject({
     result: {
-      schemaVersion: 9,
+      schemaVersion: 1,
       outcome: "accepted",
       turns: 2,
       note: { id: "n2" },
@@ -249,7 +249,7 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
   campaign.close();
 
   expect(await inspectCampaign(path)).toMatchObject({
-    result: { schemaVersion: 9, outcome: "turn-limit", turns: 1 },
+    result: { schemaVersion: 1, outcome: "turn-limit", turns: 1 },
   });
 });
 
@@ -273,8 +273,8 @@ test("a corrected reconstruction statement preserves the note and all successful
     note: { id: "n1", text },
   });
   expect(drive.calls.map(({ label }) => label)).toEqual([
-    "elenx-solve/explorer",
-    "elenx-solve/coordinator",
+    "xean-solve/explorer",
+    "xean-solve/coordinator",
     verifierLabels.source,
     verifierLabels.correctness,
     verifierLabels.requirements,

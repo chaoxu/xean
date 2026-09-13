@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createCampaign, openReader } from "elenx";
+import { createCampaign, openReader } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
@@ -229,7 +229,7 @@ test("inspection exposes Pi cancellation and a thrown local call without inventi
     await expect(
       campaign.call(
         {
-          label: "elenx-solve/coordinator",
+          label: "xean-solve/coordinator",
           role: "coordinator",
           request: null,
         },

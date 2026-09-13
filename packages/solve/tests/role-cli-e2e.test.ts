@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign } from "elenx";
+import { createCampaign } from "xean";
 
 import { applicationId, task as taskSchema } from "../roles";
 import { settings as settingsSchema } from "../runner";
@@ -36,8 +36,8 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   const first = await cli(directory, "run", task, campaign, settings);
   expect(first.code).toBe(0);
   expect(JSON.parse(first.stdout)).toMatchObject({
-    schemaVersion: 9,
-    application: "elenx-solve",
+    schemaVersion: 1,
+    application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
     turns: 2,
@@ -174,8 +174,8 @@ test("guided CLI workflow retains its verification, accounting, and execution re
   const result = await cli(directory, "run", task, campaign, settings);
   expect(result.code, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toMatchObject({
-    schemaVersion: 9,
-    application: "elenx-solve",
+    schemaVersion: 1,
+    application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
     turns: 2,
@@ -240,7 +240,7 @@ test("a provider failure leaves no verdict", async () => {
 });
 
 async function testDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "elenx-role-e2e-"));
+  const directory = await mkdtemp(join(tmpdir(), "xean-role-e2e-"));
   directories.push(directory);
   return directory;
 }
@@ -322,10 +322,10 @@ async function cli(
         PATH: process.env["PATH"] ?? "",
         HOME: directory,
         TMPDIR: directory,
-        ELENX_MODELS_PATH: join(directory, "models.json"),
+        XEAN_MODELS_PATH: join(directory, "models.json"),
         PI_CODING_AGENT_DIR: directory,
-        ELENX_E2E_REQUEST_LOG: join(directory, "requests.jsonl"),
-        ELENX_CODEX_COMMAND: join(import.meta.dir, "fixtures/fake-codex.ts"),
+        XEAN_E2E_REQUEST_LOG: join(directory, "requests.jsonl"),
+        XEAN_CODEX_COMMAND: join(import.meta.dir, "fixtures/fake-codex.ts"),
         FAKE_CODEX_CAPTURE: join(directory, "codex.jsonl"),
       },
       stdout: "pipe",

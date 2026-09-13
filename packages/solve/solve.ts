@@ -33,16 +33,16 @@ export type { ExecutionContract, ExecutionReport } from "./execution-contract";
 export type { RunDependencies, Settings, SolveModels };
 
 const usage = `Usage:
-  elenx-solve contract
-  elenx-solve init TASK.json CAMPAIGN.db SETTINGS.json
-  elenx-solve run TASK.json CAMPAIGN.db SETTINGS.json
-  elenx-solve explorer INPUT.json CAMPAIGN.db SETTINGS.json
-  elenx-solve coordinator INPUT.json CAMPAIGN.db SETTINGS.json
-  elenx-solve verifier INPUT.json CAMPAIGN.db SETTINGS.json
-  elenx-solve guide [--id ID] CAMPAIGN.db GUIDANCE.txt
-  elenx-solve submit [--id ID] CAMPAIGN.db NOTES.json
-  elenx-solve inspect [--include-requests] [--include-guidance] [--include-submissions] CAMPAIGN.db
-  elenx-solve export CAMPAIGN.db
+  xean-solve contract
+  xean-solve init TASK.json CAMPAIGN.db SETTINGS.json
+  xean-solve run TASK.json CAMPAIGN.db SETTINGS.json
+  xean-solve explorer INPUT.json CAMPAIGN.db SETTINGS.json
+  xean-solve coordinator INPUT.json CAMPAIGN.db SETTINGS.json
+  xean-solve verifier INPUT.json CAMPAIGN.db SETTINGS.json
+  xean-solve guide [--id ID] CAMPAIGN.db GUIDANCE.txt
+  xean-solve submit [--id ID] CAMPAIGN.db NOTES.json
+  xean-solve inspect [--include-requests] [--include-guidance] [--include-submissions] CAMPAIGN.db
+  xean-solve export CAMPAIGN.db
 
 run starts or resumes the durable explorer, coordinator, and verifier workflow.
 init creates or matches its declaration without provider setup or model calls.

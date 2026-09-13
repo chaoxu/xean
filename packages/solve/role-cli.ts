@@ -8,8 +8,8 @@ import {
   type Campaign,
   type Entry,
   type Json,
-} from "elenx";
-import { derivePiSpend, piRequest, piResultRecord } from "elenx/pi";
+} from "xean";
+import { derivePiSpend, piRequest, piResultRecord } from "xean/pi";
 import { z } from "zod";
 
 import { campaignAccounting } from "./accounting";
@@ -82,7 +82,7 @@ function assertApplication(declaration: Entry | undefined): void {
     declaration?.kind !== "campaign" ||
     declaration.application !== applicationId
   ) {
-    throw new Error("not a current Elenx solver journal");
+    throw new Error("not a current Xean solver journal");
   }
 }
 

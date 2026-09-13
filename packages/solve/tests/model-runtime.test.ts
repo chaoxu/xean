@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign, type Campaign } from "elenx";
-import { InMemoryCredentialStore, runPi, type PiRunOptions } from "elenx/pi";
+import { createCampaign, type Campaign } from "xean";
+import { InMemoryCredentialStore, runPi, type PiRunOptions } from "xean/pi";
 
 import { modelRuntimeOptions } from "../solve";
 import { createModelRuntime } from "../runtime";
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function runtimeOptions() {
-  const directory = await mkdtemp(join(tmpdir(), "elenx-model-runtime-"));
+  const directory = await mkdtemp(join(tmpdir(), "xean-model-runtime-"));
   directories.push(directory);
   return {
     modelsPath: join(directory, "models.json"),
@@ -27,8 +27,8 @@ async function runtimeOptions() {
 }
 
 const apis = ["openai-responses", "openai-codex-responses"] as const;
-const tagVariable = "ELENX_LAB_CODEX_LB_USAGE_TAG";
-const baseUrlVariable = "ELENX_LAB_CODEX_LB_BASE_URL";
+const tagVariable = "XEAN_LAB_CODEX_LB_USAGE_TAG";
+const baseUrlVariable = "XEAN_LAB_CODEX_LB_BASE_URL";
 const usageHeaders = {
   "X-Codex-LB-Usage-Tag": `$${tagVariable}`,
   "X-Codex-LB-Required-Capability": "usage_tag_v1",
@@ -141,13 +141,13 @@ test("custom model configuration is disabled unless explicitly selected", () => 
 
 test("custom model configuration requires an absolute path", () => {
   expect(
-    modelRuntimeOptions({ ELENX_MODELS_PATH: "/run/elenx/models.json" }),
+    modelRuntimeOptions({ XEAN_MODELS_PATH: "/run/xean/models.json" }),
   ).toEqual({
-    modelsPath: "/run/elenx/models.json",
+    modelsPath: "/run/xean/models.json",
   });
   expect(() =>
-    modelRuntimeOptions({ ELENX_MODELS_PATH: "models.json" }),
-  ).toThrow("ELENX_MODELS_PATH must be absolute");
+    modelRuntimeOptions({ XEAN_MODELS_PATH: "models.json" }),
+  ).toThrow("XEAN_MODELS_PATH must be absolute");
 });
 
 test("a missing explicit registry fails instead of selecting public models", async () => {
@@ -205,7 +205,7 @@ test.each([...apis])(
         { transport: "sse", fetch: stubFetch },
       );
       for await (const _event of stream) {
-        // The real runtime must reach Elenx's patched native provider.
+        // The real runtime must reach Xean's patched native provider.
       }
       const result = await stream.result();
       expect(result.stopReason).toBe("error");

@@ -15,13 +15,13 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createCampaign, openCampaign, openReader } from "../../src";
-import { Journal } from "../../src/db";
+import { createCampaign, openCampaign, openReader } from "../src";
+import { Journal } from "../src/db";
 
 const directories: string[] = [];
 
 function temporaryPath(name = "campaign.db"): string {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-database-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-database-"));
   directories.push(directory);
   return join(directory, name);
 }
@@ -33,6 +33,44 @@ afterEach(() => {
 });
 
 describe("campaign database", () => {
+  test("creates schema one with an explicit Xean SQLite identity", () => {
+    const path = temporaryPath();
+    createCampaign(path, "test", null).close();
+    const header = readFileSync(path);
+    expect(header.readUInt32BE(60)).toBe(1);
+    expect(header.readUInt32BE(68)).toBe(0x7865616e);
+    const reader = openReader(path);
+    expect(reader.records()).toHaveLength(1);
+    reader.close();
+  });
+
+  test.each([
+    [0, 1],
+    [0, 8],
+    [0x74657374, 1],
+  ])(
+    "rejects foreign application %i schema %i without mutation",
+    (identity, version) => {
+      const path = temporaryPath();
+      createCampaign(path, "test", null).close();
+      const database = new Database(path, { create: false, readwrite: true });
+      database.run(`PRAGMA application_id = ${identity}`);
+      database.run(`PRAGMA user_version = ${version}`);
+      database.close(true);
+      const before = readFileSync(path);
+      const files = readdirSync(dirname(path));
+      const modified = statSync(path).mtimeMs;
+      for (const opener of [openReader, openCampaign]) {
+        expect(() => opener(path)).toThrow(
+          `unsupported campaign application: ${identity}`,
+        );
+        expect(readFileSync(path)).toEqual(before);
+        expect(readdirSync(dirname(path))).toEqual(files);
+        expect(statSync(path).mtimeMs).toBe(modified);
+      }
+    },
+  );
+
   test("queries exact ordered records with intersected filters and captured boundaries", () => {
     const path = temporaryPath();
     const journal = Journal.create(path, "query-test", null);
@@ -232,7 +270,7 @@ describe("campaign database", () => {
     const path = temporaryPath();
     const marker = join(dirname(path), "ready");
     createCampaign(path, "test", null).close();
-    const fixture = resolve("tests/v1/fixtures/hot-journal.ts");
+    const fixture = resolve("tests/fixtures/hot-journal.ts");
     const child = Bun.spawn([process.execPath, fixture, path, marker], {
       stdout: "pipe",
       stderr: "pipe",
@@ -349,16 +387,18 @@ describe("campaign database", () => {
   test("refuses an unsupported schema", () => {
     const path = temporaryPath();
     const database = new Database(path, { create: true });
+    database.run("PRAGMA application_id = 2019909998");
     database.run("PRAGMA user_version = 3");
     database.close(true);
     expect(() => openReader(path)).toThrow("unsupported campaign schema: 3");
   });
 
-  test.each([6, 7, 999])(
+  test.each([0, 2, 8, 999])(
     "refuses schema %i without changing its files",
     (version) => {
       const path = temporaryPath();
       const database = new Database(path, { create: true });
+      database.run("PRAGMA application_id = 2019909998");
       database.run(`PRAGMA user_version = ${version}`);
       database.close(true);
       const before = readFileSync(path);
@@ -385,7 +425,7 @@ describe("campaign database", () => {
     const child = Bun.spawn(
       [
         process.execPath,
-        resolve("tests/v1/fixtures/hot-journal.ts"),
+        resolve("tests/fixtures/hot-journal.ts"),
         path,
         marker,
       ],
@@ -414,12 +454,7 @@ describe("campaign database", () => {
     const marker = join(dirname(path), "wal-ready");
     createCampaign(path, "test", null).close();
     const child = Bun.spawn(
-      [
-        process.execPath,
-        resolve("tests/v1/fixtures/wal-schema.ts"),
-        path,
-        marker,
-      ],
+      [process.execPath, resolve("tests/fixtures/wal-schema.ts"), path, marker],
       { stdout: "pipe", stderr: "pipe" },
     );
     for (let attempt = 0; !existsSync(marker) && attempt < 1_000; attempt += 1)
@@ -489,7 +524,7 @@ describe("campaign database", () => {
 
   test("persists a call start before an interrupted external effect", () => {
     const path = temporaryPath();
-    const fixture = resolve("tests/v1/fixtures/crash-call.ts");
+    const fixture = resolve("tests/fixtures/crash-call.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path], {
       stdout: "pipe",
       stderr: "pipe",
@@ -505,7 +540,7 @@ describe("campaign database", () => {
   test("persists tool intent before an interrupted tool effect", () => {
     const path = temporaryPath();
     const marker = join(dirname(path), "effect.json");
-    const fixture = resolve("tests/v1/fixtures/crash-tool.ts");
+    const fixture = resolve("tests/fixtures/crash-tool.ts");
     const child = Bun.spawnSync([process.execPath, fixture, path, marker], {
       stdout: "pipe",
       stderr: "pipe",

@@ -15,7 +15,7 @@ if (dirname(artifact) !== join(root, "vendor"))
   throw new Error("Invalid Pi artifact path");
 if (sha256(await readFile(artifact)) !== metadata.artifactSha256)
   throw new Error("Pi artifact digest differs from its provenance");
-const temporary = await mkdtemp(join(tmpdir(), "elenx-pi-rebuild-"));
+const temporary = await mkdtemp(join(tmpdir(), "xean-pi-rebuild-"));
 async function run(args: string[], cwd: string) {
   const process = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
   const [status, error] = await Promise.all([

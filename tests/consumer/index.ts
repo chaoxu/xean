@@ -8,7 +8,7 @@ import {
   type CallReceipt,
   type Campaign,
   type RecordQuery,
-} from "elenx";
+} from "xean";
 import {
   builtinPi,
   derivePiSpend,
@@ -18,12 +18,9 @@ import {
   runPi,
   storePiResult,
   type PiResult,
-} from "elenx/pi";
+} from "xean/pi";
 import { z } from "zod";
-import {
-  inspectCoreCallSummaries,
-  type CoreCallSummaryV1,
-} from "elenx/observe";
+import { inspectCoreCallSummaries, type CoreCallSummaryV1 } from "xean/observe";
 
 declare const campaign: Campaign;
 const models = builtinPi();

@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { piProfileNames } from "../pi-roles";
 import { settings } from "../runner";
 import { task } from "../roles";
-import { builtinPi } from "elenx/pi";
+import { builtinPi } from "xean/pi";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 const directory = new URL("../examples/", import.meta.url);

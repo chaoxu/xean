@@ -15,9 +15,9 @@ import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/opena
 import { streamSimple as streamCodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 
-import { createCampaign, defineTool } from "../../src";
-import { derivePiSpend, piRequestAttempts, runPi } from "../../src/pi";
-import { ReasoningRecovery } from "../../src/pi-recovery";
+import { createCampaign, defineTool } from "../src";
+import { derivePiSpend, piRequestAttempts, runPi } from "../src/pi";
+import { ReasoningRecovery } from "../src/pi-recovery";
 
 const platformModel: Model<"openai-responses"> = {
   id: "test-recovery",
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 function campaign() {
-  const directory = mkdtempSync(join(tmpdir(), "elenx-recovery-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-recovery-"));
   directories.push(directory);
   return createCampaign(join(directory, "campaign.db"), "recovery-test", null);
 }

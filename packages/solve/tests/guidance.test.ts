@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { createCampaign, openCampaign, openReader } from "elenx";
+import { createCampaign, openCampaign, openReader } from "xean";
 
 import { freezeExplorerGuidance, inspectGuidance } from "../guidance";
 import { guideCampaign, inspectCampaign } from "../role-cli";
@@ -293,7 +293,7 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 38 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 1 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);
@@ -305,34 +305,34 @@ test("a run without external advice adds no guidance calls", async () => {
   expect(records(path)[0]).toEqual(start);
 });
 
-test("retired persistent settings and old workflow schemas are rejected without rewriting journals", async () => {
+test("unknown settings and unsupported workflow schemas are rejected without rewriting journals", async () => {
   const { path, request } = setup();
   const before = readFileSync(path);
   await expect(
     run(
       {
         ...request,
-        settings: { ...request.settings, explorerGuidance: [] },
+        settings: { ...request.settings, unknownSetting: true },
       } as never,
       dependencies([]),
     ),
   ).rejects.toThrow();
   expect(readFileSync(path)).toEqual(before);
-  const old = join(dirname(path), "schema-23.db");
+  const invalid = join(dirname(path), "invalid-schema.db");
   createCampaign(
-    old,
+    invalid,
     applicationId,
     jsonSnapshot({
       ...workflowConfiguration({ task, settings: request.settings }),
-      schemaVersion: 23,
+      schemaVersion: 0,
     }),
   ).close();
-  const oldBytes = readFileSync(old);
-  await expect(guideCampaign(old, first)).rejects.toThrow();
+  const invalidBytes = readFileSync(invalid);
+  await expect(guideCampaign(invalid, first)).rejects.toThrow();
   await expect(
-    run({ ...request, campaignPath: old }, dependencies([])),
+    run({ ...request, campaignPath: invalid }, dependencies([])),
   ).rejects.toThrow();
-  expect(readFileSync(old)).toEqual(oldBytes);
+  expect(readFileSync(invalid)).toEqual(invalidBytes);
 });
 
 test("invalid guidance fails without creating a campaign or changing its records", async () => {

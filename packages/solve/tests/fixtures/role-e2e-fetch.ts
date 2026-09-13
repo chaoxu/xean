@@ -18,8 +18,8 @@ globalThis.fetch = (async (input, init) => {
     throw new Error("unexpected E2E fetch without request options");
   }
   const body = JSON.parse(requestBody(init.body)) as Record<string, unknown>;
-  const log = process.env["ELENX_E2E_REQUEST_LOG"];
-  if (log === undefined) throw new Error("ELENX_E2E_REQUEST_LOG is required");
+  const log = process.env["XEAN_E2E_REQUEST_LOG"];
+  if (log === undefined) throw new Error("XEAN_E2E_REQUEST_LOG is required");
   appendFileSync(log, `${JSON.stringify(body)}\n`);
 
   const serialized = JSON.stringify(body);

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign } from "elenx";
+import { createCampaign } from "xean";
 
 import {
   createPiRoles,

@@ -118,11 +118,8 @@ test("a completed campaign is returned before initializing models or checking cr
 
 test("run honors an injected source executor instead of invoking the CLI", async () => {
   const path = campaignPath();
-  const previous = process.env["ELENX_CODEX_COMMAND"];
-  process.env["ELENX_CODEX_COMMAND"] = join(
-    dirname(path),
-    "codex-must-not-run",
-  );
+  const previous = process.env["XEAN_CODEX_COMMAND"];
+  process.env["XEAN_CODEX_COMMAND"] = join(dirname(path), "codex-must-not-run");
   try {
     const drive = dependencies([
       { submission: { notes: [{ text: "Proof of P.", support: [] }] } },
@@ -162,16 +159,16 @@ test("run honors an injected source executor instead of invoking the CLI", async
     expect(await inspectCampaign(path)).toMatchObject({
       phase: "turn-limit",
       result: {
-        schemaVersion: 9,
-        application: "elenx-solve",
+        schemaVersion: 1,
+        application: "xean-solve",
         protocol: "workflow",
         outcome: "turn-limit",
         turns: 1,
       },
     });
   } finally {
-    if (previous === undefined) delete process.env["ELENX_CODEX_COMMAND"];
-    else process.env["ELENX_CODEX_COMMAND"] = previous;
+    if (previous === undefined) delete process.env["XEAN_CODEX_COMMAND"];
+    else process.env["XEAN_CODEX_COMMAND"] = previous;
   }
 });
 

@@ -81,7 +81,9 @@ export interface PiRunOptions {
   readonly candidate?: EntryId;
   readonly tools?: readonly Tool[];
   readonly stopAfterToolResult?: true;
+  /** Retryable provider errors; independent of output-length continuations. */
   readonly maxRecoveries?: number;
+  /** Ordinary output-length continuations; omitted means no continuations. */
   readonly maxLengthContinuations?: number;
   readonly submissionGate?: PiSubmissionGate | undefined;
   readonly signal?: AbortSignal;
@@ -110,26 +112,26 @@ type PiResultBody = PiOutcome & { readonly telemetry: PiTelemetry };
 
 export type PiResult = PiResultBody & { readonly call: EntryId };
 
-export const ELENX_PI_TELEMETRY_SCHEMA = defineTelemetrySchema({
+export const XEAN_PI_TELEMETRY_SCHEMA = defineTelemetrySchema({
   version: 1,
   spans: {
-    "elenx.pi.run": {
-      description: "One Pi agent loop inside an Elenx logical call.",
+    "xean.pi.run": {
+      description: "One Pi agent loop inside a Xean logical call.",
       parents: { kind: "root_or_external" },
       startAttributes: {
-        "elenx.call.label": {
+        "xean.call.label": {
           type: "string",
           required: true,
           cardinality: "high",
           description: "Application-defined reason for the call.",
         },
-        "elenx.candidate": {
+        "xean.candidate": {
           type: "number",
           required: false,
           cardinality: "high",
           description: "Candidate sequence when the call evaluates one.",
         },
-        "elenx.pi.reasoning.requested": {
+        "xean.pi.reasoning.requested": {
           type: "string",
           required: false,
           values: reasoningLevels,
@@ -139,7 +141,7 @@ export const ELENX_PI_TELEMETRY_SCHEMA = defineTelemetrySchema({
         },
       },
       endAttributes: {
-        "elenx.pi.outcome": {
+        "xean.pi.outcome": {
           type: "string",
           values: ["succeeded", "failed", "cancelled"],
           cardinality: "low",
@@ -156,7 +158,7 @@ export const ELENX_PI_TELEMETRY_SCHEMA = defineTelemetrySchema({
 } as const);
 
 export const PI_TELEMETRY_SCHEMA_VERSIONS = {
-  "elenx.pi": ELENX_PI_TELEMETRY_SCHEMA.version,
+  "xean.pi": XEAN_PI_TELEMETRY_SCHEMA.version,
   "pi.ai": AI_TELEMETRY_SCHEMA.version,
 } as const;
 
@@ -167,10 +169,10 @@ const PI_REQUEST_TELEMETRY_SCHEMA = defineTelemetrySchema({
       ...AI_TELEMETRY_SCHEMA.spans["pi.ai.request"],
       endAttributes: {
         ...AI_TELEMETRY_SCHEMA.spans["pi.ai.request"].endAttributes,
-        "elenx.pi.request.checkpoint": {
+        "xean.pi.request.checkpoint": {
           type: "number",
           description:
-            "Durable v2 request call whose result owns this measurement.",
+            "Durable request call whose result owns this measurement.",
         },
       },
     },
@@ -215,7 +217,7 @@ export const piTelemetry = z
   .strictObject({
     schemaVersions: z
       .strictObject({
-        "elenx.pi": z.literal(PI_TELEMETRY_SCHEMA_VERSIONS["elenx.pi"]),
+        "xean.pi": z.literal(PI_TELEMETRY_SCHEMA_VERSIONS["xean.pi"]),
         "pi.ai": z.literal(PI_TELEMETRY_SCHEMA_VERSIONS["pi.ai"]),
       })
       .readonly(),
@@ -253,7 +255,7 @@ function modelProfile(model: Model<Api>): Json {
 }
 
 export const piRequest = z.strictObject({
-  protocol: z.literal("elenx/pi-run/v1"),
+  protocol: z.literal("xean/pi-run/v1"),
   model: piModel,
   modelProfile: json,
   system: z.string().optional(),
@@ -329,9 +331,9 @@ function parsePiRequest(
   return parsed.success ? parsed.data : undefined;
 }
 
-const piRequestLabel = "elenx/pi-request";
+const piRequestLabel = "xean/pi-request";
 const piRequestAttempt = z.strictObject({
-  protocol: z.literal("elenx/pi-request/v2"),
+  protocol: z.literal("xean/pi-request/v1"),
   parent: entryId,
   model: piModel,
   payloadRef: z.string().regex(/^[a-f0-9]{64}$/),
@@ -556,9 +558,9 @@ const measuredUsageValue = z
     ...(reasoning === undefined ? {} : { reasoning }),
   }));
 
-/** The durable terminal measurement for one v2 provider request. */
+/** The durable terminal measurement for one provider request. */
 export const piRequestCompletion = z.strictObject({
-  protocol: z.literal("elenx/pi-request-completion/v1"),
+  protocol: z.literal("xean/pi-request-completion/v1"),
   parent: entryId,
   operation: z
     .strictObject({
@@ -612,7 +614,7 @@ function requestCompletion(
   final: AssistantMessage,
 ): z.output<typeof piRequestCompletion> {
   return piRequestCompletion.parse({
-    protocol: "elenx/pi-request-completion/v1",
+    protocol: "xean/pi-request-completion/v1",
     parent,
     operation: {
       provider: model.provider,
@@ -741,7 +743,7 @@ export function derivePiSpend(entries: readonly Entry[]) {
     if (new Set(spans.map(({ id }) => id)).size !== spans.length)
       throw new Error("duplicate Pi telemetry span in call " + call.seq);
     const roots = spans.filter(
-      ({ name, parentId }) => name === "elenx.pi.run" && parentId === null,
+      ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
     );
     if (roots.length !== 1 || !roots[0]!.settled)
       throw new Error("invalid Pi telemetry root in call " + call.seq);
@@ -750,7 +752,7 @@ export function derivePiSpend(entries: readonly Entry[]) {
         return [];
       if (!span.settled)
         throw new Error("unsettled Pi request span in call " + call.seq);
-      const checkpoint = span.attributes["elenx.pi.request.checkpoint"];
+      const checkpoint = span.attributes["xean.pi.request.checkpoint"];
       if (checkpoint !== undefined) {
         const id = entryId.parse(checkpoint);
         const operation = durable.get(id);
@@ -1082,14 +1084,14 @@ function measuredStream(
                 {
                   label: piRequestLabel,
                   request: jsonSnapshot({
-                    protocol: "elenx/pi-request/v2",
+                    protocol: "xean/pi-request/v1",
                     parent,
                     model: modelRecord(requestModel),
                     payloadRef,
                   }),
                 },
                 async ({ call }) => {
-                  span.setAttributes({ "elenx.pi.request.checkpoint": call });
+                  span.setAttributes({ "xean.pi.request.checkpoint": call });
                   started.resolve();
                   return completion.promise;
                 },
@@ -1264,19 +1266,19 @@ async function runPiBody(
   const sessionId = crypto.randomUUID();
   const recovery = new ReasoningRecovery();
   const startSpan = createTypedSpanStarter(telemetry, [
-    ELENX_PI_TELEMETRY_SCHEMA,
+    XEAN_PI_TELEMETRY_SCHEMA,
   ]);
   try {
     const body = await startSpan(
-      "elenx.pi.run",
+      "xean.pi.run",
       {
-        "elenx.call.label": options.label,
+        "xean.call.label": options.label,
         ...(options.candidate === undefined
           ? {}
-          : { "elenx.candidate": options.candidate }),
+          : { "xean.candidate": options.candidate }),
         ...(exact.reasoning === undefined
           ? {}
-          : { "elenx.pi.reasoning.requested": exact.reasoning }),
+          : { "xean.pi.reasoning.requested": exact.reasoning }),
       },
       async (span) => {
         let turns = 0;
@@ -1435,7 +1437,6 @@ async function runPiBody(
             ),
           );
         let messages = await loop(exact.prompt, []);
-        let legacyRecoveries = 0;
         let lengthContinuations = 0;
         for (;;) {
           if (gate === undefined && turns >= 32) break;
@@ -1472,14 +1473,12 @@ async function runPiBody(
             )
               break;
           }
-          if (exact.maxLengthContinuations === undefined) {
-            if (legacyRecoveries >= (exact.maxRecoveries ?? 0)) break;
-            legacyRecoveries += 1;
-          } else if (retry) {
+          if (retry) {
             if (errorRecoveries >= (exact.maxRecoveries ?? 0)) break;
             errorRecoveries += 1;
           } else {
-            if (lengthContinuations >= exact.maxLengthContinuations) break;
+            if (lengthContinuations >= (exact.maxLengthContinuations ?? 0))
+              break;
             lengthContinuations += 1;
           }
           const prior = messages;
@@ -1499,7 +1498,7 @@ async function runPiBody(
           options.model.contextWindow,
           gate !== undefined,
         );
-        span.setAttributes({ "elenx.pi.outcome": outcome.state });
+        span.setAttributes({ "xean.pi.outcome": outcome.state });
         if (outcome.state !== "succeeded") {
           span.setStatus({
             status: "error",
@@ -1526,7 +1525,7 @@ export async function runPi(
   options: PiRunOptions,
 ): Promise<PiResult> {
   const parsed = piRequest.parse({
-    protocol: "elenx/pi-run/v1",
+    protocol: "xean/pi-run/v1",
     model: modelRecord(options.model),
     modelProfile: modelProfile(options.model),
     ...(options.system === undefined ? {} : { system: options.system }),

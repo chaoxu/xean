@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import { createCampaign, openCampaign, openReader, type Campaign } from "elenx";
-import { builtinPi } from "elenx/pi";
+import { createCampaign, openCampaign, openReader, type Campaign } from "xean";
+import { builtinPi } from "xean/pi";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { z } from "zod";
 
@@ -78,7 +78,7 @@ export async function init(input: z.input<typeof runRequest>) {
         declaration?.kind !== "campaign" ||
         declaration.application !== applicationId
       )
-        throw new Error("not a current Elenx solver journal");
+        throw new Error("not a current Xean solver journal");
       const frozen = workflowConfig.parse(declaration.config);
       if (!isDeepStrictEqual(frozen, config))
         throw new Error("task or settings disagree with the workflow journal");
@@ -156,7 +156,7 @@ export async function run(
           declaration?.kind !== "campaign" ||
           declaration.application !== applicationId
         )
-          throw new Error("not a current Elenx solver journal");
+          throw new Error("not a current Xean solver journal");
         const frozen = workflowConfig.parse(
           declaration?.kind === "campaign" ? declaration.config : undefined,
         );
@@ -167,7 +167,7 @@ export async function run(
         }
         const through = campaign.lastSequence();
         const snapshot = await deriveWorkflow(
-          campaign.records({ excludeLabels: ["elenx/pi-request"], through }),
+          campaign.records({ excludeLabels: ["xean/pi-request"], through }),
         );
         initial = { snapshot, through };
         const phase = snapshot.phase;

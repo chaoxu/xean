@@ -52,7 +52,7 @@ export interface PiRecoveredErrorObservationV1 {
 }
 
 export interface CoreCampaignObservationV1 {
-  readonly schema: "elenx.core-observation/v1";
+  readonly schema: "xean.core-observation/v1";
   readonly application: string;
   readonly applicationConfig: Json;
   readonly createdAtMs: number;
@@ -67,7 +67,7 @@ export interface CoreCampaignObservationV1 {
 }
 
 export interface CoreCampaignSummaryV1 {
-  readonly schema: "elenx.core-observation-summary/v1";
+  readonly schema: "xean.core-observation-summary/v1";
   readonly application: string;
   readonly createdAtMs: number;
   readonly lastSeq: number;
@@ -292,7 +292,7 @@ function recoveredErrors(
 ): readonly PiRecoveredErrorObservationV1[] {
   if (stored.state !== "succeeded") return [];
   const root = stored.telemetry.spans.find(
-    ({ name, parentId }) => name === "elenx.pi.run" && parentId === null,
+    ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
   );
   return stored.telemetry.spans
     .filter(
@@ -333,7 +333,7 @@ export function inspectCoreCampaignRecords(
   const index = indexRecords(records);
   const accounting = indexAccounting(index);
   return {
-    schema: "elenx.core-observation/v1",
+    schema: "xean.core-observation/v1",
     application: index.declaration.application,
     applicationConfig: index.declaration.config,
     createdAtMs: index.declaration.atMs,
@@ -378,7 +378,7 @@ export function inspectCoreCampaignSummaryRecords(
     (call) => index.results.get(call.seq) === undefined,
   );
   return {
-    schema: "elenx.core-observation-summary/v1",
+    schema: "xean.core-observation-summary/v1",
     application: index.declaration.application,
     createdAtMs: index.declaration.atMs,
     lastSeq: index.last.seq,

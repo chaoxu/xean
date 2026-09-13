@@ -1,6 +1,6 @@
 # Terms
 
-This is the vocabulary of Elenx and its solver. Work in this repository uses these words for these concepts and no others. A new concept gets an entry here in the same change that introduces it. A synonym is collapsed into the existing term, never added beside it. Code identifiers compose these terms, as in `roleLabels`, `verifierNames`, and `journalVerdicts`.
+This is the vocabulary of xean and `xean-solve`. Work in this repository uses these words for these concepts and no others. A new concept gets an entry here in the same change that introduces it. A synonym is collapsed into the existing term, never added beside it. Code identifiers compose these terms, as in `roleLabels`, `verifierNames`, and `journalVerdicts`.
 
 ## Kernel
 
@@ -28,11 +28,11 @@ This is the vocabulary of Elenx and its solver. Work in this repository uses the
 | first request | The first provider operation within one logical Pi call. |
 | continuation | Any subsequent provider operation within that same logical Pi call, including recovery and length continuation. |
 | submission gate | The optional frozen Pi policy `{completeArgument, emptyArgument?, reserveTokens?, contextBudgetTokens?, continuationPrompt?}` for one submission tool, callable once per assistant response. Every valid submission executes. The call ends when its declared completion field is true, its optional `emptyArgument` names an empty array, or Pi's context estimate reaches the context budget minus the native safety margin and reserve. A gate without `emptyArgument` continues after an empty submission while context remains. Every nonterminal submission receives the frozen application continuation prompt, or default feedback, as a fresh user message. The reserve defaults to the model's maximum output tokens. |
-| context budget | The preferred total-context allocation for a gated call, bounded by the actual model context window. Pi's `contextBudgetTokens` defaults to that window. Solver settings may override Explorer's default 400,000-token budget with `explorerContextBudgetTokens`; it applies only with Explorer continuation enabled. It is separate from model capacity, input-based pricing thresholds, and cumulative billed usage. |
+| context budget | The preferred total-context allocation for a gated call, bounded by the actual model context window. Pi's `contextBudgetTokens` defaults to that window. `xean-solve` settings may override Explorer's default 400,000-token budget with `explorerContextBudgetTokens`; it applies only with Explorer continuation enabled. It is separate from model capacity, input-based pricing thresholds, and cumulative billed usage. |
 | recovered request error | A provider error inside a Pi call that ultimately succeeds. It remains an error in the journal and does not imply complete usage accounting. |
 | accounting | The inspection report of measured cost and its completeness: missing request usage, unaccounted calls and their saved request checkpoints, and calls without recorded prices. Missing cost remains unknown. |
 
-## Solver
+## xean-solve
 
 | Term | Meaning |
 | --- | --- |
@@ -71,7 +71,7 @@ This is the vocabulary of Elenx and its solver. Work in this repository uses the
 | fold | `deriveWorkflow`: the derivation of notes and phase from the journal, matching each role call by its derived prompt bytes. It builds the projection and asks it which notes exist at a journal sequence, which are accepted, and for a note's closure. |
 | projection | `Projection`: the fold's in-memory maps of notes, summaries, support, and verdicts, rebuilt from the journal on every derivation and never persisted. It alone derives verified, dead, and accepted. |
 | schema version | The declaration's version moves with every role prompt or journal shape change. The contract's version moves only with the contract or report shape. |
-| contract | The output of `elenx-solve contract`: command, arguments, outcomes, and the execution report schema. |
+| contract | The output of `xean-solve contract`: command, arguments, outcomes, and the execution report schema. |
 | settings | One profile for the explorer, one for the coordinator, one per verifier, `maxExplorerTurns`, and `window`. Fixed for the campaign. |
 | guidance | Fallible advice for the next Explorer turn, carried in its `explorerGuidance` string. The coordinator supplies a recommendation in its submission. `guide` appends external advice, which the fold combines with that recommendation in journal order. Each turn retains its advice through retries. A fresh Explorer call after interruption also receives notes already saved by that turn. Advice expires after that turn and leaves the original task and verification authority unchanged. The first turn has empty guidance unless external advice was submitted. |
 | profile | A provider, model, and reasoning level. The source verifier's profile is either the Codex CLI on its native credential, provider `codex`, whose `search` controls web search and defaults to true, or a Pi profile without web search. Offline source verification uses mathematical knowledge and supplied texts. |
@@ -80,7 +80,7 @@ This is the vocabulary of Elenx and its solver. Work in this repository uses the
 | init | The command that creates a workflow declaration or matches its exact task and settings, with no provider setup or model calls. Its arguments are the same as `run`. |
 | submit | The command that appends text notes with optional external verification to an existing workflow campaign, with no model calls. An id makes identical retries return the same receipt. Notes enter the next available coordinator input, with incoming notes numbered after any active Explorer output. `inspect --include-submissions` reports their delivery and assigned IDs. A terminal campaign leaves later submissions pending. |
 
-The Lab's own terms, such as experiment, arm, replicate, attempt, and generation, live in the `elenx-lab` repository.
+The `xean-lab` terms experiment, arm, replicate, attempt, and generation describe experiment execution and provenance.
 
 ## Words not to use
 

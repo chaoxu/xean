@@ -6,7 +6,7 @@ import {
   openReader,
   type EntryId,
   type Verdict,
-} from "elenx";
+} from "xean";
 
 const verifier = "scripted-fixture/v1";
 const fixture = "Every finite tree has one fewer edge than vertices.";
@@ -70,6 +70,6 @@ export async function runScriptedVerifier(
 if (import.meta.main) {
   const path = process.argv[2];
   if (path === undefined)
-    throw new Error("usage: bun examples/v1/scripted-verifier.ts CAMPAIGN.db");
+    throw new Error("usage: bun examples/scripted-verifier.ts CAMPAIGN.db");
   console.log(JSON.stringify(await runScriptedVerifier(path), null, 2));
 }

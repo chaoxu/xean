@@ -3,6 +3,6 @@
   "sourceIntegrity": "sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==",
   "patch": "patches/@earendil-works%2Fpi-ai@0.85.1.patch",
   "patchSha256": "93937a5878ccc4fc0683e341d367393d8c05e8197b625d8d1dd1cbe460278640",
-  "artifact": "vendor/pi-ai-0.85.1-elenx.3.tgz",
+  "artifact": "vendor/pi-ai-0.85.1-xean.1.tgz",
   "artifactSha256": "5298ff1111c0c78ed7838894e889a21622e7073af27593eb3c7bc0d3d0858146"
 }

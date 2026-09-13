@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign } from "elenx";
-import { derivePiSpend, storePiResult, type PiRunOptions } from "elenx/pi";
+import { createCampaign } from "xean";
+import { derivePiSpend, storePiResult, type PiRunOptions } from "xean/pi";
 
 import { campaignAccounting } from "../accounting";
 import { inspectCampaign } from "../role-cli";
@@ -27,7 +27,7 @@ const options: PiRunOptions = {
     maxTokens: 100,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   },
-  label: "elenx-solve/explorer",
+  label: "xean-solve/explorer",
   prompt: "Test accounting",
 };
 
@@ -46,7 +46,7 @@ function resultBody(measured: boolean) {
 }
 
 async function records(measured: boolean) {
-  const campaign = createCampaign(campaignPath(), "elenx-solve", {
+  const campaign = createCampaign(campaignPath(), "xean-solve", {
     kind: "calls",
   });
   try {
@@ -88,7 +88,7 @@ test("an unsettled call prevents complete accounting even before a usage result"
 
 test("inspection exposes completeness without modifying the journal", async () => {
   const path = campaignPath();
-  const campaign = createCampaign(path, "elenx-solve", { kind: "calls" });
+  const campaign = createCampaign(path, "xean-solve", { kind: "calls" });
   await campaign.call(
     { label: options.label, request: fakePiRequest(options), tools: [] },
     async ({ call }) => storePiResult(campaign, { call, ...resultBody(false) }),

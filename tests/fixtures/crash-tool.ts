@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { writeFileSync } from "node:fs";
 
-import { createCampaign, defineTool } from "../../../src";
+import { createCampaign, defineTool } from "../../src";
 
 const path = process.argv[2];
 const marker = process.argv[3];
