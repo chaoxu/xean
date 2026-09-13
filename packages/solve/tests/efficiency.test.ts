@@ -8,6 +8,7 @@ import {
   judgedBy,
   savedExplorerSubmission,
   succeededSubmission,
+  verifierInput,
   type Note,
 } from "../roles";
 import { supportClosure } from "../support";
@@ -91,6 +92,97 @@ test("the verification window validates only notes it reads", async () => {
     "missing support note n3",
   );
 });
+
+test("verification prefixes do not expand support already read", async () => {
+  let reads = 0;
+  const count = 128;
+  const known = Array.from({ length: count }, (_, index): Note => ({
+    ...note(index + 1),
+    get support() {
+      if (++reads > count * 3)
+        throw new Error("verification prefix repeatedly expanded support");
+      return index === 0 ? [] : [`n${index}`];
+    },
+  }));
+  const verify = known.map(({ id }) => ({
+    note: id,
+    verifiers: ["source" as const],
+  }));
+  expect(await verificationPrefix(verify, known, 100_000)).toEqual(verify);
+  expect(reads).toBeLessThanOrEqual(count * 3);
+});
+
+test.each([
+  {
+    known: [note(1), note(2), note(2)],
+    verify: ["n1"],
+    error: "duplicate note",
+  },
+  {
+    known: [note(1), note(2, ["n2"])],
+    verify: ["n1", "n2"],
+    error: "must precede",
+  },
+  {
+    known: [note(1, ["n2"]), note(2)],
+    verify: ["n2", "n1"],
+    error: "must precede",
+  },
+  {
+    known: [note(1), note(3, ["n2"])],
+    verify: ["n1", "n3"],
+    error: "missing support note n2",
+  },
+])(
+  "verification prefix still rejects $error",
+  async ({ known, verify, error }) => {
+    await expect(
+      verificationPrefix(
+        verify.map((note) => ({ note, verifiers: ["source"] })),
+        known,
+        100_000,
+      ),
+    ).rejects.toThrow(error);
+  },
+);
+
+test.each([true, false])(
+  "eligibility handles a deep valid support chain, verified=%s",
+  async (verified) => {
+    const known = Array.from({ length: 32_000 }, (_, index): Note => ({
+      ...note(index + 1, index === 0 ? [] : [`n${index}`]),
+      verified,
+    }));
+    const last = known.at(-1)!;
+    const input = await verifierInput.parseAsync({
+      task: { problem: "Prove P.", completionCriteria: "A complete proof." },
+      verify: [{ note: last.id, verifiers: ["source", "correctness"] }],
+      notes: [last],
+      support: known.slice(0, -1),
+    });
+    expect(judgedBy(input, [], "source")).toEqual([last.id]);
+    expect(
+      judgedBy(
+        input,
+        [
+          {
+            note: last.id,
+            verifier: "source",
+            verdict: "PASS",
+            report: "Passed.",
+          },
+          {
+            note: "n1",
+            verifier: "source",
+            verdict: "FAIL",
+            report: "Root failed.",
+          },
+        ],
+        "correctness",
+      ),
+    ).toEqual([]);
+  },
+);
 
 test("startup reuses its captured derivation only while the journal boundary matches", async () => {
   const task = { problem: "Prove P.", completionCriteria: "A complete proof." };

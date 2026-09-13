@@ -178,9 +178,14 @@ export async function verificationPrefix(
   let taken = 0;
   for (const entry of verify) {
     const note = pick(notes, entry.note);
-    const added = [note.id, ...(await supportClosure([note], notes))].filter(
-      (id) => !read.has(id),
-    );
+    // The first closure validates all known IDs, including disconnected notes.
+    const closed =
+      taken > 0 &&
+      note.support.every((id) => read.has(id) && byId(id, note.id) < 0);
+    const added = [
+      note.id,
+      ...(closed ? [] : await supportClosure([note], notes)),
+    ].filter((id) => !read.has(id));
     const cost = added.reduce(
       (sum, id) => sum + pick(notes, id).text.length,
       0,

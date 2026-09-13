@@ -11,6 +11,7 @@ This is the vocabulary of Elenx and its solver. Work in this repository uses the
 | journal | The append-only entry sequence in a campaign. Every entry has `seq` and `atMs`. |
 | entry | One journal record: campaign, candidate, verdict, call, tool-call, call-result, tool-result. |
 | call | One journaled invocation: label, optional role, optional candidate, exact request, declared tools. |
+| call summary | A call's timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting, derived from captured entries without response text, transcript attachments, or candidate material. It validates metadata, not attachment bytes. |
 | settled | A call whose call-result is written. `inspect` reports `settledAtMs`, `elapsedMs`, and the call-result state. |
 | state | The state of a call-result, `returned` or `threw`, or of a Pi or Codex call, `succeeded`, `failed`, or `cancelled`. Never the workflow phase. |
 | label | The string naming a call. |

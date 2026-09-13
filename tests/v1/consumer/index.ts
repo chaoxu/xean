@@ -20,6 +20,10 @@ import {
   type PiResult,
 } from "elenx/pi";
 import { z } from "zod";
+import {
+  inspectCoreCallSummaries,
+  type CoreCallSummaryV1,
+} from "elenx/observe";
 
 declare const campaign: Campaign;
 const models = builtinPi();
@@ -72,3 +76,7 @@ const query: RecordQuery = {
 void campaign.records(query);
 void campaign.record(1);
 void campaign.payload(campaign.storePayload({ input: [] }));
+const callSummaries: readonly CoreCallSummaryV1[] = inspectCoreCallSummaries(
+  campaign.records(),
+);
+void callSummaries;

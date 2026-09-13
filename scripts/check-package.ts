@@ -86,6 +86,7 @@ import {
 } from "elenx/pi";
 import {
   inspectCoreCampaign, inspectCoreCampaignSummary,
+  inspectCoreCallSummaries,
   type CoreCampaignObservationV1, type CoreCampaignSummaryV1,
 } from "elenx/observe";
 import { z } from "zod";
@@ -139,6 +140,10 @@ try {
   if (stored?.kind !== "call-result" || stored.state !== "returned")
     throw new Error("Packed consumer is missing the Pi result record");
   const compact = piResultRecord.parse(stored.output);
+  const summaries = inspectCoreCallSummaries(campaign.records());
+  if (summaries.length !== 1 || summaries[0]?.pi?.outcome !== probe.state ||
+    "responseText" in (summaries[0]?.pi ?? {}))
+    throw new Error("Packed consumer did not receive compact call metadata");
   if (!isDeepStrictEqual(readPiResult(compact, campaign), probe) ||
     !isDeepStrictEqual(storePiResult(campaign, probe), compact))
     throw new Error("Packed consumer did not reconstruct the full Pi result");

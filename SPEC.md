@@ -11,7 +11,7 @@ Elenx provides four guarantees:
 3. verdicts bound to fresh successful calls carrying the ID of the exact stored candidate; and
 4. a derived, witnessed verification status requiring every declared verifier to pass and none to fail.
 
-Elenx is not an agent framework. Applications own coordination, routes, context assembly, source search, computation, retries, budgets, filesystem policy, publication, and user interfaces.
+The kernel owns durable campaign facts, generic observation, and provider accounting. Solver owns the mathematical workflow. Lab owns experiments, execution provenance, and analysis. Observer owns HTTP serving, caching, and rendering. Applications own coordination, routes, context assembly, source search, computation, retries, budgets, filesystem policy, publication, and user interfaces.
 
 ## Runtime and dependencies
 
@@ -162,8 +162,11 @@ readPiResult(output, reader): PiResult // from elenx/pi
 piRequestAttempts(records, parent?, reader?): readonly PiRequestAttempt[] // from elenx/pi
 derivePiSpend(records): PiSpend // from elenx/pi
 piReasoning, piRequest, piTelemetry, piStoredResult, piResultRecord // Zod schemas from elenx/pi
+inspectCoreCallSummaries(records): readonly CoreCallSummaryV1[] // from elenx/observe
 ```
 
 `piResultRecord` validates the compact journal output. `piStoredResult` validates the expanded result body without its `call` field, including text, transcript, and telemetry. Both reject unknown top-level fields. Earlier campaign schemas require their matching released package.
+
+`inspectCoreCallSummaries(records)` derives call timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from one captured entry array. It validates metadata without reading response or transcript attachments or candidate material, and omits `pi.responseText`. Full `inspectCoreCampaignRecords(reader, records)` retains response text, candidate material, and attachment integrity checks.
 
 All database methods are synchronous because Bun SQLite is synchronous. External execution through `call` and `runPi` is asynchronous.

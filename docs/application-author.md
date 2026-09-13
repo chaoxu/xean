@@ -165,6 +165,8 @@ The campaign artifact stores candidate bytes, requests, prompts, transcripts, to
 
 `inspectCoreCampaign` separates `spend.requests.first` from `spend.requests.continuation`, with `cachedInputShare` when measured input is available. `spend.recoveredRequestErrors` counts provider errors inside Pi calls that ultimately succeeded. Full call observations include `pi.accounting.recoveredErrors`, with the one-based request position and available saved error name and message. A healthy final call can contain recovered errors. Missing request usage remains unknown in both partitions.
 
+For per-call analysis, use `inspectCoreCallSummaries(records)` from `elenx/observe`. It returns timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from the same captured entry array, without loading response or transcript attachments or candidate material. Use `inspectCoreCampaignRecords(reader, records)` for full content and attachment integrity checks. These generic facts support Solver's mathematical workflow, Lab's experiments and provenance, and Observer's HTTP, caching, and rendering.
+
 ## Resume and read safely
 
 Use `openCampaign(path)` only after the prior writer has terminated or closed, then derive the next application action from `campaign.records()`. Close every handle in `finally`; copying an open database is unsupported. Calls and tool calls without matching results require external reconciliation and are not automatically replayable. Use `openReader(path)` for read-only inspection. Recovery, copying, rollback-journal, and rejected WAL-state rules are defined in [`../SPEC.md`](../SPEC.md#campaign-artifact).

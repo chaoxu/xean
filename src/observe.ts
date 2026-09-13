@@ -112,6 +112,10 @@ export interface CoreCallObservationV1 {
   };
 }
 
+export type CoreCallSummaryV1 = Omit<CoreCallObservationV1, "pi"> & {
+  readonly pi?: Omit<NonNullable<CoreCallObservationV1["pi"]>, "responseText">;
+};
+
 export type PiAccountingObservationV1 =
   | {
       readonly state: "available";
@@ -335,9 +339,15 @@ export function inspectCoreCampaignRecords(
     createdAtMs: index.declaration.atMs,
     lastSeq: index.last.seq,
     lastAtMs: index.last.atMs,
-    calls: index.calls.map((call) =>
-      projectCall(reader, index, accounting, call),
-    ),
+    calls: index.calls.map((call) => {
+      const value = projectCall(index, accounting, call);
+      const stored = accounting.stored.get(call.seq);
+      const full =
+        stored === undefined ? undefined : readPiResult(stored, reader);
+      return full?.text && value.pi
+        ? { ...value, pi: { ...value.pi, responseText: full.text } }
+        : value;
+    }),
     candidates: index.candidates.map((candidate) =>
       projectCandidate(reader, index, candidate),
     ),
@@ -347,6 +357,15 @@ export function inspectCoreCampaignRecords(
       unaccountedCalls: accounting.unaccountedCalls,
     },
   };
+}
+
+/** Project call metadata and accounting without reading result or candidate payloads. */
+export function inspectCoreCallSummaries(
+  records: readonly Entry[],
+): readonly CoreCallSummaryV1[] {
+  const index = indexRecords(records);
+  const accounting = indexAccounting(index);
+  return index.calls.map((call) => projectCall(index, accounting, call));
 }
 
 /** Summarize a caller's captured journal boundary without loading payloads. */
@@ -534,16 +553,13 @@ function piEntries(index: RecordIndex, call: CallEntry): readonly Entry[] {
 }
 
 function projectCall(
-  reader: Reader,
   index: RecordIndex,
   accounting: AccountingIndex,
   call: CallEntry,
-): CoreCallObservationV1 {
+): CoreCallSummaryV1 {
   const result = index.results.get(call.seq);
   const request = piRequest.safeParse(call.request);
-  const stored = accounting.stored.get(call.seq);
-  const parsed =
-    stored === undefined ? undefined : readPiResult(stored, reader);
+  const parsed = accounting.stored.get(call.seq);
   const callAccounting = accounting.byCall.get(call.seq);
   return {
     id: call.seq,
@@ -569,12 +585,7 @@ function projectCall(
                 ? {}
                 : { reasoning: request.data.reasoning }),
             },
-            ...(parsed === undefined
-              ? {}
-              : {
-                  outcome: parsed.state,
-                  ...(parsed.text === "" ? {} : { responseText: parsed.text }),
-                }),
+            ...(parsed === undefined ? {} : { outcome: parsed.state }),
             checkpoints: (index.attemptsByParent.get(call.seq) ?? []).map(
               (attempt) => ({ id: attempt.call, state: attempt.state }),
             ),

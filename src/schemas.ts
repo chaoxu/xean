@@ -37,7 +37,7 @@ function resultEntries<
   const Kind extends
     typeof ENTRY_KINDS.callResult | typeof ENTRY_KINDS.toolResult,
 >(kind: Kind) {
-  return [
+  return z.discriminatedUnion("state", [
     z.strictObject({
       ...base,
       kind: z.literal(kind),
@@ -52,10 +52,10 @@ function resultEntries<
       state: z.literal("threw"),
       error: z.string(),
     }),
-  ] as const;
+  ]);
 }
 
-export const entry = z.union([
+export const entry = z.discriminatedUnion("kind", [
   z.strictObject({
     ...base,
     kind: z.literal(ENTRY_KINDS.campaign),
@@ -91,8 +91,8 @@ export const entry = z.union([
     source: z.string().min(1).optional(),
     input: json,
   }),
-  ...resultEntries(ENTRY_KINDS.callResult),
-  ...resultEntries(ENTRY_KINDS.toolResult),
+  resultEntries(ENTRY_KINDS.callResult),
+  resultEntries(ENTRY_KINDS.toolResult),
 ]);
 
 export type Entry = z.output<typeof entry>;

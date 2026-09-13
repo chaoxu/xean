@@ -484,6 +484,12 @@ export function judgedBy(
       supportMemo.set(id, result);
       return result;
     };
+    if (deadMemo.size === 0) {
+      for (const id of [...known.keys()].sort(byId)) {
+        dead(id);
+        supportPassed(id);
+      }
+    }
     if (
       verifierNames
         .slice(0, verifierIndex(verifier))

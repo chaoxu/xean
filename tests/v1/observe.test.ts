@@ -14,6 +14,7 @@ import {
   inspectCoreCampaignRecords,
   inspectCoreCampaignSummary,
   inspectCoreCampaignSummaryRecords,
+  inspectCoreCallSummaries,
 } from "../../src/observe";
 import {
   PI_TELEMETRY_SCHEMA_VERSIONS,
@@ -103,6 +104,37 @@ const firstUsage = {
   totalTokens: 16,
   cost: { input: 1, output: 8, cacheRead: 0.5, cacheWrite: 0.5, total: 10 },
 };
+
+test("call summaries preserve full metadata at the captured boundary", async () => {
+  const campaign = createCampaign(campaignPath(), "call-summary", null);
+  try {
+    campaign.submitCandidate(new TextEncoder().encode("proof"), ["check"]);
+    await campaign.call(
+      { label: "measured", role: "explorer", request: piRequest() },
+      async ({ call }) =>
+        piResult(campaign, call, attributes(firstUsage), [message(firstUsage)]),
+    );
+    await expect(
+      campaign.call({ label: "failed-local", request: null }, async () => {
+        throw new Error("local failure");
+      }),
+    ).rejects.toThrow("local failure");
+    const records = campaign.records();
+    const full = inspectCoreCampaignRecords(campaign, records);
+    const metadata = full.calls.map(({ pi, ...call }) => {
+      if (pi === undefined) return call;
+      const { responseText: _, ...summary } = pi;
+      return { ...call, pi: summary };
+    });
+    expect(inspectCoreCallSummaries(records)).toEqual(metadata);
+    expect(full.calls[0]?.pi?.responseText).toBe("done");
+    await campaign.call({ label: "later", request: null }, async () => null);
+    expect(inspectCoreCallSummaries(records)).toEqual(metadata);
+    expect(inspectCoreCallSummaries(campaign.records())).toHaveLength(3);
+  } finally {
+    campaign.close();
+  }
+});
 const secondUsage = {
   input: 0,
   output: 5,
@@ -768,6 +800,7 @@ test.each([
       const records = campaign.records();
       const summary = inspectCoreCampaignSummaryRecords(records);
       const full = inspectCoreCampaignRecords(campaign, records);
+      const callSummaries = inspectCoreCallSummaries(records);
       expect(summary.spend).toEqual({
         ...full.spend,
         unsupportedCalls: 0,
@@ -789,6 +822,7 @@ test.each([
         database.close();
       }
       expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
+      expect(inspectCoreCallSummaries(records)).toEqual(callSummaries);
       expect(derivePiSpend(records).summary).toMatchObject({
         logicalProviderRequests: 1,
       });
