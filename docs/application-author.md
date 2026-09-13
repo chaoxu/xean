@@ -10,7 +10,7 @@ bun add github:chaoxu/elenx zod@4.5.4
 
 Use `reader.record(seq)` for one entry and `reader.records({kinds: ["tool-call"], call})` for a call's tool submissions. Query filters run in SQLite before unrelated request bodies are parsed. `reader.lastSequence()` followed by queries with `through` captures a consistent immutable prefix. `records()` with no options still returns every exact entry. The complete `RecordQuery` contract is in [SPEC.md](../SPEC.md#campaign-artifact).
 
-Large provider payloads can be saved explicitly with `campaign.storePayload(value)`. It returns a content digest, and `reader.payload(digest)` reconstructs the captured JSON, including property order. Repeated input items share storage. Put the digest in a versioned application request rather than inventing magic reference keys that ordinary entry reads must interpret. Saving a payload is local persistence and makes no provider request.
+Large provider payloads can be saved explicitly with `campaign.storePayload(value)`. It returns a content digest, and `reader.payload(digest)` reconstructs the captured JSON, including property order. Repeated input items and ordered prefixes share storage. Put the digest in a versioned application request rather than inventing magic reference keys that ordinary entry reads must interpret. Saving a payload is local persistence and makes no provider request.
 
 If you already have serialized JSON, use `campaign.storePayloadJson(encoded)` to avoid making an intermediate object copy. It parses and reserializes the JSON before hashing, preserving the resulting property order and rejecting malformed JSON before writing.
 

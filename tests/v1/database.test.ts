@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -353,17 +354,26 @@ describe("campaign database", () => {
     expect(() => openReader(path)).toThrow("unsupported campaign schema: 3");
   });
 
-  test("does not reconfigure an unsupported writer", () => {
-    const path = temporaryPath();
-    const database = new Database(path, { create: true });
-    database.run("PRAGMA user_version = 999");
-    database.close(true);
-    const before = readFileSync(path);
-    expect(() => openCampaign(path)).toThrow(
-      "unsupported campaign schema: 999",
-    );
-    expect(readFileSync(path)).toEqual(before);
-  });
+  test.each([6, 999])(
+    "refuses schema %i without changing its files",
+    (version) => {
+      const path = temporaryPath();
+      const database = new Database(path, { create: true });
+      database.run(`PRAGMA user_version = ${version}`);
+      database.close(true);
+      const before = readFileSync(path);
+      const files = readdirSync(dirname(path));
+      const modified = statSync(path).mtimeMs;
+      for (const open of [openReader, openCampaign]) {
+        expect(() => open(path)).toThrow(
+          `unsupported campaign schema: ${version}`,
+        );
+        expect(readFileSync(path)).toEqual(before);
+        expect(readdirSync(dirname(path))).toEqual(files);
+        expect(statSync(path).mtimeMs).toBe(modified);
+      }
+    },
+  );
 
   test("does not recover an unsupported database", async () => {
     const path = temporaryPath();

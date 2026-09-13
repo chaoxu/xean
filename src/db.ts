@@ -13,7 +13,7 @@ import {
 } from "./schemas";
 import type { Entry, EntryDraft, EntryId, Json, RecordQuery } from "./types";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const ENTRY_KIND_SQL = Object.values(ENTRY_KINDS)
   .map((kind) => `'${kind}'`)
   .join(", ");
@@ -41,13 +41,23 @@ const SCHEMA = `
     digest TEXT PRIMARY KEY CHECK(length(digest) = 64),
     body TEXT NOT NULL CHECK(json_valid(body))
   ) STRICT;
+  CREATE TABLE payload_inputs (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER NOT NULL CHECK(parent_id >= 0 AND parent_id < id),
+    item_digest TEXT NOT NULL CHECK(length(item_digest) = 64),
+    UNIQUE(parent_id, item_digest)
+  ) STRICT;
   CREATE TABLE payloads (
     digest TEXT PRIMARY KEY CHECK(length(digest) = 64),
     body TEXT NOT NULL CHECK(json_valid(body)),
-    input_hashes TEXT CHECK(input_hashes IS NULL OR (json_valid(input_hashes) AND json_type(input_hashes) = 'array'))
+    input_tail INTEGER CHECK(input_tail >= 0),
+    input_length INTEGER NOT NULL CHECK(input_length >= 0),
+    CHECK((coalesce(input_tail, 0) = 0) = (input_length = 0))
   ) STRICT;
   CREATE TRIGGER payload_items_no_update BEFORE UPDATE ON payload_items BEGIN SELECT RAISE(ABORT, 'payload items are append-only'); END;
   CREATE TRIGGER payload_items_no_delete BEFORE DELETE ON payload_items BEGIN SELECT RAISE(ABORT, 'payload items are append-only'); END;
+  CREATE TRIGGER payload_inputs_no_update BEFORE UPDATE ON payload_inputs BEGIN SELECT RAISE(ABORT, 'payload inputs are append-only'); END;
+  CREATE TRIGGER payload_inputs_no_delete BEFORE DELETE ON payload_inputs BEGIN SELECT RAISE(ABORT, 'payload inputs are append-only'); END;
   CREATE TRIGGER payloads_no_update BEFORE UPDATE ON payloads BEGIN SELECT RAISE(ABORT, 'payloads are append-only'); END;
   CREATE TRIGGER payloads_no_delete BEFORE DELETE ON payloads BEGIN SELECT RAISE(ABORT, 'payloads are append-only'); END;
   PRAGMA user_version = ${SCHEMA_VERSION};
@@ -64,7 +74,8 @@ interface MaterialRow {
 }
 interface PayloadRow {
   readonly body: string;
-  readonly inputHashes: string | null;
+  readonly inputTail: bigint | null;
+  readonly inputLength: bigint;
 }
 const payloadDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const digest = (text: string): string =>
@@ -343,31 +354,54 @@ export class Journal {
       input === undefined
         ? full
         : JSON.stringify({ ...(checked as object), input: [] });
-    const inputHashes =
-      parts === undefined
-        ? null
-        : JSON.stringify(parts.map((part) => part.digest));
     this.#database
       .transaction(() => {
-        const previous = this.#database
-          .query<PayloadRow, [string]>(
-            "SELECT body, input_hashes AS inputHashes FROM payloads WHERE digest = ?",
+        const prefix = this.#database
+          .query<{ id: bigint; length: bigint }, [string]>(
+            `WITH RECURSIVE
+              requested AS MATERIALIZED (SELECT key AS position, value AS digest FROM json_each(?)),
+              prefix(id, length) AS (
+                VALUES(0, 0)
+                UNION ALL
+                SELECT step.id, prefix.length + 1
+                FROM prefix CROSS JOIN requested CROSS JOIN payload_inputs AS step
+                WHERE requested.position = prefix.length
+                  AND step.parent_id = prefix.id AND step.item_digest = requested.digest
+              ) SELECT id, length FROM prefix ORDER BY length DESC LIMIT 1`,
           )
-          .get(hash);
-        if (previous !== null) {
-          if (previous.body !== body || previous.inputHashes !== inputHashes)
-            throw new Error("stored payload disagrees with its digest");
-          return;
-        }
-        for (const part of parts ?? []) {
+          .get(JSON.stringify(parts?.map((part) => part.digest) ?? []))!;
+        let tail = parts === undefined ? null : prefix.id;
+        const length = parts?.length ?? 0;
+        for (let at = Number(prefix.length); at < length; at++) {
+          const part = parts![at]!;
           this.#database.run(
             "INSERT OR IGNORE INTO payload_items(digest,body) VALUES(?,?)",
             [part.digest, part.body],
           );
+          tail = BigInt(
+            this.#database.run(
+              "INSERT INTO payload_inputs(parent_id,item_digest) VALUES(?,?)",
+              [tail, part.digest],
+            ).lastInsertRowid,
+          );
+        }
+        const previous = this.#database
+          .query<PayloadRow, [string]>(
+            "SELECT body, input_tail AS inputTail, input_length AS inputLength FROM payloads WHERE digest = ?",
+          )
+          .get(hash);
+        if (previous !== null) {
+          if (
+            previous.body !== body ||
+            previous.inputTail !== tail ||
+            previous.inputLength !== BigInt(length)
+          )
+            throw new Error("stored payload disagrees with its digest");
+          return;
         }
         this.#database.run(
-          "INSERT INTO payloads(digest,body,input_hashes) VALUES(?,?,?)",
-          [hash, body, inputHashes],
+          "INSERT INTO payloads(digest,body,input_tail,input_length) VALUES(?,?,?,?)",
+          [hash, body, tail, length],
         );
       })
       .immediate();
@@ -378,31 +412,51 @@ export class Journal {
     const hash = payloadDigest.parse(value);
     const row = this.#database
       .query<PayloadRow, [string]>(
-        "SELECT body, input_hashes AS inputHashes FROM payloads WHERE digest = ?",
+        "SELECT body, input_tail AS inputTail, input_length AS inputLength FROM payloads WHERE digest = ?",
       )
       .get(hash);
     if (row === null) throw new Error(`payload not found: ${hash}`);
     let valueJson: Json = JSON.parse(row.body);
-    if (row.inputHashes !== null) {
+    if (row.inputTail !== null) {
       if (
         !object(valueJson) ||
         !Array.isArray(valueJson.input) ||
         valueJson.input.length !== 0
       )
         throw new Error("invalid stored payload input manifest");
-      const hashes = z.array(payloadDigest).parse(JSON.parse(row.inputHashes));
       const items = this.#database
-        .query<{ digest: string; body: string | null }, [string]>(
-          "SELECT requested.value AS digest, item.body FROM json_each(?) AS requested LEFT JOIN payload_items AS item ON item.digest = requested.value ORDER BY CAST(requested.key AS INTEGER)",
+        .query<
+          { id: bigint; parent: bigint; digest: string; body: string | null },
+          [bigint, bigint]
+        >(
+          `WITH RECURSIVE chain(id, parent_id, item_digest, depth) AS (
+            SELECT id, parent_id, item_digest, 1 FROM payload_inputs WHERE id = ?
+            UNION ALL
+            SELECT step.id, step.parent_id, step.item_digest, chain.depth + 1
+            FROM chain JOIN payload_inputs AS step ON step.id = chain.parent_id
+            WHERE step.id < chain.id AND chain.depth < ?
+          ) SELECT chain.id, chain.parent_id AS parent, chain.item_digest AS digest, item.body
+            FROM chain LEFT JOIN payload_items AS item ON item.digest = chain.item_digest
+            ORDER BY chain.id`,
         )
-        .all(JSON.stringify(hashes));
-      const values = items.map(({ digest: partHash, body }) => {
-        if (body === null)
-          throw new Error(`payload item not found: ${partHash}`);
-        if (digest(body) !== partHash)
-          throw new Error("payload item digest mismatch");
-        return JSON.parse(body) as Json;
-      });
+        .all(row.inputTail, row.inputLength);
+      if (BigInt(items.length) !== row.inputLength)
+        throw new Error("invalid stored payload input chain");
+      let parent = 0n;
+      const values = items.map(
+        ({ id, parent: previous, digest: partHash, body }) => {
+          if (previous !== parent || id <= parent)
+            throw new Error("invalid stored payload input chain");
+          parent = id;
+          if (body === null)
+            throw new Error(`payload item not found: ${partHash}`);
+          if (digest(body) !== partHash)
+            throw new Error("payload item digest mismatch");
+          return JSON.parse(body) as Json;
+        },
+      );
+      if (parent !== row.inputTail)
+        throw new Error("invalid stored payload input chain");
       valueJson = { ...valueJson, input: values };
     }
     if (digest(JSON.stringify(valueJson)) !== hash)

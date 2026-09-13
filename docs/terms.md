@@ -16,7 +16,7 @@ This is the vocabulary of Elenx and its solver. Work in this repository uses the
 | label | The string naming a call. |
 | role | The category of a call: explorer, coordinator, verifier. |
 | request | The exact JSON input of a call. For a Pi call it holds the model, the system prompt, and the prompt. For a Codex call it holds the model, reasoning, search, developer instructions, prompt, and output schema. |
-| payload | The exact JSON-serialized provider request, stored immutably by content digest. Repeated top-level input items share storage. A versioned call request may explicitly reference a payload, and full inspection retrieves it by digest. Ordinary entry JSON never interprets a reference-shaped value implicitly. |
+| payload | The exact JSON-serialized provider request, stored immutably by content digest. Repeated top-level input items and ordered prefixes share storage. A versioned call request may explicitly reference a payload, and full inspection retrieves it by digest. Ordinary entry JSON never interprets a reference-shaped value implicitly. |
 | tool, submission | A model-callable tool, and the structured value the model passed to it. The solver's submit tools are `submit_notes`, `submit_coordination`, `submit_verdict`, `submit_statement`, and `submit_proof`. A Codex source call submits its final JSON message, and a Pi source call uses `submit_verdict`. A caller's submission through `submit` is a local journaled request containing text notes, with no model call. |
 | candidate | An entry holding material and the labels of its required verifiers. The solver submits one per verification, for the notes it verifies and their support. |
 | material | The bytes attached to a candidate. |
