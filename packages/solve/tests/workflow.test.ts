@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, openCampaign, type Campaign } from "elenx";
+import { createCampaign, openCampaign, openReader, type Campaign } from "elenx";
 
 import { createPiRoles } from "../pi-roles";
 import {
@@ -16,7 +16,12 @@ import {
   type Verdict,
   type Verification,
 } from "../roles";
-import { exportCandidate, inspectCampaign } from "../role-cli";
+import {
+  exportCandidate,
+  inspectCampaign,
+  inspectAndExportCampaignRecords,
+} from "../role-cli";
+import { Projection } from "../projection";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -251,6 +256,25 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   expect(new TextDecoder().decode(await exportCandidate(path))).toBe(
     `--- n1 ---\n\n${good.text}`,
   );
+  const reader = openReader(path);
+  const captured = reader.records();
+  reader.close();
+  const original = Projection.open;
+  let derivations = 0;
+  Projection.open = async (verdicts) => {
+    derivations += 1;
+    return original(verdicts);
+  };
+  try {
+    const combined = await inspectAndExportCampaignRecords(captured);
+    expect(combined.inspection as unknown).toEqual(inspection);
+    expect(new TextDecoder().decode(combined.candidate)).toBe(
+      `--- n1 ---\n\n${good.text}`,
+    );
+    expect(derivations).toBe(1);
+  } finally {
+    Projection.open = original;
+  }
 });
 
 test("one verification judges several notes, kills the failed one, and accepts over verified support", async () => {

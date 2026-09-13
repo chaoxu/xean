@@ -9,6 +9,7 @@ runs/
 *.db-wal
 .coordinator.lock*
 *.tgz
+!vendor/*.tgz
 .playwright-mcp/
 .playwright-cli/
 .DS_Store

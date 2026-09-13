@@ -30,6 +30,35 @@ export async function createModelRuntime(
     const error = runtime.getError();
     if (error !== undefined) throw new Error(error);
   }
+  // The installed coding-agent can have its own pi-ai dependency. Bind the
+  // Responses adapters to Elenx's reviewed Pi distribution so request handling
+  // and session cleanup use the same native provider module.
+  const native = builtinPi();
+  const responses = new Map([
+    ["openai-responses", native.getProvider("openai")!],
+    ["openai-codex-responses", native.getProvider("openai-codex")!],
+  ]);
+  for (const provider of runtime.getProviders()) {
+    if (!provider.getModels().some((model) => responses.has(model.api)))
+      continue;
+    runtime.registerNativeProvider({
+      ...provider,
+      stream(model, context, streamOptions) {
+        return (responses.get(model.api) ?? provider).stream(
+          model,
+          context,
+          streamOptions,
+        );
+      },
+      streamSimple(model, context, streamOptions) {
+        return (responses.get(model.api) ?? provider).streamSimple(
+          model,
+          context,
+          streamOptions,
+        );
+      },
+    });
+  }
   return runtime;
 }
 

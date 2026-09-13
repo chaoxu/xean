@@ -44,6 +44,7 @@ import {
   verdicts,
   verifierFromLabel,
   verifierInput,
+  workflowRecords,
   type RoleName,
 } from "./roles";
 import {
@@ -54,7 +55,12 @@ import {
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
 import { codexRequest, codexResult, codexSubmission } from "./source";
-import { deriveWorkflow, workflowConfig, workflowResult } from "./workflow";
+import {
+  deriveWorkflow,
+  workflowConfig,
+  workflowResult,
+  type WorkflowPhase,
+} from "./workflow";
 
 const callsConfig = z.strictObject({ kind: z.literal("calls") });
 export type RoleCommand = RoleName;
@@ -86,7 +92,7 @@ function openCalls(path: string): Campaign {
   }
   const campaign = openCampaign(path);
   try {
-    const declaration = campaign.records()[0];
+    const declaration = campaign.record(1);
     assertApplication(declaration);
     callsConfig.parse(
       declaration?.kind === "campaign" ? declaration.config : undefined,
@@ -172,101 +178,130 @@ function callDiagnostic(
   };
 }
 
+export interface InspectionOptions {
+  readonly includeRequests?: boolean;
+  readonly includeGuidance?: boolean;
+  readonly includeSubmissions?: boolean;
+}
+
 export async function inspectCampaign(
   path: string,
-  options: {
-    readonly includeRequests?: boolean;
-    readonly includeGuidance?: boolean;
-    readonly includeSubmissions?: boolean;
-  } = {},
+  options: InspectionOptions = {},
 ): Promise<Json> {
   const reader = openReader(path);
   try {
-    const records = reader.records();
-    assertApplication(records[0]);
-    const results = new Map(
-      records
-        .filter((entry) => entry.kind === "call-result")
-        .map((entry) => [entry.parent, entry]),
-    );
-    const calls = records
-      .filter(
-        (entry): entry is Extract<Entry, { readonly kind: "call" }> =>
-          entry.kind === "call" && roleFromLabel(entry.label) !== undefined,
-      )
-      .map((entry) => {
-        const role = roleFromLabel(entry.label)!;
-        const verifier = verifierFromLabel(entry.label);
-        const result = results.get(entry.seq);
-        const visible =
-          entry.role === role
-            ? visibleSubmission(records, entry, role)
-            : undefined;
-        return {
-          call: entry.seq,
-          role,
-          label: entry.label,
-          ...(verifier === undefined ? {} : { verifier }),
-          ...(entry.candidate === undefined
-            ? {}
-            : { candidate: entry.candidate }),
-          startedAtMs: entry.atMs,
-          ...(result === undefined
-            ? {}
-            : {
-                settledAtMs: result.atMs,
-                elapsedMs: result.atMs - entry.atMs,
-                state: result.state,
-              }),
-          ...callDiagnostic(entry, result),
-          ...(visible === undefined ? {} : { submission: visible }),
-          ...(options.includeRequests === true
-            ? { request: entry.request }
-            : {}),
-        };
-      });
-    const declaration = records[0];
-    const config = workflowConfig.safeParse(
-      declaration?.kind === "campaign" ? declaration.config : undefined,
-    );
-    const snapshot = config.success ? await deriveWorkflow(records) : undefined;
-    const phase = snapshot?.phase;
-    const report =
-      phase?.kind === "accepted" || phase?.kind === "turn-limit"
-        ? workflowResult(phase)
-        : undefined;
-    const spend = derivePiSpend(records);
-    return JSON.parse(
-      JSON.stringify({
-        ...(snapshot === undefined
-          ? {}
-          : {
-              task: snapshot.config.task,
-              phase: phase?.kind,
-              notes: snapshot.notes,
-              ...(report === undefined
-                ? {}
-                : { result: executionReport(report) }),
-            }),
-        calls,
-        spend: spend.summary,
-        accounting: campaignAccounting(records, spend),
-        ...(options.includeGuidance === true
-          ? { guidance: inspectGuidance(records) }
-          : {}),
-        ...(options.includeSubmissions === true
-          ? {
-              submissions: inspectSubmittedNotes(
-                records,
-                snapshot?.noteSubmissions,
-              ),
-            }
-          : {}),
-      }),
-    ) as Json;
+    return await inspectCampaignRecords(reader.records(), options);
   } finally {
     reader.close();
   }
+}
+
+/** Inspect one captured journal boundary, without reopening its database. */
+export async function inspectCampaignRecords(
+  records: readonly Entry[],
+  options: InspectionOptions = {},
+): Promise<Json> {
+  return (await projectCampaignRecords(records, options, false)).inspection;
+}
+
+/** Share one workflow derivation between inspection and accepted-proof export. */
+export async function inspectAndExportCampaignRecords(
+  records: readonly Entry[],
+  options: InspectionOptions = {},
+): Promise<{ inspection: Json; candidate?: Uint8Array }> {
+  return projectCampaignRecords(records, options, true);
+}
+
+async function projectCampaignRecords(
+  records: readonly Entry[],
+  options: InspectionOptions,
+  includeCandidate: boolean,
+): Promise<{ inspection: Json; candidate?: Uint8Array }> {
+  assertApplication(records[0]);
+  const results = new Map(
+    records
+      .filter((entry) => entry.kind === "call-result")
+      .map((entry) => [entry.parent, entry]),
+  );
+  const calls = records
+    .filter(
+      (entry): entry is Extract<Entry, { readonly kind: "call" }> =>
+        entry.kind === "call" && roleFromLabel(entry.label) !== undefined,
+    )
+    .map((entry) => {
+      const role = roleFromLabel(entry.label)!;
+      const verifier = verifierFromLabel(entry.label);
+      const result = results.get(entry.seq);
+      const visible =
+        entry.role === role
+          ? visibleSubmission(records, entry, role)
+          : undefined;
+      return {
+        call: entry.seq,
+        role,
+        label: entry.label,
+        ...(verifier === undefined ? {} : { verifier }),
+        ...(entry.candidate === undefined
+          ? {}
+          : { candidate: entry.candidate }),
+        startedAtMs: entry.atMs,
+        ...(result === undefined
+          ? {}
+          : {
+              settledAtMs: result.atMs,
+              elapsedMs: result.atMs - entry.atMs,
+              state: result.state,
+            }),
+        ...callDiagnostic(entry, result),
+        ...(visible === undefined ? {} : { submission: visible }),
+        ...(options.includeRequests === true ? { request: entry.request } : {}),
+      };
+    });
+  const declaration = records[0];
+  const config = workflowConfig.safeParse(
+    declaration?.kind === "campaign" ? declaration.config : undefined,
+  );
+  const snapshot = config.success ? await deriveWorkflow(records) : undefined;
+  const phase = snapshot?.phase;
+  const report =
+    phase?.kind === "accepted" || phase?.kind === "turn-limit"
+      ? workflowResult(phase)
+      : undefined;
+  const spend = derivePiSpend(records);
+  const inspection = JSON.parse(
+    JSON.stringify({
+      ...(snapshot === undefined
+        ? {}
+        : {
+            task: snapshot.config.task,
+            phase: phase?.kind,
+            notes: snapshot.notes,
+            ...(report === undefined
+              ? {}
+              : { result: executionReport(report) }),
+          }),
+      calls,
+      spend: spend.summary,
+      accounting: campaignAccounting(records, spend),
+      ...(options.includeGuidance === true
+        ? { guidance: inspectGuidance(records) }
+        : {}),
+      ...(options.includeSubmissions === true
+        ? {
+            submissions: inspectSubmittedNotes(
+              records,
+              snapshot?.noteSubmissions,
+            ),
+          }
+        : {}),
+    }),
+  ) as Json;
+  return {
+    inspection,
+    ...(includeCandidate && phase?.kind === "accepted"
+      ? { candidate: candidateBytes(phase) }
+      : {}),
+  };
 }
 
 export async function guideCampaign(
@@ -276,7 +311,7 @@ export async function guideCampaign(
 ) {
   const campaign = openCampaign(path);
   try {
-    const declaration = campaign.records()[0];
+    const declaration = campaign.record(1);
     assertApplication(declaration);
     workflowConfig.parse(
       declaration?.kind === "campaign" ? declaration.config : undefined,
@@ -296,7 +331,7 @@ export async function submitNotes(
   const value = submittedNotes.parse(input);
   const campaign = openCampaign(path);
   try {
-    const declaration = campaign.records()[0];
+    const declaration = campaign.record(1);
     assertApplication(declaration);
     workflowConfig.parse(
       declaration?.kind === "campaign" ? declaration.config : undefined,
@@ -331,22 +366,32 @@ export async function submitNotes(
 export async function exportCandidate(path: string): Promise<Uint8Array> {
   const reader = openReader(path);
   try {
-    const records = reader.records();
-    assertApplication(records[0]);
-    const phase = (await deriveWorkflow(records)).phase;
-    if (phase.kind !== "accepted") {
-      throw new Error("workflow has no accepted candidate");
-    }
-    const text = [...phase.closure, phase.note.id]
-      .map((id) => {
-        const note = phase.notes.find((entry) => entry.id === id)!;
-        return `--- ${id} ---\n\n${note.text}`;
-      })
-      .join("\n\n");
-    return new TextEncoder().encode(text);
+    return await exportCandidateRecords(workflowRecords(reader));
   } finally {
     reader.close();
   }
+}
+
+export async function exportCandidateRecords(
+  records: readonly Entry[],
+): Promise<Uint8Array> {
+  assertApplication(records[0]);
+  const phase = (await deriveWorkflow(records)).phase;
+  if (phase.kind !== "accepted")
+    throw new Error("workflow has no accepted candidate");
+  return candidateBytes(phase);
+}
+
+function candidateBytes(
+  phase: Extract<WorkflowPhase, { kind: "accepted" }>,
+): Uint8Array {
+  const text = [...phase.closure, phase.note.id]
+    .map((id) => {
+      const note = phase.notes.find((entry) => entry.id === id)!;
+      return `--- ${id} ---\n\n${note.text}`;
+    })
+    .join("\n\n");
+  return new TextEncoder().encode(text);
 }
 
 export async function runRoleCommand(

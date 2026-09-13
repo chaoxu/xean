@@ -7,6 +7,7 @@ import {
   returnedToolSubmission,
   type CallReceipt,
   type Campaign,
+  type RecordQuery,
 } from "elenx";
 import {
   builtinPi,
@@ -54,3 +55,11 @@ void returnedToolSubmission;
 void (undefined as unknown as CallReceipt);
 void result;
 void credentialModels;
+const query: RecordQuery = {
+  kinds: ["tool-call"],
+  call: 1,
+  through: campaign.lastSequence(),
+};
+void campaign.records(query);
+void campaign.record(1);
+void campaign.payload(campaign.storePayload({ input: [] }));

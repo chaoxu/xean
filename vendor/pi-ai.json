@@ -1,0 +1,8 @@
+{
+  "source": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.85.1.tgz",
+  "sourceIntegrity": "sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==",
+  "patch": "patches/@earendil-works%2Fpi-ai@0.85.1.patch",
+  "patchSha256": "700b286a90eaed13c6ea175e16ff49016a117d7f2f70e914c6fd369efa1a46a3",
+  "artifact": "vendor/pi-ai-0.85.1-elenx.2.tgz",
+  "artifactSha256": "64cda43c474f816bd46632abc75f8ef1ebd79f85394614de5d59e06fa9fab532"
+}

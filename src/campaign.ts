@@ -12,6 +12,7 @@ import type {
   EntryId,
   Json,
   Reader,
+  RecordQuery,
   Tool,
   Verdict,
 } from "./types";
@@ -39,8 +40,20 @@ function names(values: readonly string[]): readonly string[] {
 class CampaignReader implements Reader {
   constructor(protected readonly journal: Journal) {}
 
-  records(): readonly Entry[] {
-    return this.journal.records();
+  records(options?: RecordQuery): readonly Entry[] {
+    return this.journal.records(options);
+  }
+
+  record(seq: EntryId): Entry | undefined {
+    return this.journal.record(seq);
+  }
+
+  lastSequence(): number {
+    return this.journal.lastSequence();
+  }
+
+  payload(digest: string): Json {
+    return this.journal.payload(digest);
   }
 
   material(candidate: EntryId): Uint8Array {
@@ -54,6 +67,10 @@ class CampaignReader implements Reader {
 
 class CampaignWriter extends CampaignReader implements Campaign {
   #activeCalls = 0;
+
+  storePayload(value: Json): string {
+    return this.journal.storePayload(value);
+  }
 
   submitCandidate(
     material: Uint8Array,
@@ -76,17 +93,11 @@ class CampaignWriter extends CampaignReader implements Campaign {
   ): EntryId {
     const call = entryId.parse(callValue);
     const verdict = verdictSchema.parse(verdictValue);
-    const records = this.records();
-    const start = records.find(
-      (entry) => entry.kind === "call" && entry.seq === call,
-    );
+    const start = this.record(call);
     const candidate = start?.kind === "call" ? start.candidate : undefined;
-    const declaration = records.find(
-      (entry) => entry.kind === "candidate" && entry.seq === candidate,
-    );
-    const result = records.find(
-      (entry) => entry.kind === "call-result" && entry.parent === call,
-    );
+    const declaration =
+      candidate === undefined ? undefined : this.record(candidate);
+    const result = this.records({ kinds: ["call-result"], parent: call })[0];
     if (
       start?.kind !== "call" ||
       candidate === undefined ||
@@ -121,7 +132,6 @@ class CampaignWriter extends CampaignReader implements Campaign {
       options.candidate === undefined
         ? undefined
         : entryId.parse(options.candidate);
-    const request = copyJson(options.request);
     const signal = options.signal ?? new AbortController().signal;
     const prepared = this.prepareTools(options.tools ?? []);
     const state: CallState = { pending: new Set(), accepting: true };
@@ -130,9 +140,11 @@ class CampaignWriter extends CampaignReader implements Campaign {
       label,
       ...(role === undefined ? {} : { role }),
       ...(candidate === undefined ? {} : { candidate }),
-      request,
+      request: options.request,
       tools: prepared.map(({ declaration }) => declaration),
     });
+    if (start.kind !== "call") throw new Error("invalid stored call");
+    const request = start.request;
     const call = start.seq;
     const tools = prepared.map((tool) =>
       this.wrapTool(call, tool, signal, state),
@@ -197,18 +209,21 @@ class CampaignWriter extends CampaignReader implements Campaign {
           if (!state.accepting) {
             throw new Error(`call is no longer accepting ${name}`);
           }
-          const input = copyJson(tool.input.parse(raw));
+          const parsed = tool.input.parse(raw);
           const source =
             sourceValue === undefined
               ? undefined
               : z.string().min(1).parse(sourceValue);
-          const toolCall = this.journal.append({
+          const stored = this.journal.append({
             kind: "tool-call",
             call,
             tool: name,
             ...(source === undefined ? {} : { source }),
-            input,
-          }).seq;
+            input: parsed as Json,
+          });
+          if (stored.kind !== "tool-call")
+            throw new Error("invalid stored tool call");
+          const { input, seq: toolCall } = stored;
           let output: Json;
           try {
             output = copyJson(

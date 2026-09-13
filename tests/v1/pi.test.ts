@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import {
   createAssistantMessageEventStream,
+  registerSessionResourceCleanup,
   type AssistantMessage,
   type Context,
   type Model,
@@ -13,6 +14,7 @@ import {
   type ModelsSimpleStreamOptions,
   type ProviderHeaders,
   type SimpleStreamOptions,
+  type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 
@@ -33,6 +35,119 @@ import {
   runPi,
   type PiSubmissionGate,
 } from "../../src/pi";
+import {
+  inspectCoreCampaign,
+  inspectCoreCampaignSummary,
+} from "../../src/observe";
+
+test("forwards provider events before completion and cleans the logical session", async () => {
+  const store = campaign();
+  let consumed!: () => void;
+  const observed = new Promise<void>((resolve) => {
+    consumed = resolve;
+  });
+  let session: string | undefined;
+  const cleaned: (string | undefined)[] = [];
+  const unregister = registerSessionResourceCleanup((id) => {
+    cleaned.push(id);
+  });
+  const models: PiModels = {
+    streamSimple(requestModel, _context, options) {
+      session = options?.sessionId;
+      const stream = createAssistantMessageEventStream();
+      const final = assistant([{ type: "text", text: "done" }], "stop");
+      void (async () => {
+        await options?.onPayload?.({ input: "streaming" }, requestModel);
+        expect(piRequestAttempts(store.records())[0]?.state).toBe("unsettled");
+        const start: AssistantMessageEvent = {
+          type: "start",
+          get partial() {
+            consumed();
+            return final;
+          },
+        };
+        stream.push(start);
+        await observed;
+        stream.push({ type: "done", reason: "stop", message: final });
+        stream.end();
+      })().catch((error: unknown) => {
+        stream.push({
+          type: "error",
+          reason: "error",
+          error: {
+            ...final,
+            stopReason: "error",
+            errorMessage: String(error),
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    },
+  };
+  try {
+    const result = await runPi(store, {
+      models,
+      model,
+      label: "forwarding",
+      prompt: "Test",
+    });
+    expect(result.state).toBe("succeeded");
+    expect(session).toBeDefined();
+    expect(cleaned).toEqual([session]);
+    expect(piRequestAttempts(store.records())[0]?.state).toBe("completed");
+  } finally {
+    unregister();
+    store.close();
+  }
+}, 1000);
+
+test("request accounting is durable before tool execution and counted once after continuation", async () => {
+  const store = campaign();
+  let checked = false;
+  const record = defineTool({
+    name: "record",
+    description: "Record",
+    input: z.strictObject({}),
+    replay: "safe",
+    async run() {
+      const spend = derivePiSpend(store.records());
+      expect(spend.unaccountedCalls).toHaveLength(1);
+      expect(spend.summary).toMatchObject({
+        logicalProviderRequests: 1,
+        unmeasuredRequests: 0,
+      });
+      expect(piRequestAttempts(store.records())[0]?.state).toBe("completed");
+      checked = true;
+      return null;
+    },
+  });
+  try {
+    await runPi(store, {
+      model,
+      label: "durable-usage",
+      prompt: "Record",
+      tools: [record],
+      models: payloadModels(
+        [
+          assistant(
+            [{ type: "toolCall", id: "first", name: "record", arguments: {} }],
+            "toolUse",
+          ),
+          assistant([{ type: "text", text: "done" }], "stop"),
+        ],
+        [{ input: "first" }, { input: "second" }],
+        [],
+      ),
+    });
+    expect(checked).toBe(true);
+    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
+      2,
+    );
+  } finally {
+    store.close();
+  }
+});
 
 type PiModels = Pick<Models, "streamSimple">;
 
@@ -1538,7 +1653,14 @@ describe("thin Pi runner", () => {
     });
 
     expect(sent).toEqual(payloads);
-    const attempts = piRequestAttempts(store.records(), result.call);
+    expect(
+      piRequestAttempts(store.records(), result.call).every(
+        (attempt) =>
+          attempt.protocol === "elenx/pi-request/v2" &&
+          attempt.payload === undefined,
+      ),
+    ).toBe(true);
+    const attempts = piRequestAttempts(store.records(), result.call, store);
     expect(attempts.map(({ payload }) => payload)).toEqual(
       JSON.parse(JSON.stringify(payloads)),
     );
@@ -1580,14 +1702,13 @@ describe("thin Pi runner", () => {
       "campaign",
       "call",
       "call",
-      "call-result",
     ]);
-    expect(piRequestAttempts(records)).toMatchObject([
+    expect(piRequestAttempts(records, undefined, reader)).toMatchObject([
       {
         parent: 2,
         call: 3,
         payload: { input: "durable request" },
-        state: "completed",
+        state: "unsettled",
       },
     ]);
     expect(derivePiSpend(records)).toMatchObject({
@@ -1627,6 +1748,49 @@ describe("thin Pi runner", () => {
       expect(piRequestAttempts(store.records())).toHaveLength(
         calls === 0 ? 0 : 1,
       );
+    }
+  });
+
+  test("keeps completed request usage after a later continuation crashes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "elenx-pi-usage-crash-"));
+    directories.push(directory);
+    const path = join(directory, "campaign.db");
+    const child = Bun.spawnSync(
+      [
+        process.execPath,
+        resolve("tests/v1/fixtures/crash-pi-request.ts"),
+        path,
+        "after-first",
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(child.exitCode).toBe(0);
+    const reader = openReader(path);
+    try {
+      const spend = derivePiSpend(reader.records());
+      expect(spend.summary).toMatchObject({
+        logicalProviderRequests: 1,
+        unmeasuredRequests: 0,
+        measuredUsage: { input: 10, output: 5, totalTokens: 15 },
+      });
+      expect(spend.unaccountedCalls).toHaveLength(1);
+      expect(spend.potentialRequests).toHaveLength(1);
+      expect(
+        piRequestAttempts(reader.records()).map(({ state }) => state),
+      ).toEqual(["completed", "unsettled"]);
+      expect(inspectCoreCampaignSummary(path).spend).toMatchObject({
+        logicalProviderRequests: 1,
+        unaccountedCalls: 1,
+      });
+      expect(inspectCoreCampaign(path).calls[0]?.pi?.accounting).toMatchObject({
+        state: "available",
+        complete: false,
+      });
+    } finally {
+      reader.close();
     }
   });
 
@@ -1680,19 +1844,30 @@ describe("thin Pi runner", () => {
       },
       async ({ call }) => {
         const request = {
-          protocol: "elenx/pi-request/v1" as const,
+          protocol: "elenx/pi-request/v2" as const,
           parent: call,
           model: { provider: model.provider, id: model.id, api: model.api },
-          payload: { input: "test" },
+          payloadRef: store.storePayload({ input: "test" }),
         };
         const internalRequest = {
           label: "elenx/pi-request",
           request,
         };
-        await store.call(internalRequest, async () => null);
+        const completion = {
+          protocol: "elenx/pi-request-completion/v1",
+          parent: call,
+          operation: {
+            provider: model.provider,
+            requestedModel: model.id,
+            api: model.api,
+            error: false,
+            usage: null,
+          },
+        };
+        await store.call(internalRequest, async () => completion);
         const pending = store.call(internalRequest, async () => {
           await blocked;
-          return null;
+          return completion;
         });
         await Promise.resolve();
         observed = piRequestAttempts(store.records(), call);
@@ -1740,7 +1915,9 @@ describe("thin Pi runner", () => {
 
     expect(result.state).toBe("failed");
     expect(fetches).toBe(1);
-    expect(piRequestAttempts(store.records(), result.call)).toMatchObject([
+    expect(
+      piRequestAttempts(store.records(), result.call, store),
+    ).toMatchObject([
       {
         parent: result.call,
         model: {

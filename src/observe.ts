@@ -114,6 +114,8 @@ export interface CoreCallObservationV1 {
 export type PiAccountingObservationV1 =
   | {
       readonly state: "available";
+      /** False when durable request measurements precede the enclosing call's settlement. */
+      readonly complete?: false;
       readonly operations: readonly PiSpendOperation[];
       readonly spend: PiObservationSpendV1;
       readonly recoveredErrors?: readonly PiRecoveredErrorObservationV1[];
@@ -161,6 +163,7 @@ interface RecordIndex {
 
 interface AccountingIndex {
   readonly byCall: ReadonlyMap<EntryId, PiAccountingObservationV1>;
+  readonly stored: ReadonlyMap<EntryId, z.output<typeof piStoredResult>>;
   readonly spend: PiObservationSpendV1;
   readonly unsupportedCalls: readonly EntryId[];
   readonly unaccountedCalls: readonly EntryId[];
@@ -330,7 +333,7 @@ function recoveredErrors(
 export function inspectCoreCampaign(path: string): CoreCampaignObservationV1 {
   const reader = openReader(path);
   try {
-    return projectCoreCampaign(reader, reader.records());
+    return inspectCoreCampaignRecords(reader, reader.records());
   } finally {
     reader.close();
   }
@@ -341,13 +344,14 @@ export function inspectCoreCampaignSummary(
 ): CoreCampaignSummaryV1 {
   const reader = openReader(path);
   try {
-    return projectCoreCampaignSummary(reader.records());
+    return inspectCoreCampaignSummaryRecords(reader.records());
   } finally {
     reader.close();
   }
 }
 
-function projectCoreCampaign(
+/** Project a caller's captured journal boundary without reading it again. */
+export function inspectCoreCampaignRecords(
   reader: Reader,
   records: readonly Entry[],
 ): CoreCampaignObservationV1 {
@@ -372,7 +376,8 @@ function projectCoreCampaign(
   };
 }
 
-function projectCoreCampaignSummary(
+/** Summarize a caller's captured journal boundary without loading payloads. */
+export function inspectCoreCampaignSummaryRecords(
   records: readonly Entry[],
 ): CoreCampaignSummaryV1 {
   const index = indexRecords(records);
@@ -463,41 +468,50 @@ function indexRecords(records: readonly Entry[]): RecordIndex {
 
 function indexAccounting(index: RecordIndex): AccountingIndex {
   const byCall = new Map<EntryId, PiAccountingObservationV1>();
+  const storedResults = new Map<EntryId, z.output<typeof piStoredResult>>();
   const understoodOperations: PiSpendOperation[] = [];
   const understoodTranscript: Json[] = [];
   const firstOperations: PiSpendOperation[] = [];
   const continuationOperations: PiSpendOperation[] = [];
   let recoveredRequestErrors = 0;
+  let availableCalls = 0;
   const unsupportedCalls: EntryId[] = [];
   const unaccountedCalls: EntryId[] = [];
   for (const call of index.calls) {
     if (!piRequest.safeParse(call.request).success) continue;
     const result = index.results.get(call.seq);
-    if (result?.state !== "returned") {
-      byCall.set(call.seq, { state: "unaccounted" });
-      unaccountedCalls.push(call.seq);
-      continue;
-    }
+    if (result?.state !== "returned") unaccountedCalls.push(call.seq);
     try {
-      const stored = piStoredResult.parse(result.output);
+      const stored =
+        result?.state === "returned"
+          ? piStoredResult.parse(result.output)
+          : undefined;
+      if (stored !== undefined) storedResults.set(call.seq, stored);
       const projected = derivePiSpend(piEntries(index, call));
       const row = projected.calls.find(({ call: id }) => id === call.seq);
+      if (row === undefined && stored === undefined) {
+        byCall.set(call.seq, { state: "unaccounted" });
+        continue;
+      }
       if (row === undefined)
         throw new Error("settled Pi call was not accounted");
       const { operations, call: _, ...spend } = row;
-      const recovered = recoveredErrors(stored);
+      const recovered = stored === undefined ? [] : recoveredErrors(stored);
+      const transcript = stored?.transcript ?? [];
       const first = operations.slice(0, 1);
       const continuation = operations.slice(1);
       understoodOperations.push(...operations);
-      understoodTranscript.push(...stored.transcript);
+      understoodTranscript.push(...transcript);
       firstOperations.push(...first);
       continuationOperations.push(...continuation);
       recoveredRequestErrors += recovered.length;
+      availableCalls += 1;
       byCall.set(call.seq, {
         state: "available",
+        ...(stored === undefined ? { complete: false as const } : {}),
         operations,
         spend: {
-          ...observedSpend(spend, stored.transcript),
+          ...observedSpend(spend, transcript),
           recoveredRequestErrors: recovered.length,
           requests: {
             first: requestPhaseSpend(first),
@@ -513,12 +527,13 @@ function indexAccounting(index: RecordIndex): AccountingIndex {
   }
   return {
     byCall,
+    stored: storedResults,
     spend: {
       ...observedSpend(
         summarizePiSpend(understoodOperations),
         understoodTranscript,
       ),
-      ...(byCall.size === unsupportedCalls.length + unaccountedCalls.length
+      ...(availableCalls === 0
         ? {}
         : {
             recoveredRequestErrors,
@@ -553,11 +568,7 @@ function projectCall(
 ): CoreCallObservationV1 {
   const result = index.results.get(call.seq);
   const request = piRequest.safeParse(call.request);
-  const stored =
-    result?.state === "returned"
-      ? piStoredResult.safeParse(result.output)
-      : undefined;
-  const parsed = stored?.success === true ? stored.data : undefined;
+  const parsed = accounting.stored.get(call.seq);
   const callAccounting = accounting.byCall.get(call.seq);
   return {
     id: call.seq,

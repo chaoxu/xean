@@ -97,7 +97,9 @@ export function dependencies(replies: readonly Reply[]) {
         throw new Error(`expected a Codex call, got ${options.label}`);
       }
       expect(options.stopAfterToolResult).toBe(true);
-      expect(options.transport).toBe("sse");
+      expect(options.transport).toBe(
+        options.model.api === "openai-codex-responses" ? "auto" : "sse",
+      );
       return respond(campaign, options, reply);
     },
     async codex(request: CodexRequest): Promise<CodexResult> {

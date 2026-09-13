@@ -1,0 +1,140 @@
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index 43e463d..1a9dc45 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -437,6 +437,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             output.responseId = response.id;
+         }
+         if (response?.usage) {
++            output.usageReported = true;
+             const inputDetails = response.usage.input_tokens_details;
+             const cachedTokens = inputDetails?.cached_tokens || 0;
+             const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
+@@ -641,8 +642,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+         }
+         else if (event.type === "response.failed") {
+-            sawTerminalResponseEvent = true;
+-            output.rawStopReason = event.response?.status;
++            finalizeResponse(event.response);
+             const error = event.response?.error;
+             const details = event.response?.incomplete_details;
+             const msg = error
+@@ -686,4 +686,4 @@ function mapStopReason(status, incompleteReason) {
+         }
+     }
+ }
+-//# sourceMappingURL=openai-responses-shared.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-responses-shared.js.map
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index bf979d4..26d8c85 100644
+--- a/dist/api/openai-codex-responses.js
++++ b/dist/api/openai-codex-responses.js
+@@ -164,7 +164,12 @@ export const stream = (model, context, options) => {
+             if (!apiKey) {
+                 throw new Error(`No API key for provider: ${model.provider}`);
+             }
+-            const accountId = extractAccountId(apiKey);
++            const proxyAuth = model.compat?.codexProxyAuth === true;
++            if (proxyAuth && (!model.baseUrl || /(^|\.)chatgpt\.com$/i.test(new URL(model.baseUrl).hostname))) {
++                throw new Error("Codex proxy authentication requires a custom base URL");
++            }
++            const accountId = proxyAuth ? undefined : extractAccountId(apiKey);
++            const cacheAccountId = accountId ?? await proxySessionIdentity(model.baseUrl, apiKey);
+             const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, model.compat?.supportsOpenAIGrammarTools ?? false);
+             const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
+             const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
+@@ -198,7 +203,7 @@ export const stream = (model, context, options) => {
+                                 startEmitted = true;
+                                 stream.push({ type: "start", partial: output });
+                             }
+-                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, accountId, grammarToolInputProperties, options);
++                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, cacheAccountId, grammarToolInputProperties, options);
+                         if (options?.signal?.aborted) {
+                             throw new Error("Request was aborted");
+                         }
+@@ -536,6 +541,11 @@ async function* mapCodexEvents(events, output) {
+             const response = event.response;
+             const code = response?.error?.code;
+             const message = response?.error?.message;
++            if (response) {
++                // Preserve terminal usage/signatures before retaining the typed
++                // Codex error used by native transport recovery.
++                yield { ...event, type: "response.completed", response: { ...response, status: "failed" } };
++            }
+             throw new CodexApiError(message || "Codex response failed", { code, payload: event });
+         }
+         if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
+@@ -682,7 +692,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
+     }
+     websocketSessionCache.clear();
+ }
+-registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
++registerSessionResourceCleanup((sessionId) => {
++    closeOpenAICodexWebSocketSessions(sessionId);
++    resetOpenAICodexWebSocketDebugStats(sessionId);
++});
+ function isWebSocketSseFallbackActive(sessionId) {
+     return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
+ }
+@@ -1244,6 +1257,11 @@ async function parseErrorResponse(response) {
+ // ============================================================================
+ // Auth & Headers
+ // ============================================================================
++async function proxySessionIdentity(baseUrl, token) {
++    const bytes = new TextEncoder().encode(`${baseUrl}\n${token}`);
++    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
++    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
++}
+ function extractAccountId(token) {
+     try {
+         const parts = token.split(".");
+@@ -1270,7 +1288,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
+         }
+     }
+     headers.set("Authorization", `Bearer ${token}`);
+-    headers.set("chatgpt-account-id", accountId);
++    if (accountId === undefined)
++        headers.delete("chatgpt-account-id");
++    else
++        headers.set("chatgpt-account-id", accountId);
+     headers.set("originator", "pi");
+     headers.set("User-Agent", getPiUserAgent());
+     return headers;
+@@ -1297,4 +1318,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+     headers.set("session-id", requestId);
+     return headers;
+ }
+-//# sourceMappingURL=openai-codex-responses.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-codex-responses.js.map
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index f61c9ea..987a114 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -305,6 +305,8 @@ export interface UserMessage {
+     timestamp: number;
+ }
+ export interface AssistantMessage {
++    /** The provider supplied usage, including an explicitly all-zero measurement. */
++    usageReported?: boolean;
+     role: "assistant";
+     content: (TextContent | ThinkingContent | ToolCall)[];
+     api: Api;
+@@ -532,6 +534,8 @@ export interface OpenAICompletionsCompat {
+ }
+ /** Compatibility settings for OpenAI Responses APIs. */
+ export interface OpenAIResponsesCompat {
++    /** Authenticate a custom Codex-protocol gateway with its opaque bearer API key, omitting the ChatGPT account header. Default: false. */
++    codexProxyAuth?: boolean;
+     /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
+     supportsDeveloperRole?: boolean;
+     /** Session-affinity header format: `openai` sends `session_id` and `x-client-request-id`; `openai-nosession` sends `x-client-request-id`; `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param, which is governed by cache retention. Default: auto-detected. */
+@@ -740,4 +744,4 @@ export interface ImagesModel<TApi extends ImagesApi> extends Omit<Model<Api>, "a
+     provider: ImagesProviderId;
+     output: ("text" | "image")[];
+ }
+-//# sourceMappingURL=types.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=types.d.ts.map

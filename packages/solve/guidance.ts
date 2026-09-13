@@ -68,9 +68,9 @@ export async function appendGuidance(
     });
     lock.run("PRAGMA busy_timeout = 5000");
     lock.run("BEGIN EXCLUSIVE");
-    const existing = guidanceEntries(campaign.records()).find(
-      (entry) => entry.id === id,
-    );
+    const existing = guidanceEntries(
+      campaign.records({ kinds: ["call"], labels: [guidanceLabel] }),
+    ).find((entry) => entry.id === id);
     if (existing !== undefined) {
       if (existing.text !== text)
         throw new Error(`guidance id already has different text: ${id}`);
@@ -84,9 +84,7 @@ export async function appendGuidance(
     );
   }
   const receipt = await pending;
-  return guidanceEntries(campaign.records()).find(
-    (entry) => entry.call === receipt.call,
-  )!;
+  return guidanceEntries([campaign.record(receipt.call)!])[0]!;
 }
 
 /** Freeze the guidance visible at this boundary, once for all retries of the
@@ -95,7 +93,12 @@ export async function freezeExplorerGuidance(
   campaign: Campaign,
   after: EntryId,
 ): Promise<boolean> {
-  const records = campaign.records();
+  const through = campaign.lastSequence();
+  const records = campaign.records({
+    kinds: ["call"],
+    labels: [guidanceLabel, explorerGuidanceLabel, roleLabels.explorer],
+    through,
+  });
   const bindings = explorerGuidanceEntries(records);
   const consumedThrough = bindings.at(-1)?.through ?? 0;
   if (
@@ -112,7 +115,7 @@ export async function freezeExplorerGuidance(
   await campaign.call(
     {
       label: explorerGuidanceLabel,
-      request: { schemaVersion: 1, after, through: records.at(-1)!.seq },
+      request: { schemaVersion: 1, after, through },
     },
     async () => null,
   );

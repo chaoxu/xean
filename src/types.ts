@@ -63,9 +63,23 @@ export interface CandidateStatus {
 }
 
 export interface Reader {
-  records(): readonly Entry[];
+  records(options?: RecordQuery): readonly Entry[];
+  record(seq: EntryId): Entry | undefined;
+  lastSequence(): number;
+  payload(digest: string): Json;
   material(candidate: EntryId): Uint8Array;
   close(): void;
+}
+
+/** Filters are intersected. Labels select calls and their call-results. */
+export interface RecordQuery {
+  readonly kinds?: readonly Entry["kind"][];
+  readonly labels?: readonly string[];
+  readonly excludeLabels?: readonly string[];
+  readonly call?: EntryId;
+  readonly parent?: EntryId;
+  readonly after?: number;
+  readonly through?: number;
 }
 
 export interface CallOptions {
@@ -90,6 +104,7 @@ export interface CallReceipt {
 }
 
 export interface Campaign extends Reader {
+  storePayload(value: Json): string;
   submitCandidate(
     material: Uint8Array,
     requiredVerifiers: readonly string[],

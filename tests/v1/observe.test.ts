@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign } from "../../src";
+import { createCampaign, type Reader } from "../../src";
 import {
   inspectCoreCampaign,
+  inspectCoreCampaignRecords,
   inspectCoreCampaignSummary,
+  inspectCoreCampaignSummaryRecords,
 } from "../../src/observe";
 import { PI_TELEMETRY_SCHEMA_VERSIONS } from "../../src/pi";
 
@@ -221,6 +223,126 @@ test("projects opaque application data, calls, candidates, and verdicts", async 
       },
     ],
   });
+});
+
+test("captured observation boundaries do not reread later calls or verdicts", async () => {
+  const path = campaignPath();
+  const campaign = createCampaign(path, "captured-boundary", { opaque: true });
+  let forbiddenReads = 0;
+  const forbidden = (): never => {
+    forbiddenReads += 1;
+    throw new Error("captured projection must not reread journal or payload");
+  };
+  const materialReads: number[] = [];
+  const reader: Reader = {
+    records: forbidden,
+    record: forbidden,
+    lastSequence: forbidden,
+    payload: forbidden,
+    material(seq) {
+      materialReads.push(seq);
+      return campaign.material(seq);
+    },
+    close: forbidden,
+  };
+  try {
+    const candidate = campaign.submitCandidate(
+      new TextEncoder().encode("captured proof"),
+      ["proof"],
+    );
+    const { call } = await campaign.call(
+      { label: "proof", candidate, request: null },
+      async () => ({ state: "succeeded" }),
+    );
+    const through = campaign.lastSequence();
+    const records = campaign.records({ through });
+    const before = inspectCoreCampaignRecords(reader, records);
+    const summary = inspectCoreCampaignSummaryRecords(records);
+    expect(before.lastSeq).toBe(through);
+    expect(before.calls.map((value) => value.id)).toEqual([call]);
+    expect(before.candidates[0]!.status.verified).toBe(false);
+    expect(before.candidates[0]!.material).toMatchObject({
+      text: "captured proof",
+    });
+    expect(summary).toMatchObject({
+      lastSeq: through,
+      callCount: 1,
+      candidateCount: 1,
+      verifiedCandidateCount: 0,
+    });
+
+    campaign.recordVerdict(call, "PASS", { checked: "after capture" });
+    campaign.submitCandidate(new TextEncoder().encode("later proof"), [
+      "later",
+    ]);
+    await campaign.call({ label: "later", request: null }, async () => null);
+
+    expect(campaign.lastSequence()).toBeGreaterThan(through);
+    expect(inspectCoreCampaignRecords(reader, records)).toEqual(before);
+    expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
+    expect(materialReads).toEqual([candidate, candidate]);
+    expect(forbiddenReads).toBe(0);
+    const current = inspectCoreCampaignSummary(path);
+    expect(current).toMatchObject({
+      callCount: 2,
+      candidateCount: 2,
+      verifiedCandidateCount: 1,
+    });
+    expect(current.lastSeq).toBeGreaterThan(summary.lastSeq);
+  } finally {
+    campaign.close();
+  }
+});
+
+test("a captured pending call stays pending after its result is appended", async () => {
+  const campaign = createCampaign(campaignPath(), "pending-boundary", null);
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const pending = campaign.call(
+    { label: "pending", request: null },
+    async () => {
+      await gate;
+      return { done: true };
+    },
+  );
+  let forbiddenReads = 0;
+  const forbidden = (): never => {
+    forbiddenReads += 1;
+    throw new Error("unexpected live read");
+  };
+  const reader: Reader = {
+    records: forbidden,
+    record: forbidden,
+    lastSequence: forbidden,
+    payload: forbidden,
+    material: forbidden,
+    close: forbidden,
+  };
+  try {
+    const records = campaign.records({ through: campaign.lastSequence() });
+    const summary = inspectCoreCampaignSummaryRecords(records);
+    expect(summary.callsWithoutResult?.count).toBe(1);
+    expect(
+      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
+    ).toBe("unsettled");
+    finish();
+    await pending;
+    expect(campaign.lastSequence()).toBeGreaterThan(summary.lastSeq);
+    expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
+    expect(
+      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
+    ).toBe("unsettled");
+    expect(forbiddenReads).toBe(0);
+    const latest = inspectCoreCampaignSummaryRecords(campaign.records());
+    expect(latest).not.toHaveProperty("callsWithoutResult");
+    expect(latest.lastSeq).toBeGreaterThan(summary.lastSeq);
+  } finally {
+    finish();
+    await pending;
+    campaign.close();
+  }
 });
 
 test("preserves non-UTF-8 candidate bytes without invented text", () => {

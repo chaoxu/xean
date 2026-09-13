@@ -12,6 +12,8 @@
   },
   "files": [
     "src",
+    "patches",
+    "vendor",
     "LICENSE",
     "README.md",
     "SPEC.md",
@@ -49,7 +51,11 @@
   "trustedDependencies": [
     "cozo-node"
   ],
+  "bundledDependencies": [
+    "@earendil-works/pi-ai"
+  ],
   "overrides": {
-    "tar": "^7.5.7"
+    "tar": "^7.5.7",
+    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.85.1-elenx.2.tgz"
   }
 }

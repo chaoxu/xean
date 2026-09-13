@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createCampaign, openCampaign, openReader } from "../../src";
+import { Journal } from "../../src/db";
 
 const directories: string[] = [];
 
@@ -31,6 +32,178 @@ afterEach(() => {
 });
 
 describe("campaign database", () => {
+  test("queries exact ordered records with intersected filters and captured boundaries", () => {
+    const path = temporaryPath();
+    const journal = Journal.create(path, "query-test", null);
+    const a = journal.append({
+      kind: "call",
+      label: "work",
+      role: "explorer",
+      request: null,
+      tools: [],
+    });
+    const b = journal.append({
+      kind: "call",
+      label: "checkpoint",
+      request: null,
+      tools: [],
+    });
+    const checkpointResult = journal.append({
+      kind: "call-result",
+      parent: b.seq,
+      state: "returned",
+      output: null,
+    });
+    const tool = journal.append({
+      kind: "tool-call",
+      call: a.seq,
+      tool: "submit",
+      source: "remote-1",
+      input: { notes: [] },
+    });
+    const toolResult = journal.append({
+      kind: "tool-result",
+      parent: tool.seq,
+      state: "returned",
+      output: { noteIds: [] },
+    });
+    const result = journal.append({
+      kind: "call-result",
+      parent: a.seq,
+      state: "returned",
+      output: { done: true },
+    });
+    const all = journal.records();
+    expect(journal.record(a.seq)).toEqual(a);
+    expect(journal.record(result.seq + 1)).toBeUndefined();
+    expect(journal.lastSequence()).toBe(result.seq);
+    expect(journal.records({ labels: ["checkpoint"] })).toEqual([
+      b,
+      checkpointResult,
+    ]);
+    expect(journal.records({ excludeLabels: ["checkpoint"] })).toEqual(
+      all.filter((e) => e.seq !== b.seq && e.seq !== checkpointResult.seq),
+    );
+    expect(
+      journal.records({
+        kinds: ["tool-call"],
+        call: a.seq,
+        after: b.seq,
+        through: tool.seq,
+      }),
+    ).toEqual([tool]);
+    expect(
+      journal.records({ kinds: ["tool-result"], parent: tool.seq }),
+    ).toEqual([toolResult]);
+    expect(journal.records({ kinds: ["call-result"], parent: a.seq })).toEqual([
+      result,
+    ]);
+    expect(
+      journal.records({
+        labels: ["work"],
+        kinds: ["call-result"],
+        through: tool.seq,
+      }),
+    ).toEqual([]);
+    expect(journal.records({ kinds: [] })).toEqual([]);
+    expect(journal.records({ labels: [] })).toEqual([]);
+    expect(journal.records({ excludeLabels: [] })).toEqual(all);
+    expect(journal.records({ after: 0, through: 0 })).toEqual([]);
+    expect(journal.records({ after: result.seq, through: a.seq })).toEqual([]);
+    expect(() => journal.records({ after: -1 })).toThrow();
+    expect(() => journal.record(0)).toThrow();
+    expect(() => journal.records({ kinds: ["unknown"] } as never)).toThrow();
+    journal.close();
+    const reader = openReader(path);
+    expect(reader.record(a.seq)).toEqual(a);
+    expect(reader.lastSequence()).toBe(result.seq);
+    expect(reader.records({ labels: ["work"] })).toEqual([a, result]);
+    reader.close();
+  });
+
+  test("SQL filters leave an unrelated large invalid entry unparsed", () => {
+    const path = temporaryPath();
+    const journal = Journal.create(path, "selective-query", null);
+    const owner = journal.append({
+      kind: "call",
+      label: "owner",
+      request: null,
+      tools: [],
+    });
+    const tool = journal.append({
+      kind: "tool-call",
+      call: owner.seq,
+      tool: "submit",
+      input: { notes: [] },
+    });
+    journal.close();
+    const database = new Database(path, { readwrite: true, create: false });
+    database.run("INSERT INTO entries(at_ms,kind,body) VALUES(?,?,?)", [
+      Date.now(),
+      "call",
+      JSON.stringify({
+        label: "large-invalid",
+        request: { text: "x".repeat(2 * 1024 * 1024) },
+        tools: [],
+        unexpected: true,
+      }),
+    ]);
+    const indexNames = database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type='index'",
+      )
+      .all()
+      .map((r) => r.name);
+    expect(indexNames).toContain("entries_call_seq");
+    expect(indexNames).toContain("entries_parent_seq");
+    expect(indexNames).toContain("entries_label_seq");
+    database.close();
+    const reader = openReader(path);
+    expect(reader.records({ kinds: ["tool-call"], call: owner.seq })).toEqual([
+      tool,
+    ]);
+    expect(reader.records({ excludeLabels: ["large-invalid"] })).toHaveLength(
+      3,
+    );
+    expect(reader.record(owner.seq)).toEqual(owner);
+    expect(reader.lastSequence()).toBe(4);
+    expect(() => reader.records()).toThrow();
+    reader.close();
+  });
+
+  test("recordVerdict reads only its candidate, call, and result", async () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "targeted-verdict", null);
+    const candidate = campaign.submitCandidate(
+      new TextEncoder().encode("claim"),
+      ["audit"],
+    );
+    const call = await campaign.call(
+      { label: "audit", candidate, request: null },
+      async () => ({ state: "succeeded" }),
+    );
+    const db = new Database(path, { readwrite: true });
+    db.run("INSERT INTO entries(at_ms,kind,body) VALUES(?,?,?)", [
+      Date.now(),
+      "call",
+      JSON.stringify({
+        label: "unrelated-large-invalid",
+        request: { text: "x".repeat(2 * 1024 * 1024) },
+        tools: [],
+        unexpected: true,
+      }),
+    ]);
+    db.close();
+    const verdict = campaign.recordVerdict(call.call, "PASS", null);
+    expect(campaign.record(verdict)).toMatchObject({
+      kind: "verdict",
+      call: call.call,
+      verdict: "PASS",
+    });
+    expect(() => campaign.records()).toThrow();
+    campaign.close();
+  });
+
   test("creates a private file without overwriting an existing campaign", () => {
     const path = temporaryPath();
     const campaign = createCampaign(path, "first", null);

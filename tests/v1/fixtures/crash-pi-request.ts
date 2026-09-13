@@ -5,7 +5,8 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 
-import { createCampaign } from "../../../src";
+import { createCampaign, defineTool } from "../../../src";
+import { z } from "zod";
 import { runPi } from "../../../src/pi";
 
 const path = process.argv[2];
@@ -22,11 +23,46 @@ const model: Model<Api> = {
   contextWindow: 10_000,
   maxTokens: 1_000,
 };
+let requests = 0;
+const afterFirst = process.argv[3] === "after-first";
 const models = {
   streamSimple(requestModel, _context, options) {
     const stream = createAssistantMessageEventStream();
     void (async () => {
       await options?.onPayload?.({ input: "durable request" }, requestModel);
+      if (afterFirst && requests++ === 0) {
+        stream.push({
+          type: "done",
+          reason: "toolUse",
+          message: {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            content: [
+              { type: "toolCall", id: "ping-1", name: "ping", arguments: {} },
+            ],
+            stopReason: "toolUse",
+            timestamp: Date.now(),
+            usage: {
+              input: 10,
+              output: 5,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 15,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+          },
+        });
+        stream.end();
+        return;
+      }
       process.exit(0);
     })();
     return stream;
@@ -38,4 +74,19 @@ await runPi(campaign, {
   model,
   label: "crash/v1",
   prompt: "Crash after checkpoint",
+  ...(afterFirst
+    ? {
+        tools: [
+          defineTool({
+            name: "ping",
+            description: "Ping",
+            input: z.strictObject({}),
+            replay: "safe",
+            async run() {
+              return null;
+            },
+          }),
+        ],
+      }
+    : {}),
 });

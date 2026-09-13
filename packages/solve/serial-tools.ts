@@ -11,9 +11,12 @@ const openAiResponsesApis = new Set([
 /**
  * Force the sole terminal tool for OpenAI Responses requests and disable
  * parallel calls. The payload is rewritten before the checkpointing hook sees
- * it so the durable checkpoint matches the sent bytes. Pi 0.85's simple-stream
+ * it so the durable checkpoint captures the effective full request. Pi may
+ * send a cached WebSocket continuation as a response ID plus new input items.
+ * Pi 0.85's simple-stream
  * toolChoice supports only auto/none, not required, and has no parallel-call
- * option. Keep this wrapper until both controls are available upstream.
+ * option. Its Codex adapter also omits output caps; preserve them for proxies
+ * that explicitly advertise support. Keep these controls until Pi exposes them.
  */
 export function withSerialToolCalls(models: SolveModels): SolveModels {
   return {
@@ -47,7 +50,19 @@ export function withSerialToolCalls(models: SolveModels): SolveModels {
                 parallel_tool_calls: false,
               }
             : payload;
-        return (await inner?.(serial, requestModel)) ?? serial;
+        const effective =
+          model.api === "openai-codex-responses" &&
+          model.compat !== undefined &&
+          "supportsMaxOutputTokens" in model.compat &&
+          model.compat.supportsMaxOutputTokens === true &&
+          typeof serial === "object" &&
+          serial !== null
+            ? {
+                ...serial,
+                max_output_tokens: options?.maxTokens ?? model.maxTokens,
+              }
+            : serial;
+        return (await inner?.(effective, requestModel)) ?? effective;
       };
       return models.streamSimple(model, context, { ...options, onPayload });
     },

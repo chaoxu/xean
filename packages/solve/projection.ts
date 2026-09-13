@@ -33,6 +33,9 @@ verified[note] := established[note], not unverified[note], not dead[note]
 accepted[note] := passed[candidate, note, "correctness"], passed[candidate, note, "source"], passed[candidate, note, "requirements"], passed[candidate, note, "reconstruction"], verified[note]`;
 
 export class Projection {
+  private snapshot:
+    | { seq: EntryId; value: Promise<{ notes: Note[]; accepted: string[] }> }
+    | undefined;
   private constructor(private readonly db: InstanceType<typeof CozoDb>) {}
 
   static async open(verdicts: readonly JournalVerdict[]): Promise<Projection> {
@@ -70,6 +73,7 @@ export class Projection {
     }[],
     seq: EntryId,
   ): Promise<void> {
+    this.snapshot = undefined;
     await this.db.run("?[id, seq, text] <- $rows :put note {id => seq, text}", {
       rows: entries.map(({ id, text }) => [id, seq, text]),
     });
@@ -102,6 +106,7 @@ export class Projection {
     seq: EntryId,
   ): Promise<void> {
     if (filings.length === 0) return;
+    this.snapshot = undefined;
     await this.db.run(
       "?[note, seq, summary] <- $rows :put summary {note => seq, summary}",
       { rows: filings.map(({ note, summary }) => [note, seq, summary]) },
@@ -110,6 +115,18 @@ export class Projection {
 
   /** Every note that exists at `seq`, with the summary, verdicts, and flags derived by then, in id order. */
   async at(seq: EntryId): Promise<Note[]> {
+    return (await this.read(seq)).notes;
+  }
+
+  private read(seq: EntryId) {
+    if (this.snapshot?.seq !== seq)
+      this.snapshot = { seq, value: this.readAt(seq) };
+    return this.snapshot.value;
+  }
+
+  private async readAt(
+    seq: EntryId,
+  ): Promise<{ notes: Note[]; accepted: string[] }> {
     const [notes, summaries, support, verdicts, flags, external] =
       await Promise.all([
         this.db.run("?[id, text] := *note{id, seq, text}, seq <= $seq", {
@@ -127,7 +144,8 @@ export class Projection {
         this.db.run(
           `${derivedRules}
 ?[note, flag] := verified[note], flag = "verified"
-?[note, flag] := dead[note], flag = "dead"`,
+?[note, flag] := dead[note], flag = "dead"
+?[note, flag] := accepted[note], flag = "accepted"`,
           { seq },
         ),
         this.db.run(
@@ -146,24 +164,33 @@ export class Projection {
     const verificationOf = new Map(
       external.rows.map(([id, source, report]) => [id, { source, report }]),
     );
-    return notes.rows
+    const supportOf = new Map<unknown, string[]>();
+    for (const [note, parent] of support.rows) {
+      const values = supportOf.get(note) ?? [];
+      values.push(parent as string);
+      supportOf.set(note, values);
+    }
+    const verdictsOf = new Map<unknown, unknown[][]>();
+    for (const row of verdicts.rows) {
+      const values = verdictsOf.get(row[2]) ?? [];
+      values.push(row);
+      verdictsOf.set(row[2], values);
+    }
+    const projected = notes.rows
       .map(([id, text]) =>
         noteSchema.parse({
           id,
           ...(summaryOf.has(id) ? { summary: summaryOf.get(id) } : {}),
           text,
-          support: support.rows
-            .filter(([note]) => note === id)
-            .map(([, supportId]) => supportId as string)
-            .sort(byId),
-          verdicts: verdicts.rows
-            .filter(([, , note]) => note === id)
-            .map(([, verifier, note, verdict, report]) => ({
+          support: (supportOf.get(id) ?? []).sort(byId),
+          verdicts: (verdictsOf.get(id) ?? []).map(
+            ([, verifier, note, verdict, report]) => ({
               verifier,
               note,
               verdict,
               report,
-            })),
+            }),
+          ),
           verified: verifiedNotes.has(id),
           dead: deadNotes.has(id),
           ...(verificationOf.has(id)
@@ -172,19 +199,19 @@ export class Projection {
         }),
       )
       .sort((left, right) => byId(left.id, right.id));
+    return {
+      notes: projected,
+      accepted: [...flagged("accepted")].map((id) => id as string).sort(byId),
+    };
   }
 
   /** The notes accepted at `seq`: every verifier passed them on one candidate, in id order. */
   async accepted(seq: EntryId): Promise<string[]> {
-    const result = await this.db.run(
-      `${derivedRules}
-?[note] := accepted[note]`,
-      { seq },
-    );
-    return result.rows.map(([note]) => note as string).sort(byId);
+    return (await this.read(seq)).accepted;
   }
 
   close(): void {
+    this.snapshot = undefined;
     this.db.close();
   }
 }

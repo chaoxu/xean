@@ -81,7 +81,11 @@ export async function appendSubmittedNotes(
     return receipt;
   };
   for (let attempt = 0; attempt < 3; attempt++) {
-    const records = campaign.records(),
+    const through = campaign.lastSequence();
+    const records = campaign.records({
+        excludeLabels: ["elenx/pi-request"],
+        through,
+      }),
       prior = existing(records);
     if (prior) return prior;
     await validate(records);
@@ -92,10 +96,13 @@ export async function appendSubmittedNotes(
       });
       lock.run("PRAGMA busy_timeout = 5000");
       lock.run("BEGIN EXCLUSIVE");
-      const current = campaign.records(),
+      const current = campaign.records({
+          kinds: ["call"],
+          labels: [notesLabel],
+        }),
         duplicate = existing(current);
       if (duplicate) return duplicate;
-      if (current.at(-1)?.seq !== records.at(-1)?.seq) continue;
+      if (campaign.lastSequence() !== through) continue;
       // Append synchronously while locked, then settle the local call outside it.
       pending = campaign.call(
         { label: notesLabel, request: jsonSnapshot(request) },
@@ -103,9 +110,7 @@ export async function appendSubmittedNotes(
       );
     }
     const result = await pending;
-    return receipts(campaign.records()).find(
-      (entry) => entry.call === result.call,
-    )!;
+    return receipts([campaign.record(result.call)!])[0]!;
   }
   throw new Error(
     "campaign changed while validating submitted notes; retry the same id",
@@ -124,7 +129,18 @@ export async function freezeSubmittedNotes(
   campaign: Campaign,
   after: EntryId,
 ): Promise<boolean> {
-  const records = campaign.records(),
+  const through = campaign.lastSequence();
+  const records = campaign.records({
+      kinds: ["call"],
+      labels: [
+        notesLabel,
+        boundaryLabel,
+        roleLabels.explorer,
+        roleLabels.coordinator,
+        "elenx-solve/explorer-guidance",
+      ],
+      through,
+    }),
     bound = boundaries(records);
   const consumedThrough = bound.at(-1)?.through ?? 0;
   if (
@@ -143,7 +159,7 @@ export async function freezeSubmittedNotes(
   await campaign.call(
     {
       label: boundaryLabel,
-      request: { schemaVersion: 1, after, through: records.at(-1)!.seq },
+      request: { schemaVersion: 1, after, through },
     },
     async () => null,
   );

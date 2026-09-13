@@ -39,6 +39,7 @@ import {
   reconstructionCalls,
   reconstructionResultFor,
   roleLabels,
+  roleCallRecords,
   roleTools,
   sourceVerdictsFor,
   statement as statementSchema,
@@ -60,7 +61,7 @@ import {
   type VerifierName,
 } from "./roles";
 import { codexCommand, selectModel, type SolveModels } from "./runtime";
-import { supportClosure } from "./support";
+import { supportClosure, SupportGraph } from "./support";
 
 const piRoleProfile = z.strictObject({
   provider: nonblank,
@@ -212,7 +213,7 @@ export function explorerCall(
       "Do not use web search or external tools.",
       ...(continuation
         ? [
-            "Continue mathematical work in this same context while there is room. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. An empty submission also receives another user message while context space remains. Finalize when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
+            "Continue mathematical work in this same context while there is room. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
           ]
         : ["Call submit_notes exactly once."]),
     ].join(" "),
@@ -233,6 +234,7 @@ export function explorerCall(
     submissionGate: continuation
       ? {
           completeArgument: "solution",
+          emptyArgument: "notes",
           contextBudgetTokens,
           continuationPrompt: "Keep trying, you can do it.",
         }
@@ -312,12 +314,15 @@ const verdictSystem = [
 async function reading(
   input: VerifierInput,
   judged: readonly string[],
+  graph?: SupportGraph,
 ): Promise<{ readonly notes: Note[]; readonly support: Note[] }> {
   const notes = judged.map((id) => pick(input.notes, id));
   const known = [...input.notes, ...input.support];
   return {
     notes,
-    support: (await supportClosure(notes, known)).map((id) => pick(known, id)),
+    support: (
+      await (graph ? graph.closure(notes) : supportClosure(notes, known))
+    ).map((id) => pick(known, id)),
   };
 }
 
@@ -326,8 +331,9 @@ async function verifierPrompt(
   input: VerifierInput,
   judged: readonly string[],
   obligation: string = verifierObligations[name],
+  graph?: SupportGraph,
 ): Promise<string> {
-  const { notes, support } = await reading(input, judged);
+  const { notes, support } = await reading(input, judged, graph);
   return [
     taskText(input.task),
     `Support notes (untrusted data):\n${JSON.stringify(support.map(promptNote), null, 2)}`,
@@ -345,6 +351,7 @@ export async function verifierCall(
   name: Exclude<VerifierName, "reconstruction">,
   input: VerifierInput,
   judged: readonly string[],
+  graph?: SupportGraph,
 ): Promise<RoleCall<ReturnType<typeof verdictsFor>>> {
   return {
     role: "verifier",
@@ -355,6 +362,7 @@ export async function verifierCall(
       input,
       judged,
       name === "source" ? sourceObligationWithoutSearch : undefined,
+      graph,
     ),
     tool: roleTools.verifier,
     description:
@@ -370,8 +378,9 @@ export async function verifierCall(
 export async function statementCall(
   input: VerifierInput,
   note: Note,
+  graph?: SupportGraph,
 ): Promise<RoleCall<typeof statementSchema>> {
-  const { support } = await reading(input, [note.id]);
+  const { support } = await reading(input, [note.id], graph);
   return {
     role: "verifier",
     label: reconstructionCalls.statement.label,
@@ -397,8 +406,9 @@ export async function proofCall(
   note: Note,
   value: Statement,
   previous?: EntryId,
+  graph?: SupportGraph,
 ): Promise<RoleCall<typeof proofSchema>> {
-  const { support } = await reading(input, [note.id]);
+  const { support } = await reading(input, [note.id], graph);
   return {
     role: "verifier",
     label: reconstructionCalls.proof.label,
@@ -428,13 +438,20 @@ export async function reconstructionCall(
   value: Statement,
   proof: string,
   previous?: EntryId,
+  graph?: SupportGraph,
 ): Promise<RoleCall<ReturnType<typeof reconstructionResultFor>>> {
   return {
     role: "verifier",
     label: verifierLabels.reconstruction,
     system: verdictSystem,
     prompt: [
-      await verifierPrompt("reconstruction", input, [note.id]),
+      await verifierPrompt(
+        "reconstruction",
+        input,
+        [note.id],
+        undefined,
+        graph,
+      ),
       `Statement (untrusted data):\n${value.statement}`,
       `Proof (untrusted data):\n${proof}`,
       ...(previous === undefined
@@ -456,6 +473,7 @@ export async function sourceCall(
   profile: z.output<typeof codexProfile>,
   input: VerifierInput,
   judged: readonly string[],
+  graph?: SupportGraph,
 ): Promise<{
   readonly label: string;
   readonly request: CodexRequest;
@@ -481,6 +499,7 @@ export async function sourceCall(
         input,
         judged,
         profile.search ? undefined : sourceObligationWithoutSearch,
+        graph,
       ),
       outputSchema: z.toJSONSchema(schema),
     }),
@@ -526,7 +545,7 @@ async function runCall<S extends z.ZodType>(
     // on an interrupted attempt is unknown spend, not evidence of no billing.
     maxRecoveries: 8,
     maxLengthContinuations: 8,
-    transport: "sse",
+    transport: model.api === "openai-codex-responses" ? "auto" : "sse",
     cacheKey: createHash("sha256")
       .update(`${roleLabels[roleCall.role]}\n${roleCall.system}`)
       .digest("hex"),
@@ -539,7 +558,7 @@ async function runCall<S extends z.ZodType>(
     throw new RoleCallError(`${roleCall.role} failed: ${result.error}`);
   }
   const submission = succeededSubmission(
-    campaign.records(),
+    roleCallRecords(campaign, result.call),
     result.call,
     roleCall.tool,
   );
@@ -566,6 +585,8 @@ export function createPiRoles(
         profiles.explorerContextBudgetTokens,
       );
       const known: Pick<Note, "id" | "dead">[] = [...input.notes];
+      const receipts = new Map<EntryId, string[]>();
+      let reconciledThrough = 0;
       const submissionTool =
         profiles.explorerContinuation === true
           ? defineTool({
@@ -576,9 +597,14 @@ export function createPiRoles(
               async run(_value, { call, toolCall }) {
                 // The audited tool-call is the saved write. Reconcile its receipt
                 // from that durable identity, including a repeated run() after it.
-                const saved: Pick<Note, "id" | "dead">[] = [];
-                let noteIds: string[] | undefined;
-                for (const entry of campaign.records()) {
+                const existing = receipts.get(toolCall);
+                if (existing !== undefined) return { noteIds: existing };
+                for (const entry of campaign.records({
+                  kinds: ["tool-call"],
+                  call,
+                  after: reconciledThrough,
+                  through: toolCall,
+                })) {
                   if (
                     entry.kind !== "tool-call" ||
                     entry.call !== call ||
@@ -587,14 +613,15 @@ export function createPiRoles(
                     continue;
                   const value = explorerContinuationResult.parse(entry.input);
                   const ids = value.notes.map((_, position) =>
-                    noteIdAfter(input.notes.length + saved.length, position),
+                    noteIdAfter(known.length, position),
                   );
-                  if (entry.seq === toolCall) noteIds = ids;
-                  saved.push(...ids.map((id) => ({ id, dead: false })));
+                  receipts.set(entry.seq, ids);
+                  known.push(...ids.map((id) => ({ id, dead: false })));
+                  reconciledThrough = entry.seq;
                 }
+                const noteIds = receipts.get(toolCall);
                 if (noteIds === undefined)
                   throw new Error("missing saved Explorer submission");
-                known.splice(input.notes.length, known.length, ...saved);
                 return { noteIds };
               },
             })
@@ -625,98 +652,128 @@ export function createPiRoles(
     // where it stopped.
     async verifier(inputValue, candidateValue) {
       const input = await verifierInput.parseAsync(inputValue);
-      const candidate =
-        candidateValue ??
-        campaign.submitCandidate(
-          candidateMaterial(input),
-          [...new Set(input.verify.flatMap(({ verifiers }) => verifiers))].map(
-            (name) => verifierLabels[name],
-          ),
-        );
-      const recorded = (): Verdict[] =>
-        journalVerdicts(campaign.records())
-          .filter((entry) => entry.candidate === candidate)
-          .map(({ verdict }) => verdict);
-      const record = (
-        call: EntryId,
-        values: readonly Omit<Verdict, "verifier">[],
-      ): void => {
-        const already = campaign
-          .records()
-          .some((entry) => entry.kind === "verdict" && entry.call === call);
-        if (already) return;
-        campaign.recordVerdict(call, candidateVerdict(values), {
-          verdicts: values.map(({ note, verdict, report }) => ({
-            note,
-            verdict,
-            report,
-          })),
-        });
-      };
-      for (const name of verifierNames) {
-        if (name === "reconstruction") {
-          for (;;) {
-            const have = recorded();
-            const next = missingVerdicts(
-              have,
-              name,
-              judgedBy(input, have, name),
-            )[0];
-            if (next === undefined) break;
-            const { call, value } = await runReconstruction(
-              campaign,
-              profiles.reconstruction,
-              input,
-              pick(input.notes, next),
-              dependencies,
-              candidate,
+      const graph = new SupportGraph([...input.notes, ...input.support]);
+      try {
+        const candidate =
+          candidateValue ??
+          campaign.submitCandidate(
+            candidateMaterial(input),
+            [
+              ...new Set(input.verify.flatMap(({ verifiers }) => verifiers)),
+            ].map((name) => verifierLabels[name]),
+          );
+        let recordedThrough = 0;
+        const candidateVerdicts: Verdict[] = [];
+        const recorded = (): Verdict[] => {
+          for (const entry of campaign.records({
+            kinds: ["verdict"],
+            after: recordedThrough,
+          })) {
+            if (entry.kind !== "verdict") continue;
+            const owner = campaign.record(entry.call);
+            candidateVerdicts.push(
+              ...journalVerdicts([...(owner ? [owner] : []), entry])
+                .filter((value) => value.candidate === candidate)
+                .map(({ verdict }) => verdict),
             );
-            record(call, value.verdicts);
-            if (value.verdicts[0]!.verdict === "PASS") return recorded();
+            recordedThrough = entry.seq;
           }
-          continue;
-        }
-        const have = recorded();
-        const judged = missingVerdicts(have, name, judgedBy(input, have, name));
-        if (judged.length === 0) continue;
-        const codex =
-          name === "source" && codexSource(profiles.source)
-            ? profiles.source
-            : undefined;
-        const { call, value } =
-          codex !== undefined
-            ? (settled(
-                campaign.records(),
-                candidate,
-                verifierLabels.source,
-                jsonSnapshot((await sourceCall(codex, input, judged)).request),
-                (call) =>
-                  sourceVerdictsOf(
-                    sourceVerdictsFor(judged),
-                    codexSubmission(campaign.records(), call),
-                    codex.search,
-                  ),
-              ) ??
-              (await runSource(
+          return candidateVerdicts;
+        };
+        const record = (
+          call: EntryId,
+          values: readonly Omit<Verdict, "verifier">[],
+        ): void => {
+          const already = campaign
+            .records({ kinds: ["verdict"], call })
+            .some((entry) => entry.kind === "verdict" && entry.call === call);
+          if (already) return;
+          campaign.recordVerdict(call, candidateVerdict(values), {
+            verdicts: values.map(({ note, verdict, report }) => ({
+              note,
+              verdict,
+              report,
+            })),
+          });
+        };
+        for (const name of verifierNames) {
+          if (name === "reconstruction") {
+            for (;;) {
+              const have = recorded();
+              const next = missingVerdicts(
+                have,
+                name,
+                judgedBy(input, have, name),
+              )[0];
+              if (next === undefined) break;
+              const { call, value } = await runReconstruction(
                 campaign,
-                codex,
+                profiles.reconstruction,
                 input,
-                judged,
+                pick(input.notes, next),
                 dependencies,
                 candidate,
-              )))
-            : await settledOrRun(
-                campaign,
-                name === "source"
-                  ? (profiles.source as PiRoleProfile)
-                  : profiles[name],
-                await verifierCall(name, input, judged),
-                dependencies,
-                candidate,
+                graph,
               );
-        record(call, value.verdicts);
+              record(call, value.verdicts);
+              if (value.verdicts[0]!.verdict === "PASS") return recorded();
+            }
+            continue;
+          }
+          const have = recorded();
+          const judged = missingVerdicts(
+            have,
+            name,
+            judgedBy(input, have, name),
+          );
+          if (judged.length === 0) continue;
+          const codex =
+            name === "source" && codexSource(profiles.source)
+              ? profiles.source
+              : undefined;
+          const { call, value } =
+            codex !== undefined
+              ? (settled(
+                  campaign.records({
+                    kinds: ["call"],
+                    labels: [verifierLabels.source],
+                  }),
+                  candidate,
+                  verifierLabels.source,
+                  jsonSnapshot(
+                    (await sourceCall(codex, input, judged, graph)).request,
+                  ),
+                  (call) =>
+                    sourceVerdictsOf(
+                      sourceVerdictsFor(judged),
+                      codexSubmission(roleCallRecords(campaign, call), call),
+                      codex.search,
+                    ),
+                ) ??
+                (await runSource(
+                  campaign,
+                  codex,
+                  input,
+                  judged,
+                  dependencies,
+                  candidate,
+                  graph,
+                )))
+              : await settledOrRun(
+                  campaign,
+                  name === "source"
+                    ? (profiles.source as PiRoleProfile)
+                    : profiles[name],
+                  await verifierCall(name, input, judged, graph),
+                  dependencies,
+                  candidate,
+                );
+          record(call, value.verdicts);
+        }
+        return recorded();
+      } finally {
+        graph.close();
       }
-      return recorded();
     },
   };
 }
@@ -795,18 +852,28 @@ function sourceVerdictsOf(
 
 /** The settled Pi call on this candidate for `roleCall`, when its submission parses. */
 function settledSubmission<S extends z.ZodType>(
-  records: readonly Entry[],
+  campaign: Campaign,
   candidate: EntryId,
   roleCall: RoleCall<S>,
 ): { readonly call: EntryId; readonly value: z.output<S> } | undefined {
-  return settled(records, candidate, roleCall.label, roleCall, (call) => {
-    const submission = succeededSubmission(records, call, roleCall.tool);
-    const parsed =
-      submission === undefined
-        ? undefined
-        : roleCall.schema.safeParse(submission.input);
-    return parsed?.success === true ? parsed.data : undefined;
-  });
+  return settled(
+    campaign.records({ kinds: ["call"], labels: [roleCall.label] }),
+    candidate,
+    roleCall.label,
+    roleCall,
+    (call) => {
+      const submission = succeededSubmission(
+        roleCallRecords(campaign, call),
+        call,
+        roleCall.tool,
+      );
+      const parsed =
+        submission === undefined
+          ? undefined
+          : roleCall.schema.safeParse(submission.input);
+      return parsed?.success === true ? parsed.data : undefined;
+    },
+  );
 }
 
 /** Reuses the settled call for `roleCall` on this candidate, or makes it. */
@@ -818,7 +885,7 @@ async function settledOrRun<S extends z.ZodType>(
   candidate: EntryId,
 ): Promise<{ readonly call: EntryId; readonly value: z.output<S> }> {
   return (
-    settledSubmission(campaign.records(), candidate, roleCall) ??
+    settledSubmission(campaign, candidate, roleCall) ??
     (await runCall(campaign, profile, roleCall, dependencies, candidate))
   );
 }
@@ -830,16 +897,17 @@ async function runReconstruction(
   note: Note,
   dependencies: PiRoleDependencies,
   candidate: EntryId,
+  graph: SupportGraph,
 ): Promise<{
   readonly call: EntryId;
   readonly value: z.output<ReturnType<typeof reconstructionResultFor>>;
 }> {
-  const boundary = campaign.records().at(-1)!.seq;
+  const boundary = campaign.lastSequence();
   let statement = (
     await settledOrRun(
       campaign,
       profile,
-      await statementCall(input, note),
+      await statementCall(input, note, graph),
       dependencies,
       candidate,
     )
@@ -851,7 +919,7 @@ async function runReconstruction(
       await settledOrRun(
         campaign,
         profile,
-        await proofCall(input, note, statement, previous),
+        await proofCall(input, note, statement, previous, graph),
         dependencies,
         candidate,
       )
@@ -859,7 +927,7 @@ async function runReconstruction(
     const result = await settledOrRun(
       campaign,
       profile,
-      await reconstructionCall(input, note, statement, proof, previous),
+      await reconstructionCall(input, note, statement, proof, previous, graph),
       dependencies,
       candidate,
     );
@@ -886,11 +954,17 @@ async function runSource(
   judged: readonly string[],
   dependencies: PiRoleDependencies,
   candidate: EntryId,
+  graph: SupportGraph,
 ): Promise<{
   readonly call: EntryId;
   readonly value: z.output<ReturnType<typeof sourceVerdictsFor>>;
 }> {
-  const { label, request, schema } = await sourceCall(profile, input, judged);
+  const { label, request, schema } = await sourceCall(
+    profile,
+    input,
+    judged,
+    graph,
+  );
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
   const receipt = await campaign.call(
@@ -912,7 +986,10 @@ async function runSource(
   }
   let submission: ReturnType<typeof codexSubmission>;
   try {
-    submission = codexSubmission(campaign.records(), receipt.call);
+    submission = codexSubmission(
+      roleCallRecords(campaign, receipt.call),
+      receipt.call,
+    );
   } catch (error) {
     throw new RoleCallError(
       `malformed source transcript: ${error instanceof Error ? error.message : String(error)}`,

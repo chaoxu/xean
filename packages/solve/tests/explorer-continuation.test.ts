@@ -43,6 +43,7 @@ test("Explorer continuation defaults off and only its enabled schema requires a 
   expect(off.submissionGate).toBeUndefined();
   expect(on.submissionGate).toEqual({
     completeArgument: "solution",
+    emptyArgument: "notes",
     contextBudgetTokens: 400_000,
     continuationPrompt: "Keep trying, you can do it.",
   });
@@ -116,6 +117,7 @@ test("only enabled Explorer calls receive the gate; a solution claim still goes 
     expect(result.kind).toBe("turn-limit");
     expect(drive.calls[0]?.submissionGate).toEqual({
       completeArgument: "solution",
+      emptyArgument: "notes",
       contextBudgetTokens: 400_000,
       continuationPrompt: explorerCall(input, true).submissionGate!
         .continuationPrompt,
@@ -194,8 +196,37 @@ test("explicitly disabled Explorer omits the kernel gate", async () => {
   }
 });
 
+test.each(["openai-responses", "openai-codex-responses"] as const)(
+  "Solver selects transport for the model adapter: %s",
+  async (api) => {
+    const campaign = createCampaign(campaignPath(), applicationId, {
+      kind: "calls",
+    });
+    const drive = dependencies([{ submission: { notes: [note] } }]);
+    const models = {
+      ...drive.models,
+      getModel(provider: string, id: string) {
+        const selected = drive.models.getModel(provider, id);
+        return selected === undefined ? undefined : { ...selected, api };
+      },
+    };
+    try {
+      await createPiRoles(campaign, roleSettings(), {
+        ...drive,
+        models,
+      }).explorer(input);
+      expect(drive.calls[0]?.model.api).toBe(api);
+      expect(drive.calls[0]?.transport).toBe(
+        api === "openai-codex-responses" ? "auto" : "sse",
+      );
+    } finally {
+      campaign.close();
+    }
+  },
+);
+
 test.each([false, true])(
-  "an empty context-limit handoff returns to the coordinator and a fresh Explorer with saved notes: %s",
+  "the first empty handoff returns to the coordinator and a fresh Explorer with saved notes: %s",
   async (saveFirst) => {
     const config = workflowConfiguration({
       task,

@@ -34,10 +34,23 @@ function itemId(block: ThinkingContent): string | undefined {
 // Pi keeps signatures on failed messages, but its adapters omit those messages.
 // Only the model-input view changes here; the transcript retains the failure.
 export class ReasoningRecovery {
+  private readonly ids = new WeakMap<
+    ThinkingContent,
+    { readonly signature: string | undefined; readonly id: string | undefined }
+  >();
   private readonly completed = new WeakMap<
     AssistantMessage,
     ThinkingContent[]
   >();
+
+  private itemId(block: ThinkingContent): string | undefined {
+    const cached = this.ids.get(block);
+    if (cached !== undefined && cached.signature === block.thinkingSignature)
+      return cached.id;
+    const id = itemId(block);
+    this.ids.set(block, { signature: block.thinkingSignature, id });
+    return id;
+  }
 
   observe(model: Model<Api>) {
     const blocks: ThinkingContent[] = [];
@@ -51,11 +64,13 @@ export class ReasoningRecovery {
           return;
         const block = event.partial.content[event.contentIndex];
         if (block?.type !== "thinking") return;
-        const id = itemId(block);
+        const id = this.itemId(block);
         if (id === undefined || ids.has(id)) return;
         ids.add(id);
         // Event.partial is mutable; snapshot at the completed-block event.
-        blocks.push({ ...block });
+        const snapshot = { ...block };
+        this.ids.set(snapshot, { signature: snapshot.thinkingSignature, id });
+        blocks.push(snapshot);
       },
       settle: (message: AssistantMessage) => {
         if (
@@ -78,14 +93,14 @@ export class ReasoningRecovery {
         if (message.role === "assistant") {
           for (const block of message.content) {
             if (block.type !== "thinking") continue;
-            const id = itemId(block);
+            const id = this.itemId(block);
             if (id !== undefined) ids.add(id);
           }
         }
         return [message];
       }
       const blocks = (this.completed.get(message) ?? []).filter((block) => {
-        const id = itemId(block)!;
+        const id = this.itemId(block)!;
         if (ids.has(id)) return false;
         ids.add(id);
         return true;

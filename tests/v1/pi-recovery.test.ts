@@ -260,7 +260,7 @@ describe.each([platformModel, codexModel])(
           ...input(adapter.sent[0]),
           checkpoint,
         ]);
-        const requests = piRequestAttempts(store.records(), result.call);
+        const requests = piRequestAttempts(store.records(), result.call, store);
         expect(requests).toHaveLength(2);
         expect(requests[1]?.payload as unknown).toEqual(adapter.sent[1]);
         expect(result.transcript).toMatchObject([
@@ -300,7 +300,7 @@ describe.each([platformModel, codexModel])(
     );
 
     test.each([false, true])(
-      "max_messages with new completed reasoning continues beyond the error budget (gate=%s)",
+      "max_messages keeps completed reasoning while consuming the error budget (gate=%s)",
       async (gated) => {
         const checkpoints = Array.from({ length: 10 }, (_, index) =>
           reasoning(`rs_limit_${index}`),
@@ -351,11 +351,11 @@ describe.each([platformModel, codexModel])(
               }
             : {}),
         });
-        expect(result.state).toBe("succeeded");
-        expect(adapter.sent).toHaveLength(11);
+        expect(result.state).toBe("failed");
+        expect(adapter.sent).toHaveLength(2);
         expect(input(adapter.sent.at(-1))).toEqual([
           ...input(adapter.sent[0]),
-          ...checkpoints.flatMap((checkpoint) =>
+          ...checkpoints.slice(0, 1).flatMap((checkpoint) =>
             gated
               ? [
                   checkpoint,
@@ -372,8 +372,8 @@ describe.each([platformModel, codexModel])(
               : [checkpoint],
           ),
         ]);
-        expect(executed).toEqual([7]);
-        expect(derivePiSpend(store.records()).summary.requestErrors).toBe(10);
+        expect(executed).toEqual([]);
+        expect(derivePiSpend(store.records()).summary.requestErrors).toBe(2);
       },
     );
 
@@ -487,7 +487,7 @@ describe.each([platformModel, codexModel])(
         error: "Response incomplete: max_messages",
         text: "",
       });
-      expect(adapter.sent).toHaveLength(3);
+      expect(adapter.sent).toHaveLength(2);
       expect(input(adapter.sent[1])).toEqual([
         ...input(adapter.sent[0]),
         first,
@@ -496,10 +496,8 @@ describe.each([platformModel, codexModel])(
         { role: "user" },
         { stopReason: "error", rawStopReason: "incomplete.max_messages" },
         { stopReason: "error", rawStopReason: "incomplete.max_messages" },
-        { stopReason: "error", rawStopReason: "incomplete.max_messages" },
       ]);
-      expect(input(adapter.sent[2])).toEqual(input(adapter.sent[1]));
-      expect(piRequestAttempts(store.records(), result.call)).toHaveLength(3);
+      expect(piRequestAttempts(store.records(), result.call)).toHaveLength(2);
     });
 
     test.each(["content_filter", "unknown_limit"])(

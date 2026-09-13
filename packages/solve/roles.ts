@@ -3,6 +3,7 @@ import {
   type Entry,
   type EntryId,
   type Json,
+  type Reader,
 } from "elenx";
 import { piRequest } from "elenx/pi";
 import { z } from "zod";
@@ -16,6 +17,42 @@ const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 
 export const applicationId = "elenx-solve";
 export const workflowProtocol = "workflow";
+
+/** Workflow semantics use role calls and receipts, never provider checkpoint payloads. */
+export function workflowRecords(reader: Reader): readonly Entry[] {
+  return reader.records({ excludeLabels: ["elenx/pi-request"] });
+}
+
+/** One role call's durable submission and settlement, without other calls' outputs. */
+export function roleCallRecords(
+  reader: Reader,
+  call: EntryId,
+): readonly Entry[] {
+  const through = reader.lastSequence();
+  const owner = reader.record(call);
+  const results = reader.records({
+    kinds: ["call-result"],
+    parent: call,
+    through,
+  });
+  const settledThrough = results[0]?.seq ?? through;
+  const tools = reader.records({
+    kinds: ["tool-call"],
+    call,
+    through: settledThrough,
+  });
+  const toolIds = new Set(tools.map(({ seq }) => seq));
+  return [
+    ...(owner === undefined ? [] : [owner]),
+    ...tools,
+    ...reader
+      .records({ kinds: ["tool-result"], after: call, through: settledThrough })
+      .filter(
+        (entry) => entry.kind === "tool-result" && toolIds.has(entry.parent),
+      ),
+    ...results,
+  ].sort((left, right) => left.seq - right.seq);
+}
 export const roleNames = ["explorer", "coordinator", "verifier"] as const;
 export type RoleName = (typeof roleNames)[number];
 /** The verifiers in the order they run; the coordinator asks for a prefix of this order. */
@@ -390,40 +427,63 @@ export function judgedBy(
   const position = new Map(
     input.verify.map(({ note }, index) => [note, index]),
   );
-  const known = [...input.notes, ...input.support];
+  const known = new Map(
+    [...input.notes, ...input.support].map((note) => [note.id, note]),
+  );
   const judged: string[] = [];
+  const passes = new Set<string>();
+  const failures = new Set<string>();
+  const deadMemo = new Map<string, boolean>();
+  const supportMemo = new Map<string, boolean>();
+  let evidenceReady = false;
   for (const [index, entry] of input.verify.entries()) {
     if (!entry.verifiers.includes(verifier)) continue;
-    const prior = recorded.filter(
-      (value) =>
-        verifierIndex(value.verifier) < verifierIndex(verifier) ||
-        (verifier === "reconstruction" &&
-          value.verifier === "reconstruction" &&
-          (position.get(value.note) ?? Number.POSITIVE_INFINITY) < index),
-    );
-    const passed = (id: string, name: VerifierName): boolean =>
-      prior.some(
+    // Ordinary verifiers share one evidence view for the entire list.
+    // Reconstruction also sees earlier notes' reconstruction verdicts.
+    if (!evidenceReady || verifier === "reconstruction") {
+      passes.clear();
+      failures.clear();
+      deadMemo.clear();
+      supportMemo.clear();
+      const prior = recorded.filter(
         (value) =>
-          value.note === id &&
-          value.verifier === name &&
-          value.verdict === "PASS",
+          verifierIndex(value.verifier) < verifierIndex(verifier) ||
+          (verifier === "reconstruction" &&
+            value.verifier === "reconstruction" &&
+            (position.get(value.note) ?? Number.POSITIVE_INFINITY) < index),
       );
-    const dead = (id: string): boolean =>
-      prior.some(
-        (value) =>
-          value.note === id &&
-          value.verifier !== "requirements" &&
-          value.verdict === "FAIL",
-      ) || (known.find((note) => note.id === id)?.support ?? []).some(dead);
-    const supportPassed = (id: string): boolean =>
-      (known.find((note) => note.id === id)?.support ?? []).every(
+      for (const value of prior) {
+        if (value.verdict === "PASS")
+          passes.add(`${value.note}/${value.verifier}`);
+        if (value.verifier !== "requirements" && value.verdict === "FAIL")
+          failures.add(value.note);
+      }
+      evidenceReady = true;
+    }
+    const passed = (id: string, name: VerifierName): boolean =>
+      passes.has(`${id}/${name}`);
+    const dead = (id: string): boolean => {
+      const saved = deadMemo.get(id);
+      if (saved !== undefined) return saved;
+      const result =
+        failures.has(id) || (known.get(id)?.support ?? []).some(dead);
+      deadMemo.set(id, result);
+      return result;
+    };
+    const supportPassed = (id: string): boolean => {
+      const saved = supportMemo.get(id);
+      if (saved !== undefined) return saved;
+      const result = (known.get(id)?.support ?? []).every(
         (support) =>
-          known.find((note) => note.id === support)?.verified === true ||
+          known.get(support)?.verified === true ||
           (verifierNames
             .slice(0, Math.min(verifierIndex(verifier), 2))
             .every((name) => passed(support, name)) &&
             supportPassed(support)),
       );
+      supportMemo.set(id, result);
+      return result;
+    };
     if (
       verifierNames
         .slice(0, verifierIndex(verifier))

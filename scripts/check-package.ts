@@ -45,6 +45,7 @@ try {
         zod: manifest.dependencies.zod,
       },
       devDependencies: {
+        "@earendil-works/pi-coding-agent": "0.85.1",
         "@types/bun": manifest.devDependencies["@types/bun"],
         typescript: manifest.devDependencies.typescript,
       },
@@ -98,6 +99,44 @@ try {
     telemetry: { schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS, spans: [] } });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), replay: "safe", async run() { return null; } });
+  const native = await import(Bun.resolveSync(
+    "@earendil-works/pi-ai/api/openai-codex-responses",
+    Bun.resolveSync("elenx/pi", import.meta.dir),
+  ));
+  const proxyModel = {
+    id: "packed-proxy", name: "Packed proxy fixture", api: "openai-codex-responses" as const,
+    provider: "openai-codex", baseUrl: "https://invalid.test/backend-api", reasoning: false,
+    input: ["text"] as ["text"], contextWindow: 20_000, maxTokens: 1000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    compat: { supportsStrictMode: true, codexProxyAuth: true },
+  };
+  const stubFetch: typeof fetch = Object.assign(async () => new Response(
+    "data: " + JSON.stringify({ type: "response.failed", response: {
+      id: "packed-failure", status: "failed", output: [],
+      error: { code: "invalid_request_error", message: "offline fixture" },
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15,
+        output_tokens_details: { reasoning_tokens: 3 } },
+    } }) + "\\n\\n", { headers: { "content-type": "text/event-stream" } },
+  ), { preconnect: fetch.preconnect });
+  const runtimeModule = new URL("./core/model-runtime.js", import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const { ModelRuntime } = await import(runtimeModule.href);
+  const runtime = await ModelRuntime.create({ modelsPath: null, authPath: "./auth.json", refreshOnCreate: false });
+  runtime.registerProvider("packed-proxy", { api: "openai-codex-responses", baseUrl: proxyModel.baseUrl,
+    apiKey: "offline-proxy-key", models: [{ ...proxyModel, provider: "packed-proxy" }],
+    streamSimple: native.streamSimple,
+  });
+  const configured = runtime.getModel("packed-proxy", proxyModel.id);
+  if (!configured) throw new Error("ModelRuntime did not retain the proxy model");
+  const probe = await runPi(campaign, { model: configured, label: "packed-pi", prompt: "Offline fixture",
+    models: { streamSimple(requestModel, context, options) {
+      return runtime.streamSimple(requestModel, context, { ...options,
+        transport: "sse", fetch: stubFetch });
+    } },
+  });
+  const spend = derivePiSpend(campaign.records()).summary;
+  if (probe.state !== "failed" || spend.logicalProviderRequests !== 1 ||
+    !("measuredUsage" in spend) || spend.measuredUsage.reasoning !== 3)
+    throw new Error("Packed consumer did not receive the patched native Pi provider");
 } finally { campaign.close(); }
 void [entryIdSchema, verdictSchema, openCampaign, openReader,
   returnedToolSubmission, ELENX_PI_TELEMETRY_SCHEMA, PI_TELEMETRY_SCHEMA_VERSIONS,
@@ -112,6 +151,8 @@ void [inspectCoreCampaign, inspectCoreCampaignSummary];
       process.execPath,
       "install",
       "--ignore-scripts",
+      "--cache-dir",
+      join(temporary, "cache"),
       "--minimum-release-age",
       "86400",
     ],

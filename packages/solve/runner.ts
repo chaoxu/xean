@@ -16,7 +16,7 @@ import {
   type PiRoleDependencies,
   type SolveSettings,
 } from "./pi-roles";
-import { applicationId, task } from "./roles";
+import { applicationId, task, workflowRecords } from "./roles";
 import {
   codexCommand,
   requireCredentials,
@@ -32,6 +32,7 @@ import {
   workflowResult,
   type WorkflowConfig,
   type WorkflowResult,
+  type WorkflowSnapshot,
 } from "./workflow";
 
 export const settings = solveSettings;
@@ -72,7 +73,7 @@ export async function init(input: z.input<typeof runRequest>) {
       ? openReader(request.campaignPath)
       : createCampaign(request.campaignPath, applicationId, config);
     try {
-      const declaration = campaign.records()[0];
+      const declaration = campaign.record(1);
       if (
         declaration?.kind !== "campaign" ||
         declaration.application !== applicationId
@@ -97,6 +98,7 @@ async function drive(
   config: WorkflowConfig,
   dependencies: RunDependencies,
   models: PiRoleDependencies["models"],
+  initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
 ): Promise<RunResult> {
   const roles = createPiRoles(campaign, config.settings, {
     models,
@@ -107,7 +109,9 @@ async function drive(
       : { signal: dependencies.signal }),
   });
   try {
-    const phase = await runWorkflow(campaign, roles, dependencies);
+    const pending = runWorkflow(campaign, roles, dependencies, initial);
+    initial = undefined;
+    const phase = await pending;
     if (phase.kind === "accepted" || phase.kind === "turn-limit") {
       return workflowResult(phase);
     }
@@ -115,7 +119,7 @@ async function drive(
   } catch (error) {
     let at: string;
     try {
-      at = (await deriveWorkflow(campaign.records())).phase.kind;
+      at = (await deriveWorkflow(workflowRecords(campaign))).phase.kind;
     } catch {
       throw error;
     }
@@ -142,9 +146,12 @@ export async function run(
     let campaign = existsSync(request.campaignPath)
       ? openCampaign(request.campaignPath)
       : undefined;
+    let initial:
+      | { readonly snapshot: WorkflowSnapshot; readonly through: number }
+      | undefined;
     try {
       if (campaign !== undefined) {
-        const declaration = campaign.records()[0];
+        const declaration = campaign.record(1);
         if (
           declaration?.kind !== "campaign" ||
           declaration.application !== applicationId
@@ -158,7 +165,12 @@ export async function run(
             "task or settings disagree with the workflow journal",
           );
         }
-        const phase = (await deriveWorkflow(campaign.records())).phase;
+        const through = campaign.lastSequence();
+        const snapshot = await deriveWorkflow(
+          campaign.records({ excludeLabels: ["elenx/pi-request"], through }),
+        );
+        initial = { snapshot, through };
+        const phase = snapshot.phase;
         if (phase.kind === "accepted" || phase.kind === "turn-limit")
           return workflowResult(phase);
       }
@@ -205,7 +217,9 @@ export async function run(
         });
       }
       campaign ??= createCampaign(request.campaignPath, applicationId, config);
-      return await drive(campaign, config, dependencies, models);
+      const pending = drive(campaign, config, dependencies, models, initial);
+      initial = undefined;
+      return await pending;
     } finally {
       campaign?.close();
     }

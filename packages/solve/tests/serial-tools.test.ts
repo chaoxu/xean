@@ -126,6 +126,7 @@ test.each([platformModel, codexModel])(
     const model: PiRunOptions["model"] = {
       ...baseModel,
       id: "gpt-6-astra",
+      compat: { supportsMaxOutputTokens: true },
       thinkingLevelMap: {
         low: "low",
         medium: "medium",
@@ -182,6 +183,7 @@ test.each([platformModel, codexModel])(
         },
         {
           reasoning: "max",
+          maxTokens: 321,
           onPayload(payload) {
             checkpoint = payload;
             throw new Error("stopped before transport");
@@ -192,6 +194,7 @@ test.each([platformModel, codexModel])(
       expect(checkpoint).toMatchObject({
         model: "gpt-6-astra",
         reasoning: { effort: "max" },
+        max_output_tokens: 321,
       });
       if (tools?.length) {
         expect(checkpoint).toMatchObject({

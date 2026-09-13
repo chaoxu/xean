@@ -13,6 +13,7 @@ export type {
   EntryId,
   Json,
   Reader,
+  RecordQuery,
   Tool,
   ToolExecutionContext,
   Verdict,

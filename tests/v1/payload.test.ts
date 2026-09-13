@@ -1,0 +1,217 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { createCampaign, openReader, type Json } from "../../src";
+
+const directories: string[] = [];
+function temporaryPath(): string {
+  const directory = mkdtempSync(join(tmpdir(), "elenx-payload-"));
+  directories.push(directory);
+  return join(directory, "campaign.db");
+}
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true });
+});
+
+describe("immutable request payloads", () => {
+  test("reconstructs captured JSON key order and literal reference-like values", async () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "payload", null);
+    const payload: Json = {
+      model: "synthetic",
+      input: [
+        { type: "reasoning", encrypted_content: "abc", summary: [] },
+        {
+          payloadRef: "a".repeat(64),
+          $ref: "literal",
+          input_hashes: ["ordinary data"],
+        },
+        null,
+        false,
+        7,
+        "Unicode α and a literal \\u0000",
+      ],
+      tools: [],
+      instructions: "after input",
+    };
+    const captured = JSON.stringify(payload);
+    const digest = campaign.storePayload(payload);
+    expect(digest).toBe(
+      new Bun.CryptoHasher("sha256").update(captured).digest("hex"),
+    );
+    expect(JSON.stringify(campaign.payload(digest))).toBe(captured);
+    expect(campaign.storePayload(payload)).toBe(digest);
+    const receipt = await campaign.call(
+      { label: "reference", request: { payloadRef: digest } },
+      async () => ({ payloadRef: "literal" }),
+    );
+    const entry = campaign.record(receipt.call);
+    expect(entry?.kind === "call" ? entry.request : null).toEqual({
+      payloadRef: digest,
+    });
+    expect(campaign.record(receipt.call + 1)).toMatchObject({
+      output: { payloadRef: "literal" },
+    });
+    const changed = campaign.payload(digest) as { input: Json[] };
+    changed.input[0] = "changed";
+    expect(JSON.stringify(campaign.payload(digest))).toBe(captured);
+    campaign.close();
+    const reader = openReader(path);
+    expect(JSON.stringify(reader.payload(digest))).toBe(captured);
+    expect(reader.record(receipt.call)).toEqual(entry);
+    expect(() => reader.payload("invalid")).toThrow();
+    expect(() => reader.payload("f".repeat(64))).toThrow("payload not found");
+    reader.close();
+  });
+
+  test("round-trips payloads with no top-level input array", () => {
+    const campaign = createCampaign(temporaryPath(), "payload", null);
+    for (const value of [
+      null,
+      true,
+      42,
+      "text",
+      [1, 2],
+      { input: "literal", payloadRef: "literal" },
+      { input: [] },
+    ] satisfies Json[]) {
+      expect(campaign.payload(campaign.storePayload(value))).toEqual(value);
+    }
+    campaign.close();
+  });
+
+  test("preserves literal prototype and reference keys without interpreting them", () => {
+    const campaign = createCampaign(temporaryPath(), "payload", null);
+    const captured =
+      '{"__proto__":{"safe":true},"input":[{"__proto__":{"safe":true},"$ref":"literal","payloadRef":"literal"}],"constructor":"literal"}';
+    const hash = campaign.storePayload(JSON.parse(captured));
+    expect(JSON.stringify(campaign.payload(hash))).toBe(captured);
+    expect(
+      Object.prototype.hasOwnProperty.call(campaign.payload(hash), "__proto__"),
+    ).toBe(true);
+    expect(({} as { safe?: unknown }).safe).toBeUndefined();
+    campaign.close();
+  });
+
+  test("a thousand related requests store unique items and compact manifests", () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "payload", null);
+    const shared = [
+      { type: "reasoning", id: "one", encrypted_content: "a".repeat(16384) },
+      { type: "reasoning", id: "two", encrypted_content: "b".repeat(16384) },
+    ];
+    let originalBytes = 0;
+    const hashes: string[] = [];
+    for (let n = 0; n < 1000; n++) {
+      const payload = {
+        model: "synthetic",
+        input: [...shared, { type: "user", text: `next ${n}` }],
+        request: n,
+      };
+      originalBytes += Buffer.byteLength(JSON.stringify(payload));
+      hashes.push(campaign.storePayload(payload));
+    }
+    expect(campaign.payload(hashes[0]!)).toEqual({
+      model: "synthetic",
+      input: [...shared, { type: "user", text: "next 0" }],
+      request: 0,
+    });
+    expect(campaign.payload(hashes[999]!)).toEqual({
+      model: "synthetic",
+      input: [...shared, { type: "user", text: "next 999" }],
+      request: 999,
+    });
+    campaign.close();
+    const db = new Database(path, { readonly: true });
+    expect(db.query("SELECT count(*) n FROM payload_items").get()).toEqual({
+      n: 1002,
+    });
+    expect(db.query("SELECT count(*) n FROM payloads").get()).toEqual({
+      n: 1000,
+    });
+    const stored = db
+      .query<{ n: number }, []>(
+        "SELECT (SELECT sum(length(body)) FROM payload_items) + (SELECT sum(length(body)+length(input_hashes)) FROM payloads) n",
+      )
+      .get()!.n;
+    expect(stored).toBeLessThan(originalBytes / 20);
+    expect(statSync(path).size).toBeLessThan(originalBytes / 10);
+    db.close();
+  }, 20_000);
+
+  test("payload and item insertion is atomic and existing bytes are immutable", () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "payload", null);
+    const db = new Database(path, { readwrite: true });
+    db.run(
+      "CREATE TRIGGER reject_payload BEFORE INSERT ON payloads BEGIN SELECT RAISE(ABORT, 'test rejection'); END",
+    );
+    expect(() =>
+      campaign.storePayload({ input: [{ text: "atomic" }] }),
+    ).toThrow("test rejection");
+    expect(db.query("SELECT count(*) n FROM payload_items").get()).toEqual({
+      n: 0,
+    });
+    expect(db.query("SELECT count(*) n FROM payloads").get()).toEqual({ n: 0 });
+    db.run("DROP TRIGGER reject_payload");
+    campaign.storePayload({ input: [{ text: "atomic" }] });
+    for (const table of ["payloads", "payload_items"]) {
+      expect(() => db.run(`UPDATE ${table} SET body=body`)).toThrow(
+        "append-only",
+      );
+      expect(() => db.run(`DELETE FROM ${table}`)).toThrow("append-only");
+    }
+    db.close();
+    campaign.close();
+  });
+
+  test("rejects missing, corrupt, and reordered stored items", () => {
+    for (const corruption of ["missing", "body", "order"] as const) {
+      const path = temporaryPath(),
+        campaign = createCampaign(path, "payload", null);
+      const hash = campaign.storePayload({
+        before: 1,
+        input: [{ text: "first" }, { text: "second" }],
+        after: 2,
+      });
+      campaign.close();
+      const db = new Database(path, { readwrite: true });
+      if (corruption === "missing") {
+        db.run("DROP TRIGGER payload_items_no_delete");
+        db.run(
+          "DELETE FROM payload_items WHERE digest=(SELECT digest FROM payload_items LIMIT 1)",
+        );
+      } else if (corruption === "body") {
+        db.run("DROP TRIGGER payload_items_no_update");
+        db.run(
+          "UPDATE payload_items SET body='null' WHERE digest=(SELECT digest FROM payload_items LIMIT 1)",
+        );
+      } else {
+        const row = db
+          .query<{ input_hashes: string }, [string]>(
+            "SELECT input_hashes FROM payloads WHERE digest=?",
+          )
+          .get(hash)!;
+        db.run("DROP TRIGGER payloads_no_update");
+        db.run("UPDATE payloads SET input_hashes=? WHERE digest=?", [
+          JSON.stringify(JSON.parse(row.input_hashes).reverse()),
+          hash,
+        ]);
+      }
+      db.close();
+      const reader = openReader(path);
+      expect(() => reader.payload(hash)).toThrow(
+        corruption === "missing"
+          ? "payload item not found"
+          : corruption === "body"
+            ? "payload item digest mismatch"
+            : "payload digest mismatch",
+      );
+      reader.close();
+    }
+  });
+});
