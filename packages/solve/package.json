@@ -32,7 +32,6 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
-    "cozo-node": "0.7.6",
     "zod": "4.5.4"
   },
   "peerDependencies": {

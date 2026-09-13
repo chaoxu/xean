@@ -59,7 +59,6 @@ try {
         elenx: `file:${kernelArchive}`,
         "elenx-solve": `file:${solverArchive}`,
       },
-      trustedDependencies: ["cozo-node"],
     }),
   );
   await run(

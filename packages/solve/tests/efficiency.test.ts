@@ -1,11 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, type RecordQuery } from "elenx";
 
-import { CozoDb } from "../cozo";
 import { createPiRoles } from "../pi-roles";
 import { Projection } from "../projection";
 import { applicationId, judgedBy, type Note } from "../roles";
-import { SupportGraph } from "../support";
+import { supportClosure } from "../support";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -57,39 +56,23 @@ test("eligibility visits shared support once per fixed evidence view", () => {
   expect(reads).toBeLessThanOrEqual(count * 3);
 });
 
-test("one support query serves a verification window and later closures", async () => {
-  const original = CozoDb.prototype.run;
-  let queries = 0;
-  CozoDb.prototype.run = function (
-    script: string,
-    params?: Record<string, unknown>,
-  ) {
-    queries += 1;
-    return original.call(this, script, params);
-  };
-  const known = Array.from({ length: 100 }, (_, i) =>
-    note(i + 1, i === 0 ? [] : [`n${i}`]),
+test("support closure visits shared ancestors once without storing all root closures", async () => {
+  let reads = 0;
+  const count = 100;
+  const known = Array.from({ length: count }, (_, i): Note => ({
+    ...note(i + 1),
+    get support() {
+      if (++reads > count) throw new Error("shared ancestor expanded twice");
+      return i === 0 ? [] : ["n" + i, ...(i > 1 ? ["n" + (i - 1)] : [])];
+    },
+  }));
+  expect(await supportClosure([known.at(-1)!], known)).toEqual(
+    known.slice(0, -1).map(({ id }) => id),
   );
-  const graph = new SupportGraph(known);
-  try {
-    const verify = known.map(({ id }) => ({
-      note: id,
-      verifiers: ["source" as const],
-    }));
-    expect(await verificationPrefix(verify, known, 100_000, graph)).toEqual(
-      verify,
-    );
-    expect(await graph.closure([known.at(-1)!])).toEqual(
-      known.slice(0, -1).map(({ id }) => id),
-    );
-    expect(queries).toBe(1);
-  } finally {
-    graph.close();
-    CozoDb.prototype.run = original;
-  }
+  expect(reads).toBe(count);
 });
 
-test("batching closure roots preserves errors only for notes the window reads", async () => {
+test("the verification window validates only notes it reads", async () => {
   const known = [note(1), note(2), note(4, ["n3"])];
   const verify = known.map(({ id }) => ({
     note: id,
@@ -103,16 +86,6 @@ test("batching closure roots preserves errors only for notes the window reads", 
   );
 });
 
-test("a released support graph cannot recreate native state", async () => {
-  const graph = new SupportGraph([note(1)]);
-  expect(await graph.closure([note(1)])).toEqual([]);
-  graph.close();
-  graph.close();
-  await expect(graph.closure([note(1)])).rejects.toThrow(
-    "support graph is closed",
-  );
-});
-
 test("startup reuses its captured derivation only while the journal boundary matches", async () => {
   const task = { problem: "Prove P.", completionCriteria: "A complete proof." };
   const config = workflowConfiguration({ task, settings: roleSettings() });
@@ -121,11 +94,11 @@ test("startup reuses its captured derivation only while the journal boundary mat
     snapshot: await deriveWorkflow(campaign.records()),
     through: campaign.lastSequence(),
   };
-  const original = Projection.open;
+  const original = Projection.prototype.at;
   let derivations = 0;
-  Projection.open = async (verdicts) => {
-    derivations += 1;
-    return original(verdicts);
+  Projection.prototype.at = function (seq) {
+    if (seq === 1) derivations += 1;
+    return original.call(this, seq);
   };
   const roles = createPiRoles(campaign, config.settings, dependencies([]));
   try {
@@ -156,36 +129,22 @@ test("startup reuses its captured derivation only while the journal boundary mat
     ).toBe("explorer");
     expect(derivations).toBe(1);
   } finally {
-    Projection.open = original;
+    Projection.prototype.at = original;
     campaign.close();
   }
 });
 
-test("projection snapshots share queries and invalidate after a filing", async () => {
-  const projection = await Projection.open([]);
-  const original = CozoDb.prototype.run;
-  let queries = 0;
-  try {
-    await projection.add([note(1)], 2);
-    CozoDb.prototype.run = function (
-      script: string,
-      params?: Record<string, unknown>,
-    ) {
-      queries += 1;
-      return original.call(this, script, params);
-    };
-    expect((await projection.at(2))[0]?.summary).toBeUndefined();
-    expect(await projection.accepted(2)).toEqual([]);
-    expect((await projection.at(2))[0]?.text).toBe("Result 1.");
-    expect(queries).toBe(6);
-    await projection.file([{ note: "n1", summary: "A filed result." }], 3);
-    expect((await projection.at(3))[0]?.summary).toBe("A filed result.");
-    expect(await projection.accepted(3)).toEqual([]);
-    expect(queries).toBe(13);
-  } finally {
-    CozoDb.prototype.run = original;
-    projection.close();
-  }
+test("projection snapshots are reused and later filings leave earlier snapshots intact", () => {
+  const projection = new Projection([]);
+  projection.add([note(1)], 2);
+  const before = projection.at(2);
+  expect(before[0]?.summary).toBeUndefined();
+  expect(projection.accepted(2)).toEqual([]);
+  expect(projection.at(2)).toBe(before);
+  projection.file([{ note: "n1", summary: "A filed result." }], 3);
+  expect(projection.at(3)[0]?.summary).toBe("A filed result.");
+  expect(before[0]?.summary).toBeUndefined();
+  expect(projection.at(2)).toEqual(before);
 });
 
 test("Explorer receipts reconcile only new owned submissions and reuse durable identities", async () => {

@@ -10,7 +10,7 @@ bun pm trust cozo-node
 bun run elenx-solve contract
 ```
 
-The install command uses Bun's one-day release-age filter to avoid partially published upstream dependency versions. The trust command allows Cozo's install script to install the native database binding used by the solver. Both packages include the MIT license. The release assets also include `SHA256SUMS` for checking downloaded archives.
+The install command uses Bun's one-day release-age filter to avoid partially published upstream dependency versions. The trust command allows Cozo's install script to install the native database binding used by this release. Current source checkouts use TypeScript for the projection and support closure and require no Cozo binding or trust command. Both packages include the MIT license. The release assets also include `SHA256SUMS` for checking downloaded archives.
 
 ## Choose a provider
 
@@ -57,4 +57,4 @@ Submit guidance while a campaign is active or paused for delivery to a future Ex
 
 ## Existing campaigns
 
-Release Elenx 0.10.0 and Solver 0.36.0 use workflow schema 36 and execution-contract schema 9. They support optional Explorer continuation, externally verified notes, and acceptance of a supplied complete proof after all four checks with zero Explorer turns. Current development uses workflow schema 37 and retains optional continuation after empty Explorer submissions. The published Elenx 0.9.4 and Solver 0.35.0 packages use workflow schema 24 and execution-contract schema 8; keep that published-release provenance unchanged. The CLI run arguments remain unchanged. Campaigns from earlier workflow or kernel schemas need their matching implementation. Preserve a campaign together with its task, settings, and package revision.
+Release Elenx 0.10.0 and Solver 0.36.0 use workflow schema 36 and execution-contract schema 9. They support optional Explorer continuation, externally verified notes, and acceptance of a supplied complete proof after all four checks with zero Explorer turns. Current development uses workflow schema 37 and hands off to the coordinator on the first empty Explorer submission. The published Elenx 0.9.4 and Solver 0.35.0 packages use workflow schema 24 and execution-contract schema 8. Keep that published-release provenance unchanged. The CLI run arguments remain unchanged. Campaigns from earlier workflow or kernel schemas need their matching implementation. Preserve a campaign together with its task, settings, and package revision.

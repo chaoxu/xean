@@ -48,9 +48,6 @@
     "prettier": "3.9.6",
     "typescript": "7.0.2"
   },
-  "trustedDependencies": [
-    "cozo-node"
-  ],
   "bundledDependencies": [
     "@earendil-works/pi-ai"
   ],

@@ -468,15 +468,9 @@ const usageKeys = [
 
 export type PiMeasuredUsage = z.output<typeof usageAttributes>;
 
-export interface PiSpendOperation {
-  readonly provider: string;
-  readonly requestedModel: string;
-  readonly servedModel?: string;
-  readonly api: string;
-  readonly stopReason?: z.output<typeof stopReason>;
-  readonly error: boolean;
-  readonly usage: PiMeasuredUsage | null;
-}
+export type PiSpendOperation = Readonly<
+  z.output<typeof piRequestCompletion>["operation"]
+>;
 
 const measuredUsageValue = z
   .strictObject({
@@ -532,7 +526,7 @@ function assistantUsage(message: AssistantMessage): PiMeasuredUsage | null {
     ].some((value) => value !== 0)
   )
     return null;
-  return measuredUsageValue.parse({
+  return {
     input: usage.input,
     output: usage.output,
     cacheRead: usage.cacheRead,
@@ -540,7 +534,7 @@ function assistantUsage(message: AssistantMessage): PiMeasuredUsage | null {
     totalTokens: usage.totalTokens,
     estimatedCostUsd: usage.cost.total,
     ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
-  });
+  };
 }
 
 function requestCompletion(
@@ -584,7 +578,7 @@ function measuredUsage(
   return usageAttributes.parse(attributes);
 }
 
-function spendSummary(operations: readonly PiSpendOperation[]) {
+export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
   const measured = operations.flatMap(({ usage }) =>
     usage === null ? [] : [usage],
   );
@@ -620,13 +614,7 @@ function spendSummary(operations: readonly PiSpendOperation[]) {
   };
 }
 
-export function summarizePiSpend(
-  operations: readonly PiSpendOperation[],
-): PiSpendSummary {
-  return spendSummary(operations);
-}
-
-export type PiSpendSummary = ReturnType<typeof spendSummary>;
+export type PiSpendSummary = ReturnType<typeof summarizePiSpend>;
 
 export function derivePiSpend(entries: readonly Entry[]) {
   const calls = entries.filter(
@@ -672,7 +660,7 @@ export function derivePiSpend(entries: readonly Entry[]) {
         accounted.push({
           call: call.seq,
           operations,
-          ...spendSummary(operations),
+          ...summarizePiSpend(operations),
         });
       }
       continue;
@@ -686,7 +674,6 @@ export function derivePiSpend(entries: readonly Entry[]) {
     );
     if (roots.length !== 1 || !roots[0]!.settled)
       throw new Error("invalid Pi telemetry root in call " + call.seq);
-    const matched = new Set<EntryId>();
     const operations = spans.flatMap((span): PiSpendOperation[] => {
       if (span.name !== "pi.ai.request" || span.parentId !== roots[0]!.id)
         return [];
@@ -696,9 +683,9 @@ export function derivePiSpend(entries: readonly Entry[]) {
       if (checkpoint !== undefined) {
         const id = entryId.parse(checkpoint);
         const operation = durable.get(id);
-        if (operation === undefined || matched.has(id))
+        if (operation === undefined)
           throw new Error("missing or duplicate Pi request completion " + id);
-        matched.add(id);
+        durable.delete(id);
         return [operation];
       }
       // Failures before payload construction have only a logical-call span.
@@ -720,9 +707,13 @@ export function derivePiSpend(entries: readonly Entry[]) {
         },
       ];
     });
-    if (matched.size !== durable.size)
+    if (durable.size !== 0)
       throw new Error("unmatched Pi request completion in call " + call.seq);
-    accounted.push({ call: call.seq, operations, ...spendSummary(operations) });
+    accounted.push({
+      call: call.seq,
+      operations,
+      ...summarizePiSpend(operations),
+    });
   }
   const potentialRequests = unaccountedCalls.flatMap((call) =>
     (attemptsByParent.get(call) ?? []).flatMap((attempt) =>
@@ -735,7 +726,9 @@ export function derivePiSpend(entries: readonly Entry[]) {
     calls: accounted,
     unaccountedCalls,
     potentialRequests,
-    summary: spendSummary(accounted.flatMap(({ operations }) => operations)),
+    summary: summarizePiSpend(
+      accounted.flatMap(({ operations }) => operations),
+    ),
   };
 }
 
@@ -980,9 +973,10 @@ function measuredStream(
         let hookCalls = 0;
         let checkpointed = false;
         let checkpoint: ReturnType<Campaign["call"]> | undefined;
-        let completeCheckpoint:
-          ((value: z.output<typeof piRequestCompletion>) => void) | undefined;
-        let failCheckpoint: ((error: unknown) => void) | undefined;
+        const completion =
+          Promise.withResolvers<z.output<typeof piRequestCompletion>>();
+        // Own a rejection even when the writer fails before entering its handler.
+        void completion.promise.catch(() => {});
         try {
           const modelOptions = requestOptions as
             ModelsSimpleStreamOptions | undefined;
@@ -1019,19 +1013,7 @@ function measuredStream(
                 cacheKey,
               );
               const payloadRef = campaign.storePayload(jsonSnapshot(effective));
-              let markStarted!: () => void;
-              const started = new Promise<void>((resolve) => {
-                markStarted = resolve;
-              });
-              const completion = new Promise<
-                z.output<typeof piRequestCompletion>
-              >((resolve, reject) => {
-                completeCheckpoint = resolve;
-                failCheckpoint = reject;
-              });
-              // A writer can reject before entering its handler. Own both promises
-              // immediately, including that pre-dispatch failure path.
-              void completion.catch(() => {});
+              const started = Promise.withResolvers<void>();
               checkpoint = campaign.call(
                 {
                   label: piRequestLabel,
@@ -1044,11 +1026,12 @@ function measuredStream(
                 },
                 async ({ call }) => {
                   span.setAttributes({ "elenx.pi.request.checkpoint": call });
-                  markStarted();
-                  return completion;
+                  started.resolve();
+                  return completion.promise;
                 },
               );
-              await Promise.race([started, checkpoint]);
+              void checkpoint.catch(started.reject);
+              await started.promise;
               checkpointed = true;
               return effective;
             },
@@ -1077,7 +1060,8 @@ function measuredStream(
             throw new Error(
               "Pi adapter must invoke onPayload exactly once per request",
             );
-          const usage = assistantUsage(final);
+          const measurement = requestCompletion(parent, model, final);
+          const { usage } = measurement.operation;
           span.setAttributes({
             ...(final.responseModel === undefined
               ? {}
@@ -1114,11 +1098,11 @@ function measuredStream(
                 message: final.errorMessage ?? "Pi request " + final.stopReason,
               },
             });
-          completeCheckpoint?.(requestCompletion(parent, model, final));
+          completion.resolve(measurement);
           await checkpoint;
           return { final, terminal };
         } catch (error) {
-          failCheckpoint?.(error);
+          completion.reject(error);
           await checkpoint?.catch(() => {});
           throw error;
         }

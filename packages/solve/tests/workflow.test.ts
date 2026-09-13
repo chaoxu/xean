@@ -259,11 +259,11 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   const reader = openReader(path);
   const captured = reader.records();
   reader.close();
-  const original = Projection.open;
+  const original = Projection.prototype.at;
   let derivations = 0;
-  Projection.open = async (verdicts) => {
-    derivations += 1;
-    return original(verdicts);
+  Projection.prototype.at = function (seq) {
+    if (seq === 1) derivations += 1;
+    return original.call(this, seq);
   };
   try {
     const combined = await inspectAndExportCampaignRecords(captured);
@@ -273,7 +273,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     );
     expect(derivations).toBe(1);
   } finally {
-    Projection.open = original;
+    Projection.prototype.at = original;
   }
 });
 

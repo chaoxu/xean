@@ -84,6 +84,18 @@ describe("immutable request payloads", () => {
     campaign.close();
   });
 
+  test("round-trips a large ordered input manifest in one bounded read", () => {
+    const campaign = createCampaign(temporaryPath(), "payload", null);
+    const input = Array.from({ length: 1_200 }, (_, index) => ({
+      index,
+      text: `item-${index}`,
+    }));
+    const value = { before: true, input, after: true } satisfies Json;
+    const digest = campaign.storePayload(value);
+    expect(campaign.payload(digest)).toEqual(value);
+    campaign.close();
+  });
+
   test("preserves literal prototype and reference keys without interpreting them", () => {
     const campaign = createCampaign(temporaryPath(), "payload", null);
     const captured =

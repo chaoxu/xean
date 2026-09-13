@@ -387,19 +387,19 @@ export class Journal {
       )
         throw new Error("invalid stored payload input manifest");
       const hashes = z.array(payloadDigest).parse(JSON.parse(row.inputHashes));
-      const items = hashes.map((partHash) => {
-        const part = this.#database
-          .query<{ body: string }, [string]>(
-            "SELECT body FROM payload_items WHERE digest = ?",
-          )
-          .get(partHash);
-        if (part === null)
+      const items = this.#database
+        .query<{ digest: string; body: string | null }, [string]>(
+          "SELECT requested.value AS digest, item.body FROM json_each(?) AS requested LEFT JOIN payload_items AS item ON item.digest = requested.value ORDER BY CAST(requested.key AS INTEGER)",
+        )
+        .all(JSON.stringify(hashes));
+      const values = items.map(({ digest: partHash, body }) => {
+        if (body === null)
           throw new Error(`payload item not found: ${partHash}`);
-        if (digest(part.body) !== partHash)
+        if (digest(body) !== partHash)
           throw new Error("payload item digest mismatch");
-        return JSON.parse(part.body) as Json;
+        return JSON.parse(body) as Json;
       });
-      valueJson = { ...valueJson, input: items };
+      valueJson = { ...valueJson, input: values };
     }
     if (digest(JSON.stringify(valueJson)) !== hash)
       throw new Error("payload digest mismatch");

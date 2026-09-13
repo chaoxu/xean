@@ -149,6 +149,61 @@ test("request accounting is durable before tool execution and counted once after
   }
 });
 
+test.each(["checkpoint", "provider-result"] as const)(
+  "settles calls and cleans the session after a %s rejection",
+  async (failure) => {
+    const store = campaign();
+    const call = store.call.bind(store);
+    store.call = (options, runner) =>
+      failure === "checkpoint" && options.label === "elenx/pi-request"
+        ? Promise.reject(new Error("checkpoint rejected"))
+        : call(options, runner);
+    const provider = invalidPayloadModels(1);
+    const cleaned: (string | undefined)[] = [];
+    const unregister = registerSessionResourceCleanup((id) => {
+      cleaned.push(id);
+    });
+    let session: string | undefined;
+    try {
+      await expect(
+        runPi(store, {
+          models: {
+            streamSimple(model, context, options) {
+              session = options?.sessionId;
+              const stream = provider.streamSimple(model, context, options);
+              if (failure === "provider-result")
+                stream.result = async () => {
+                  throw new Error("provider-result rejected");
+                };
+              return stream;
+            },
+          },
+          model,
+          label: "rejected-request",
+          prompt: "Test",
+        }),
+      ).rejects.toThrow(`${failure} rejected`);
+      const entries = store.records();
+      const calls = entries.filter((entry) => entry.kind === "call");
+      expect(calls).toHaveLength(failure === "checkpoint" ? 1 : 2);
+      for (const call of calls)
+        expect(entries).toContainEqual(
+          expect.objectContaining({
+            kind: "call-result",
+            parent: call.seq,
+            state: "threw",
+          }),
+        );
+      expect(session).toBeDefined();
+      expect(cleaned).toEqual([session]);
+    } finally {
+      unregister();
+      store.close();
+    }
+  },
+  1000,
+);
+
 type PiModels = Pick<Models, "streamSimple">;
 
 const model: Model<"openai-responses"> = {
