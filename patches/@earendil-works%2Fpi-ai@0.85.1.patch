@@ -28,10 +28,29 @@ index 43e463d..1a9dc45 100644
 \ No newline at end of file
 +//# sourceMappingURL=openai-responses-shared.js.map
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index bf979d4..26d8c85 100644
+index bf979d4..d99370a 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -164,7 +164,12 @@ export const stream = (model, context, options) => {
+@@ -97,11 +97,15 @@ function sleep(ms, signal) {
+             reject(new Error("Request was aborted"));
+             return;
+         }
+-        const timeout = setTimeout(resolve, ms);
+-        signal?.addEventListener("abort", () => {
++        const timeout = setTimeout(() => {
++            signal?.removeEventListener("abort", onAbort);
++            resolve();
++        }, ms);
++        const onAbort = () => {
+             clearTimeout(timeout);
+             reject(new Error("Request was aborted"));
+-        });
++        };
++        signal?.addEventListener("abort", onAbort, { once: true });
+     });
+ }
+ function normalizeTimeoutMs(value) {
+@@ -164,7 +168,12 @@ export const stream = (model, context, options) => {
              if (!apiKey) {
                  throw new Error(`No API key for provider: ${model.provider}`);
              }
@@ -45,7 +64,7 @@ index bf979d4..26d8c85 100644
              const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, model.compat?.supportsOpenAIGrammarTools ?? false);
              const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
              const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
-@@ -198,7 +203,7 @@ export const stream = (model, context, options) => {
+@@ -198,7 +207,7 @@ export const stream = (model, context, options) => {
                                  startEmitted = true;
                                  stream.push({ type: "start", partial: output });
                              }
@@ -54,7 +73,7 @@ index bf979d4..26d8c85 100644
                          if (options?.signal?.aborted) {
                              throw new Error("Request was aborted");
                          }
-@@ -536,6 +541,11 @@ async function* mapCodexEvents(events, output) {
+@@ -536,6 +545,11 @@ async function* mapCodexEvents(events, output) {
              const response = event.response;
              const code = response?.error?.code;
              const message = response?.error?.message;
@@ -66,7 +85,7 @@ index bf979d4..26d8c85 100644
              throw new CodexApiError(message || "Codex response failed", { code, payload: event });
          }
          if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-@@ -682,7 +692,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
+@@ -682,7 +696,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
      }
      websocketSessionCache.clear();
  }
@@ -78,7 +97,7 @@ index bf979d4..26d8c85 100644
  function isWebSocketSseFallbackActive(sessionId) {
      return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
  }
-@@ -1244,6 +1257,11 @@ async function parseErrorResponse(response) {
+@@ -1244,6 +1261,11 @@ async function parseErrorResponse(response) {
  // ============================================================================
  // Auth & Headers
  // ============================================================================
@@ -90,7 +109,7 @@ index bf979d4..26d8c85 100644
  function extractAccountId(token) {
      try {
          const parts = token.split(".");
-@@ -1270,7 +1288,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
+@@ -1270,7 +1292,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
          }
      }
      headers.set("Authorization", `Bearer ${token}`);
@@ -102,7 +121,7 @@ index bf979d4..26d8c85 100644
      headers.set("originator", "pi");
      headers.set("User-Agent", getPiUserAgent());
      return headers;
-@@ -1297,4 +1318,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+@@ -1297,4 +1322,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
      headers.set("session-id", requestId);
      return headers;
  }
@@ -138,3 +157,26 @@ index f61c9ea..987a114 100644
 -//# sourceMappingURL=types.d.ts.map
 \ No newline at end of file
 +//# sourceMappingURL=types.d.ts.map
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index ce8c4cb..7cbe47d 100644
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -86,11 +86,15 @@ function sleep(ms, signal) {
+             reject(new RetrySleepAbortError());
+             return;
+         }
+-        const timeout = setTimeout(resolve, ms);
+-        signal?.addEventListener("abort", () => {
++        const timeout = setTimeout(() => {
++            signal?.removeEventListener("abort", onAbort);
++            resolve();
++        }, ms);
++        const onAbort = () => {
+             clearTimeout(timeout);
+             reject(new RetrySleepAbortError());
+-        }, { once: true });
++        };
++        signal?.addEventListener("abort", onAbort, { once: true });
+     });
+ }
+ /**

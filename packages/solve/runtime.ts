@@ -4,12 +4,11 @@ import { access } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { builtinPi } from "elenx/pi";
+import { openAIResponsesApi, openAICodexResponsesApi } from "elenx/pi";
 
-export type SolveModels = Pick<
-  ReturnType<typeof builtinPi>,
-  "getModel" | "streamSimple"
-> & { readonly checkAuth?: (provider: string) => Promise<unknown> };
+export type SolveModels = Pick<ModelRuntime, "getModel" | "streamSimple"> & {
+  readonly checkAuth?: (provider: string) => Promise<unknown>;
+};
 
 export async function createModelRuntime(
   options: Parameters<typeof ModelRuntime.create>[0],
@@ -33,10 +32,9 @@ export async function createModelRuntime(
   // The installed coding-agent can have its own pi-ai dependency. Bind the
   // Responses adapters to Elenx's reviewed Pi distribution so request handling
   // and session cleanup use the same native provider module.
-  const native = builtinPi();
   const responses = new Map([
-    ["openai-responses", native.getProvider("openai")!],
-    ["openai-codex-responses", native.getProvider("openai-codex")!],
+    ["openai-responses", openAIResponsesApi()],
+    ["openai-codex-responses", openAICodexResponsesApi()],
   ]);
   for (const provider of runtime.getProviders()) {
     if (!provider.getModels().some((model) => responses.has(model.api)))

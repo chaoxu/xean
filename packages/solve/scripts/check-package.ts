@@ -73,10 +73,21 @@ try {
     join(consumer, "check-runtime.ts"),
     `${await Bun.file(join(solver, "tests/fixtures/no-coding-agent-entrypoint.ts")).text()}
 import { createModelRuntime } from "./node_modules/elenx-solve/runtime.ts";
+const bundledPi = Bun.resolveSync("@earendil-works/pi-ai", Bun.resolveSync("elenx/pi", import.meta.dir));
+const codingAgent = Bun.resolveSync("@earendil-works/pi-coding-agent", Bun.resolveSync("elenx-solve", import.meta.dir));
+if (bundledPi === Bun.resolveSync("@earendil-works/pi-ai", codingAgent))
+  throw new Error("consumer fixture requires separate bundled and transitive Pi copies");
 await createModelRuntime({ modelsPath: null, authPath: "./auth.json", refreshOnCreate: false });
 `,
   );
   await run([process.execPath, "run", "check-runtime.ts"], consumer);
+  const runtimeTest = "node_modules/elenx-solve/tests/model-runtime.test.ts";
+  await mkdir(join(consumer, "node_modules/elenx-solve/tests"));
+  await Bun.write(
+    join(consumer, runtimeTest),
+    Bun.file(join(solver, "tests/model-runtime.test.ts")),
+  );
+  await run([process.execPath, "test", `./${runtimeTest}`], consumer);
   await run(
     [
       process.execPath,

@@ -12,6 +12,8 @@ Use `reader.record(seq)` for one entry and `reader.records({kinds: ["tool-call"]
 
 Large provider payloads can be saved explicitly with `campaign.storePayload(value)`. It returns a content digest, and `reader.payload(digest)` reconstructs the captured JSON, including property order. Repeated input items share storage. Put the digest in a versioned application request rather than inventing magic reference keys that ordinary entry reads must interpret. Saving a payload is local persistence and makes no provider request.
 
+If you already have serialized JSON, use `campaign.storePayloadJson(encoded)` to avoid making an intermediate object copy. It parses and reserializes the JSON before hashing, preserving the resulting property order and rejecting malformed JSON before writing.
+
 ```ts
 import {
   createCampaign,

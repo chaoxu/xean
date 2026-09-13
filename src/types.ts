@@ -105,6 +105,7 @@ export interface CallReceipt {
 
 export interface Campaign extends Reader {
   storePayload(value: Json): string;
+  storePayloadJson(encoded: string): string;
   submitCandidate(
     material: Uint8Array,
     requiredVerifiers: readonly string[],

@@ -80,7 +80,60 @@ describe("immutable request payloads", () => {
       { input: [] },
     ] satisfies Json[]) {
       expect(campaign.payload(campaign.storePayload(value))).toEqual(value);
+      expect(
+        campaign.payload(campaign.storePayloadJson(JSON.stringify(value))),
+      ).toEqual(value);
     }
+    campaign.close();
+  });
+
+  test("serialized payloads normalize JSON syntax and preserve literal keys", () => {
+    const campaign = createCampaign(temporaryPath(), "payload", null);
+    const encoded =
+      ' { "model": "old", "input": [1e400, -0, 1.0, {"__proto__": {"safe": true}}], "model": "new", "__proto__": {"safe": true} } ';
+    const canonical = JSON.stringify(JSON.parse(encoded));
+    const hash = campaign.storePayloadJson(encoded);
+    expect(hash).toBe(
+      new Bun.CryptoHasher("sha256").update(canonical).digest("hex"),
+    );
+    expect(JSON.stringify(campaign.payload(hash))).toBe(canonical);
+    expect(campaign.storePayload(JSON.parse(canonical))).toBe(hash);
+    expect(campaign.storePayloadJson(canonical)).toBe(hash);
+    expect(({} as { safe?: unknown }).safe).toBeUndefined();
+    campaign.close();
+  });
+
+  test("malformed serialized payloads cannot write items or manifests", () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "payload", null);
+    for (const encoded of ["{", "undefined", "NaN", '{"input": [1,]}'])
+      expect(() => campaign.storePayloadJson(encoded)).toThrow();
+    campaign.close();
+    const database = new Database(path, { readonly: true });
+    for (const table of ["payloads", "payload_items"])
+      expect(database.query(`SELECT count(*) n FROM ${table}`).get()).toEqual({
+        n: 0,
+      });
+    database.close();
+  });
+
+  test("object payloads retain validation and snapshot mutable input", () => {
+    const campaign = createCampaign(temporaryPath(), "payload", null);
+    for (const value of [NaN, Infinity, { input: [NaN] }])
+      expect(() => campaign.storePayload(value)).toThrow();
+    let reads = 0;
+    const captured = campaign.storePayload({
+      get input() {
+        return [{ read: ++reads }];
+      },
+    });
+    expect(reads).toBe(2);
+    expect(campaign.payload(captured)).toEqual({ input: [{ read: 2 }] });
+    const input = [{ text: "original" }];
+    const hash = campaign.storePayload({ input });
+    input[0]!.text = "changed";
+    input.push({ text: "added" });
+    expect(campaign.payload(hash)).toEqual({ input: [{ text: "original" }] });
     campaign.close();
   });
 

@@ -72,6 +72,10 @@ class CampaignWriter extends CampaignReader implements Campaign {
     return this.journal.storePayload(value);
   }
 
+  storePayloadJson(encoded: string): string {
+    return this.journal.storePayloadJson(encoded);
+  }
+
   submitCandidate(
     material: Uint8Array,
     requiredVerifiers: readonly string[],

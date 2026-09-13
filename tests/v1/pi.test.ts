@@ -1650,7 +1650,11 @@ describe("thin Pi runner", () => {
     const payloads = [
       {
         instructions: "Use the adder.",
-        input: [{ role: "user", content: "Add 2 and 5" }],
+        input: [
+          JSON.parse(
+            '{"__proto__":{"safe":true},"role":"user","content":"Add 2 and 5"}',
+          ),
+        ],
         tools: [{ name: "add", strict: true }],
         reasoning: { effort: "high" },
         prompt_cache_key: undefined,
@@ -1716,8 +1720,8 @@ describe("thin Pi runner", () => {
       ),
     ).toBe(true);
     const attempts = piRequestAttempts(store.records(), result.call, store);
-    expect(attempts.map(({ payload }) => payload)).toEqual(
-      JSON.parse(JSON.stringify(payloads)),
+    expect(attempts.map(({ payload }) => JSON.stringify(payload))).toEqual(
+      payloads.map((payload) => JSON.stringify(payload)),
     );
     expect(attempts.map(({ call }) => call)).toEqual([3, 7]);
     expect(attempts.map(({ model }) => model.baseUrl)).toEqual([

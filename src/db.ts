@@ -323,8 +323,12 @@ export class Journal {
     // Validate the public JSON value, then preserve the serializer's own keys.
     // Zod's defensive record copy omits a literal "__proto__" property.
     copyJson(value);
-    const full = JSON.stringify(value);
-    const checked = JSON.parse(full) as Json;
+    return this.storePayloadJson(JSON.stringify(value));
+  }
+
+  storePayloadJson(encoded: string): string {
+    const checked = JSON.parse(z.string().parse(encoded)) as Json;
+    const full = JSON.stringify(checked);
     const hash = digest(full);
     const input =
       object(checked) && Array.isArray(checked.input)

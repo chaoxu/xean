@@ -49,6 +49,8 @@ import type {
 export { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 export { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 export { builtinModels as builtinPi } from "@earendil-works/pi-ai/providers/all";
+export { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+export { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
 
 type PiModels = Pick<Models, "streamSimple">;
 const codexLbUsageTagHeader = "X-Codex-LB-Usage-Tag";
@@ -1012,7 +1014,10 @@ function measuredStream(
                 ),
                 cacheKey,
               );
-              const payloadRef = campaign.storePayload(jsonSnapshot(effective));
+              const encoded = JSON.stringify(effective);
+              if (encoded === undefined)
+                throw new TypeError("Pi value is not JSON");
+              const payloadRef = campaign.storePayloadJson(encoded);
               const started = Promise.withResolvers<void>();
               checkpoint = campaign.call(
                 {
