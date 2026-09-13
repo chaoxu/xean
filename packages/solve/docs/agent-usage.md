@@ -176,7 +176,7 @@ Workflow schema 38 drains the requested verification batches before another Expl
 
 The `run` arguments stay unchanged. Execution-contract schema 9 adds optional external `verification` on notes and permits accepted results with zero Explorer turns. Consumers that read coordinator submissions should use `explorerGuidance`. `--include-guidance` and `--include-submissions` are explicit inspection options. Runs with no external input add no delivery records for it.
 
-All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](../../../SPEC.md) for recovery and copy rules.
+All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/elenx/blob/main/SPEC.md) for recovery and copy rules.
 
 ## Export and review
 

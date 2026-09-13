@@ -4,9 +4,9 @@ Elenx runs mathematical exploration with durable notes, verification, and guidan
 
 The underlying kernel is also a library for agent applications. It stores exact candidate bytes, records calls, tool invocations, settled tool results, and unknown tool outcomes through an append-only campaign API, binds verdicts to fresh candidate-scoped calls, and derives verification status from the recorded evidence.
 
-The bundled Pi runner executes application-selected models and Zod tools. Pi owns provider execution and credentials. Elenx records logical calls, pre-send request checkpoints, and settled telemetry. Durable continuation extends an output-limited response with its validated transcript, frozen model profile, and tool contract.
+The bundled Pi runner executes application-selected models and Zod tools. Pi owns provider execution and credentials. Elenx records logical calls, pre-send request checkpoints, and settled telemetry. Within a live call, continuation extends an output-limited response using the existing transcript, frozen model profile, and tool contract. After a process restart, the application starts a fresh call from recorded work.
 
-The kernel enforces identity, durability, crash semantics, and accounting contracts. It records application-selected capabilities but does not sandbox the runner. The model owns reasoning strategy. Applications own context assembly, tools, budgets, verification methods, and publication. Verification status records which declared checks passed. Mathematical acceptance still needs [external review](packages/solve/README.md#external-final-review).
+The kernel enforces identity, durability, crash semantics, and accounting contracts. It records application-selected capabilities but does not sandbox the runner. The model owns reasoning strategy. Applications own context assembly, tools, budgets, verification methods, and publication. Verification status records which declared checks passed. Mathematical acceptance still needs [external review](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md#external-final-review).
 
 ## Try the solver
 
@@ -25,7 +25,7 @@ bun packages/solve/solve.ts inspect campaign.db
 bun packages/solve/solve.ts export campaign.db
 ```
 
-This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role. Private endpoints require an explicit model registry. For an OpenAI API account, use `settings-openai.json` with `OPENAI_API_KEY` as described in [provider setup](packages/solve/docs/installation.md#choose-a-provider).
+This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role. Private endpoints require an explicit model registry. For an OpenAI API account, use `settings-openai.json` with `OPENAI_API_KEY` as described in [provider setup](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md#choose-a-provider).
 
 Settings select the model for each role and cap Explorer turns. Repeat the same `run` command after an interruption to continue. A completed campaign returns its recorded result.
 
@@ -36,7 +36,7 @@ bun packages/solve/solve.ts guide --id try-direct-proof campaign.db packages/sol
 bun packages/solve/solve.ts inspect --include-guidance campaign.db
 ```
 
-Guidance is saved immediately and delivered to the next Explorer turn whose input has not been frozen. It applies to that turn only, including its retries. The task, completion criteria, and verification rules stay fixed. See [using Elenx from another agent](packages/solve/docs/agent-usage.md) for submission receipts, delivery, and recovery.
+Guidance is saved immediately and delivered to the next Explorer turn whose input has not been frozen. It applies to that turn only, including its retries. The task, completion criteria, and verification rules stay fixed. See [using Elenx from another agent](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md) for submission receipts, delivery, and recovery.
 
 To supply mathematical work before exploration, create the campaign and submit text notes first:
 
@@ -46,11 +46,11 @@ bun packages/solve/solve.ts submit --id initial-notes campaign.db notes.json
 bun packages/solve/solve.ts run task.json campaign.db settings.json
 ```
 
-`init` and `submit` make no model calls. Submitted notes enter the coordinator for filing and verification. A caller can explicitly attach external verification to a supporting result. Acceptance of a complete proof still requires all four normal verifiers. The [note submission guide](packages/solve/docs/agent-usage.md#supply-mathematical-notes) gives the JSON format and explains how to add notes during a run.
+`init` and `submit` make no model calls. Submitted notes enter the coordinator for filing and verification. A caller can explicitly attach external verification to a supporting result. Acceptance of a complete proof still requires all four normal verifiers. The [note submission guide](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md#supply-mathematical-notes) gives the JSON format and explains how to add notes during a run.
 
 ## Install
 
-For the packaged solver, follow [installation and provider setup](packages/solve/docs/installation.md). Release `v0.10.0` includes kernel 0.10.0 and solver 0.36.0, with OpenAI API and Codex subscription examples.
+For the packaged solver, follow [installation and provider setup](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md). Release `v0.10.0` includes kernel 0.10.0 and solver 0.36.0, with OpenAI API and Codex subscription examples.
 
 The v1 kernel requires Bun 1.3.13 or newer. Applications define tool schemas with Zod:
 
@@ -66,21 +66,21 @@ The API and campaign schema are experimental. Campaigns are accepted only when t
 
 | Question | Authority |
 | --- | --- |
-| Why is Elenx designed this way? | [`docs/philosophy.md`](docs/philosophy.md) |
+| Why is Elenx designed this way? | [`docs/philosophy.md`](https://github.com/chaoxu/elenx/blob/main/docs/philosophy.md) |
 | What does the kernel guarantee? | [`SPEC.md`](SPEC.md) |
-| Which words name which concepts? | [`docs/terms.md`](docs/terms.md) |
-| How do I run the solver? | [`packages/solve/README.md`](packages/solve/README.md) |
-| How can another agent inspect a run, supply notes, or give advice? | [`packages/solve/docs/agent-usage.md`](packages/solve/docs/agent-usage.md) |
-| How do the solver roles and replay behave? | [`packages/solve/docs/role-runner.md`](packages/solve/docs/role-runner.md) |
+| Which words name which concepts? | [`docs/terms.md`](https://github.com/chaoxu/elenx/blob/main/docs/terms.md) |
+| How do I run the solver? | [`packages/solve/README.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md) |
+| How can another agent inspect a run, supply notes, or give advice? | [`packages/solve/docs/agent-usage.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/agent-usage.md) |
+| How do the solver roles and replay behave? | [`packages/solve/docs/role-runner.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/role-runner.md) |
 | How do I build an application? | [`docs/application-author.md`](docs/application-author.md) |
-| How do I install packages and configure a provider? | [`packages/solve/docs/installation.md`](packages/solve/docs/installation.md) |
-| What changed in this release? | [`docs/releases/v0.10.0.md`](docs/releases/v0.10.0.md) |
+| How do I install packages and configure a provider? | [`packages/solve/docs/installation.md`](https://github.com/chaoxu/elenx/blob/main/packages/solve/docs/installation.md) |
+| What changed in the published v0.10.0 release? | [`docs/releases/v0.10.0.md`](https://github.com/chaoxu/elenx/blob/main/docs/releases/v0.10.0.md) |
 
 The deterministic verifier example is [`examples/v1/scripted-verifier.ts`](examples/v1/scripted-verifier.ts). [`examples/v1/pi-smoke.ts`](examples/v1/pi-smoke.ts) exercises the LLM-verdict path with a real Pi model.
 
 ## Solver
 
-[`packages/solve`](packages/solve) supplies one durable task workflow. A task is one JSON object:
+[`packages/solve`](https://github.com/chaoxu/elenx/tree/main/packages/solve) supplies one durable task workflow. A task is one JSON object:
 
 ```json
 {
@@ -89,7 +89,7 @@ The deterministic verifier example is [`examples/v1/scripted-verifier.ts`](examp
 }
 ```
 
-The explorer writes notes, and callers can submit additional notes. The coordinator files them, gives `explorerGuidance` for the next turn, selects supporting texts, and lists the notes to verify. The source, correctness, requirements, and reconstruction verifiers record verdicts on those notes. The workflow ends when all four pass one note, including a supplied proof verified before the first Explorer turn. `inspect` derives the phase, notes, and terminal result from the journal. The [solver guide](packages/solve/README.md#run) documents the commands and their results.
+The explorer writes notes, and callers can submit additional notes. The coordinator files them, gives `explorerGuidance` for the next turn, selects supporting texts, and lists the notes to verify. The source, correctness, requirements, and reconstruction verifiers record verdicts on those notes. The workflow ends when all four pass one note, including a supplied proof verified before the first Explorer turn. `inspect` derives the phase, notes, and terminal result from the journal. The [solver guide](https://github.com/chaoxu/elenx/blob/main/packages/solve/README.md#run) documents the commands and their results.
 
 ## Development
 
