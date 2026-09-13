@@ -31,6 +31,9 @@ import {
   piRequest,
   piRequestAttempts,
   piStoredResult,
+  piResultRecord,
+  readPiResult,
+  storePiResult,
   piTelemetry,
   runPi,
   type PiSubmissionGate,
@@ -279,8 +282,10 @@ function spendEntries(
       state: "returned",
       output: {
         state: "succeeded",
-        text: "done",
-        transcript: [],
+        call: 2,
+        textRef: "a".repeat(64),
+        transcriptRef: "b".repeat(64),
+        assistantUsage: [],
         telemetry: {
           schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
           spans: [
@@ -1485,10 +1490,15 @@ describe("thin Pi runner", () => {
     }
     expect(terminal.output).toMatchObject({
       state: "succeeded",
-      transcript: [{ role: "user" }, { role: "assistant" }],
+      call: result.call,
       telemetry: result.telemetry,
     });
-    expect(piStoredResult.parse(terminal.output)).toMatchObject({
+    expect(readPiResult(terminal.output, store)).toEqual(result);
+    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty(
+      "transcript",
+    );
+    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty("text");
+    expect(readPiResult(terminal.output, store)).toMatchObject({
       state: "succeeded",
       text: "answer",
       transcript: [{ role: "user" }, { role: "assistant" }],
@@ -2760,7 +2770,7 @@ describe("thin Pi runner", () => {
     ) {
       throw new Error("missing stored Pi failure");
     }
-    expect(piStoredResult.parse(storedFailure.output)).toMatchObject({
+    expect(readPiResult(storedFailure.output, failedCampaign)).toMatchObject({
       state: "failed",
       providerRetryable: true,
     });
@@ -2844,4 +2854,69 @@ describe("thin Pi runner", () => {
       }).success,
     ).toBe(false);
   });
+});
+
+test.each(["succeeded", "failed", "cancelled"] as const)(
+  "compact Pi storage round-trips %s without retaining content in the journal",
+  async (state) => {
+    const store = campaign();
+    const text = "large answer ".repeat(10_000);
+    const body = piStoredResult.parse({
+      state,
+      text,
+      transcript: [{ role: "assistant", content: text, usage: null }],
+      telemetry: { schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS, spans: [] },
+      ...(state === "succeeded" ? {} : { error: "terminal error" }),
+      ...(state === "failed"
+        ? { providerRetryable: false, truncated: true }
+        : {}),
+    });
+    try {
+      const receipt = await store.call(
+        { label: "storage", request: null },
+        async ({ call }) => storePiResult(store, { call, ...body }),
+      );
+      expect(JSON.stringify(receipt.output).length).toBeLessThan(1000);
+      expect(piResultRecord.parse(receipt.output).assistantUsage).toEqual([
+        null,
+      ]);
+      expect(readPiResult(receipt.output, store)).toEqual({
+        call: receipt.call,
+        ...body,
+      });
+    } finally {
+      store.close();
+    }
+  },
+);
+
+test("collects final text in order across a long interrupted response chain", async () => {
+  const store = campaign();
+  try {
+    const fragments = Array.from({ length: 21 }, (_, index) => `[${index}]`);
+    const output = await runPi(store, {
+      models: models(
+        fragments.map((text, index) =>
+          assistant(
+            [
+              { type: "thinking", thinking: "private reasoning" },
+              { type: "text", text },
+            ],
+            index === fragments.length - 1 ? "stop" : "length",
+          ),
+        ),
+      ),
+      model,
+      label: "linear-text",
+      prompt: "Continue",
+      maxLengthContinuations: 20,
+    });
+    expect(output.state).toBe("succeeded");
+    expect(output.text).toBe(fragments.join(""));
+    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
+      21,
+    );
+  } finally {
+    store.close();
+  }
 });

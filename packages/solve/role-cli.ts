@@ -9,7 +9,7 @@ import {
   type Entry,
   type Json,
 } from "elenx";
-import { derivePiSpend, piRequest, piStoredResult } from "elenx/pi";
+import { derivePiSpend, piRequest, piResultRecord } from "elenx/pi";
 import { z } from "zod";
 
 import { campaignAccounting } from "./accounting";
@@ -167,7 +167,7 @@ function callDiagnostic(
   if (result === undefined) return {};
   if (result.state === "threw") return { error: result.error };
   const parsed = piRequest.safeParse(call.request).success
-    ? piStoredResult.safeParse(result.output)
+    ? piResultRecord.safeParse(result.output)
     : codexRequest.safeParse(call.request).success
       ? codexResult.safeParse(result.output)
       : undefined;

@@ -13,7 +13,7 @@ import {
 } from "./schemas";
 import type { Entry, EntryDraft, EntryId, Json, RecordQuery } from "./types";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const ENTRY_KIND_SQL = Object.values(ENTRY_KINDS)
   .map((kind) => `'${kind}'`)
   .join(", ");
@@ -49,7 +49,7 @@ const SCHEMA = `
   ) STRICT;
   CREATE TABLE payloads (
     digest TEXT PRIMARY KEY CHECK(length(digest) = 64),
-    body TEXT NOT NULL CHECK(json_valid(body)),
+    body_digest TEXT NOT NULL CHECK(length(body_digest) = 64),
     input_tail INTEGER CHECK(input_tail >= 0),
     input_length INTEGER NOT NULL CHECK(input_length >= 0),
     CHECK((coalesce(input_tail, 0) = 0) = (input_length = 0))
@@ -73,7 +73,7 @@ interface MaterialRow {
   readonly material: Uint8Array;
 }
 interface PayloadRow {
-  readonly body: string;
+  readonly bodyDigest: string;
   readonly inputTail: bigint | null;
   readonly inputLength: bigint;
 }
@@ -354,6 +354,7 @@ export class Journal {
       input === undefined
         ? full
         : JSON.stringify({ ...(checked as object), input: [] });
+    const bodyDigest = digest(body);
     this.#database
       .transaction(() => {
         const prefix = this.#database
@@ -387,12 +388,12 @@ export class Journal {
         }
         const previous = this.#database
           .query<PayloadRow, [string]>(
-            "SELECT body, input_tail AS inputTail, input_length AS inputLength FROM payloads WHERE digest = ?",
+            "SELECT body_digest AS bodyDigest, input_tail AS inputTail, input_length AS inputLength FROM payloads WHERE digest = ?",
           )
           .get(hash);
         if (previous !== null) {
           if (
-            previous.body !== body ||
+            previous.bodyDigest !== bodyDigest ||
             previous.inputTail !== tail ||
             previous.inputLength !== BigInt(length)
           )
@@ -400,8 +401,12 @@ export class Journal {
           return;
         }
         this.#database.run(
-          "INSERT INTO payloads(digest,body,input_tail,input_length) VALUES(?,?,?,?)",
-          [hash, body, tail, length],
+          "INSERT OR IGNORE INTO payload_items(digest,body) VALUES(?,?)",
+          [bodyDigest, body],
+        );
+        this.#database.run(
+          "INSERT INTO payloads(digest,body_digest,input_tail,input_length) VALUES(?,?,?,?)",
+          [hash, bodyDigest, tail, length],
         );
       })
       .immediate();
@@ -411,11 +416,15 @@ export class Journal {
   payload(value: string): Json {
     const hash = payloadDigest.parse(value);
     const row = this.#database
-      .query<PayloadRow, [string]>(
-        "SELECT body, input_tail AS inputTail, input_length AS inputLength FROM payloads WHERE digest = ?",
+      .query<PayloadRow & { body: string | null }, [string]>(
+        "SELECT payload.body_digest AS bodyDigest, content.body, payload.input_tail AS inputTail, payload.input_length AS inputLength FROM payloads AS payload LEFT JOIN payload_items AS content ON content.digest = payload.body_digest WHERE payload.digest = ?",
       )
       .get(hash);
     if (row === null) throw new Error(`payload not found: ${hash}`);
+    if (row.body === null)
+      throw new Error(`payload body not found: ${row.bodyDigest}`);
+    if (digest(row.body) !== row.bodyDigest)
+      throw new Error("payload body digest mismatch");
     let valueJson: Json = JSON.parse(row.body);
     if (row.inputTail !== null) {
       if (

@@ -13,7 +13,11 @@ import {
   builtinPi,
   derivePiSpend,
   InMemoryCredentialStore,
+  piResultRecord,
+  readPiResult,
   runPi,
+  storePiResult,
+  type PiResult,
 } from "elenx/pi";
 import { z } from "zod";
 
@@ -55,6 +59,11 @@ void returnedToolSubmission;
 void (undefined as unknown as CallReceipt);
 void result;
 void credentialModels;
+declare const fullPiResult: PiResult;
+const storedPiResult = storePiResult(campaign, fullPiResult);
+void piResultRecord.parse(storedPiResult);
+const restoredPiResult: PiResult = readPiResult(storedPiResult, campaign);
+void restoredPiResult;
 const query: RecordQuery = {
   kinds: ["tool-call"],
   call: 1,

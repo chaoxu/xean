@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign, type Entry } from "elenx";
-import { derivePiSpend, type PiRunOptions } from "elenx/pi";
+import { createCampaign } from "elenx";
+import { derivePiSpend, storePiResult, type PiRunOptions } from "elenx/pi";
 
 import { campaignAccounting } from "../accounting";
 import { inspectCampaign } from "../role-cli";
@@ -31,7 +31,7 @@ const options: PiRunOptions = {
   prompt: "Test accounting",
 };
 
-function records(measured: boolean): Entry[] {
+function resultBody(measured: boolean) {
   const telemetry = structuredClone(fakePiTelemetry(options, "succeeded"));
   if (measured)
     Object.assign(telemetry.spans[1]!.attributes, {
@@ -42,42 +42,27 @@ function records(measured: boolean): Entry[] {
       "pi.ai.usage.total_tokens": 12,
       "pi.ai.usage.cost": 0,
     });
-  return [
-    {
-      kind: "campaign",
-      seq: 1,
-      atMs: 1,
-      application: "elenx-solve",
-      config: { kind: "calls" },
-    },
-    {
-      kind: "call",
-      seq: 2,
-      atMs: 2,
-      label: options.label,
-      request: fakePiRequest(options),
-      tools: [],
-    },
-    {
-      kind: "call-result",
-      seq: 3,
-      atMs: 3,
-      parent: 2,
-      state: "returned",
-      output: JSON.parse(
-        JSON.stringify({
-          state: "succeeded",
-          text: "",
-          transcript: [],
-          telemetry,
-        }),
-      ),
-    },
-  ];
+  return { state: "succeeded", text: "", transcript: [], telemetry } as const;
 }
 
-test("known zero-priced usage is complete but absent usage is unknown", () => {
-  expect(campaignAccounting(records(true))).toEqual({
+async function records(measured: boolean) {
+  const campaign = createCampaign(campaignPath(), "elenx-solve", {
+    kind: "calls",
+  });
+  try {
+    await campaign.call(
+      { label: options.label, request: fakePiRequest(options), tools: [] },
+      async ({ call }) =>
+        storePiResult(campaign, { call, ...resultBody(measured) }),
+    );
+    return campaign.records();
+  } finally {
+    campaign.close();
+  }
+}
+
+test("known zero-priced usage is complete but absent usage is unknown", async () => {
+  expect(campaignAccounting(await records(true))).toEqual({
     complete: true,
     measuredCostUsd: 0,
     unmeasuredRequests: 0,
@@ -85,15 +70,15 @@ test("known zero-priced usage is complete but absent usage is unknown", () => {
     potentialRequests: [],
     unpricedCalls: [],
   });
-  expect(campaignAccounting(records(false))).toMatchObject({
+  expect(campaignAccounting(await records(false))).toMatchObject({
     complete: false,
     measuredCostUsd: null,
     unmeasuredRequests: 1,
   });
 });
 
-test("an unsettled call prevents complete accounting even before a usage result", () => {
-  expect(campaignAccounting(records(true).slice(0, 2))).toMatchObject({
+test("an unsettled call prevents complete accounting even before a usage result", async () => {
+  expect(campaignAccounting((await records(true)).slice(0, 2))).toMatchObject({
     complete: false,
     measuredCostUsd: null,
     unmeasuredRequests: 0,
@@ -104,13 +89,9 @@ test("an unsettled call prevents complete accounting even before a usage result"
 test("inspection exposes completeness without modifying the journal", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "elenx-solve", { kind: "calls" });
-  const result = records(false)[2] as Extract<
-    Entry,
-    { kind: "call-result"; state: "returned" }
-  >;
   await campaign.call(
     { label: options.label, request: fakePiRequest(options), tools: [] },
-    async () => result.output,
+    async ({ call }) => storePiResult(campaign, { call, ...resultBody(false) }),
   );
   const spend = derivePiSpend(campaign.records()).summary;
   campaign.close();

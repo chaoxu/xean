@@ -193,7 +193,7 @@ describe("immutable request payloads", () => {
     campaign.close();
     const db = new Database(path, { readonly: true });
     expect(db.query("SELECT count(*) n FROM payload_items").get()).toEqual({
-      n: 1002,
+      n: 2002,
     });
     expect(db.query("SELECT count(*) n FROM payload_inputs").get()).toEqual({
       n: 1002,
@@ -223,13 +223,53 @@ describe("immutable request payloads", () => {
     const db = new Database(path, { readonly: true });
     for (const table of ["payload_items", "payload_inputs"])
       expect(db.query(`SELECT count(*) n FROM ${table}`).get()).toEqual({
-        n: 769,
+        n: table === "payload_items" ? 1025 : 769,
       });
     expect(db.query("SELECT count(*) n FROM payloads").get()).toEqual({
       n: 256,
     });
     // Complete lists alone would exceed 6 MiB for these 98,944 item hashes.
     expect(statSync(path).size).toBeLessThan(2 * 1024 * 1024);
+    db.close();
+  });
+
+  test("growing requests share unchanged instructions and tool definitions", () => {
+    const path = temporaryPath(),
+      campaign = createCampaign(path, "payload", null);
+    const fixed = {
+      model: "synthetic",
+      instructions: "Fixed instructions.\n".repeat(256),
+      tools: [
+        { type: "function", name: "submit", parameters: { type: "object" } },
+      ],
+      max_output_tokens: 1024,
+    };
+    const input: Json[] = [];
+    const hashes: string[] = [];
+    for (let n = 0; n < 128; n++) {
+      input.push({ role: "user", content: `next ${n}` });
+      hashes.push(campaign.storePayload({ ...fixed, input }));
+    }
+    for (const n of [0, 63, 127])
+      expect(campaign.payload(hashes[n]!)).toEqual({
+        ...fixed,
+        input: input.slice(0, n + 1),
+      });
+    const changed = { ...fixed, input, max_output_tokens: 512 };
+    expect(campaign.payload(campaign.storePayload(changed))).toEqual(changed);
+    campaign.close();
+    const db = new Database(path, { readonly: true });
+    expect(
+      db
+        .query(
+          "SELECT count(*) n, count(DISTINCT body_digest) bodies FROM payloads",
+        )
+        .get(),
+    ).toEqual({ n: 129, bodies: 2 });
+    expect(db.query("SELECT count(*) n FROM payload_items").get()).toEqual({
+      n: 130,
+    });
+    expect(statSync(path).size).toBeLessThan(384 * 1024);
     db.close();
   });
 
@@ -281,13 +321,18 @@ describe("immutable request payloads", () => {
     ).toThrow("test rejection");
     for (const table of ["payloads", "payload_items", "payload_inputs"])
       expect(db.query(`SELECT count(*) n FROM ${table}`).get()).toEqual({
-        n: 1,
+        n: table === "payload_items" ? 2 : 1,
       });
     expect(campaign.payload(saved)).toEqual({ input: [{ text: "saved" }] });
     db.run("DROP TRIGGER reject_payload");
     campaign.storePayload({ input: [{ text: "atomic" }] });
     for (const table of ["payloads", "payload_items", "payload_inputs"]) {
-      const field = table === "payload_inputs" ? "parent_id" : "body";
+      const field =
+        table === "payload_inputs"
+          ? "parent_id"
+          : table === "payloads"
+            ? "body_digest"
+            : "body";
       expect(() => db.run(`UPDATE ${table} SET ${field}=${field}`)).toThrow(
         "append-only",
       );
@@ -311,12 +356,12 @@ describe("immutable request payloads", () => {
       if (corruption === "missing") {
         db.run("DROP TRIGGER payload_items_no_delete");
         db.run(
-          "DELETE FROM payload_items WHERE digest=(SELECT digest FROM payload_items LIMIT 1)",
+          "DELETE FROM payload_items WHERE digest=(SELECT item_digest FROM payload_inputs LIMIT 1)",
         );
       } else if (corruption === "body") {
         db.run("DROP TRIGGER payload_items_no_update");
         db.run(
-          "UPDATE payload_items SET body='null' WHERE digest=(SELECT digest FROM payload_items LIMIT 1)",
+          "UPDATE payload_items SET body='null' WHERE digest=(SELECT item_digest FROM payload_inputs LIMIT 1)",
         );
       } else {
         const rows = db
@@ -337,6 +382,50 @@ describe("immutable request payloads", () => {
           ? "payload item not found"
           : corruption === "body"
             ? "payload item digest mismatch"
+            : "payload digest mismatch",
+      );
+      reader.close();
+    }
+  });
+
+  test("rejects missing or corrupt shared payload bodies", () => {
+    for (const corruption of ["missing", "body", "reference"] as const) {
+      const path = temporaryPath(),
+        campaign = createCampaign(path, "payload", null);
+      const hash = campaign.storePayload({
+        instructions: "original",
+        input: [1],
+      });
+      const other = campaign.storePayload({
+        instructions: "changed",
+        input: [1],
+      });
+      campaign.close();
+      const db = new Database(path, { readwrite: true });
+      if (corruption === "reference") {
+        db.run("DROP TRIGGER payloads_no_update");
+        db.run(
+          "UPDATE payloads SET body_digest=(SELECT body_digest FROM payloads WHERE digest=?) WHERE digest=?",
+          [other, hash],
+        );
+      } else {
+        db.run(
+          `DROP TRIGGER payload_items_no_${corruption === "missing" ? "delete" : "update"}`,
+        );
+        db.run(
+          corruption === "missing"
+            ? "DELETE FROM payload_items WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)"
+            : "UPDATE payload_items SET body='null' WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)",
+          [hash],
+        );
+      }
+      db.close();
+      const reader = openReader(path);
+      expect(() => reader.payload(hash)).toThrow(
+        corruption === "missing"
+          ? "payload body not found"
+          : corruption === "body"
+            ? "payload body digest mismatch"
             : "payload digest mismatch",
       );
       reader.close();

@@ -3,7 +3,13 @@ import { createCampaign, type RecordQuery } from "elenx";
 
 import { createPiRoles } from "../pi-roles";
 import { Projection } from "../projection";
-import { applicationId, judgedBy, type Note } from "../roles";
+import {
+  applicationId,
+  judgedBy,
+  savedExplorerSubmission,
+  succeededSubmission,
+  type Note,
+} from "../roles";
 import { supportClosure } from "../support";
 import {
   deriveWorkflow,
@@ -217,6 +223,75 @@ test("Explorer receipts reconcile only new owned submissions and reuse durable i
       support: [],
     });
     expect(result.notes).toHaveLength(10);
+  } finally {
+    campaign.close();
+  }
+});
+
+test("completed Explorer replay reads submissions once and preserves tool and settlement boundaries", async () => {
+  const config = workflowConfiguration({
+    task: { problem: "Prove P.", completionCriteria: "A complete proof." },
+    settings: { ...roleSettings(), explorerContinuation: true },
+  });
+  const campaign = createCampaign(campaignPath(), applicationId, config);
+  const first = { text: "A durable partial proof.", support: [] };
+  const drive = dependencies([
+    {
+      onStarted: async (tools) => {
+        await tools[0]!.execute({ notes: [first], solution: false });
+      },
+      submission: { notes: [], solution: false },
+    },
+  ]);
+  try {
+    const initial = (await deriveWorkflow(campaign.records())).phase;
+    if (initial.kind !== "explorer") throw new Error("expected Explorer");
+    await createPiRoles(campaign, config.settings, drive).explorer(
+      initial.input,
+    );
+    const records = campaign.records();
+    const owner = records.find(
+      (entry) => entry.kind === "call" && entry.role === "explorer",
+    );
+    if (owner?.kind !== "call") throw new Error("missing Explorer call");
+    const reads = new Map<number, number>();
+    const tracked = records.map((entry) =>
+      entry.kind === "tool-call" && entry.call === owner.seq
+        ? {
+            ...entry,
+            get input() {
+              reads.set(entry.seq, (reads.get(entry.seq) ?? 0) + 1);
+              return entry.input;
+            },
+          }
+        : entry,
+    );
+    const completed = await deriveWorkflow(tracked);
+    expect([...reads.values()]).toEqual([1, 1]);
+    expect(completed.phase).toMatchObject({
+      kind: "coordinator",
+      input: { emptySubmission: true, notes: [{ id: "n1", text: first.text }] },
+    });
+
+    const saved = savedExplorerSubmission(records, owner.seq)!;
+    const settled = succeededSubmission(
+      records,
+      owner.seq,
+      "submit_notes",
+      saved,
+    )!;
+    expect(saved.emptySubmission).toBe(true);
+    expect(saved.settled).toBeLessThan(settled.settled);
+    expect(settled.input).toBe(saved.input);
+    const beforeReceipt = await deriveWorkflow(
+      records.filter((entry) => entry.seq <= saved.settled),
+    );
+    expect(beforeReceipt.phase.kind).toBe("explorer");
+    expect(beforeReceipt.notes).toMatchObject([{ id: "n1", text: first.text }]);
+    const withoutReceipts = await deriveWorkflow(
+      records.filter((entry) => entry.kind !== "tool-result"),
+    );
+    expect(withoutReceipts.phase).toEqual(completed.phase);
   } finally {
     campaign.close();
   }

@@ -400,29 +400,103 @@ export function piRequestAttempts(
   });
 }
 
-const storedResultBase = {
+const nonnegative = z.number().finite().nonnegative();
+const assistantUsageRecord = z.object({
+  input: nonnegative,
+  output: nonnegative,
+  cacheRead: nonnegative,
+  cacheWrite: nonnegative,
+  totalTokens: nonnegative,
+  reasoning: nonnegative.optional(),
+  cost: z.object({
+    input: nonnegative,
+    output: nonnegative,
+    cacheRead: nonnegative,
+    cacheWrite: nonnegative,
+    total: nonnegative,
+  }),
+});
+
+function resultSchema<T extends z.ZodRawShape>(fields: T) {
+  return z.discriminatedUnion("state", [
+    z.strictObject({ ...fields, state: z.literal("succeeded") }),
+    z.strictObject({
+      ...fields,
+      state: z.literal("failed"),
+      error: z.string(),
+      providerRetryable: z.boolean(),
+      truncated: z.boolean(),
+    }),
+    z.strictObject({
+      ...fields,
+      state: z.literal("cancelled"),
+      error: z.string(),
+    }),
+  ]);
+}
+
+export const piStoredResult = resultSchema({
   transcript: z.array(json).readonly(),
   text: z.string(),
   telemetry: piTelemetry,
-};
+});
 
-export const piStoredResult = z.discriminatedUnion("state", [
-  z.strictObject({ state: z.literal("succeeded"), ...storedResultBase }),
-  z.strictObject({
-    state: z.literal("failed"),
-    error: z.string(),
-    providerRetryable: z.boolean(),
-    truncated: z.boolean(),
-    ...storedResultBase,
-  }),
-  z.strictObject({
-    state: z.literal("cancelled"),
-    error: z.string(),
-    ...storedResultBase,
-  }),
-]);
+export const piResultRecord = resultSchema({
+  call: entryId,
+  textRef: z.string().regex(/^[a-f0-9]{64}$/),
+  transcriptRef: z.string().regex(/^[a-f0-9]{64}$/),
+  telemetry: piTelemetry,
+  assistantUsage: z.array(assistantUsageRecord.nullable()).readonly(),
+});
 
-const nonnegative = z.number().finite().nonnegative();
+export function storePiResult(
+  campaign: Campaign,
+  value: PiResult,
+): z.output<typeof piResultRecord> {
+  const { transcript, text, ...metadata } = value;
+  const assistantUsage = transcript.flatMap((message) => {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      Array.isArray(message) ||
+      (message as { readonly [key: string]: Json }).role !== "assistant"
+    )
+      return [];
+    const parsed = assistantUsageRecord.safeParse(
+      (message as { readonly [key: string]: Json }).usage,
+    );
+    return [parsed.success ? parsed.data : null];
+  });
+  return piResultRecord.parse({
+    ...metadata,
+    assistantUsage,
+    textRef: campaign.storePayloadJson(JSON.stringify(text)),
+    transcriptRef: campaign.storePayloadJson(JSON.stringify(transcript)),
+  });
+}
+
+/** Attachment integrity is checked on full resolution, as for checkpoint payloads. */
+export function readPiResult(
+  output: unknown,
+  reader: Pick<Reader, "payload">,
+): PiResult {
+  const {
+    call,
+    textRef,
+    transcriptRef,
+    assistantUsage: _,
+    ...metadata
+  } = piResultRecord.parse(output);
+  return {
+    call,
+    ...piStoredResult.parse({
+      ...metadata,
+      text: reader.payload(textRef),
+      transcript: reader.payload(transcriptRef),
+    }),
+  };
+}
+
 const stopReason = z.enum([
   "stop",
   "length",
@@ -667,7 +741,9 @@ export function derivePiSpend(entries: readonly Entry[]) {
       }
       continue;
     }
-    const stored = piStoredResult.parse(result.output);
+    const stored = piResultRecord.parse(result.output);
+    if (stored.call !== call.seq)
+      throw new Error("invalid Pi result owner " + call.seq);
     const { spans } = stored.telemetry;
     if (new Set(spans.map(({ id }) => id)).size !== spans.length)
       throw new Error("duplicate Pi telemetry span in call " + call.seq);
@@ -826,21 +902,27 @@ function result(
   requireSubmission = false,
 ): PiOutcome {
   const stored = jsonSnapshot(messages) as readonly Json[];
-  const final = messages.findLast(
-    (message): message is AssistantMessage => message.role === "assistant",
-  );
-  const parts = messages.flatMap((message, at) => {
-    if (message.role !== "assistant") return [];
-    const bridge = messages
-      .slice(at + 1)
-      .find((next) => next.role !== "toolResult");
-    const interrupted =
-      bridge?.role === "user" &&
-      bridge.content === lengthContinuation &&
-      message.stopReason === "length";
-    if (message === final || interrupted) return [contentText(message.content)];
-    return [];
-  });
+  let final: AssistantMessage | undefined;
+  let finalAt = -1;
+  let next: AgentMessage | undefined;
+  const parts: string[] = [];
+  for (let at = messages.length - 1; at >= 0; at -= 1) {
+    const message = messages[at]!;
+    if (message.role === "assistant") {
+      if (final === undefined) {
+        final = message;
+        finalAt = at;
+      }
+      const interrupted =
+        next?.role === "user" &&
+        next.content === lengthContinuation &&
+        message.stopReason === "length";
+      if (message === final || interrupted)
+        parts.push(contentText(message.content));
+    }
+    if (message.role !== "toolResult") next = message;
+  }
+  parts.reverse();
   const text = parts.join("");
   if (signal?.aborted || final?.stopReason === "aborted") {
     return {
@@ -850,9 +932,7 @@ function result(
       error: final?.errorMessage ?? "Pi call was cancelled",
     };
   }
-  const afterFinal = messages.slice(
-    messages.lastIndexOf(final as AgentMessage) + 1,
-  );
+  const afterFinal = messages.slice(finalAt + 1);
   const stoppedAfterTool =
     stopAfterToolResult &&
     (final?.stopReason === "toolUse" ||
@@ -1222,7 +1302,8 @@ async function runPiCall(
   if (typeof options.models?.streamSimple !== "function") {
     throw new TypeError("Pi models must provide streamSimple");
   }
-  const receipt = await campaign.call(
+  let full: PiResult | undefined;
+  await campaign.call(
     {
       label: options.label,
       ...(options.role === undefined ? {} : { role: options.role }),
@@ -1236,10 +1317,15 @@ async function runPiCall(
     async ({ call, request, tools, signal }) => {
       const exact = parsePiRequest(request);
       if (exact === undefined) throw new Error("invalid stored Pi request");
-      return runPiBody(campaign, call, exact, tools, signal, options);
+      full = {
+        call,
+        ...(await runPiBody(campaign, call, exact, tools, signal, options)),
+      };
+      return storePiResult(campaign, full);
     },
   );
-  return { call: receipt.call, ...(receipt.output as PiResultBody) };
+  if (full === undefined) throw new Error("Pi call returned without a result");
+  return full;
 }
 
 async function runPiBody(

@@ -681,7 +681,13 @@ export function returnedOutput(
 export function savedExplorerSubmission(
   records: readonly Entry[],
   call: EntryId,
-): { readonly settled: EntryId; readonly input: Json } | undefined {
+):
+  | {
+      readonly settled: EntryId;
+      readonly input: z.output<typeof explorerContinuationResult>;
+      readonly emptySubmission: boolean;
+    }
+  | undefined {
   const submissions = records.flatMap((entry) =>
     entry.kind === "tool-call" &&
     entry.call === call &&
@@ -699,6 +705,7 @@ export function savedExplorerSubmission(
     ? undefined
     : {
         settled: last.seq,
+        emptySubmission: last.value.notes.length === 0,
         input: {
           notes: submissions.flatMap(({ value }) => value.notes),
           solution: last.value.solution,
@@ -710,6 +717,7 @@ export function succeededSubmission(
   records: readonly Entry[],
   call: EntryId,
   tool: string,
+  savedExplorer?: ReturnType<typeof savedExplorerSubmission>,
 ): { readonly settled: EntryId; readonly input: Json } | undefined {
   const returned = returnedOutput(records, call);
   if (
@@ -731,7 +739,7 @@ export function succeededSubmission(
       request?.success &&
       request.data.submissionGate !== undefined
     ) {
-      const saved = savedExplorerSubmission(records, call);
+      const saved = savedExplorer ?? savedExplorerSubmission(records, call);
       return saved === undefined
         ? undefined
         : { settled: returned.settled, input: saved.input };

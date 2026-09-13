@@ -71,7 +71,8 @@ try {
   );
   await Bun.write(
     join(consumer, "index.ts"),
-    `import {
+    `import { isDeepStrictEqual } from "node:util";
+import {
   createCampaign, defineTool, deriveCandidateStatus, entryIdSchema,
   openCampaign, openReader, returnedToolSubmission, verdictSchema,
   type CallReceipt, type Campaign, type Entry, type Json, type Verdict,
@@ -79,7 +80,7 @@ try {
 import {
   builtinPi, derivePiSpend, ELENX_PI_TELEMETRY_SCHEMA,
   InMemoryCredentialStore, piReasoning, piRequest,
-  piRequestAttempts, piStoredResult,
+  piRequestAttempts, piStoredResult, piResultRecord, readPiResult, storePiResult,
   PI_TELEMETRY_SCHEMA_VERSIONS, piTelemetry, runPi,
   type PiResult, type PiSpend,
 } from "elenx/pi";
@@ -134,6 +135,13 @@ try {
     } },
   });
   const spend = derivePiSpend(campaign.records()).summary;
+  const stored = campaign.records().find(entry => entry.kind === "call-result" && entry.parent === probe.call);
+  if (stored?.kind !== "call-result" || stored.state !== "returned")
+    throw new Error("Packed consumer is missing the Pi result record");
+  const compact = piResultRecord.parse(stored.output);
+  if (!isDeepStrictEqual(readPiResult(compact, campaign), probe) ||
+    !isDeepStrictEqual(storePiResult(campaign, probe), compact))
+    throw new Error("Packed consumer did not reconstruct the full Pi result");
   if (probe.state !== "failed" || spend.logicalProviderRequests !== 1 ||
     !("measuredUsage" in spend) || spend.measuredUsage.reasoning !== 3)
     throw new Error("Packed consumer did not receive the patched native Pi provider");

@@ -3,14 +3,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign, type Reader } from "../../src";
+import {
+  createCampaign,
+  type Campaign,
+  type EntryId,
+  type Reader,
+} from "../../src";
 import {
   inspectCoreCampaign,
   inspectCoreCampaignRecords,
   inspectCoreCampaignSummary,
   inspectCoreCampaignSummaryRecords,
 } from "../../src/observe";
-import { PI_TELEMETRY_SCHEMA_VERSIONS } from "../../src/pi";
+import {
+  PI_TELEMETRY_SCHEMA_VERSIONS,
+  piStoredResult,
+  storePiResult,
+} from "../../src/pi";
 
 const directories: string[] = [];
 
@@ -36,6 +45,8 @@ function piRequest() {
 }
 
 function piResult(
+  campaign: Campaign,
+  call: EntryId,
   attributes: Record<string, string | number | boolean>,
   transcript: readonly unknown[] = [],
   additionalOperations: readonly Record<
@@ -44,40 +55,43 @@ function piResult(
   >[] = [],
   errors: readonly (string | undefined)[] = [],
 ) {
-  return {
-    state: "succeeded" as const,
-    text: "done",
-    transcript,
-    telemetry: {
-      schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
-      spans: [
-        {
-          id: 1,
-          parentId: null,
-          name: "elenx.pi.run",
-          attributes: {},
-          events: [],
-          status: { status: "ok" as const },
-          settled: true,
-        },
-        ...[attributes, ...additionalOperations].map((operation, at) => ({
-          id: at + 2,
-          parentId: 1,
-          name: "pi.ai.request",
-          attributes: operation,
-          events: [],
-          status:
-            errors[at] === undefined
-              ? { status: "ok" as const }
-              : {
-                  status: "error" as const,
-                  error: { name: "ProviderError", message: errors[at] },
-                },
-          settled: true,
-        })),
-      ],
-    },
-  };
+  return storePiResult(campaign, {
+    call,
+    ...piStoredResult.parse({
+      state: "succeeded" as const,
+      text: "done",
+      transcript,
+      telemetry: {
+        schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
+        spans: [
+          {
+            id: 1,
+            parentId: null,
+            name: "elenx.pi.run",
+            attributes: {},
+            events: [],
+            status: { status: "ok" as const },
+            settled: true,
+          },
+          ...[attributes, ...additionalOperations].map((operation, at) => ({
+            id: at + 2,
+            parentId: 1,
+            name: "pi.ai.request",
+            attributes: operation,
+            events: [],
+            status:
+              errors[at] === undefined
+                ? { status: "ok" as const }
+                : {
+                    status: "error" as const,
+                    error: { name: "ProviderError", message: errors[at] },
+                  },
+            settled: true,
+          })),
+        ],
+      },
+    }),
+  });
 }
 
 const firstUsage = {
@@ -118,8 +132,10 @@ test("derives token buckets and prices reasoning per response", async () => {
   try {
     await campaign.call(
       { label: "workflow/measured", request: piRequest() },
-      async () =>
+      async ({ call }) =>
         piResult(
+          campaign,
+          call,
           attributes(firstUsage),
           [message(firstUsage), message(secondUsage)],
           [attributes(secondUsage)],
@@ -152,8 +168,10 @@ test("omits reasoning cost when measured retry usage is absent from transcript",
   try {
     await campaign.call(
       { label: "workflow/measured", request: piRequest() },
-      async () =>
+      async ({ call }) =>
         piResult(
+          campaign,
+          call,
           attributes(firstUsage),
           [message(firstUsage)],
           [attributes(secondUsage)],
@@ -395,8 +413,8 @@ test("keeps understood spend when another Pi telemetry record is unsupported", a
   try {
     await campaign.call(
       { label: "workflow/measured", request: piRequest() },
-      async () =>
-        piResult({
+      async ({ call }) =>
+        piResult(campaign, call, {
           "pi.ai.provider": "provider",
           "pi.ai.model": "model",
           "pi.ai.api": "responses",
@@ -449,8 +467,8 @@ test("reports missing usage as unmeasured instead of zero", async () => {
   try {
     await campaign.call(
       { label: "workflow/unmeasured", request: piRequest() },
-      async () =>
-        piResult({
+      async ({ call }) =>
+        piResult(campaign, call, {
           "pi.ai.provider": "provider",
           "pi.ai.model": "model",
           "pi.ai.api": "responses",
@@ -534,11 +552,19 @@ test.each([
   try {
     await campaign.call(
       { label: "workflow/recovered", request: piRequest() },
-      async () => piResult(unmeasured, [], [attributes(cached)], [failure]),
+      async ({ call }) =>
+        piResult(
+          campaign,
+          call,
+          unmeasured,
+          [],
+          [attributes(cached)],
+          [failure],
+        ),
     );
     await campaign.call(
       { label: "workflow/fresh", request: piRequest() },
-      async () => piResult(attributes(fresh)),
+      async ({ call }) => piResult(campaign, call, attributes(fresh)),
     );
   } finally {
     campaign.close();
@@ -608,8 +634,10 @@ test("keeps terminal provider failures separate from recovered errors", async ()
   try {
     await campaign.call(
       { label: "workflow/failed", request: piRequest() },
-      async () => ({
+      async ({ call }) => ({
         ...piResult(
+          campaign,
+          call,
           unmeasured,
           [],
           [unmeasured],
@@ -665,7 +693,7 @@ test("keeps measured zero usage distinct from missing usage in each request phas
   try {
     await campaign.call(
       { label: "workflow/zero", request: piRequest() },
-      async () => piResult(attributes(zero)),
+      async ({ call }) => piResult(campaign, call, attributes(zero)),
     );
   } finally {
     campaign.close();
@@ -706,7 +734,7 @@ test("cache-read share counts fresh tokens and cache writes in the prompt denomi
   try {
     await campaign.call(
       { label: "workflow/cache-write", request: piRequest() },
-      async () => piResult(attributes(usage)),
+      async ({ call }) => piResult(campaign, call, attributes(usage)),
     );
   } finally {
     campaign.close();
@@ -715,3 +743,96 @@ test("cache-read share counts fresh tokens and cache writes in the prompt denomi
     0.5,
   );
 });
+
+test.each([
+  ["textRef", "damaged"],
+  ["textRef", "missing"],
+  ["transcriptRef", "damaged"],
+  ["transcriptRef", "missing"],
+] as const)(
+  "summary and accounting avoid %s %s attachments; full inspection checks integrity",
+  async (attachment, corruption) => {
+    const { Database } = await import("bun:sqlite");
+    const { derivePiSpend, piResultRecord, readPiResult } =
+      await import("../../src/pi");
+    const path = campaignPath();
+    const campaign = createCampaign(path, "attachments", null);
+    try {
+      const receipt = await campaign.call(
+        { label: "measured", request: piRequest() },
+        async ({ call }) =>
+          piResult(campaign, call, attributes(firstUsage), [
+            message(firstUsage),
+          ]),
+      );
+      const records = campaign.records();
+      const summary = inspectCoreCampaignSummaryRecords(records);
+      const full = inspectCoreCampaignRecords(campaign, records);
+      expect(summary.spend).toEqual({
+        ...full.spend,
+        unsupportedCalls: 0,
+        unaccountedCalls: 0,
+      });
+      const record = piResultRecord.parse(receipt.output);
+      const database = new Database(path);
+      try {
+        database.run(
+          `DROP TRIGGER payload_items_no_${corruption === "missing" ? "delete" : "update"}`,
+        );
+        database.run(
+          corruption === "missing"
+            ? "DELETE FROM payload_items WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)"
+            : "UPDATE payload_items SET body='null' WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)",
+          [record[attachment]],
+        );
+      } finally {
+        database.close();
+      }
+      expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
+      expect(derivePiSpend(records).summary).toMatchObject({
+        logicalProviderRequests: 1,
+      });
+      expect(() => readPiResult(receipt.output, campaign)).toThrow();
+      expect(() => inspectCoreCampaignRecords(campaign, records)).toThrow();
+    } finally {
+      campaign.close();
+    }
+  },
+);
+
+test.each([
+  { role: "assistant", usage: null },
+  { role: "assistant", usage: { ...firstUsage, reasoning: -1 } },
+  {
+    role: "assistant",
+    usage: { ...firstUsage, cost: { ...firstUsage.cost, output: -1 } },
+  },
+  { role: "assistant", usage: { ...firstUsage, reasoning: 6 } },
+])(
+  "invalid assistant usage preserves unavailable reasoning cost: %j",
+  async (invalid) => {
+    const campaign = createCampaign(campaignPath(), "invalid-usage", null);
+    try {
+      await campaign.call(
+        { label: "measured", request: piRequest() },
+        async ({ call }) =>
+          piResult(campaign, call, attributes(firstUsage), [
+            message(firstUsage),
+            invalid,
+          ]),
+      );
+      const records = campaign.records();
+      const full = inspectCoreCampaignRecords(campaign, records);
+      const summary = inspectCoreCampaignSummaryRecords(records);
+      expect(full.calls[0]?.pi?.accounting.state).toBe("available");
+      expect(full.spend.breakdown?.estimatedReasoningCostUsd).toBeUndefined();
+      expect(summary.spend).toEqual({
+        ...full.spend,
+        unsupportedCalls: 0,
+        unaccountedCalls: 0,
+      });
+    } finally {
+      campaign.close();
+    }
+  },
+);

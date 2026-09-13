@@ -354,7 +354,7 @@ describe("campaign database", () => {
     expect(() => openReader(path)).toThrow("unsupported campaign schema: 3");
   });
 
-  test.each([6, 999])(
+  test.each([6, 7, 999])(
     "refuses schema %i without changing its files",
     (version) => {
       const path = temporaryPath();

@@ -19,7 +19,6 @@ import {
 import {
   applicationId,
   coordinatorInput,
-  explorerContinuationResult,
   explorerInput,
   journalVerdicts,
   jsonSnapshot,
@@ -43,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 37;
+export const workflowSchemaVersion = 38;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -276,11 +275,19 @@ export async function deriveWorkflow(
             notesAfter: cursor,
           };
         }
-        const completed = succeededSubmission(records, call.seq, roleCall.tool);
-        const saved =
+        const savedContinuation =
           config.settings.explorerContinuation === true
             ? savedExplorerSubmission(records, call.seq)
-            : completed;
+            : undefined;
+        const completed = succeededSubmission(
+          records,
+          call.seq,
+          roleCall.tool,
+          savedContinuation,
+        );
+        // Saved notes become visible at the last tool call; the next phase
+        // starts only at the outer call-result, which can occur later.
+        const saved = savedContinuation ?? completed;
         if (saved !== undefined) {
           const value = roleCall.schema.parse(saved.input);
           const notes = value.notes.map((entry, position) => ({
@@ -292,17 +299,7 @@ export async function deriveWorkflow(
           known = projection.at(saved.settled);
         }
         if (completed !== undefined) {
-          const lastSubmission = records.findLast(
-            (entry) =>
-              entry.kind === "tool-call" &&
-              entry.call === call.seq &&
-              entry.tool === roleCall.tool,
-          );
-          emptySubmission =
-            config.settings.explorerContinuation === true &&
-            lastSubmission?.kind === "tool-call" &&
-            explorerContinuationResult.parse(lastSubmission.input).notes
-              .length === 0;
+          emptySubmission = savedContinuation?.emptySubmission === true;
           cursor = completed.settled;
           turns += 1;
           break;

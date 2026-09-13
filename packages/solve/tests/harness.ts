@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { AuditedTool, Campaign, Json } from "elenx";
-import type { PiResult, PiRunOptions } from "elenx/pi";
+import { storePiResult, type PiResult, type PiRunOptions } from "elenx/pi";
 
 import type { SolveSettings } from "../pi-roles";
 import type { SolveModels } from "../runtime";
@@ -163,12 +163,12 @@ async function respond(
         : { candidate: options.candidate }),
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     },
-    async ({ tools }) => {
+    async ({ call, tools }) => {
       if (reply.onStarted !== undefined) await reply.onStarted(tools);
       if (reply.submission !== undefined) {
         await tools[0]!.execute(reply.submission);
       }
-      return body;
+      return storePiResult(campaign, { call, ...body });
     },
   );
   return { call: receipt.call, ...body };
