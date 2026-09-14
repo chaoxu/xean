@@ -66,6 +66,7 @@ const piSubmissionGate = z.strictObject({
   emptyArgument: z.string().regex(/\S/u).optional(),
   reserveTokens: z.number().int().positive().optional(),
   contextBudgetTokens: z.number().int().positive().optional(),
+  maxResponses: z.number().int().positive().optional(),
   continuationPrompt: z.string().regex(/\S/u).optional(),
 });
 export type PiSubmissionGate = z.output<typeof piSubmissionGate>;
@@ -962,7 +963,7 @@ function result(
           : overflow
             ? "Pi exceeded its context window"
             : requireSubmission && final.stopReason === "stop"
-              ? "Pi exhausted submission headroom without a terminal submission"
+              ? "Pi ended without a terminal submission"
               : `Pi stopped with ${final.stopReason}`),
     };
   }
@@ -1282,8 +1283,11 @@ async function runPiBody(
       },
       async (span) => {
         let turns = 0;
+        let responses = 0;
         let errorRecoveries = 0;
         const gate = exact.submissionGate;
+        const responseLimitReached = () =>
+          gate?.maxResponses !== undefined && responses >= gate.maxResponses;
         let steering: AgentMessage[] = [];
         const contextState = (context: AgentContext) =>
           submissionContext(gate!, options.model, {
@@ -1336,8 +1340,11 @@ async function runPiBody(
                 )
                   errorRecoveries = 0;
                 turns += 1;
+                if (!["error", "aborted"].includes(message.stopReason))
+                  responses += 1;
                 if (gate === undefined)
                   return turns >= 32 || message.stopReason === "length";
+                if (responseLimitReached()) return true;
                 const state = contextState(context);
                 if (
                   message.stopReason === "length" ||
@@ -1404,6 +1411,9 @@ async function runPiBody(
                       const terminate =
                         submitted[gate.completeArgument] === true ||
                         (Array.isArray(empty) && empty.length === 0) ||
+                        // This response is counted after its tool call finishes.
+                        (gate.maxResponses !== undefined &&
+                          responses + 1 >= gate.maxResponses) ||
                         state.tokens >= state.threshold;
                       if (!terminate)
                         steering = [
@@ -1440,6 +1450,7 @@ async function runPiBody(
         let lengthContinuations = 0;
         for (;;) {
           if (gate === undefined && turns >= 32) break;
+          if (responseLimitReached()) break;
           const final = messages.findLast(
             (message): message is AssistantMessage =>
               message.role === "assistant",

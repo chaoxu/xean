@@ -44,7 +44,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 2;
+export const workflowSchemaVersion = 3;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -264,6 +264,7 @@ export async function deriveWorkflow(
           explorerRequest,
           config.settings.explorerContinuation === true,
           config.settings.explorerContextBudgetTokens,
+          config.settings.maxExplorerResponses,
         );
         const call = firstCall(
           records,

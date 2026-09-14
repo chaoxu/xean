@@ -535,6 +535,123 @@ test("submission gate saves every partial in the same context before the near-li
   ).toBe(true);
 });
 
+test.each([1, 3, 5])(
+  "a response limit of %s stops nonempty no-progress submissions without another push",
+  async (maxResponses) => {
+    const replies = Array.from({ length: maxResponses }, (_, index) =>
+      gateReply(index, 1000, false),
+    );
+    for (const reply of replies) {
+      const tool = reply.content.find((block) => block.type === "toolCall");
+      if (tool?.type !== "toolCall") throw new Error("fixture");
+      tool.arguments = {
+        solution: false,
+        text: "No new mathematical progress.",
+      };
+    }
+    const { result, requests, records } = await gatedRun(
+      replies,
+      true,
+      2,
+      gatedTool,
+      undefined,
+      {
+        ...submissionGate,
+        maxResponses,
+        continuationPrompt: "Keep trying, you can do it.",
+      },
+    );
+    expect(result.state).toBe("succeeded");
+    expect(requests).toHaveLength(maxResponses);
+    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
+      maxResponses,
+    );
+    expect(
+      result.transcript.filter(
+        (message: any) =>
+          message.role === "user" &&
+          message.content === "Keep trying, you can do it.",
+      ),
+    ).toHaveLength(maxResponses - 1);
+    expect(requests.at(-1)!.maxTokens).toBeGreaterThan(1);
+  },
+);
+
+test("provider retries do not consume the response limit", async () => {
+  const failure = {
+    ...assistant([], "error"),
+    errorMessage: "upstream_error: Codex upstream request failed",
+  };
+  const { result, requests, records } = await gatedRun(
+    [
+      failure,
+      gateReply(1, 1000, false),
+      { ...failure },
+      gateReply(2, 2000, false),
+    ],
+    true,
+    1,
+    gatedTool,
+    undefined,
+    { ...submissionGate, maxResponses: 2 },
+  );
+  expect(result.state).toBe("succeeded");
+  expect(requests).toHaveLength(4);
+  expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(2);
+});
+
+test.each([1, 2])(
+  "rejected submissions count toward a response limit of %s",
+  async (maxResponses) => {
+    const invalid = gateReply(1, 1000, false);
+    const tool = invalid.content.find((block) => block.type === "toolCall");
+    if (tool?.type !== "toolCall") throw new Error("fixture");
+    tool.arguments = { text: "Missing the required solution field." };
+    const { result, requests, records } = await gatedRun(
+      [invalid, gateReply(2, 2000, false)],
+      true,
+      2,
+      gatedTool,
+      undefined,
+      { ...submissionGate, maxResponses },
+    );
+    expect(result.state).toBe(maxResponses === 1 ? "failed" : "succeeded");
+    expect(requests).toHaveLength(maxResponses);
+    expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(
+      maxResponses - 1,
+    );
+  },
+);
+
+test.each(["stop", "length"] as const)(
+  "plain %s responses cannot bypass the response limit",
+  async (stop) => {
+    const { result, requests } = await gatedRun(
+      [gateReply(1, 1000, false, stop), gateReply(2, 1000, false, stop)],
+      true,
+      2,
+      gatedTool,
+      undefined,
+      { ...submissionGate, maxResponses: 2 },
+    );
+    expect(requests).toHaveLength(2);
+    expect(result.state).toBe("failed");
+  },
+);
+
+test("a large response limit retains the context handoff", async () => {
+  const { result, requests } = await gatedRun(
+    [gateReply(1, 1000, false), gateReply(2, 4000, false)],
+    true,
+    2,
+    gatedTool,
+    undefined,
+    { ...submissionGate, maxResponses: 1_000_000_000_000_000 },
+  );
+  expect(result.state).toBe("succeeded");
+  expect(requests).toHaveLength(2);
+});
+
 test.each([false, true])(
   "an empty submission hands off only when configured: %s",
   async (stopOnEmpty) => {
@@ -973,7 +1090,7 @@ test("exhausted headroom without a submission fails rather than handing off plai
   ]);
   expect(result).toMatchObject({
     state: "failed",
-    error: "Pi exhausted submission headroom without a terminal submission",
+    error: "Pi ended without a terminal submission",
   });
   expect(requests).toHaveLength(1);
   expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(0);

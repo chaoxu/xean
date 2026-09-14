@@ -116,6 +116,7 @@ export const solveSettings = z.strictObject({
   maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
   explorerContinuation: z.boolean().default(true),
+  maxExplorerResponses: z.number().int().positive().default(5),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
@@ -202,6 +203,7 @@ export function explorerCall(
   input: ExplorerInput,
   continuation = false,
   contextBudgetTokens = 400_000,
+  maxResponses = 5,
 ): RoleCall<ReturnType<typeof explorerResultFor>> {
   return {
     role: "explorer",
@@ -217,7 +219,7 @@ export function explorerCall(
       "Do not use web search or external tools.",
       ...(continuation
         ? [
-            "Continue mathematical work in this same context while there is room. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
+            "Continue mathematical work in this same context within the call's response and context budgets. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize on the final permitted response or when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
           ]
         : ["Call submit_notes exactly once."]),
     ].join(" "),
@@ -231,6 +233,11 @@ export function explorerCall(
       )}`,
       `Your first note is ${noteIdAfter(input.notes.length, 0)}.`,
       `Explorer guidance (fallible advice):\n${input.explorerGuidance}`,
+      ...(continuation
+        ? [
+            `This call permits at most ${maxResponses} model responses, including the first. Use each response for new mathematical work and save it with submit_notes. The final permitted response must submit all remaining notes. An empty submission or a complete-solution claim may hand off earlier.`,
+          ]
+        : []),
     ].join("\n\n"),
     tool: roleTools.explorer,
     description: "Return the notes written during this explorer turn",
@@ -240,6 +247,7 @@ export function explorerCall(
           completeArgument: "solution",
           emptyArgument: "notes",
           contextBudgetTokens,
+          maxResponses,
           continuationPrompt: "Keep trying, you can do it.",
         }
       : undefined,
@@ -600,6 +608,7 @@ export function createPiRoles(
         input,
         profiles.explorerContinuation === true,
         profiles.explorerContextBudgetTokens,
+        profiles.maxExplorerResponses,
       );
       const known: Pick<Note, "id" | "dead">[] = [...input.notes];
       const receipts = new Map<EntryId, string[]>();

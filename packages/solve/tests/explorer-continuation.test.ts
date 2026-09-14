@@ -45,6 +45,7 @@ test("Explorer continuation defaults on and only its enabled schema requires a s
     completeArgument: "solution",
     emptyArgument: "notes",
     contextBudgetTokens: 400_000,
+    maxResponses: 5,
     continuationPrompt: "Keep trying, you can do it.",
   });
   expect(ordinary.schema.safeParse({ notes: [note] }).success).toBe(true);
@@ -61,12 +62,37 @@ test("Explorer continuation defaults on and only its enabled schema requires a s
       solution,
     );
   expect(on.system).toContain("does not bypass mathematical verification");
-  const { explorerContinuation: _, ...settings } = roleSettings();
+  const {
+    explorerContinuation: _,
+    maxExplorerResponses: __,
+    ...settings
+  } = roleSettings();
   expect(solveSettings.parse(settings).explorerContinuation).toBe(true);
+  expect(solveSettings.parse(settings).maxExplorerResponses).toBe(5);
+  expect(on.prompt).toContain("at most 5 model responses, including the first");
   expect(
     solveSettings.parse({ ...roleSettings(), explorerContinuation: false })
       .explorerContinuation,
   ).toBe(false);
+});
+
+test.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+  "Explorer rejects an invalid response limit: %s",
+  (maxExplorerResponses) => {
+    expect(
+      solveSettings.safeParse({ ...roleSettings(), maxExplorerResponses })
+        .success,
+    ).toBe(false);
+  },
+);
+
+test("Explorer accepts a large response limit", () => {
+  expect(
+    solveSettings.parse({
+      ...roleSettings(),
+      maxExplorerResponses: 1_000_000_000_000_000,
+    }).maxExplorerResponses,
+  ).toBe(1_000_000_000_000_000);
 });
 
 test("omitted continuation enables only Explorer's gate; a solution claim still goes through ordinary verification", async () => {
@@ -119,6 +145,7 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
       completeArgument: "solution",
       emptyArgument: "notes",
       contextBudgetTokens: 400_000,
+      maxResponses: 5,
       continuationPrompt: explorerCall(input, true).submissionGate!
         .continuationPrompt,
     });
@@ -328,6 +355,7 @@ test.each([false, true])(
 test.each([
   { explorerContinuation: false },
   { explorerContextBudgetTokens: 500_000 },
+  { maxExplorerResponses: 2 },
 ])("continuation settings remain frozen on resume: %j", async (change) => {
   const path = campaignPath(),
     settings = { ...roleSettings(), explorerContinuation: true };
@@ -353,14 +381,21 @@ test.each([
   });
 });
 
-test("omitted continuation is saved explicitly and matches an explicit true on resume", async () => {
-  const { explorerContinuation: _, ...settings } = roleSettings();
+test("omitted continuation and response budget are saved explicitly and match explicit defaults on resume", async () => {
+  const {
+    explorerContinuation: _,
+    maxExplorerResponses: __,
+    ...settings
+  } = roleSettings();
   const path = campaignPath();
   await init({ task, campaignPath: path, settings });
   const campaign = openCampaign(path);
   try {
     expect(campaign.record(1)).toMatchObject({
-      config: { schemaVersion: 2, settings: { explorerContinuation: true } },
+      config: {
+        schemaVersion: 3,
+        settings: { explorerContinuation: true, maxExplorerResponses: 5 },
+      },
     });
   } finally {
     campaign.close();
@@ -369,84 +404,141 @@ test("omitted continuation is saved explicitly and matches an explicit true on r
     await init({
       task,
       campaignPath: path,
-      settings: { ...settings, explorerContinuation: true },
+      settings: {
+        ...settings,
+        explorerContinuation: true,
+        maxExplorerResponses: 5,
+      },
     }),
   ).toMatchObject({ created: false });
 });
 
-test("previous workflow declarations with an omitted default are rejected without changing the journal", async () => {
-  const { explorerContinuation: _, ...settings } = roleSettings();
-  const path = campaignPath();
-  createCampaign(
-    path,
-    applicationId,
-    jsonSnapshot({
-      kind: "workflow",
-      schemaVersion: 1,
+test.each([1, 2])(
+  "previous workflow schema %s is rejected without changing the journal",
+  async (schemaVersion) => {
+    const { explorerContinuation: _, ...settings } = roleSettings();
+    const path = campaignPath();
+    createCampaign(
+      path,
+      applicationId,
+      jsonSnapshot({
+        kind: "workflow",
+        schemaVersion,
+        task,
+        settings,
+      }),
+    ).close();
+    const before = await Bun.file(path).arrayBuffer();
+    await expect(
+      run(
+        { task, campaignPath: path, settings },
+        {
+          models: async () => {
+            throw new Error("must reject the schema before provider setup");
+          },
+        },
+      ),
+    ).rejects.toThrow("schemaVersion");
+    expect(await Bun.file(path).arrayBuffer()).toEqual(before);
+  },
+);
+
+test.each([1, 3])(
+  "Explorer response limit %s reaches execution and replay with all saved notes",
+  async (maxExplorerResponses) => {
+    const config = workflowConfiguration({
       task,
-      settings,
-    }),
-  ).close();
-  const before = await Bun.file(path).arrayBuffer();
-  await expect(
-    run(
-      { task, campaignPath: path, settings },
+      settings: {
+        ...roleSettings(),
+        maxExplorerTurns: 1,
+        explorerContinuation: true,
+        explorerContextBudgetTokens: 80_000,
+        maxExplorerResponses,
+      },
+    });
+    const campaign = createCampaign(campaignPath(), applicationId, config);
+    const notes = Array.from({ length: maxExplorerResponses }, (_, index) => ({
+      text: `Partial work ${index + 1}.`,
+      support: [],
+    }));
+    const drive = dependencies([
       {
-        models: async () => {
-          throw new Error("must reject the schema before provider setup");
+        onStarted: async (tools) => {
+          for (const saved of notes.slice(0, -1))
+            await tools[0]!.execute({ notes: [saved], solution: false });
+        },
+        submission: { notes: [notes.at(-1)!], solution: false },
+      },
+      {
+        submission: {
+          filings: notes.map((note, index) => ({
+            note: `n${index + 1}`,
+            summary: note.text,
+          })),
+          explorerGuidance: "Continue.",
+          support: [],
+          verify: [],
         },
       },
-    ),
-  ).rejects.toThrow("schemaVersion");
-  expect(await Bun.file(path).arrayBuffer()).toEqual(before);
-});
-
-test("a custom Explorer context budget reaches execution and journal replay", async () => {
-  const config = workflowConfiguration({
-    task,
-    settings: {
-      ...roleSettings(),
-      maxExplorerTurns: 1,
-      explorerContinuation: true,
-      explorerContextBudgetTokens: 80_000,
-    },
-  });
-  const campaign = createCampaign(campaignPath(), applicationId, config);
-  const drive = dependencies([
-    { submission: { notes: [note], solution: false } },
-    {
-      submission: {
-        filings: [{ note: "n1", summary: "Partial work." }],
-        explorerGuidance: "Continue.",
-        support: [],
-        verify: [],
-      },
-    },
-  ]);
-  try {
-    await runWorkflow(
-      campaign,
-      createPiRoles(campaign, config.settings, drive),
-    );
-    expect(drive.calls[0]?.submissionGate?.contextBudgetTokens).toBe(80_000);
-    expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
-      "turn-limit",
-    );
-    const call = campaign
-      .records()
-      .find((entry) => entry.kind === "call" && entry.role === "explorer");
-    if (call?.kind !== "call") throw new Error("missing Explorer call");
-    const initial = { ...input, explorerGuidance: "" };
-    expect(sameRequest(call.request, explorerCall(initial, true, 80_000))).toBe(
-      true,
-    );
-    expect(sameRequest(call.request, explorerCall(initial, true, 90_000))).toBe(
-      false,
-    );
-  } finally {
-    campaign.close();
-  }
-});
+    ]);
+    try {
+      await runWorkflow(
+        campaign,
+        createPiRoles(campaign, config.settings, drive),
+      );
+      expect(drive.calls[0]?.submissionGate?.contextBudgetTokens).toBe(80_000);
+      expect(drive.calls[0]?.submissionGate?.maxResponses).toBe(
+        maxExplorerResponses,
+      );
+      expect(drive.calls[0]?.prompt).toContain(
+        `at most ${maxExplorerResponses} model responses`,
+      );
+      for (const note of notes)
+        expect(drive.calls[1]?.prompt).toContain(note.text);
+      expect(drive.calls[1]?.prompt).not.toContain(
+        "ended with an empty submission",
+      );
+      expect(drive.calls.map((call) => call.role)).toEqual([
+        "explorer",
+        "coordinator",
+      ]);
+      expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
+        "turn-limit",
+      );
+      const call = campaign
+        .records()
+        .find((entry) => entry.kind === "call" && entry.role === "explorer");
+      if (call?.kind !== "call") throw new Error("missing Explorer call");
+      const initial = { ...input, explorerGuidance: "" };
+      expect(
+        sameRequest(
+          call.request,
+          explorerCall(initial, true, 80_000, maxExplorerResponses),
+        ),
+      ).toBe(true);
+      expect(
+        sameRequest(
+          call.request,
+          explorerCall(initial, true, 90_000, maxExplorerResponses),
+        ),
+      ).toBe(false);
+      expect(
+        sameRequest(
+          call.request,
+          explorerCall(initial, true, 80_000, maxExplorerResponses + 1),
+        ),
+      ).toBe(false);
+      const before = campaign.records();
+      await runWorkflow(
+        campaign,
+        createPiRoles(campaign, config.settings, dependencies([])),
+      );
+      expect(campaign.records()).toEqual(before);
+    } finally {
+      campaign.close();
+    }
+  },
+);
 
 test("every saved submission reaches the coordinator, including early proofs before an empty handoff", async () => {
   const path = campaignPath();
