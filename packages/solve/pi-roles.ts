@@ -78,31 +78,13 @@ export const piProfileNames = [
   "requirements",
   "reconstruction",
 ] as const;
-// The source verifier runs the Codex CLI on its native credential, the only
-// path that provides web search, so its profile names that provider.
-const codexProfile = z.strictObject({
+// Source verification always uses the Codex CLI with live web search.
+export const codexProfile = z.strictObject({
   provider: z.literal("codex"),
   model: nonblank,
   reasoning: codexReasoning,
-  // Without search the source verifier has no web access, for a task that
-  // must not touch the internet; results are assessed from mathematical knowledge.
-  search: z.boolean().default(true),
+  search: z.literal(true).default(true),
 });
-// Any other provider runs the source verifier as a Pi call without web
-// search, for a task that must not reach the internet and a worker without a
-// Codex credential; the provider name codex always means the Codex profile.
-const sourceProfile = z.union([
-  codexProfile,
-  piRoleProfile.refine((profile) => profile.provider !== "codex", {
-    message: "the codex provider takes the Codex profile",
-    path: ["provider"],
-  }),
-]);
-export function codexSource(
-  profile: z.output<typeof sourceProfile>,
-): profile is z.output<typeof codexProfile> {
-  return profile.provider === "codex";
-}
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
 // taking at least the first entry of each batch.
@@ -110,7 +92,7 @@ export const solveSettings = z.strictObject({
   explorer: piRoleProfile,
   coordinator: piRoleProfile,
   correctness: piRoleProfile,
-  source: sourceProfile,
+  source: codexProfile,
   requirements: piRoleProfile,
   reconstruction: piRoleProfile,
   maxExplorerTurns: z.number().int().positive().default(10),
@@ -133,14 +115,7 @@ export function piProviders(
         ? name !== "explorer" && name !== "coordinator"
         : name === role,
   );
-  const providers = names.map((name) => settings[name].provider);
-  if (
-    (role === undefined || role === "verifier") &&
-    !codexSource(settings.source)
-  ) {
-    providers.push(settings.source.provider);
-  }
-  return [...new Set(providers)];
+  return [...new Set(names.map((name) => settings[name].provider))];
 }
 
 export interface PiRoleDependencies {
@@ -290,23 +265,21 @@ export function coordinatorCall(
 }
 
 const sourceListing =
-  "For each note, list every external result its text invokes: a theorem, lemma, or fact attributed to the literature or to a named source and proved neither in the text nor in a support note.";
+  "For each note, list in externalResults every nonroutine external result its text invokes and proves neither there nor in an established support note. Include exact hypotheses and conclusions. Routine facts whose justification is immediate need no entry; a research theorem is not routine just because you recognize its name or citation.";
 
 const routineText =
   "Do not fail solely for an omitted routine fact or harmless standard convention whose justification is immediate and does not change the argument.";
 
-const sourceAssessment =
-  "Assess each invoked result and whether its hypotheses apply using available sources, your mathematical knowledge and the supplied texts. Pass when the result and its applicability are established by that evidence, or when no external result is invoked. Standard facts need no citation lookup or proof from first principles. Check declared dependencies now: a note applying a nonroutine external theorem must name a support note stating that theorem with its hypotheses and conclusion. A note whose result is that external theorem may cite its source directly. Fail for a missing substantive dependency, concrete false statement, source mismatch, or incorrect application; do not disregard contrary source evidence in favor of recollection. Routine facts need no separate support note. Return INCONCLUSIVE only when that evidence cannot settle the result or its applicability, and identify the precise uncertainty. A theorem's name or a plausible citation alone is not evidence. Lack of web access alone is not grounds for INCONCLUSIVE. State the basis of your assessment in the report.";
+export const sourceAssessment =
+  "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected: result repeats its externalResults entry exactly, source identifies the paper and theorem or section, url identifies the page you opened, and quote gives the relevant passage from that source. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Fail for a concrete false statement, source mismatch, or incorrect application. Check declared dependencies: an application of a nonroutine external theorem must name a support note stating that theorem with its hypotheses and conclusion; the theorem note itself may cite its source directly. Fail a missing substantive dependency. Self-contained proofs and immediate routine facts can pass without retrieval. State the basis of the assessment in the report.";
 
 const verifierObligations = {
   correctness: `Judge each text on its own terms: whatever it asserts, it must establish. A correct partial result passes even when it explicitly leaves the task unfinished. Check every load-bearing inference, and search for counterexamples, missing cases, invalid bounds, and reasons the stated conclusions do not follow. Fail a note when an inference is unsupported, a stated conclusion is unproved, or the search finds a blocking defect. Check that every substantive result the text uses is proved there or supplied by that note's declared support and its transitive closure. Other notes in the verification batch are not additional premises. A note ID mentioned only for provenance or a mathematical expression resembling an ID is not a dependency. ${routineText}`,
-  source: `${sourceListing} Use web search to open authoritative sources when available. If lookup fails or cannot settle a result, assess it from mathematical knowledge and the supplied texts. ${sourceAssessment} Return sources only for results confirmed in sources you actually opened, with the result as the source states it, the source, and the URL opened. Results assessed without retrieval have no source entry.`,
+  source: `${sourceListing} ${sourceAssessment}`,
   requirements:
     "Decide whether each note meets every completion criterion of the exact task. A defect in one attempted proof, a missing stylistic requirement, ambiguity, or an unsupported claim that the problem is open does not meet them. A sound note that does not meet them fails, and the report says so plainly.",
   reconstruction: `Compare the note's text with a proof written from the statement and the support notes alone. First check that the supplied statement faithfully states what the note establishes, with its hypotheses and conclusion and without its proof method or steps. If the statement misstates the note or gives away its method, return a corrected statement in the statement field and an empty verdicts list. This repairs the verification input and makes no verdict on the note. Otherwise set statement to null and return one verdict: PASS when both establish the statement and the note's text uses no result beyond its support and the statement's hypotheses; FAIL when the note's text does not establish the statement or relies on an undeclared result; INCONCLUSIVE when the independent proof left something unproved and no concrete defect in the note was found. ${routineText}`,
 } as const satisfies Readonly<Record<VerifierName, string>>;
-
-const sourceObligationWithoutSearch = `${sourceListing} You have no web search. ${sourceAssessment} Do not claim to have retrieved or inspected an external source; return no sources.`;
 
 const verifierSystem = [
   "You are one verifier for the notes under verification in one mathematical task. The verifier name and obligation are stated after the support notes.",
@@ -356,7 +329,7 @@ async function verifierPrompt(
 // can cache that prefix across them; only the verifier name and obligation
 // at the end differ.
 export async function verifierCall(
-  name: Exclude<VerifierName, "reconstruction">,
+  name: Exclude<VerifierName, "source" | "reconstruction">,
   input: VerifierInput,
   judged: readonly string[],
 ): Promise<RoleCall<ReturnType<typeof verdictsFor>>> {
@@ -364,12 +337,7 @@ export async function verifierCall(
     role: "verifier",
     label: verifierLabels[name],
     system: verdictSystem,
-    prompt: await verifierPrompt(
-      name,
-      input,
-      judged,
-      name === "source" ? sourceObligationWithoutSearch : undefined,
-    ),
+    prompt: await verifierPrompt(name, input, judged),
     tool: roleTools.verifier,
     description:
       "Return this verifier's verdict on each note under verification",
@@ -462,8 +430,7 @@ export async function reconstructionCall(
   };
 }
 
-// The source verifier is a Codex call, with web search when its profile says
-// so. Its request is the same prompt with the shared verifier text as
+// The source verifier is a Codex call with web search. Its request uses the shared verifier text as
 // developer instructions, and its verdicts are the final message, constrained
 // by the output schema.
 export async function sourceCall(
@@ -485,17 +452,10 @@ export async function sourceCall(
       search: profile.search,
       developerInstructions: [
         ...verifierSystem,
-        profile.search
-          ? "Web search is your only tool."
-          : "You have no web search and no other tool.",
+        "Web search is your only tool. Open the actual source pages; searching alone is not source verification.",
         "Return one JSON object matching the output schema and nothing else.",
       ].join(" "),
-      prompt: await verifierPrompt(
-        "source",
-        input,
-        judged,
-        profile.search ? undefined : sourceObligationWithoutSearch,
-      ),
+      prompt: await verifierPrompt("source", input, judged),
       outputSchema: z.toJSONSchema(schema),
     }),
     schema,
@@ -746,12 +706,8 @@ export function createPiRoles(
         const have = recorded();
         const judged = missingVerdicts(have, name, judgedBy(input, have, name));
         if (judged.length === 0) continue;
-        const codex =
-          name === "source" && codexSource(profiles.source)
-            ? profiles.source
-            : undefined;
         const { call, value } =
-          codex !== undefined
+          name === "source"
             ? (settled(
                 campaign.records({
                   kinds: ["call"],
@@ -759,17 +715,19 @@ export function createPiRoles(
                 }),
                 candidate,
                 verifierLabels.source,
-                jsonSnapshot((await sourceCall(codex, input, judged)).request),
+                jsonSnapshot(
+                  (await sourceCall(profiles.source, input, judged)).request,
+                ),
                 (call) =>
                   sourceVerdictsOf(
                     sourceVerdictsFor(judged),
                     codexSubmission(roleCallRecords(campaign, call), call),
-                    codex.search,
+                    true,
                   ),
               ) ??
               (await runSource(
                 campaign,
-                codex,
+                profiles.source,
                 input,
                 judged,
                 dependencies,
@@ -777,9 +735,7 @@ export function createPiRoles(
               )))
             : await settledOrRun(
                 campaign,
-                name === "source"
-                  ? (profiles.source as PiRoleProfile)
-                  : profiles[name],
+                profiles[name],
                 await verifierCall(name, input, judged),
                 dependencies,
                 candidate,

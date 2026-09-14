@@ -138,6 +138,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
               note: "n1",
               verdict: "INCONCLUSIVE",
               report: "Source unavailable.",
+              externalResults: [],
               sources: [],
             },
           ],

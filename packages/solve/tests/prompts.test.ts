@@ -178,13 +178,12 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
       explorerGuidance: "",
     }),
     coordinatorCall({ task, notes: [evidence] }),
-    await verifierCall("source", input, ["n2"]),
     await verifierCall("correctness", input, ["n2"]),
     await statementCall(input, target),
     await proofCall(input, target, { statement: "P holds." }),
   ];
   const native = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: false },
+    { provider: "codex", model: "test", reasoning: "low", search: true },
     input,
     ["n2"],
   );
@@ -229,7 +228,9 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
       note,
       verdict: "PASS",
       report: "Checked.",
-      ...(factory === sourceVerdictsFor ? { sources: [] } : {}),
+      ...(factory === sourceVerdictsFor
+        ? { externalResults: [], sources: [] }
+        : {}),
     });
     expect(factory(["n1"]).safeParse({ verdicts: [value("n1")] }).success).toBe(
       true,
@@ -267,7 +268,15 @@ test("correctness permits valid partial claims and reserves task completion for 
   const requirements = await verifierCall("requirements", verification, [
     "n14",
   ]);
-  const source = await verifierCall("source", verification, ["n14"]);
+  const { request: sourceRequest } = await sourceCall(
+    { provider: "codex", model: "test", reasoning: "low", search: true },
+    verification,
+    ["n14"],
+  );
+  const source = {
+    prompt: sourceRequest.prompt,
+    system: sourceRequest.developerInstructions,
+  };
   for (const call of [correctness, requirements, source]) {
     expect(call.system).toContain(
       "Only the requirements verifier judges whether the note completes the task.",
@@ -327,7 +336,6 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
     ),
     coordinatorCall({ task, notes: [note, second] }),
     coordinatorCall({ task, notes: [note, second], emptySubmission: true }),
-    await verifierCall("source", verification, ["n2"]),
     await verifierCall("correctness", verification, ["n2"]),
     await verifierCall("requirements", verification, ["n2"]),
   ];
@@ -361,26 +369,14 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
     if (call.submissionGate?.continuationPrompt !== undefined)
       digest.update(`${call.submissionGate.continuationPrompt}\n`);
   }
-  const offline = await sourceCall(
-    {
-      provider: "codex",
-      model: "codex-model",
-      reasoning: "low",
-      search: false,
-    },
-    verification,
-    ["n2"],
+  digest.update(
+    `${source.label}\n${source.request.developerInstructions}\n${source.request.prompt}\n`,
   );
-  for (const call of [source, offline]) {
-    digest.update(
-      `${call.label}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
-    );
-  }
   // Changing any role prompt changes the bytes the workflow fold matches
   // against journals, so bump workflowSchemaVersion and update this digest
   // in the same change.
-  expect(workflowSchemaVersion).toBe(4);
+  expect(workflowSchemaVersion).toBe(5);
   expect(digest.digest("hex")).toBe(
-    "20267f11b9bd70988724ce25bd4bad6776969ee9790ac16ef8fc14e1804bba2e",
+    "ff7a7bdb674887caf90ccb2c89ae4b21980160643bb63ae973108607d8e19c00",
   );
 });

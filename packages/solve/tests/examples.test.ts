@@ -36,7 +36,7 @@ test.each(["openai", "openai-codex"])(
       ),
     );
     const models = builtinPi();
-    for (const name of [...piProfileNames, "source"] as const) {
+    for (const name of piProfileNames) {
       const profile = value[name];
       expect(profile.provider).toBe(provider);
       const model = models.getModel(profile.provider, profile.model);

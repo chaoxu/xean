@@ -127,14 +127,13 @@ test("support closure combines roots, shares ancestors, and sorts numeric ids", 
 
 test("each verifier and reconstruction stage receives inherited context exactly once", async () => {
   const calls = await Promise.all([
-    verifierCall("source", input, ["n3"]),
     verifierCall("correctness", input, ["n3"]),
     verifierCall("requirements", input, ["n3"]),
     statementCall(input, target),
     proofCall(input, target, { statement: "Coverage holds." }),
   ]);
   const native = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: false },
+    { provider: "codex", model: "test", reasoning: "low", search: true },
     input,
     ["n3"],
   );
@@ -182,7 +181,6 @@ test("the verification window counts transitive shared texts once without droppi
 
 test("workflow construction and per-call selection both retain ancestors across explorer turns", async () => {
   const settings = roleSettings();
-  settings.source = settings.correctness;
   settings.maxExplorerTurns = 3;
   const workflow = workflowConfiguration({ task, settings });
   const campaign = createCampaign(campaignPath(), applicationId, workflow);
@@ -199,8 +197,16 @@ test("workflow construction and per-call selection both retain ancestors across 
         },
       },
       {
-        submission: {
-          verdicts: [{ note: n.id, verdict: "PASS", report: "Known sources." }],
+        codex: {
+          verdicts: [
+            {
+              note: n.id,
+              verdict: "PASS",
+              report: "Known sources.",
+              externalResults: [],
+              sources: [],
+            },
+          ],
         },
       },
       {

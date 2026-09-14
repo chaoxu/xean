@@ -32,7 +32,7 @@ function config() {
   const settings = roleSettings();
   return workflowConfiguration({
     task,
-    settings: { ...settings, source: settings.correctness },
+    settings,
   });
 }
 
@@ -42,6 +42,11 @@ function verdict(note = "n1", value = "PASS") {
 
 const check = (value = "PASS", note = "n1"): Reply => ({
   submission: { verdicts: [verdict(note, value)] },
+});
+const sourceCheck = (value = "PASS", note = "n1"): Reply => ({
+  codex: {
+    verdicts: [{ ...verdict(note, value), externalResults: [], sources: [] }],
+  },
 });
 const reconstruction = (value = "PASS", note = "n1"): Reply => ({
   submission: { statement: null, verdicts: [verdict(note, value)] },
@@ -67,7 +72,7 @@ const start: readonly Reply[] = [
 
 const beforeReconstruction: readonly Reply[] = [
   ...start,
-  check(),
+  sourceCheck(),
   check(),
   check(),
   { submission: { statement: "P holds." } },
@@ -93,6 +98,8 @@ test.each([...verifierNames])(
           proof(),
           reconstruction(value),
         );
+      } else if (verifier === "source") {
+        replies.push(sourceCheck(value));
       } else {
         replies.push(check(value));
       }
@@ -120,12 +127,12 @@ test.each([...verifierNames])(
           createPiRoles(campaign, configuration.settings, drive),
         ),
       ).toMatchObject({ kind: "turn-limit", turns: 2 });
-      expect(drive.calls).toHaveLength(replies.length);
-      expect(drive.calls[nextExplorer]?.label).toBe("xean-solve/explorer");
-      expect(drive.calls[nextExplorer]?.prompt).toContain(
+      expect(drive.allCalls).toHaveLength(replies.length);
+      expect(drive.allCalls[nextExplorer]?.label).toBe("xean-solve/explorer");
+      expect(drive.allCalls[nextExplorer]?.prompt).toContain(
         "Check inconclusive.",
       );
-      expect(drive.calls[nextExplorer + 1]?.prompt).toContain(
+      expect(drive.allCalls[nextExplorer + 1]?.prompt).toContain(
         "Check inconclusive.",
       );
       expect((await deriveWorkflow(campaign.records())).notes[0]).toMatchObject(
@@ -150,13 +157,13 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   const path = campaignPath();
   const configuration = config();
   let campaign = createCampaign(path, applicationId, configuration);
-  const first = dependencies([...start, check("INCONCLUSIVE")]);
+  const first = dependencies([...start, sourceCheck("INCONCLUSIVE")]);
   expect(
     await runWorkflow(
       campaign,
       createPiRoles(campaign, configuration.settings, first),
       {
-        pauseRequested: () => first.calls.length === 3,
+        pauseRequested: () => first.allCalls.length === 3,
       },
     ),
   ).toMatchObject({ kind: "explorer" });
@@ -192,7 +199,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
         verify: [{ note: "n2", verifiers: [...verifierNames] }],
       },
     },
-    check("PASS", "n2"),
+    sourceCheck("PASS", "n2"),
     check("PASS", "n2"),
     check("PASS", "n2"),
     { submission: { statement: "P holds." } },
@@ -205,8 +212,8 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
       createPiRoles(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 2, note: { id: "n2" } });
-  expect(resumed.calls[0]?.label).toBe("xean-solve/explorer");
-  expect(resumed.calls[0]?.prompt).toContain("Check inconclusive.");
+  expect(resumed.allCalls[0]?.label).toBe("xean-solve/explorer");
+  expect(resumed.allCalls[0]?.prompt).toContain("Check inconclusive.");
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),
   ).toHaveLength(2);
@@ -231,7 +238,15 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
   const drive = dependencies([
     ...start,
     {
-      codex: { verdicts: [{ ...verdict("n1", "INCONCLUSIVE"), sources: [] }] },
+      codex: {
+        verdicts: [
+          {
+            ...verdict("n1", "INCONCLUSIVE"),
+            externalResults: [],
+            sources: [],
+          },
+        ],
+      },
     },
   ]);
   expect(
@@ -245,7 +260,7 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
     notes: [{ verified: false, dead: false }],
   });
   expect(drive.codexCalls).toHaveLength(1);
-  expect(drive.calls).toHaveLength(2);
+  expect(drive.allCalls).toHaveLength(3);
   campaign.close();
 
   expect(await inspectCampaign(path)).toMatchObject({
@@ -272,7 +287,7 @@ test("a corrected reconstruction statement preserves the note and all successful
     turns: 1,
     note: { id: "n1", text },
   });
-  expect(drive.calls.map(({ label }) => label)).toEqual([
+  expect(drive.allCalls.map(({ label }) => label)).toEqual([
     "xean-solve/explorer",
     "xean-solve/coordinator",
     verifierLabels.source,
@@ -284,8 +299,8 @@ test("a corrected reconstruction statement preserves the note and all successful
     `${verifierLabels.reconstruction}/proof`,
     verifierLabels.reconstruction,
   ]);
-  expect(drive.calls[8]?.prompt).toContain("The precise proposition P.");
-  expect(drive.calls[8]?.prompt).not.toContain("ORIGINAL_PROOF");
+  expect(drive.allCalls[8]?.prompt).toContain("The precise proposition P.");
+  expect(drive.allCalls[8]?.prompt).not.toContain("ORIGINAL_PROOF");
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),
   ).toHaveLength(1);
@@ -297,7 +312,7 @@ test("a corrected reconstruction statement preserves the note and all successful
     campaign,
     createPiRoles(campaign, configuration.settings, noCalls),
   );
-  expect(noCalls.calls).toHaveLength(0);
+  expect(noCalls.allCalls).toHaveLength(0);
   campaign.close();
   const inspected = (await inspectCampaign(path)) as {
     calls: { submission?: unknown }[];
@@ -334,10 +349,10 @@ test("reopening after a corrected proof settled reuses it and retries only the f
       createPiRoles(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 1 });
-  expect(resumed.calls.map(({ label }) => label)).toEqual([
+  expect(resumed.allCalls.map(({ label }) => label)).toEqual([
     verifierLabels.reconstruction,
   ]);
-  expect(resumed.calls[0]?.prompt).toContain("Corrected proof.");
+  expect(resumed.allCalls[0]?.prompt).toContain("Corrected proof.");
   campaign.close();
 });
 
@@ -385,7 +400,13 @@ test("resuming an interrupted verification preserves inconclusive and successful
       },
     },
     {
-      submission: { verdicts: [verdict("n1"), verdict("n2", "INCONCLUSIVE")] },
+      codex: {
+        verdicts: [verdict("n1"), verdict("n2", "INCONCLUSIVE")].map((v) => ({
+          ...v,
+          externalResults: [],
+          sources: [],
+        })),
+      },
     },
     { state: "failed", error: "provider disconnected" },
   ]);
@@ -411,7 +432,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
       campaign,
       createPiRoles(campaign, configuration.settings, resumed),
       {
-        pauseRequested: () => resumed.calls.length === 1,
+        pauseRequested: () => resumed.allCalls.length === 1,
       },
     ),
   ).toMatchObject({ kind: "explorer" });
@@ -420,9 +441,9 @@ test("resuming an interrupted verification preserves inconclusive and successful
       ({ verified }) => verified,
     ),
   ).toEqual([true, false]);
-  expect(resumed.calls).toHaveLength(1);
-  expect(resumed.calls[0]?.label).toBe(verifierLabels.correctness);
-  expect(resumed.calls[0]?.prompt).not.toContain('"id": "n2"');
+  expect(resumed.allCalls).toHaveLength(1);
+  expect(resumed.allCalls[0]?.label).toBe(verifierLabels.correctness);
+  expect(resumed.allCalls[0]?.prompt).not.toContain('"id": "n2"');
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),
   ).toEqual(candidates);
@@ -456,7 +477,13 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
       },
     },
     {
-      submission: { verdicts: [verdict("n1", "INCONCLUSIVE"), verdict("n2")] },
+      codex: {
+        verdicts: [verdict("n1", "INCONCLUSIVE"), verdict("n2")].map((v) => ({
+          ...v,
+          externalResults: [],
+          sources: [],
+        })),
+      },
     },
     check("PASS", "n2"),
     check("PASS", "n2"),
@@ -470,7 +497,7 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
       createPiRoles(campaign, configuration.settings, drive),
     ),
   ).toMatchObject({ kind: "accepted", note: { id: "n2" } });
-  expect(drive.calls).toHaveLength(8);
+  expect(drive.allCalls).toHaveLength(8);
   campaign.close();
 });
 
@@ -507,8 +534,8 @@ test("repeated statement corrections stop automatic retries and remain resumable
       createPiRoles(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 1 });
-  expect(resumed.calls).toHaveLength(2);
-  expect(resumed.calls[0]?.prompt).toContain("Corrected P, second try.");
+  expect(resumed.allCalls).toHaveLength(2);
+  expect(resumed.allCalls[0]?.prompt).toContain("Corrected P, second try.");
   campaign.close();
 });
 
@@ -540,7 +567,15 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
         ],
       },
     },
-    { submission: { verdicts: [verdict("n1"), verdict("n2")] } },
+    {
+      codex: {
+        verdicts: [verdict("n1"), verdict("n2")].map((v) => ({
+          ...v,
+          externalResults: [],
+          sources: [],
+        })),
+      },
+    },
     {
       submission: { verdicts: [verdict("n1", "INCONCLUSIVE"), verdict("n2")] },
     },

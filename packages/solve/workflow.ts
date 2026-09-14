@@ -8,14 +8,12 @@ import { explorerGuidance, freezeExplorerGuidance } from "./guidance";
 import { freezeSubmittedNotes, submittedNotesBoundary } from "./notes";
 import { byId, supportClosure } from "./support";
 import {
-  codexSource,
   coordinatorCall,
   explorerCall,
   RoleCallError,
   sameRequest,
   solveSettings,
   sourceCall,
-  verifierCall,
   type RoleCall,
 } from "./pi-roles";
 import {
@@ -44,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 4;
+export const workflowSchemaVersion = 5;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -369,25 +367,17 @@ export async function deriveWorkflow(
           pick(filed, id),
         ),
       });
-      // The source call opens every verification: a Codex request matched
-      // exactly, or a Pi call matched by its prompt bytes.
+      // The source call opens every verification with an exact Codex request.
       const judged = judgedBy(verifierRequest, [], "source");
       const first = firstCall(
         records,
         cursor,
         "verifier",
         verifierLabels.source,
-        codexSource(config.settings.source)
-          ? jsonSnapshot(
-              (
-                await sourceCall(
-                  config.settings.source,
-                  verifierRequest,
-                  judged,
-                )
-              ).request,
-            )
-          : await verifierCall("source", verifierRequest, judged),
+        jsonSnapshot(
+          (await sourceCall(config.settings.source, verifierRequest, judged))
+            .request,
+        ),
       );
       if (first === undefined) {
         return {

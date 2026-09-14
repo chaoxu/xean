@@ -38,7 +38,6 @@ async function setup(turns = 1) {
     campaignPath: campaign,
     settings: {
       ...profiles,
-      source: profiles.explorer,
       maxExplorerTurns: turns,
     },
   };
@@ -84,6 +83,20 @@ function coordinate(
 }
 
 function verdict(note: string, name: string, result = "PASS"): Reply {
+  if (name === "source")
+    return {
+      codex: {
+        verdicts: [
+          {
+            note,
+            verdict: result,
+            report: `${name}: ${result}.`,
+            externalResults: [],
+            sources: [],
+          },
+        ],
+      },
+    };
   return {
     submission: {
       ...(name === "reconstruction" ? { statement: null } : {}),
@@ -101,13 +114,13 @@ function coordinatorNotes(prompt: string): Note[] {
 
 test("init creates only a workflow declaration without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(4);
+  expect(workflowSchemaVersion).toBe(5);
   const before = records(path);
   expect(before).toHaveLength(1);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 4, task },
+    config: { schemaVersion: 5, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -144,18 +157,18 @@ test("unchecked initial notes reach coordinator and verification before the firs
     outcome: "turn-limit",
     turns: 1,
   });
-  expect(drive.calls.map((call) => call.role)).toEqual([
+  expect(drive.allCalls.map((call) => call.role)).toEqual([
     "coordinator",
     "verifier",
     "verifier",
     "explorer",
     "coordinator",
   ]);
-  expect(coordinatorNotes(drive.calls[0]!.prompt)).toMatchObject([
+  expect(coordinatorNotes(drive.allCalls[0]!.prompt)).toMatchObject([
     { id: "n1", text: externalText, verified: false, verdicts: [] },
   ]);
-  expect(drive.calls[3]!.prompt).toContain(externalText);
-  expect(drive.calls[3]!.prompt).toContain("Your first note is n2.");
+  expect(drive.allCalls[3]!.prompt).toContain(externalText);
+  expect(drive.allCalls[3]!.prompt).toContain("Your first note is n2.");
   const report = await inspect(path);
   expect(report.notes.map((note) => [note.id, note.verified])).toEqual([
     ["n1", true],
@@ -189,13 +202,13 @@ test("a note arriving during explorer is numbered after explorer notes in the fo
     outcome: "turn-limit",
     turns: 1,
   });
-  expect(drive.calls.map((call) => call.role)).toEqual([
+  expect(drive.allCalls.map((call) => call.role)).toEqual([
     "explorer",
     "coordinator",
   ]);
-  expect(drive.calls[0]!.prompt).not.toContain(externalText);
+  expect(drive.allCalls[0]!.prompt).not.toContain(externalText);
   expect(
-    coordinatorNotes(drive.calls[1]!.prompt).map((note) => [
+    coordinatorNotes(drive.allCalls[1]!.prompt).map((note) => [
       note.id,
       note.text,
     ]),
@@ -243,20 +256,20 @@ test("a frozen coordinator retries identical input while a later note waits for 
     outcome: "turn-limit",
     turns: 2,
   });
-  expect(rest.calls.map((call) => call.role)).toEqual([
+  expect(rest.allCalls.map((call) => call.role)).toEqual([
     "coordinator",
     "coordinator",
     "explorer",
     "coordinator",
   ]);
-  expect(rest.calls[0]!.prompt).toBe(initial.calls[1]!.prompt);
-  expect(rest.calls[0]!.system).toBe(initial.calls[1]!.system);
-  expect(rest.calls[0]!.prompt).not.toContain(externalText);
+  expect(rest.allCalls[0]!.prompt).toBe(initial.allCalls[1]!.prompt);
+  expect(rest.allCalls[0]!.system).toBe(initial.allCalls[1]!.system);
+  expect(rest.allCalls[0]!.prompt).not.toContain(externalText);
   expect(
-    coordinatorNotes(rest.calls[1]!.prompt).map((note) => note.id),
+    coordinatorNotes(rest.allCalls[1]!.prompt).map((note) => note.id),
   ).toEqual(["n1", "n2"]);
-  expect(rest.calls[2]!.prompt).toContain(externalText);
-  expect(rest.calls[2]!.prompt).toContain("Your first note is n3.");
+  expect(rest.allCalls[2]!.prompt).toContain(externalText);
+  expect(rest.allCalls[2]!.prompt).toContain("Your first note is n3.");
   expect(records(path).slice(0, before.length)).toEqual(before);
 });
 
@@ -271,7 +284,7 @@ test("external verification establishes support without inventing verdicts or ac
   expect(
     await run(request, {
       ...intake,
-      pauseRequested: () => intake.calls.length === 1,
+      pauseRequested: () => intake.allCalls.length === 1,
     }),
   ).toMatchObject({ outcome: "paused", at: "explorer" });
   const support = (await inspect(path)).notes[0]!;
@@ -305,15 +318,17 @@ test("external verification establishes support without inventing verdicts or ac
     note: { id: "n2" },
   });
   expect(
-    drive.calls.filter((call) => call.label === "xean-solve/verifier/source"),
+    drive.allCalls.filter(
+      (call) => call.label === "xean-solve/verifier/source",
+    ),
   ).toHaveLength(1);
   expect(
-    drive.calls.filter(
+    drive.allCalls.filter(
       (call) => call.label === "xean-solve/verifier/correctness",
     ),
   ).toHaveLength(1);
   expect(
-    drive.calls.find(
+    drive.allCalls.find(
       (call) => call.label === "xean-solve/verifier/reconstruction/proof",
     )!.prompt,
   ).toContain(externalText);
@@ -354,7 +369,7 @@ test("a supplied complete proof still needs all four checks and accepts with zer
     turns: 0,
     note: { id: "n1" },
   });
-  expect(drive.calls.map((call) => call.label)).toEqual([
+  expect(drive.allCalls.map((call) => call.label)).toEqual([
     "xean-solve/coordinator",
     "xean-solve/verifier/source",
     "xean-solve/verifier/correctness",
@@ -386,7 +401,7 @@ for (const result of ["PASS", "FAIL"] as const) {
     expect(
       await run(request, {
         ...first,
-        pauseRequested: () => first.calls.length === 1,
+        pauseRequested: () => first.allCalls.length === 1,
       }),
     ).toMatchObject({ outcome: "paused", at: "explorer" });
     await submitNotes(
@@ -410,11 +425,13 @@ for (const result of ["PASS", "FAIL"] as const) {
     expect(
       await run(request, {
         ...drive,
-        pauseRequested: () => drive.calls.length === 3,
+        pauseRequested: () => drive.allCalls.length === 3,
       }),
     ).toMatchObject({ outcome: "paused", at: "explorer" });
     expect(
-      coordinatorNotes(drive.calls[0]!.prompt).find((note) => note.id === "n2"),
+      coordinatorNotes(drive.allCalls[0]!.prompt).find(
+        (note) => note.id === "n2",
+      ),
     ).toMatchObject({ verified: false, dead: false, verdicts: [] });
     expect(
       (await inspect(path)).notes.find((note) => note.id === "n2"),
@@ -424,9 +441,9 @@ for (const result of ["PASS", "FAIL"] as const) {
       verdicts: [],
       verification: attestation,
     });
-    expect(drive.calls.filter((call) => call.role === "explorer")).toHaveLength(
-      0,
-    );
+    expect(
+      drive.allCalls.filter((call) => call.role === "explorer"),
+    ).toHaveLength(0);
   });
 }
 

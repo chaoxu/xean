@@ -8,7 +8,6 @@ import { z } from "zod";
 
 import {
   createPiRoles,
-  codexSource,
   piProfileNames,
   piProviders,
   RoleCallError,
@@ -180,9 +179,8 @@ export async function run(
           : (dependencies.models ?? builtinPi());
       // Resolve every configured Pi role before creating a fresh journal or
       // dispatching any work, including roles reached only after exploration.
-      for (const name of [...piProfileNames, "source"] as const) {
+      for (const name of piProfileNames) {
         const profile = config.settings[name];
-        if (name === "source" && codexSource(config.settings.source)) continue;
         try {
           const model = selectModel(models, {
             provider: profile.provider,
@@ -205,10 +203,7 @@ export async function run(
           piProviders(config.settings),
         );
       }
-      if (
-        codexSource(config.settings.source) &&
-        dependencies.codex === undefined
-      ) {
+      if (dependencies.codex === undefined) {
         await requireCodex({
           command: codexCommand(process.env),
           ...(dependencies.signal === undefined

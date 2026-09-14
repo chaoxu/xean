@@ -21,6 +21,8 @@ import {
   type Settings,
 } from "./runner";
 import { task } from "./roles";
+import { review } from "./review";
+import { codexProfile } from "./pi-roles";
 import {
   createModelRuntime,
   modelRegistryPath,
@@ -39,6 +41,7 @@ const usage = `Usage:
   xean-solve explorer INPUT.json CAMPAIGN.db SETTINGS.json
   xean-solve coordinator INPUT.json CAMPAIGN.db SETTINGS.json
   xean-solve verifier INPUT.json CAMPAIGN.db SETTINGS.json
+  xean-solve review TASK.json ARGUMENT.md REVIEW.db PROFILE.json
   xean-solve guide [--id ID] CAMPAIGN.db GUIDANCE.txt
   xean-solve submit [--id ID] CAMPAIGN.db NOTES.json
   xean-solve inspect [--include-requests] [--include-guidance] [--include-submissions] CAMPAIGN.db
@@ -80,6 +83,31 @@ async function main(args: readonly string[]): Promise<void> {
     return;
   }
   const [command, ...positionals] = parsed.positionals;
+  if (command === "review") {
+    if (positionals.length !== 4 || Object.keys(parsed.values).length !== 0)
+      throw new Error(usage);
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    try {
+      writeJson(
+        await review(
+          {
+            task: task.parse(await readJson(positionals[0]!)),
+            argument: await readFile(positionals[1]!, "utf8"),
+            campaignPath: positionals[2]!,
+            profile: codexProfile.parse(await readJson(positionals[3]!)),
+          },
+          { signal: controller.signal },
+        ),
+      );
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+    }
+    return;
+  }
   if (parsed.values["include-guidance"] === true && command !== "inspect")
     throw new Error(usage);
   if (parsed.values["include-submissions"] === true && command !== "inspect")

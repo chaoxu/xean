@@ -67,6 +67,7 @@ if (args[0] === "--version") {
           note,
           verdict: "PASS",
           report: "The text invokes no external result.",
+          externalResults: [],
           sources: [],
         })),
       },

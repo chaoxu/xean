@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { createCampaign, openCampaign, openReader, type Campaign } from "xean";
 
-import { createPiRoles } from "../pi-roles";
+import { createPiRoles, solveSettings } from "../pi-roles";
 import {
   applicationId,
   coordinatorResultFor,
@@ -70,6 +70,7 @@ function sourceOf(notes: readonly string[], verdict = "PASS"): Reply {
         note,
         verdict,
         report: `source ${verdict.toLowerCase()}.`,
+        externalResults: [],
         sources: [],
       })),
     },
@@ -586,6 +587,7 @@ test("a source FAIL kills the note before correctness runs, and the explorer sti
             note: "n1",
             verdict: "FAIL",
             report: "Smith 2020 states the bound for n > 2 only.",
+            externalResults: ["Smith's bound for all n."],
             sources: [],
           },
         ],
@@ -630,11 +632,13 @@ test("a source PASS that confirms sources without searching is an operational er
             note: "n1",
             verdict: "PASS",
             report: "confirmed",
+            externalResults: ["Every X is Y."],
             sources: [
               {
                 result: "Every X is Y.",
                 source: "Smith 2020",
                 url: "https://example.org/smith",
+                quote: "Every X is Y.",
               },
             ],
           },
@@ -650,47 +654,18 @@ test("a source PASS that confirms sources without searching is an operational er
   campaign.close();
 });
 
-test("a Pi source profile runs the source verifier as a Pi call without web search", async () => {
-  const path = campaignPath();
+test("source profiles require Codex with web search", () => {
   const settings = roleSettings();
-  const workflow = workflowConfiguration({
-    task,
-    settings: { ...settings, maxExplorerTurns: 1, source: settings.explorer },
-  });
-  let campaign = createCampaign(path, applicationId, workflow);
-  const drive = dependencies([
-    { submission: { notes: [good] } },
-    {
-      submission: coordination("n1", {
-        verify: [{ note: "n1", verifiers: lemma }],
-      }),
-    },
-    verdictsOf("source", ["n1"]),
-    verdictsOf("correctness", ["n1"]),
-  ]);
-  const phase = await runWorkflow(
-    campaign,
-    createPiRoles(campaign, workflow.settings, drive),
-  );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
-  if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
-  expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
-  expect(drive.codexCalls).toHaveLength(0);
-  expect(drive.calls.map(({ label }) => label)).toEqual([
-    "xean-solve/explorer",
-    "xean-solve/coordinator",
-    "xean-solve/verifier/source",
-    "xean-solve/verifier/correctness",
-  ]);
-  expect(drive.calls[2]?.prompt).toContain("Verifier:\nsource");
-  expect(drive.calls[2]?.prompt).toContain(
-    "your mathematical knowledge and the supplied texts",
-  );
-  expect(drive.calls[2]?.system).toContain("Do not use web search");
-  campaign.close();
-  campaign = openCampaign(path);
-  expect((await phaseOf(campaign)).kind).toBe("turn-limit");
-  campaign.close();
+  expect(
+    solveSettings.safeParse({ ...settings, source: settings.explorer }).success,
+  ).toBe(false);
+  expect(
+    solveSettings.safeParse({
+      ...settings,
+      source: { ...settings.source, search: false },
+    }).success,
+  ).toBe(false);
+  expect(solveSettings.parse(settings).source.search).toBe(true);
 });
 
 test("explorer notes name only live earlier notes as support", () => {
@@ -1361,53 +1336,47 @@ test("the next explorer starts only after all requested partial-result batches s
   campaign.close();
 });
 
-test.each([false, true])(
-  "source verification can use knowledge without retrieved sources (search=%s)",
-  async (search) => {
-    const path = campaignPath();
-    const settings = roleSettings();
-    const workflow = workflowConfiguration({
-      task,
-      settings: {
-        ...settings,
-        maxExplorerTurns: 1,
-        source: {
-          provider: "codex",
-          model: "codex-model",
-          reasoning: "low",
-          search,
-        },
+test("a self-contained proof needs no retrieved source", async () => {
+  const search = true;
+  const path = campaignPath();
+  const settings = roleSettings();
+  const workflow = workflowConfiguration({
+    task,
+    settings: {
+      ...settings,
+      maxExplorerTurns: 1,
+      source: {
+        provider: "codex",
+        model: "codex-model",
+        reasoning: "low",
+        search,
       },
-    });
-    const campaign = createCampaign(path, applicationId, workflow);
-    const drive = dependencies([
-      { submission: { notes: [good] } },
-      {
-        submission: coordination("n1", {
-          verify: [{ note: "n1", verifiers: lemma }],
-        }),
-      },
-      { ...sourceOf(["n1"]), searched: false },
-      verdictsOf("correctness", ["n1"]),
-    ]);
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
-    if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
-    expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
-    expect(drive.codexCalls[0]).toMatchObject({ search });
-    if (!search)
-      expect(drive.codexCalls[0]?.developerInstructions).toContain(
-        "no web search",
-      );
-    expect(drive.codexCalls[0]?.prompt).toContain(
-      "your mathematical knowledge and the supplied texts",
-    );
-    campaign.close();
-  },
-);
+    },
+  });
+  const campaign = createCampaign(path, applicationId, workflow);
+  const drive = dependencies([
+    { submission: { notes: [good] } },
+    {
+      submission: coordination("n1", {
+        verify: [{ note: "n1", verifiers: lemma }],
+      }),
+    },
+    { ...sourceOf(["n1"]), searched: false },
+    verdictsOf("correctness", ["n1"]),
+  ]);
+  const phase = await runWorkflow(
+    campaign,
+    createPiRoles(campaign, workflow.settings, drive),
+  );
+  expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
+  if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
+  expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
+  expect(drive.codexCalls[0]).toMatchObject({ search });
+  expect(drive.codexCalls[0]?.prompt).toContain(
+    "Self-contained proofs and immediate routine facts can pass without retrieval",
+  );
+  campaign.close();
+});
 
 test("the first Explorer works on the task without fixed guidance in settings", async () => {
   const path = campaignPath();

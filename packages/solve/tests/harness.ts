@@ -79,6 +79,12 @@ export function roleSettings(): SolveSettings {
 export function dependencies(replies: readonly Reply[]) {
   const queue = [...replies];
   const calls: PiRunOptions[] = [];
+  const allCalls: {
+    label: string;
+    role?: string;
+    system: string;
+    prompt: string;
+  }[] = [];
   const codexCalls: CodexRequest[] = [];
   const models: SolveModels = {
     getModel(provider, id) {
@@ -91,9 +97,16 @@ export function dependencies(replies: readonly Reply[]) {
   return {
     models,
     calls,
+    allCalls,
     codexCalls,
     async run(campaign: Campaign, options: PiRunOptions): Promise<PiResult> {
       calls.push(options);
+      allCalls.push({
+        label: options.label,
+        ...(options.role === undefined ? {} : { role: options.role }),
+        system: options.system ?? "",
+        prompt: options.prompt,
+      });
       const reply = queue.shift();
       if (reply === undefined) throw new Error(`no reply for ${options.label}`);
       if (reply.codex !== undefined) {
@@ -107,6 +120,12 @@ export function dependencies(replies: readonly Reply[]) {
     },
     async codex(request: CodexRequest): Promise<CodexResult> {
       codexCalls.push(request);
+      allCalls.push({
+        label: "xean-solve/verifier/source",
+        role: "verifier",
+        system: request.developerInstructions,
+        prompt: request.prompt,
+      });
       const reply = queue.shift();
       if (reply?.codex === undefined) {
         throw new Error("expected a Pi call, got the source verifier");

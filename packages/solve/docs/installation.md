@@ -33,7 +33,7 @@ With an OpenAI API account, configure `OPENAI_API_KEY` in your environment or th
 bun run xean-solve run node_modules/xean-solve/examples/task-even-sum.json campaign.db node_modules/xean-solve/examples/settings-openai.json
 ```
 
-These profiles use public provider endpoints and Pi credentials. They require no Fleet services, private model registry, or lab certificate. The source verifier in both examples runs through Pi without web search. Use a new campaign path when changing profiles, since each campaign fixes its settings.
+Explorer, coordinator, correctness, requirements, and reconstruction use public provider endpoints and Pi credentials. Source verification also requires the Codex CLI and its native login, and always enables web search. The examples require no Fleet services, private model registry, or lab certificate. Use a new campaign path when changing profiles because the settings are frozen.
 
 For a private deployment, set `XEAN_MODELS_PATH` to the absolute path of a valid Pi `models.json` containing the provider override. Xean reads a custom model registry only through that explicit setting. `OPENAI_BASE_URL` does not override Pi's model endpoints.
 

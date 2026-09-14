@@ -528,28 +528,28 @@ export function missingVerdicts(
 }
 
 /** Binds a verdict list to the notes one call judges: one verdict per note under verification. */
-function verdictsOver<T extends z.ZodRawShape>(
+function verdictsOver<T extends z.ZodRawShape & { note: z.ZodString }>(
   entry: z.ZodObject<T>,
   judged: readonly string[],
 ) {
   const expected = [...judged].sort(byId).join(",");
   // Keep the provider schema stable across candidates. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
-  return z
-    .strictObject({ verdicts: z.array(entry.extend({ note: noteId })) })
-    .refine(
-      (value) =>
-        (
-          value as { readonly verdicts: readonly { readonly note: string }[] }
-        ).verdicts
-          .map(({ note }) => note)
-          .sort(byId)
-          .join(",") === expected,
-      {
-        message: "one verdict per note under verification",
-        path: ["verdicts"],
-      },
-    );
+  return z.strictObject({ verdicts: z.array(entry) }).refine(
+    (value) =>
+      (
+        value as unknown as {
+          readonly verdicts: readonly { readonly note: string }[];
+        }
+      ).verdicts
+        .map(({ note }) => note)
+        .sort(byId)
+        .join(",") === expected,
+    {
+      message: "one verdict per note under verification",
+      path: ["verdicts"],
+    },
+  );
 }
 
 /** The verdicts of one correctness or requirements call. */
@@ -585,7 +585,7 @@ export type Statement = z.output<typeof statement>;
 /** The proof the reconstruction verifier writes from the statement and the support notes alone. */
 export const proof = z.strictObject({ proof: nonblank });
 
-/** What the source verifier confirmed: one entry per external result the text invokes. */
+/** Passages inspected by the source verifier, including evidence of a mismatch. */
 // A plain string in the schema because the provider's structured output
 // rejects the JSON Schema "uri" format; the shape is checked after parsing.
 export const sources = z.array(
@@ -593,9 +593,33 @@ export const sources = z.array(
     result: nonblank,
     source: nonblank,
     url: z.string().refine((value) => URL.canParse(value), "must be a URL"),
+    quote: nonblank,
   }),
 );
-const sourceVerdict = verdict.omit({ verifier: true }).extend({ sources });
+export const sourceEvidence = z.strictObject({
+  externalResults: z.array(nonblank),
+  sources,
+});
+export function hasSourcePassages(
+  value: z.output<typeof sourceEvidence> & { verdict: string },
+): boolean {
+  return (
+    value.sources.every((source) =>
+      value.externalResults.includes(source.result),
+    ) &&
+    (value.verdict !== "PASS" ||
+      value.externalResults.every((result) =>
+        value.sources.some((source) => source.result === result),
+      ))
+  );
+}
+const sourceVerdict = verdict
+  .omit({ verifier: true })
+  .extend(sourceEvidence.shape)
+  .refine(
+    hasSourcePassages,
+    "PASS requires a source passage for every nonroutine external result",
+  );
 /** The verdicts of one source call. */
 export const sourceVerdicts = z.strictObject({
   verdicts: z.array(sourceVerdict),
