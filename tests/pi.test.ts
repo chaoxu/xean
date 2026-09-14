@@ -535,7 +535,7 @@ test("submission gate saves every partial in the same context before the near-li
   ).toBe(true);
 });
 
-test.each([1, 3, 5])(
+test.each([1, 4, 5])(
   "a response limit of %s stops nonempty no-progress submissions without another push",
   async (maxResponses) => {
     const replies = Array.from({ length: maxResponses }, (_, index) =>

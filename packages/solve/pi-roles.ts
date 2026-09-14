@@ -116,7 +116,7 @@ export const solveSettings = z.strictObject({
   maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
   explorerContinuation: z.boolean().default(true),
-  maxExplorerResponses: z.number().int().positive().default(5),
+  maxExplorerResponses: z.number().int().positive().default(4),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
@@ -203,7 +203,7 @@ export function explorerCall(
   input: ExplorerInput,
   continuation = false,
   contextBudgetTokens = 400_000,
-  maxResponses = 5,
+  maxResponses = 4,
 ): RoleCall<ReturnType<typeof explorerResultFor>> {
   return {
     role: "explorer",

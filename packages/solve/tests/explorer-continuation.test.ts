@@ -45,7 +45,7 @@ test("Explorer continuation defaults on and only its enabled schema requires a s
     completeArgument: "solution",
     emptyArgument: "notes",
     contextBudgetTokens: 400_000,
-    maxResponses: 5,
+    maxResponses: 4,
     continuationPrompt: "Keep trying, you can do it.",
   });
   expect(ordinary.schema.safeParse({ notes: [note] }).success).toBe(true);
@@ -68,8 +68,8 @@ test("Explorer continuation defaults on and only its enabled schema requires a s
     ...settings
   } = roleSettings();
   expect(solveSettings.parse(settings).explorerContinuation).toBe(true);
-  expect(solveSettings.parse(settings).maxExplorerResponses).toBe(5);
-  expect(on.prompt).toContain("at most 5 model responses, including the first");
+  expect(solveSettings.parse(settings).maxExplorerResponses).toBe(4);
+  expect(on.prompt).toContain("at most 4 model responses, including the first");
   expect(
     solveSettings.parse({ ...roleSettings(), explorerContinuation: false })
       .explorerContinuation,
@@ -145,7 +145,7 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
       completeArgument: "solution",
       emptyArgument: "notes",
       contextBudgetTokens: 400_000,
-      maxResponses: 5,
+      maxResponses: 4,
       continuationPrompt: explorerCall(input, true).submissionGate!
         .continuationPrompt,
     });
@@ -393,8 +393,8 @@ test("omitted continuation and response budget are saved explicitly and match ex
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 3,
-        settings: { explorerContinuation: true, maxExplorerResponses: 5 },
+        schemaVersion: 4,
+        settings: { explorerContinuation: true, maxExplorerResponses: 4 },
       },
     });
   } finally {
@@ -407,13 +407,13 @@ test("omitted continuation and response budget are saved explicitly and match ex
       settings: {
         ...settings,
         explorerContinuation: true,
-        maxExplorerResponses: 5,
+        maxExplorerResponses: 4,
       },
     }),
   ).toMatchObject({ created: false });
 });
 
-test.each([1, 2])(
+test.each([1, 2, 3])(
   "previous workflow schema %s is rejected without changing the journal",
   async (schemaVersion) => {
     const { explorerContinuation: _, ...settings } = roleSettings();

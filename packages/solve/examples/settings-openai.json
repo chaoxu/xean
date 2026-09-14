@@ -1,6 +1,6 @@
 {
   "maxExplorerTurns": 3,
-  "maxExplorerResponses": 5,
+  "maxExplorerResponses": 4,
   "window": 100000,
   "explorer": {
     "provider": "openai",
