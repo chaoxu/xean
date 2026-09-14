@@ -31,6 +31,7 @@ export interface Reply {
   readonly submission?: Json;
   readonly state?: "succeeded" | "failed" | "cancelled";
   readonly error?: string;
+  readonly transcript?: readonly Json[];
   /** A source verifier answer, delivered through the fake Codex instead of Pi. */
   readonly codex?: Json;
   readonly searched?: boolean;
@@ -143,14 +144,14 @@ async function respond(
             error: reply.error ?? "failed",
             providerRetryable: false,
             truncated: false,
-            transcript: [],
+            transcript: reply.transcript ?? [],
             text: "",
             telemetry,
           } as const)
         : ({
             state,
             error: reply.error ?? "cancelled",
-            transcript: [],
+            transcript: reply.transcript ?? [],
             text: "",
             telemetry,
           } as const);

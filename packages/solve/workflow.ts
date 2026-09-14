@@ -1,5 +1,6 @@
 import type { Campaign, Entry, EntryId, Json } from "xean";
 import { isDeepStrictEqual } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { Projection } from "./projection";
@@ -10,6 +11,7 @@ import {
   codexSource,
   coordinatorCall,
   explorerCall,
+  RoleCallError,
   sameRequest,
   solveSettings,
   sourceCall,
@@ -466,6 +468,7 @@ export function workflowResult(phase: WorkflowTerminal): WorkflowResult {
 export interface WorkflowDependencies {
   readonly pauseRequested?: () => boolean;
   readonly status?: (message: string) => void;
+  readonly signal?: AbortSignal;
 }
 
 export async function runWorkflow(
@@ -480,6 +483,7 @@ export async function runWorkflow(
       : await deriveWorkflow(workflowRecords(campaign));
   initial = undefined;
   let phase = snapshot.phase;
+  let errorRecoveries = 0;
   for (;;) {
     if (phase.kind === "accepted" || phase.kind === "turn-limit") {
       return phase;
@@ -495,18 +499,41 @@ export async function runWorkflow(
     }
     dependencies.status?.(phase.kind);
     const verifying = phase.kind === "verifier" ? phase.input : undefined;
-    if (phase.kind === "explorer") {
-      if (await freezeExplorerGuidance(campaign, snapshot.explorerAfter!)) {
-        snapshot = await deriveWorkflow(workflowRecords(campaign));
-        phase = snapshot.phase;
-        if (phase.kind !== "explorer")
-          throw new Error("explorer boundary changed");
+    try {
+      if (phase.kind === "explorer") {
+        if (await freezeExplorerGuidance(campaign, snapshot.explorerAfter!)) {
+          snapshot = await deriveWorkflow(workflowRecords(campaign));
+          phase = snapshot.phase;
+          if (phase.kind !== "explorer")
+            throw new Error("explorer boundary changed");
+        }
+        await roles.explorer(phase.input);
+      } else if (phase.kind === "coordinator") {
+        await roles.coordinator(phase.input);
+      } else {
+        await roles.verifier(phase.input, phase.candidate);
       }
-      await roles.explorer(phase.input);
-    } else if (phase.kind === "coordinator") {
-      await roles.coordinator(phase.input);
-    } else {
-      await roles.verifier(phase.input, phase.candidate);
+      errorRecoveries = 0;
+    } catch (error) {
+      if (
+        !(error instanceof RoleCallError) ||
+        !error.retryable ||
+        errorRecoveries >= 3 ||
+        dependencies.signal?.aborted
+      )
+        throw error;
+      errorRecoveries += 1;
+      snapshot = await deriveWorkflow(workflowRecords(campaign));
+      phase = snapshot.phase;
+      if (!dependencies.pauseRequested?.()) {
+        dependencies.status?.(
+          `${phase.kind}: retrying with a fresh call (${errorRecoveries}/3)`,
+        );
+        await delay(1000 * 2 ** (errorRecoveries - 1), undefined, {
+          signal: dependencies.signal,
+        });
+      }
+      continue;
     }
     snapshot = await deriveWorkflow(workflowRecords(campaign));
     phase = snapshot.phase;

@@ -451,6 +451,45 @@ test("resume reconstructs the next role from the journal", async () => {
   campaign.close();
 });
 
+test("provider continuation recovery preserves completed verifier checks and the candidate", async () => {
+  const workflow = config();
+  const campaign = createCampaign(campaignPath(), applicationId, workflow);
+  const drive = dependencies([
+    { submission: { notes: [good] } },
+    { submission: coordination("n1") },
+    sourceOf(["n1"]),
+    {
+      state: "failed",
+      error: "Provider continuation unavailable.",
+      transcript: [
+        { role: "assistant", stopReason: "length", content: [] },
+        { role: "assistant", stopReason: "error", content: [] },
+      ],
+    },
+    ...passes("n1").slice(1),
+  ]);
+  try {
+    const phase = await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    );
+    expect(phase.kind).toBe("accepted");
+    expect(drive.codexCalls).toHaveLength(1);
+    expect(drive.calls[2]!.label).toBe(verifierLabels.correctness);
+    expect(drive.calls[3]!.label).toBe(verifierLabels.correctness);
+    expect(drive.calls[3]!.candidate).toBe(drive.calls[2]!.candidate);
+    expect(drive.calls[3]!.prompt).toBe(drive.calls[2]!.prompt);
+    expect(
+      campaign.records().filter((entry) => entry.kind === "candidate"),
+    ).toHaveLength(1);
+    expect(
+      campaign.records().filter((entry) => entry.kind === "verdict"),
+    ).toHaveLength(4);
+  } finally {
+    campaign.close();
+  }
+});
+
 test("a verification that fails mid-way resumes on the same candidate", async () => {
   const path = campaignPath();
   const workflow = config();

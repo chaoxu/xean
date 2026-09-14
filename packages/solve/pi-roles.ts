@@ -150,7 +150,11 @@ export interface PiRoleDependencies {
 }
 
 export class RoleCallError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Retry this unfinished role from its journal, with a fresh provider call. */
+    readonly retryable = false,
+  ) {
     super(message);
     this.name = "RoleCallError";
   }
@@ -538,7 +542,37 @@ async function runCall<S extends z.ZodType>(
       : { signal: dependencies.signal }),
   });
   if (result.state !== "succeeded") {
-    throw new RoleCallError(`${roleCall.role} failed: ${result.error}`);
+    const transcript = result.transcript.flatMap((message) => {
+      if (
+        typeof message !== "object" ||
+        message === null ||
+        Array.isArray(message)
+      )
+        return [];
+      return [message as { readonly [key: string]: Json }];
+    });
+    const assistant = transcript.filter(
+      (message) => message.role === "assistant",
+    );
+    // A provider can lose a continuation even when it cannot retry that same
+    // request. Rebuild the role through the workflow instead of replaying its
+    // provider state or tool effects. Initial failures and tool/schema failures
+    // do not establish a recoverable continuation.
+    const retryable =
+      result.state === "failed" &&
+      assistant.at(-1)?.stopReason === "error" &&
+      !transcript.some(
+        (message) => message.role === "toolResult" && message.isError === true,
+      ) &&
+      assistant
+        .slice(0, -1)
+        .some((message) =>
+          ["stop", "toolUse", "length"].includes(String(message.stopReason)),
+        );
+    throw new RoleCallError(
+      `${roleCall.role} failed: ${result.error}`,
+      retryable,
+    );
   }
   const submission = succeededSubmission(
     roleCallRecords(campaign, result.call),
