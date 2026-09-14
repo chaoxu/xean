@@ -100,6 +100,12 @@ test("a full audit receives the entire argument and reuses only the exact comple
       expect(value.developerInstructions).toContain(
         "Open and read the cited paper",
       );
+      expect(value.developerInstructions).not.toContain(
+        "must name a support note",
+      );
+      expect(value.developerInstructions).toContain(
+        "a verified external theorem may be cited directly",
+      );
       return {
         state: "succeeded" as const,
         codexVersion: "fixture",
