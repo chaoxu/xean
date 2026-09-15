@@ -1,11 +1,11 @@
 # Install the solver
 
-Xean requires Bun 1.3.13 or newer. Install the Xean 1.0.0 kernel and solver archives in a project directory:
+Xean requires Bun 1.3.13 or newer. Install the Xean 1.1.0 kernel and solver archives in a project directory:
 
 ```sh
 mkdir xean-project
 cd xean-project
-bun add --minimum-release-age 86400 /path/to/xean-1.0.0.tgz /path/to/xean-solve-1.0.0.tgz
+bun add --minimum-release-age 86400 /path/to/xean-1.1.0.tgz /path/to/xean-solve-1.1.0.tgz
 bun run xean-solve contract
 ```
 
@@ -21,7 +21,9 @@ With an OpenAI Codex subscription, use Pi's `/login` command to authenticate the
 bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
 ```
 
-Xean uses Pi's saved credential, which is separate from Codex CLI login. After logging in and exiting Pi, run the small setup example. This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role:
+Xean uses Pi's saved credential for these roles. Source verification and independent review require a separate native Codex CLI login. Before running either profile, install the Codex CLI and authenticate it with `codex login`. The CLI is selected by `XEAN_CODEX_COMMAND` or found on the path, and its native credential is read from `CODEX_HOME` or `~/.codex`.
+
+After logging in and exiting Pi, run the small setup example. This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role:
 
 ```sh
 bun run xean-solve run node_modules/xean-solve/examples/task-even-sum.json campaign.db node_modules/xean-solve/examples/settings-openai-codex.json

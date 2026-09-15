@@ -33,6 +33,8 @@ bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
 
 Enter `/login`, choose **OpenAI Codex**, and exit. The OpenAI API profile uses `OPENAI_API_KEY` and `packages/solve/examples/settings-openai.json`. Provider access, credentials, and model availability come from Pi and the selected profile. The solver examples use public OpenAI endpoints and need no xean-lab service.
 
+Source verification and independent review also require the Codex CLI with native credentials. Install the CLI and authenticate with `codex login` before running either profile. Xean selects the CLI through `XEAN_CODEX_COMMAND` or the path, reads its credential from `CODEX_HOME` or `~/.codex`, and enables web search for these checks.
+
 The task is one JSON object:
 
 ```json
@@ -74,6 +76,14 @@ The deterministic verifier example is [`examples/scripted-verifier.ts`](examples
 `xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The Explorer writes self-contained notes, the coordinator files notes and selects support, and verifiers record structured verdicts. The workflow derives notes, support closure, dead notes, verified candidates, phase, and result from journal records. It never treats model prose or process stdout as verification authority.
 
 Explorer continuation is enabled by default. Set `explorerContinuation: false` for ordinary Explorer handoff. When enabled, the Explorer can submit notes repeatedly in one context until it claims completion, submits an empty note set, reaches `maxExplorerResponses` (default 4: the initial response plus three continuations), or reaches its context budget. Set `maxExplorerResponses: 1` for first-response handoff. Each submission is journaled, and a fresh user message directs the next step. The context budget is bounded by model capacity. Provider retries, cancellation, output limits, and context overflow remain recorded outcomes with bounded handling.
+
+The source verifier inspects primary-source passages for nonroutine external results and checks their exact hypotheses and application. It records bibliographic corrections without failing verified mathematics. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
+
+```sh
+bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json
+```
+
+Solver workflow declarations use schema 6. Earlier declarations require their original runtime. Start a fresh campaign with the new version and use `submit` or `guide` to carry selected prior work forward. The SQLite journal and execution contract remain at schema 1.
 
 ## Development
 
