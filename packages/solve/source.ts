@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   symlink,
@@ -16,9 +17,9 @@ import { z } from "zod";
 import { nonblank, returnedOutput } from "./roles";
 
 // The source verifier runs Codex, with web search only when the request asks
-// for it, isolated in a fresh CODEX_HOME that holds only the inherited OAuth
-// credential, with every other Codex feature disabled. Its request and stdout
-// are journaled like any call.
+// for it, isolated in a fresh CODEX_HOME. Only the selected provider's connection
+// settings and credentials are inherited; other Codex features stay disabled.
+// Its request and stdout are journaled like any call.
 
 /** The reasoning levels the Codex CLI accepts for model_reasoning_effort. */
 export const codexReasoning = z.enum([
@@ -238,10 +239,107 @@ const disabledFeatures = [
 
 const fileCredentials = 'cli_auth_credentials_store="file"';
 
+const providerConnection = z.strictObject({
+  name: nonblank,
+  base_url: z.url(),
+  wire_api: z.literal("responses").default("responses"),
+  env_key: nonblank.optional(),
+  requires_openai_auth: z.boolean().default(false),
+  supports_websockets: z.boolean().optional(),
+  supports_standalone_web_search: z.boolean().optional(),
+  http_headers: z.record(z.string(), z.string()).default({}),
+  env_http_headers: z.record(z.string(), nonblank).default({}),
+});
+
+/** Read connection settings only; user instructions, tools, and hooks stay out. */
+async function providerEnvironment(
+  home: string,
+  inherited: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
+): Promise<{ readonly args: string[]; readonly requiresLogin: boolean }> {
+  const configPath = join(home, "config.toml");
+  if (!existsSync(configPath)) return { args: [], requiresLogin: true };
+  const config = Bun.TOML.parse(await readFile(configPath, "utf8")) as {
+    model_provider?: unknown;
+    model_providers?: Record<string, unknown>;
+  };
+  if (
+    config.model_provider === undefined ||
+    config.model_provider === "openai"
+  ) {
+    return { args: [], requiresLogin: true };
+  }
+  const selected = nonblank.parse(config.model_provider);
+  const provider = providerConnection.parse(config.model_providers?.[selected]);
+  const args = ["-c", 'model_provider="xean-source"'];
+  for (const key of [
+    "name",
+    "base_url",
+    "wire_api",
+    "env_key",
+    "requires_openai_auth",
+    "supports_websockets",
+    "supports_standalone_web_search",
+  ] as const) {
+    const value = provider[key];
+    if (value !== undefined)
+      args.push(
+        "-c",
+        `model_providers.xean-source.${key}=${JSON.stringify(value)}`,
+      );
+  }
+  if (provider.env_key !== undefined) {
+    const key = inherited[provider.env_key];
+    if (key === undefined || key.trim() === "")
+      throw new Error(
+        `source provider requires environment variable ${provider.env_key}`,
+      );
+    env[provider.env_key] = key;
+  }
+  const headers: Record<string, string> = {};
+  // Header values may be credentials. Put them in the child environment, never argv.
+  let index = 0;
+  for (const [name, value] of Object.entries(provider.http_headers)) {
+    let variable: string;
+    do {
+      variable = `XEAN_SOURCE_HEADER_${index++}`;
+    } while (variable in inherited || variable in env);
+    env[variable] = value;
+    headers[name.toLowerCase()] = variable;
+  }
+  for (const [name, variable] of Object.entries(provider.env_http_headers)) {
+    const value = inherited[variable];
+    if (value !== undefined && value.trim() !== "") {
+      headers[name.toLowerCase()] = variable;
+      env[variable] = value;
+    }
+  }
+  if (Object.keys(headers).length)
+    args.push(
+      "-c",
+      `model_providers.xean-source.env_http_headers={${Object.entries(headers)
+        .map(
+          ([name, variable]) =>
+            `${JSON.stringify(name)}=${JSON.stringify(variable)}`,
+        )
+        .join(",")}}`,
+    );
+  return {
+    args,
+    requiresLogin:
+      provider.requires_openai_auth && provider.env_key === undefined,
+  };
+}
+
 async function sourceEnvironment(
   directory: string,
   inherited: NodeJS.ProcessEnv,
-): Promise<{ readonly env: NodeJS.ProcessEnv; readonly hasAuth: boolean }> {
+): Promise<{
+  readonly env: NodeJS.ProcessEnv;
+  readonly hasAuth: boolean;
+  readonly providerArgs: string[];
+  readonly requiresLogin: boolean;
+}> {
   const codexHome = join(directory, "codex-home");
   await mkdir(codexHome);
   const inheritedHome = resolve(
@@ -249,24 +347,38 @@ async function sourceEnvironment(
   );
   const inheritedAuth = join(inheritedHome, "auth.json");
   const hasAuth = existsSync(inheritedAuth);
-  if (hasAuth) {
-    await symlink(await realpath(inheritedAuth), join(codexHome, "auth.json"));
-  } else {
-    await writeFile(join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
-  }
-  // Only what the CLI needs to run and reach the network; in particular
-  // no OPENAI_* or CODEX_* variable that would move it off its native
-  // credential, and no other process's secrets.
+  // Only process/network settings and the selected provider's named credentials.
   const env: NodeJS.ProcessEnv = { CODEX_HOME: codexHome };
   for (const name of Object.keys(inherited)) {
     if (
-      ["PATH", "HOME", "TMPDIR", "TERM", "LANG", "LC_ALL"].includes(name) ||
+      [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TERM",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NODE_EXTRA_CA_CERTS",
+      ].includes(name) ||
       /^(?:HTTPS?|NO|ALL)_PROXY$/iu.test(name)
     ) {
       env[name] = inherited[name];
     }
   }
-  return { env, hasAuth };
+  const provider = await providerEnvironment(inheritedHome, inherited, env);
+  if (provider.requiresLogin && hasAuth) {
+    await symlink(await realpath(inheritedAuth), join(codexHome, "auth.json"));
+  } else {
+    await writeFile(join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
+  }
+  return {
+    env,
+    hasAuth,
+    providerArgs: provider.args,
+    requiresLogin: provider.requiresLogin,
+  };
 }
 
 /** Check local CLI capabilities and native credentials without a model call. */
@@ -280,10 +392,8 @@ export async function requireCodex(
   const command = options.command ?? "codex";
   const directory = await mkdtemp(join(tmpdir(), "xean-source-"));
   try {
-    const { env, hasAuth } = await sourceEnvironment(
-      directory,
-      options.environment ?? process.env,
-    );
+    const { env, hasAuth, providerArgs, requiresLogin } =
+      await sourceEnvironment(directory, options.environment ?? process.env);
     const check = async (args: readonly string[], failure: string) => {
       if (options.signal?.aborted) {
         throw new Error("source verifier preflight cancelled");
@@ -347,8 +457,13 @@ export async function requireCodex(
     }
     const authFailure =
       "source verifier requires native Codex credentials in CODEX_HOME/auth.json; run codex login";
-    if (!hasAuth) throw new Error(authFailure);
-    await check(["-c", fileCredentials, "login", "status"], authFailure);
+    if (requiresLogin) {
+      if (!hasAuth) throw new Error(authFailure);
+      await check(
+        [...providerArgs, "-c", fileCredentials, "login", "status"],
+        authFailure,
+      );
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -371,7 +486,10 @@ export function codexExec(
     let exitCode: number | null | undefined;
     try {
       directory = await mkdtemp(join(tmpdir(), "xean-source-"));
-      const { env } = await sourceEnvironment(directory, inherited);
+      const { env, providerArgs } = await sourceEnvironment(
+        directory,
+        inherited,
+      );
       const schemaPath = join(directory, "verdict.schema.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));
       if (codexVersion === undefined) {
@@ -400,11 +518,16 @@ export function codexExec(
       const run = await runCommand(
         command,
         [
-          ...(request.search ? ["--search"] : []),
+          "exec",
           "-m",
           request.model,
-          ...disabledFeatures.flatMap((feature) => ["--disable", feature]),
-          "exec",
+          ...providerArgs,
+          "-c",
+          `web_search="${request.search ? "live" : "disabled"}"`,
+          ...disabledFeatures.flatMap((feature) => [
+            "-c",
+            `features.${feature}=false`,
+          ]),
           "--ephemeral",
           "--ignore-user-config",
           "--ignore-rules",

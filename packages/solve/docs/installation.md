@@ -21,7 +21,7 @@ With an OpenAI Codex subscription, use Pi's `/login` command to authenticate the
 bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
 ```
 
-Xean uses Pi's saved credential for these roles. Source verification and independent review require a separate native Codex CLI login. Before running either profile, install the Codex CLI and authenticate it with `codex login`. The CLI is selected by `XEAN_CODEX_COMMAND` or found on the path, and its native credential is read from `CODEX_HOME` or `~/.codex`.
+Xean uses Pi's saved credential for these roles. Source verification and independent review use the Codex CLI, selected by `XEAN_CODEX_COMMAND` or found on the path. By default, authenticate it with `codex login`; its credential is read from `CODEX_HOME` or `~/.codex`. A selected custom provider in that home’s `config.toml` can instead use its configured endpoint and `env_key` credential.
 
 After logging in and exiting Pi, run the small setup example. This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role:
 
@@ -35,7 +35,7 @@ With an OpenAI API account, configure `OPENAI_API_KEY` in your environment or th
 bun run xean-solve run node_modules/xean-solve/examples/task-even-sum.json campaign.db node_modules/xean-solve/examples/settings-openai.json
 ```
 
-Explorer, coordinator, correctness, requirements, and reconstruction use public provider endpoints and Pi credentials. Source verification also requires the Codex CLI and its native login, and always enables web search. The examples require no Fleet services, private model registry, or lab certificate. Use a new campaign path when changing profiles because the settings are frozen.
+Explorer, coordinator, correctness, requirements, and reconstruction use public provider endpoints and Pi credentials. Source verification also requires the Codex CLI and configured credentials, and always enables web search. The examples require no Fleet services, private model registry, or lab certificate. Use a new campaign path when changing profiles because the settings are frozen.
 
 For a private deployment, set `XEAN_MODELS_PATH` to the absolute path of a valid Pi `models.json` containing the provider override. Xean reads a custom model registry only through that explicit setting. `OPENAI_BASE_URL` does not override Pi's model endpoints.
 
@@ -51,6 +51,21 @@ Pi `ModelRuntime` resolves each provider's configured `headers`. For codex-lb at
 ```
 
 Set `XEAN_LAB_CODEX_LB_USAGE_TAG` to the attempt's stable usage tag before starting the solver. Pi rejects an unresolved configured tag before transport. The generic `runPi` runner does not inject these headers from the environment.
+
+For Codex source verification and independent review, configure the selected custom provider using the standard Codex configuration:
+
+```toml
+model_provider = "gateway"
+
+[model_providers.gateway]
+name = "My model gateway"
+base_url = "https://gateway.example/v1"
+wire_api = "responses"
+env_key = "GATEWAY_API_KEY"
+supports_websockets = true
+```
+
+The adapter reads this provider’s connection fields from `CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and passes only its named credentials and headers to the isolated CLI. Supported fields are `name`, `base_url`, `wire_api`, `env_key`, `requires_openai_auth`, `supports_websockets`, `supports_standalone_web_search`, `http_headers`, and `env_http_headers`. Set `supports_standalone_web_search = true` when the gateway implements Codex’s `alpha/search` endpoint; current Codex models require this tool for source retrieval. Header values stay out of process arguments. User instructions, tools, hooks, and rules are not inherited. A missing configured credential is an error; it never falls back to the native account. Connection settings are runtime configuration and do not change the campaign’s task, role prompts, or response allowance.
 
 ## Diagnose provider failures
 

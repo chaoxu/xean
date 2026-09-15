@@ -222,6 +222,127 @@ test("ambient API credentials cannot satisfy missing native credentials", async 
   expectCleaned(captures);
 });
 
+test("selected provider routes source calls without a native login or unrelated user configuration", async () => {
+  const setup = await fixture({ auth: false, customHome: true });
+  await writeFile(
+    join(setup.authHome, "config.toml"),
+    `
+model_provider = "gateway"
+developer_instructions = "USER INSTRUCTIONS MUST NOT BE INHERITED"
+[features]
+shell_tool = true
+[model_providers.gateway]
+name = "Example gateway"
+base_url = "https://gateway.example.test/v1"
+env_key = "GATEWAY_KEY"
+supports_websockets = true
+supports_standalone_web_search = true
+http_headers = { "X-Private-Header" = "fixture-header-secret", "X-Usage-Tag" = "static-tag" }
+env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
+`,
+  );
+  const options = {
+    ...setup.options,
+    environment: {
+      ...setup.options.environment,
+      GATEWAY_KEY: "fixture-gateway-secret",
+      XEAN_SOURCE_HEADER_0: "fixture/attempt-1",
+      SSL_CERT_FILE: "/example/ca.pem",
+    },
+  };
+  await requireCodex(options);
+  const result = await codexExec(options)({
+    protocol: "xean/codex-exec/v1",
+    model: "fixture-model",
+    reasoning: "low",
+    search: true,
+    developerInstructions: "Verify this source.",
+    prompt: "Exact task.",
+    outputSchema: { type: "object" },
+  });
+  expect(result.state).toBe("succeeded");
+  const captures = await setup.captures();
+  expect(captures.some((capture) => capture.args.includes("login"))).toBe(
+    false,
+  );
+  const execution = captures.at(-1)!;
+  expect(execution.args).toContain('model_provider="xean-source"');
+  expect(
+    execution.args.indexOf('model_provider="xean-source"'),
+  ).toBeGreaterThan(execution.args.indexOf("exec"));
+  expect(execution.args).toContain(
+    'model_providers.xean-source.base_url="https://gateway.example.test/v1"',
+  );
+  expect(execution.args).toContain(
+    'model_providers.xean-source.env_key="GATEWAY_KEY"',
+  );
+  expect(execution.args).toContain("--ignore-user-config");
+  expect(execution.args).toContain('web_search="live"');
+  expect(execution.args).toContain("features.shell_tool=false");
+  expect(execution.args).toContain("features.apps=false");
+  expect(execution.args).toContain(
+    "model_providers.xean-source.supports_standalone_web_search=true",
+  );
+  expect(execution.input).toBe("Exact task.");
+  expect(execution.env["GATEWAY_KEY"]).toBe("fixture-gateway-secret");
+  expect(execution.env["XEAN_SOURCE_HEADER_0"]).toBe("fixture/attempt-1");
+  expect(execution.env["SSL_CERT_FILE"]).toBe("/example/ca.pem");
+  expect(execution.env["OTHER_SECRET"]).toBeUndefined();
+  expect(execution.files).toEqual(["auth.json"]);
+  expect(execution.auth).not.toBe(join(setup.authHome, "auth.json"));
+  const args = execution.args.join("\n");
+  expect(args).not.toContain("fixture-gateway-secret");
+  expect(args).not.toContain("fixture-header-secret");
+  expect(args).not.toContain("USER INSTRUCTIONS");
+  const headerArgument = execution.args.find((arg) =>
+    arg.startsWith("model_providers.xean-source.env_http_headers="),
+  )!;
+  const parsed = Bun.TOML.parse(headerArgument) as {
+    model_providers: Record<
+      string,
+      { env_http_headers: Record<string, string> }
+    >;
+  };
+  const headerVariable =
+    parsed.model_providers["xean-source"]!.env_http_headers[
+      "x-private-header"
+    ]!;
+  expect(execution.env[headerVariable]).toBe("fixture-header-secret");
+  expect(
+    parsed.model_providers["xean-source"]!.env_http_headers["x-usage-tag"],
+  ).toBe("XEAN_SOURCE_HEADER_0");
+  expectCleaned(captures);
+});
+
+test("missing selected provider credentials never fall back to the native account", async () => {
+  const setup = await fixture({ customHome: true });
+  await writeFile(
+    join(setup.authHome, "config.toml"),
+    `
+model_provider = "gateway"
+[model_providers.gateway]
+name = "Example gateway"
+base_url = "https://gateway.example.test/v1"
+env_key = "ABSENT_GATEWAY_KEY"
+`,
+  );
+  await expect(requireCodex(setup.options)).rejects.toThrow(
+    "source provider requires environment variable ABSENT_GATEWAY_KEY",
+  );
+  expect(existsSync(join(setup.directory, "capture.jsonl"))).toBe(false);
+  const result = await codexExec(setup.options)({
+    protocol: "xean/codex-exec/v1",
+    model: "fixture-model",
+    reasoning: "low",
+    search: true,
+    developerInstructions: "Verify.",
+    prompt: "Task.",
+    outputSchema: { type: "object" },
+  });
+  expect(result.state).toBe("failed");
+  expect(existsSync(join(setup.directory, "capture.jsonl"))).toBe(false);
+});
+
 test("rejected login status suppresses credential output and cleans up", async () => {
   const setup = await fixture({ loginExit: 1 });
   let message = "";
