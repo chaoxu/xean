@@ -42,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 8;
+export const workflowSchemaVersion = 9;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -218,6 +218,11 @@ export async function deriveWorkflow(
       const entries = submission.notes.map((entry, index) => ({
         id: noteIdAfter(count, index),
         ...entry,
+        support: entry.support.map((reference) =>
+          typeof reference === "number"
+            ? noteIdAfter(count, reference - 1)
+            : reference,
+        ),
       }));
       projection.add(entries, boundary.call);
       noteSubmissions.push({

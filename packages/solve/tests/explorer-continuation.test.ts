@@ -386,7 +386,7 @@ test("omitted continuation and response budget are saved explicitly and match ex
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         settings: { explorerContinuation: true, maxExplorerResponses: 4 },
       },
     });

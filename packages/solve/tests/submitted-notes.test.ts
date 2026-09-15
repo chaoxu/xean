@@ -128,15 +128,154 @@ function coordinatorNotes(prompt: string): Note[] {
   return JSON.parse(prompt.slice(at + marker.length));
 }
 
+test("submission-local support follows its own notes after active Explorer output", async () => {
+  const { path, request } = await setup();
+  const graph = {
+    notes: [
+      { text: "An isolated external theorem T.", support: [] },
+      { text: "An application of theorem T.", support: [1] },
+    ],
+  };
+  const drive = dependencies([
+    {
+      submission: { notes: [partial] },
+      onStarted: async () => {
+        await submitNotes(path, graph, "graph-a");
+        const beforeRetry = records(path);
+        await submitNotes(path, graph, "graph-a");
+        expect(records(path)).toEqual(beforeRetry);
+        await submitNotes(path, graph, "graph-b");
+      },
+    },
+    coordinate(["n1", "n2", "n3", "n4", "n5"]),
+  ]);
+  expect(await run(request, drive)).toMatchObject({ outcome: "turn-limit" });
+  const projected = coordinatorNotes(drive.allCalls[1]!.prompt);
+  expect(projected.map(({ id, support }) => ({ id, support }))).toEqual([
+    { id: "n1", support: [] },
+    { id: "n2", support: [] },
+    { id: "n3", support: ["n2"] },
+    { id: "n4", support: [] },
+    { id: "n5", support: ["n4"] },
+  ]);
+  expect(projected.slice(1).map(({ text }) => text)).toEqual([
+    ...graph.notes.map(({ text }) => text),
+    ...graph.notes.map(({ text }) => text),
+  ]);
+  expect((await inspect(path, true)).submissions).toMatchObject([
+    { id: "graph-a", notes: graph.notes, noteIds: ["n2", "n3"] },
+    { id: "graph-b", notes: graph.notes, noteIds: ["n4", "n5"] },
+  ]);
+});
+
+test("an imported theorem graph reaches focused source checking without flattening proofs", async () => {
+  const { path, request } = await setup();
+  const theorem = "External theorem T: its exact hypotheses and conclusion.";
+  const application =
+    "The application proves P using T with matching hypotheses.";
+  await submitNotes(
+    path,
+    {
+      notes: [
+        { text: theorem, support: [] },
+        { text: application, support: [1] },
+        { text: "A self-contained elementary proof.", support: [] },
+      ],
+    },
+    "imported-graph",
+  );
+  expect(
+    records(path)
+      .filter((e) => e.kind === "call")
+      .map((e) => e.label),
+  ).toEqual(["xean-solve/notes"]);
+  const drive = dependencies([
+    coordinate(
+      ["n1", "n2", "n3"],
+      ["n2"],
+      ["n1", "n2", "n3"].map((note) => ({ note, verifiers: lemmaVerifiers })),
+    ),
+    {
+      submission: {
+        verdicts: [
+          {
+            note: "n1",
+            verdict: "PASS",
+            report: "The isolated theorem is conditional on its source.",
+            externalResults: ["External theorem for n1."],
+          },
+          {
+            note: "n2",
+            verdict: "PASS",
+            report: "The application uses its declared theorem support.",
+            externalResults: [],
+          },
+          {
+            note: "n3",
+            verdict: "PASS",
+            report: "The proof is self-contained.",
+            externalResults: [],
+          },
+        ],
+      },
+    },
+    verdict("n1", "source"),
+  ]);
+  expect(
+    await run(request, {
+      ...drive,
+      pauseRequested: () => drive.allCalls.length === 3,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
+  const packet = JSON.parse(drive.codexCalls[0]!.prompt);
+  expect(packet.notes.map((n: { id: string }) => n.id)).toEqual(["n1"]);
+  expect(drive.codexCalls[0]!.prompt).toContain(theorem);
+  expect(drive.codexCalls[0]!.prompt).not.toContain(application);
+  expect(drive.allCalls[1]!.prompt).toContain(theorem);
+  expect(drive.allCalls[1]!.prompt).toContain(application);
+  expect(
+    (await inspect(path)).notes.map(({ id, support, verified }) => ({
+      id,
+      support,
+      verified,
+    })),
+  ).toEqual([
+    { id: "n1", support: [], verified: true },
+    { id: "n2", support: ["n1"], verified: true },
+    { id: "n3", support: [], verified: true },
+  ]);
+  const before = records(path);
+  await inspect(path, true);
+  expect(records(path)).toEqual(before);
+});
+
+test("invalid local support is rejected before appending a submission", async () => {
+  const { path } = await setup();
+  const before = records(path);
+  for (const support of [[0], [-1], [1], [2], [1.5]]) {
+    await expect(
+      submitNotes(path, { notes: [{ text: "First note.", support }] }),
+    ).rejects.toThrow();
+  }
+  for (const support of [[1, 1], [2], [3], ["n1"]]) {
+    await expect(
+      submitNotes(path, {
+        notes: [partial, { text: "Second note.", support }],
+      }),
+    ).rejects.toThrow();
+  }
+  expect(records(path)).toEqual(before);
+});
+
 test("init creates only a workflow declaration without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(8);
+  expect(workflowSchemaVersion).toBe(9);
   const before = records(path);
   expect(before).toHaveLength(1);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 8, task },
+    config: { schemaVersion: 9, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);

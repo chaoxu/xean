@@ -124,11 +124,11 @@ export const verdict = z.strictObject({
 export type Verdict = z.output<typeof verdict>;
 
 const distinctSupport = [
-  (value: { readonly support: readonly string[] }) =>
+  (value: { readonly support: readonly (string | number)[] }) =>
     new Set(value.support).size === value.support.length,
   { message: "support ids must be distinct", path: ["support"] },
 ] as [
-  (value: { readonly support: readonly string[] }) => boolean,
+  (value: { readonly support: readonly (string | number)[] }) => boolean,
   { message: string; path: string[] },
 ];
 // The projection derives the flags from verifier evidence, caller attestations,
@@ -148,12 +148,26 @@ export const submittedNotes = z.strictObject({
       z
         .strictObject({
           text: nonblank,
-          support: z.array(noteId),
+          support: z.array(z.union([noteId, z.number().int().positive()])),
           verification: externalVerification.optional(),
         })
         .refine(...distinctSupport),
     )
-    .min(1),
+    .min(1)
+    .superRefine((notes, context) => {
+      notes.forEach((note, position) => {
+        note.support.forEach((reference, index) => {
+          if (typeof reference === "number" && reference > position) {
+            context.addIssue({
+              code: "custom",
+              path: [position, "support", index],
+              message:
+                "local support must name an earlier note in this submission (one-based)",
+            });
+          }
+        });
+      });
+    }),
 });
 
 const noteFields = z.strictObject({

@@ -365,8 +365,9 @@ export async function submitNotes(
         );
         for (const note of value.notes) {
           if (
-            new Set(note.support).size !== note.support.length ||
-            note.support.some((support) => !live.has(support))
+            note.support.some(
+              (support) => typeof support === "string" && !live.has(support),
+            )
           )
             throw new Error(
               "submitted support must name distinct existing notes that are not dead",

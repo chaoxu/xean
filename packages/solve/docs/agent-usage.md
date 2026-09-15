@@ -65,7 +65,26 @@ The caller can explicitly mark a result as externally verified by adding `verifi
 
 Choose this field only when the caller intends to supply an established result. `verification.source` identifies the reviewer or caller, and `verification.report` records the basis of that verification. This is separate from the literature source verifier. The attestation makes the note usable as verified support only when its own support is verified and it is not dead. Ordinary source, correctness, or reconstruction failures still make it dead. A requirements failure still prevents acceptance. A supplied complete proof needs all four normal verifiers to pass, even with an attestation. It can then be accepted with zero Explorer turns.
 
-Support IDs name existing notes in this campaign that are not dead. Obtain them from `inspect`, and list every existing note whose result the submitted text uses. A submission cannot reference guessed future IDs or another note in that same submission. When transferring material from another run, the caller selects the useful work and rewrites dependencies to existing destination IDs. The solver assigns new note IDs when it takes the submission into the workflow.
+String support IDs name existing notes in this campaign that are not dead. Obtain them from `inspect`. A positive integer names an earlier note in the same submission, counted from 1. For example, this submits a theorem and its application together without a model call:
+
+```json
+{
+  "notes": [
+    {
+      "text": "The exact external theorem, with its hypotheses and source.",
+      "support": []
+    },
+    {
+      "text": "A proof applying that theorem with matching hypotheses.",
+      "support": [1]
+    }
+  ]
+}
+```
+
+The solver resolves local references to assigned note IDs at delivery, after any active Explorer output. Each submission has its own numbering. Self references, forward references, duplicate support, and missing existing IDs are rejected before appending. Raw receipt texts and references remain unchanged on replay.
+
+When transferring work, submit each theorem and proof separately in dependency order and convert the selected graph's edges to local positions. Include shared support once. Keep source-note references in the text unambiguous, and preserve provenance separately from verification. If a prior migration already bundled notes into archival prose, recover the original graph from its source journal and recorded lineage first. An archival paragraph naming a theorem does not create a support edge. Submission grants no verification by default.
 
 Use `-` for standard input, or call the exported function from TypeScript:
 
@@ -176,7 +195,7 @@ The workflow drains requested verification batches before another Explorer turn 
 
 Inspection includes saved notes before handoff and after interruption. A fresh role call receives their full texts with stable IDs and the same guidance, with a fresh response budget. Internal provider retries share the existing response count. Every retryable provider error, including `incomplete.max_messages`, consumes the `maxRecoveries` allowance while preserving completed reasoning. Empty submissions are successful handoffs and do not consume error recoveries. See [Explorer continuation](../README.md#explorer-continuation) for context headroom. Coordinator advice uses `explorerGuidance`, and inconclusive verification returns its report to Explorer. Resuming requires the task, settings, and request contracts recorded in the campaign.
 
-The workflow declaration uses schema 8 and the execution contract uses schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result with zero Explorer turns after all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
+The workflow declaration uses schema 9 and the execution contract uses schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result with zero Explorer turns after all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
 
 All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/xean/blob/main/SPEC.md) for recovery and copy rules.
 
