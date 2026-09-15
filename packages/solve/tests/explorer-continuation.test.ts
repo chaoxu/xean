@@ -112,26 +112,18 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
         filings: [{ note: "n1", summary: "A claimed proof." }],
         explorerGuidance: "Check it.",
         support: [],
-        verify: [{ note: "n1", verifiers: ["source", "correctness"] }],
-      },
-    },
-    {
-      codex: {
-        verdicts: [
-          {
-            note: "n1",
-            verdict: "PASS",
-            report: "No external result.",
-            externalResults: [],
-            sources: [],
-          },
-        ],
+        verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
       },
     },
     {
       submission: {
         verdicts: [
-          { note: "n1", verdict: "FAIL", report: "The claim is false." },
+          {
+            note: "n1",
+            verdict: "FAIL",
+            report: "The claim is false.",
+            externalResults: [],
+          },
         ],
       },
     },
@@ -394,7 +386,7 @@ test("omitted continuation and response budget are saved explicitly and match ex
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         settings: { explorerContinuation: true, maxExplorerResponses: 4 },
       },
     });
@@ -414,7 +406,7 @@ test("omitted continuation and response budget are saved explicitly and match ex
   ).toMatchObject({ created: false });
 });
 
-test.each([1, 2, 3, 4, 5, 6])(
+test.each([1, 2, 3, 4, 5, 6, 7])(
   "previous workflow schema %s is rejected without changing the journal",
   async (schemaVersion) => {
     const { explorerContinuation: _, ...settings } = roleSettings();

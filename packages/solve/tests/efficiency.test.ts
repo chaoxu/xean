@@ -52,12 +52,15 @@ test("eligibility visits shared support once per fixed evidence view", () => {
   expect(
     judgedBy(
       {
-        verify: known.map(({ id }) => ({ note: id, verifiers: ["source"] })),
+        verify: known.map(({ id }) => ({
+          note: id,
+          verifiers: ["correctness"],
+        })),
         notes: known,
         support: [],
       },
       [],
-      "source",
+      "correctness",
     ),
   ).toEqual(known.map(({ id }) => id));
   expect(reads).toBeLessThanOrEqual(count * 3);
@@ -156,29 +159,29 @@ test.each([true, false])(
     const last = known.at(-1)!;
     const input = await verifierInput.parseAsync({
       task: { problem: "Prove P.", completionCriteria: "A complete proof." },
-      verify: [{ note: last.id, verifiers: ["source", "correctness"] }],
+      verify: [{ note: last.id, verifiers: ["correctness", "source"] }],
       notes: [last],
       support: known.slice(0, -1),
     });
-    expect(judgedBy(input, [], "source")).toEqual([last.id]);
+    expect(judgedBy(input, [], "correctness")).toEqual([last.id]);
     expect(
       judgedBy(
         input,
         [
           {
             note: last.id,
-            verifier: "source",
+            verifier: "correctness",
             verdict: "PASS",
             report: "Passed.",
           },
           {
             note: "n1",
-            verifier: "source",
+            verifier: "correctness",
             verdict: "FAIL",
             report: "Root failed.",
           },
         ],
-        "correctness",
+        "source",
       ),
     ).toEqual([]);
   },

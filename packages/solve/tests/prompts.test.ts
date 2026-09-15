@@ -186,8 +186,19 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     { provider: "codex", model: "test", reasoning: "low", search: true },
     input,
     ["n2"],
+    {
+      call: 1 as EntryId,
+      verdicts: [
+        {
+          note: "n2",
+          verdict: "PASS",
+          report: "Conditional.",
+          externalResults: ["The exact external theorem."],
+        },
+      ],
+    },
   );
-  for (const prompt of [...calls.map((c) => c.prompt), native.request.prompt]) {
+  for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
     expect(prompt).toContain('"verdict": "PASS"');
     expect(prompt).toContain(evidence.verdicts[1]!.report);
@@ -195,6 +206,12 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     expect(prompt).toContain(evidence.summary);
     expect(prompt).toContain(evidence.text);
   }
+  expect(
+    JSON.parse(native.request.prompt).notes.map(({ id }: { id: string }) => id),
+  ).toEqual(["n2"]);
+  expect(native.request.prompt).not.toContain(
+    "LONG HISTORICAL PASS EXPLANATION",
+  );
   expect(evidence).toEqual(before);
 });
 
@@ -272,12 +289,23 @@ test("correctness permits valid partial claims and reserves task completion for 
     { provider: "codex", model: "test", reasoning: "low", search: true },
     verification,
     ["n14"],
+    {
+      call: 1 as EntryId,
+      verdicts: [
+        {
+          note: "n14",
+          verdict: "PASS",
+          report: "Conditional.",
+          externalResults: ["The exact external bound."],
+        },
+      ],
+    },
   );
   const source = {
     prompt: sourceRequest.prompt,
     system: sourceRequest.developerInstructions,
   };
-  for (const call of [correctness, requirements, source]) {
+  for (const call of [correctness, requirements]) {
     expect(call.system).toContain(
       "Only the requirements verifier judges whether the note completes the task.",
     );
@@ -287,6 +315,7 @@ test("correctness permits valid partial claims and reserves task completion for 
     expect(call.prompt).toContain(partial.text);
     expect(call.prompt).toContain(verification.task.completionCriteria);
   }
+  expect(source.prompt).toContain(partial.text);
   expect(correctness.prompt).toContain(
     "A correct partial result passes even when it explicitly leaves the task unfinished.",
   );
@@ -362,6 +391,17 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
     { provider: "codex", model: "codex-model", reasoning: "low", search: true },
     verification,
     ["n2"],
+    {
+      call: 1 as EntryId,
+      verdicts: [
+        {
+          note: "n2",
+          verdict: "PASS",
+          report: "Conditional.",
+          externalResults: ["The exact external theorem."],
+        },
+      ],
+    },
   );
   const digest = createHash("sha256");
   for (const call of calls) {
@@ -375,8 +415,8 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
   // Changing any role prompt changes the bytes the workflow fold matches
   // against journals, so bump workflowSchemaVersion and update this digest
   // in the same change.
-  expect(workflowSchemaVersion).toBe(7);
+  expect(workflowSchemaVersion).toBe(8);
   expect(digest.digest("hex")).toBe(
-    "ffc9ec748904a1150863898a5b217a5c3769d5ce1ca24028ad4c179258938dd3",
+    "bd6f5a19965521fa0156cb2dc6839c8ee648001eb172e299df6b3de4b4879f97",
   );
 });

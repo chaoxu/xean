@@ -91,8 +91,8 @@ function submissionFor(tool: string, request: string): unknown {
         {
           note,
           verifiers: [
-            "source",
             "correctness",
+            "source",
             "requirements",
             "reconstruction",
           ],
@@ -122,6 +122,7 @@ function submissionFor(tool: string, request: string): unknown {
       ...(verifier === "reconstruction" ? { statement: null } : {}),
       verdicts: notes.map((note) => ({
         note,
+        ...(verifier === "correctness" ? { externalResults: [] } : {}),
         verdict: pass ? "PASS" : "FAIL",
         report: pass
           ? `${verifier} passed.`

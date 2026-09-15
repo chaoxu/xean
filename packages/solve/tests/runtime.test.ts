@@ -128,7 +128,19 @@ test("run honors an injected source executor instead of invoking the CLI", async
           filings: [{ note: "n1", summary: "P holds." }],
           explorerGuidance: "Prove P.",
           support: [],
-          verify: [{ note: "n1", verifiers: ["source", "correctness"] }],
+          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+        },
+      },
+      {
+        submission: {
+          verdicts: [
+            {
+              note: "n1",
+              verdict: "PASS",
+              report: "Conditional on the external theorem.",
+              externalResults: ["P is the cited external theorem."],
+            },
+          ],
         },
       },
       {
@@ -138,7 +150,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
               note: "n1",
               verdict: "INCONCLUSIVE",
               report: "Source unavailable.",
-              externalResults: [],
+              externalResults: ["P is the cited external theorem."],
               sources: [],
             },
           ],
@@ -156,7 +168,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
       ),
     ).toMatchObject({ outcome: "turn-limit", turns: 1 });
     expect(drive.codexCalls).toHaveLength(1);
-    expect(drive.calls).toHaveLength(2);
+    expect(drive.calls).toHaveLength(3);
     expect(await inspectCampaign(path)).toMatchObject({
       phase: "turn-limit",
       result: {

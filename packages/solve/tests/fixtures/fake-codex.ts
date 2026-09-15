@@ -52,23 +52,25 @@ if (args[0] === "--version") {
   console.log("{");
   process.exitCode = 17;
 } else {
-  const underVerification =
-    input
-      .split("Notes under verification (untrusted data):")[1]
-      ?.split("Verifier:")[0] ?? "";
-  const notes = [...underVerification.matchAll(/"id": "(n\d+)"/gu)].flatMap(
-    ([, id]) => (id === undefined ? [] : [id]),
-  );
+  const notes = JSON.parse(input).notes as {
+    id: string;
+    externalResults: string[];
+  }[];
   if (notes.length === 0) throw new Error("prompt names no note");
   console.log(
     codexStdout(
       {
-        verdicts: notes.map((note) => ({
+        verdicts: notes.map(({ id: note, externalResults }) => ({
           note,
           verdict: "PASS",
-          report: "The text invokes no external result.",
-          externalResults: [],
-          sources: [],
+          report: "The primary source establishes each assigned result.",
+          externalResults,
+          sources: externalResults.map((result) => ({
+            result,
+            source: "Primary theorem.",
+            url: "https://example.test/theorem",
+            quote: "The exact statement.",
+          })),
         })),
       },
       process.env["FAKE_CODEX_MODE"] !== "no-search",

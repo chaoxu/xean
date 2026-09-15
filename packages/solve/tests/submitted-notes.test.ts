@@ -28,7 +28,7 @@ const attestation = {
   report: "The stated lemma and its hypotheses were checked in full.",
 };
 const partial = { text: "An independent partial result.", support: [] };
-const lemmaVerifiers: Verification["verifiers"] = ["source", "correctness"];
+const lemmaVerifiers: Verification["verifiers"] = ["correctness", "source"];
 
 async function setup(turns = 1) {
   const campaign = campaignPath();
@@ -91,8 +91,15 @@ function verdict(note: string, name: string, result = "PASS"): Reply {
             note,
             verdict: result,
             report: `${name}: ${result}.`,
-            externalResults: [],
-            sources: [],
+            externalResults: [`External theorem for ${note}.`],
+            sources: [
+              {
+                result: `External theorem for ${note}.`,
+                source: "Primary theorem.",
+                url: "https://example.test/theorem",
+                quote: "Exact theorem statement.",
+              },
+            ],
           },
         ],
       },
@@ -100,7 +107,16 @@ function verdict(note: string, name: string, result = "PASS"): Reply {
   return {
     submission: {
       ...(name === "reconstruction" ? { statement: null } : {}),
-      verdicts: [{ note, verdict: result, report: `${name}: ${result}.` }],
+      verdicts: [
+        {
+          note,
+          verdict: result,
+          report: `${name}: ${result}.`,
+          ...(name === "correctness"
+            ? { externalResults: [`External theorem for ${note}.`] }
+            : {}),
+        },
+      ],
     },
   };
 }
@@ -114,13 +130,13 @@ function coordinatorNotes(prompt: string): Note[] {
 
 test("init creates only a workflow declaration without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(7);
+  expect(workflowSchemaVersion).toBe(8);
   const before = records(path);
   expect(before).toHaveLength(1);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 7, task },
+    config: { schemaVersion: 8, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -144,8 +160,8 @@ test("unchecked initial notes reach coordinator and verification before the firs
   expect((await inspect(path, true)).submissions).toHaveLength(1);
   const drive = dependencies([
     coordinate(["n1"], ["n1"], [{ note: "n1", verifiers: lemmaVerifiers }]),
-    verdict("n1", "source"),
     verdict("n1", "correctness"),
+    verdict("n1", "source"),
     {
       submission: {
         notes: [{ text: "Using n1, another partial result.", support: ["n1"] }],
@@ -305,8 +321,8 @@ test("external verification establishes support without inventing verdicts or ac
       },
     },
     coordinate(["n2"], ["n2"], [{ note: "n2", verifiers: [...verifierNames] }]),
-    verdict("n2", "source"),
     verdict("n2", "correctness"),
+    verdict("n2", "source"),
     verdict("n2", "requirements"),
     { submission: { statement: "P holds." } },
     { submission: { proof: "P follows from the supplied lemma." } },
@@ -357,8 +373,8 @@ test("a supplied complete proof still needs all four checks and accepts with zer
   expect((await inspect(path)).phase).not.toBe("accepted");
   const drive = dependencies([
     coordinate(["n1"], ["n1"], [{ note: "n1", verifiers: [...verifierNames] }]),
-    verdict("n1", "source"),
     verdict("n1", "correctness"),
+    verdict("n1", "source"),
     verdict("n1", "requirements"),
     { submission: { statement: "P holds." } },
     { submission: { proof: "Independent complete proof of P." } },
@@ -371,8 +387,8 @@ test("a supplied complete proof still needs all four checks and accepts with zer
   });
   expect(drive.allCalls.map((call) => call.label)).toEqual([
     "xean-solve/coordinator",
-    "xean-solve/verifier/source",
     "xean-solve/verifier/correctness",
+    "xean-solve/verifier/source",
     "xean-solve/verifier/requirements",
     "xean-solve/verifier/reconstruction/statement",
     "xean-solve/verifier/reconstruction/proof",
@@ -419,13 +435,14 @@ for (const result of ["PASS", "FAIL"] as const) {
     );
     const drive = dependencies([
       coordinate(["n2"], [], [{ note: "n1", verifiers: lemmaVerifiers }]),
-      verdict("n1", "source"),
       verdict("n1", "correctness", result),
+      ...(result === "PASS" ? [verdict("n1", "source")] : []),
     ]);
     expect(
       await run(request, {
         ...drive,
-        pauseRequested: () => drive.allCalls.length === 3,
+        pauseRequested: () =>
+          drive.allCalls.length === (result === "PASS" ? 3 : 2),
       }),
     ).toMatchObject({ outcome: "paused", at: "explorer" });
     expect(

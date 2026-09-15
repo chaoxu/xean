@@ -165,7 +165,20 @@ test.each(["failed", "cancelled"] as const)(
     const error = `Codex ${state}`;
     try {
       const roles = createPiRoles(campaign, roleSettings(), {
-        ...dependencies([]),
+        ...dependencies([
+          {
+            submission: {
+              verdicts: [
+                {
+                  note: "n1",
+                  verdict: "PASS",
+                  report: "Conditional on the external theorem.",
+                  externalResults: ["The external theorem asserts P."],
+                },
+              ],
+            },
+          },
+        ]),
         codex: async () => ({
           state,
           error,
@@ -187,12 +200,13 @@ test.each(["failed", "cancelled"] as const)(
             },
           ],
           support: [],
-          verify: [{ note: "n1", verifiers: ["source"] }],
+          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
         }),
       ).rejects.toThrow(error);
       const inspection = await inspectCampaign(path);
       expect(inspection).toMatchObject({
         calls: [
+          { verifier: "correctness", state: "returned", outcome: "succeeded" },
           {
             role: "verifier",
             verifier: "source",

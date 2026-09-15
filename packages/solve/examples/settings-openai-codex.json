@@ -1,6 +1,7 @@
 {
   "maxExplorerTurns": 3,
   "maxExplorerResponses": 4,
+  "maxSourceWebActions": 16,
   "window": 100000,
   "explorer": {
     "provider": "openai-codex",

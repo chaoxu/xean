@@ -62,6 +62,7 @@ export function roleSettings(): SolveSettings {
     window: 100_000,
     explorerContinuation: false,
     maxExplorerResponses: 4,
+    maxSourceWebActions: 16,
     explorer: profile,
     coordinator: profile,
     correctness: profile,

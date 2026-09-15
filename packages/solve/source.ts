@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   mkdir,
@@ -35,6 +36,7 @@ export const codexRequest = z.strictObject({
   model: nonblank,
   reasoning: codexReasoning,
   search: z.boolean(),
+  maxWebActions: z.number().int().positive().optional(),
   developerInstructions: nonblank,
   prompt: nonblank,
   outputSchema: z.json(),
@@ -56,6 +58,11 @@ export const codexResult = z.discriminatedUnion("state", [
   }),
   z.strictObject({ state: z.literal("failed"), ...execution, error: nonblank }),
   z.strictObject({
+    state: z.literal("exhausted"),
+    ...execution,
+    error: nonblank,
+  }),
+  z.strictObject({
     state: z.literal("cancelled"),
     ...execution,
     error: nonblank,
@@ -75,6 +82,9 @@ export const codexUsage = z.strictObject({
   reasoning: z.number().int().nonnegative(),
 });
 export type CodexUsage = z.output<typeof codexUsage>;
+
+const compactionWarning =
+  "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
 function eventObject(value: Json): Record<string, Json> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -127,6 +137,13 @@ export function codexTranscript(stdout: string): {
     if (stage !== "turn") throw new Error(`${type} outside an active turn`);
     const item = eventObject(event["item"] ?? null);
     const itemType = z.string().parse(item["type"]);
+    if (
+      type === "item.completed" &&
+      itemType === "error" &&
+      item["message"] === compactionWarning
+    ) {
+      continue;
+    }
     if (!["reasoning", "agent_message", "web_search"].includes(itemType)) {
       throw new Error(`Codex used forbidden item type: ${itemType}`);
     }
@@ -173,6 +190,8 @@ interface CommandResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly cancelled: boolean;
+  readonly exhausted: boolean;
+  readonly error?: string;
 }
 
 async function runCommand(
@@ -183,34 +202,138 @@ async function runCommand(
     readonly env?: NodeJS.ProcessEnv;
     readonly input?: string;
     readonly signal?: AbortSignal;
+    readonly maxWebActions?: number;
   } = {},
 ): Promise<CommandResult> {
-  let cancelled = options.signal?.aborted === true;
-  const abort = () => {
-    cancelled = true;
-  };
-  options.signal?.addEventListener("abort", abort, { once: true });
-  try {
-    const child = Bun.spawn([command, ...args], {
+  if (options.signal?.aborted) {
+    return {
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      cancelled: true,
+      exhausted: false,
+    };
+  }
+  return await new Promise<CommandResult>((complete) => {
+    const processGroup = process.platform !== "win32";
+    const child = spawn(command, args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      stdin:
-        options.input === undefined
-          ? "ignore"
-          : new TextEncoder().encode(options.input),
-      stdout: "pipe",
-      stderr: "pipe",
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      // Codex may be a launcher with a native child. Keep both in the group
+      // that we terminate, while remaining attached to their output and exit.
+      detached: processGroup,
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    return { exitCode, stdout, stderr, cancelled };
-  } finally {
-    options.signal?.removeEventListener("abort", abort);
-  }
+    let stdout = "";
+    let stderr = "";
+    let pending = "";
+    let cancelled = false;
+    let exhausted = false;
+    let error: string | undefined;
+    let termination: ReturnType<typeof setTimeout> | undefined;
+    const actions = new Set<string>();
+    const kill = (signal: NodeJS.Signals) => {
+      if (child.pid === undefined) return;
+      try {
+        if (processGroup) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // A process that exited before its close event needs no signal.
+      }
+    };
+    const stop = () => {
+      if (termination !== undefined) return;
+      kill("SIGTERM");
+      // The CLI, its launcher, or both may ignore SIGTERM. Keep the timer
+      // until close, since descendants can retain the output pipes.
+      termination = setTimeout(() => kill("SIGKILL"), 250);
+    };
+    const abort = () => {
+      cancelled = true;
+      stop();
+    };
+    const failure = (reason: unknown) => {
+      error ??= reason instanceof Error ? reason.message : String(reason);
+      stop();
+    };
+    const observe = (line: string) => {
+      if (
+        options.maxWebActions === undefined ||
+        exhausted ||
+        cancelled ||
+        error !== undefined ||
+        line.trim() === ""
+      ) {
+        return;
+      }
+      try {
+        const event = eventObject(z.json().parse(JSON.parse(line)));
+        const type = z.string().parse(event["type"]);
+        if (["thread.started", "turn.started", "turn.completed"].includes(type))
+          return;
+        if (!["item.started", "item.updated", "item.completed"].includes(type))
+          throw new Error(`Codex emitted forbidden event type: ${type}`);
+        const item = eventObject(event["item"] ?? null);
+        const itemType = z.string().parse(item["type"]);
+        if (
+          type === "item.completed" &&
+          itemType === "error" &&
+          item["message"] === compactionWarning
+        ) {
+          return;
+        }
+        if (!["reasoning", "agent_message", "web_search"].includes(itemType))
+          throw new Error(`Codex used forbidden item type: ${itemType}`);
+        if (itemType !== "web_search") return;
+        const id = nonblank.safeParse(item["id"]);
+        if (!id.success) {
+          throw new Error("Codex web-search item has no nonblank ID");
+        }
+        actions.add(id.data);
+        if (actions.size >= options.maxWebActions) {
+          exhausted = true;
+          stop();
+        }
+      } catch (reason) {
+        failure(reason);
+      }
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (options.maxWebActions === undefined) return;
+      pending += chunk;
+      let end: number;
+      while ((end = pending.indexOf("\n")) !== -1) {
+        observe(pending.slice(0, end));
+        pending = pending.slice(end + 1);
+      }
+    });
+    child.stdout.on("end", () => observe(pending));
+    child.stdout.on("error", failure);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stderr.on("error", failure);
+    child.stdin.on("error", failure);
+    child.on("error", failure);
+    child.on("close", (exitCode) => {
+      if (termination !== undefined) clearTimeout(termination);
+      options.signal?.removeEventListener("abort", abort);
+      complete({
+        exitCode,
+        stdout,
+        stderr,
+        cancelled,
+        exhausted,
+        ...(error === undefined ? {} : { error }),
+      });
+    });
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    child.stdin.end(options.input);
+  });
 }
 
 const disabledFeatures = [
@@ -568,6 +691,9 @@ export function codexExec(
           cwd: directory,
           env,
           input: request.prompt,
+          ...(request.maxWebActions === undefined
+            ? {}
+            : { maxWebActions: request.maxWebActions }),
           ...(signal === undefined ? {} : { signal }),
         },
       );
@@ -582,6 +708,26 @@ export function codexExec(
           stderr,
           exitCode,
           error: "source verification cancelled",
+        };
+      }
+      if (run.exhausted) {
+        return {
+          state: "exhausted",
+          codexVersion,
+          stdout,
+          stderr,
+          exitCode,
+          error: `source verification reached maxWebActions=${request.maxWebActions}; stopped after observing the limit, including any work already in flight`,
+        };
+      }
+      if (run.error !== undefined) {
+        return {
+          state: "failed",
+          codexVersion,
+          stdout,
+          stderr,
+          exitCode,
+          error: run.error,
         };
       }
       if (run.exitCode !== 0) {

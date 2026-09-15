@@ -40,12 +40,36 @@ function verdict(note = "n1", value = "PASS") {
   return { note, verdict: value, report: `Check ${value.toLowerCase()}.` };
 }
 
+const externalResults = (note: string) => [`External premise of ${note}`];
+const correctnessVerdict = (note = "n1", value = "PASS") => ({
+  ...verdict(note, value),
+  externalResults: externalResults(note),
+});
+const correctness = (value = "PASS", note = "n1"): Reply => ({
+  submission: { verdicts: [correctnessVerdict(note, value)] },
+});
+const sourceVerdict = (note = "n1", value = "PASS") => ({
+  ...verdict(note, value),
+  externalResults: externalResults(note),
+  sources:
+    value === "PASS"
+      ? [
+          {
+            result: externalResults(note)[0]!,
+            source: "Example Theorem 1",
+            url: "https://example.org/theorem",
+            quote: "Exact inspected theorem.",
+          },
+        ]
+      : [],
+});
+
 const check = (value = "PASS", note = "n1"): Reply => ({
   submission: { verdicts: [verdict(note, value)] },
 });
 const sourceCheck = (value = "PASS", note = "n1"): Reply => ({
   codex: {
-    verdicts: [{ ...verdict(note, value), externalResults: [], sources: [] }],
+    verdicts: [sourceVerdict(note, value)],
   },
 });
 const reconstruction = (value = "PASS", note = "n1"): Reply => ({
@@ -72,8 +96,8 @@ const start: readonly Reply[] = [
 
 const beforeReconstruction: readonly Reply[] = [
   ...start,
+  correctness(),
   sourceCheck(),
-  check(),
   check(),
   { submission: { statement: "P holds." } },
   proof(),
@@ -100,6 +124,8 @@ test.each([...verifierNames])(
         );
       } else if (verifier === "source") {
         replies.push(sourceCheck(value));
+      } else if (verifier === "correctness") {
+        replies.push(correctness(value));
       } else {
         replies.push(check(value));
       }
@@ -157,13 +183,17 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   const path = campaignPath();
   const configuration = config();
   let campaign = createCampaign(path, applicationId, configuration);
-  const first = dependencies([...start, sourceCheck("INCONCLUSIVE")]);
+  const first = dependencies([
+    ...start,
+    correctness(),
+    sourceCheck("INCONCLUSIVE"),
+  ]);
   expect(
     await runWorkflow(
       campaign,
       createPiRoles(campaign, configuration.settings, first),
       {
-        pauseRequested: () => first.allCalls.length === 3,
+        pauseRequested: () => first.allCalls.length === 4,
       },
     ),
   ).toMatchObject({ kind: "explorer" });
@@ -176,7 +206,10 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
         id: "n1",
         verified: false,
         dead: false,
-        verdicts: [{ verifier: "source", ...verdict("n1", "INCONCLUSIVE") }],
+        verdicts: [
+          { verifier: "correctness", ...verdict() },
+          { verifier: "source", ...verdict("n1", "INCONCLUSIVE") },
+        ],
       },
     ],
   });
@@ -199,8 +232,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
         verify: [{ note: "n2", verifiers: [...verifierNames] }],
       },
     },
-    sourceCheck("PASS", "n2"),
-    check("PASS", "n2"),
+    { submission: { verdicts: [{ ...verdict("n2"), externalResults: [] }] } },
     check("PASS", "n2"),
     { submission: { statement: "P holds." } },
     proof(),
@@ -237,17 +269,8 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
   const campaign = createCampaign(path, applicationId, configuration);
   const drive = dependencies([
     ...start,
-    {
-      codex: {
-        verdicts: [
-          {
-            ...verdict("n1", "INCONCLUSIVE"),
-            externalResults: [],
-            sources: [],
-          },
-        ],
-      },
-    },
+    correctness(),
+    sourceCheck("INCONCLUSIVE"),
   ]);
   expect(
     await runWorkflow(
@@ -260,7 +283,7 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
     notes: [{ verified: false, dead: false }],
   });
   expect(drive.codexCalls).toHaveLength(1);
-  expect(drive.allCalls).toHaveLength(3);
+  expect(drive.allCalls).toHaveLength(4);
   campaign.close();
 
   expect(await inspectCampaign(path)).toMatchObject({
@@ -290,8 +313,8 @@ test("a corrected reconstruction statement preserves the note and all successful
   expect(drive.allCalls.map(({ label }) => label)).toEqual([
     "xean-solve/explorer",
     "xean-solve/coordinator",
-    verifierLabels.source,
     verifierLabels.correctness,
+    verifierLabels.source,
     verifierLabels.requirements,
     `${verifierLabels.reconstruction}/statement`,
     `${verifierLabels.reconstruction}/proof`,
@@ -394,21 +417,20 @@ test("resuming an interrupted verification preserves inconclusive and successful
         explorerGuidance: "Prove P.",
         support: [],
         verify: [
-          { note: "n1", verifiers: ["source", "correctness"] },
+          { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: [...verifierNames] },
         ],
       },
     },
     {
-      codex: {
-        verdicts: [verdict("n1"), verdict("n2", "INCONCLUSIVE")].map((v) => ({
-          ...v,
-          externalResults: [],
-          sources: [],
-        })),
+      submission: {
+        verdicts: [
+          correctnessVerdict("n1"),
+          correctnessVerdict("n2", "INCONCLUSIVE"),
+        ],
       },
     },
-    { state: "failed", error: "provider disconnected" },
+    { ...sourceCheck(), state: "failed", error: "provider disconnected" },
   ]);
   await expect(
     runWorkflow(
@@ -426,7 +448,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
   expect(await inspectCampaign(path)).not.toHaveProperty("result");
 
   campaign = openCampaign(path);
-  const resumed = dependencies([check()]);
+  const resumed = dependencies([sourceCheck()]);
   expect(
     await runWorkflow(
       campaign,
@@ -442,7 +464,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
     ),
   ).toEqual([true, false]);
   expect(resumed.allCalls).toHaveLength(1);
-  expect(resumed.allCalls[0]?.label).toBe(verifierLabels.correctness);
+  expect(resumed.allCalls[0]?.label).toBe(verifierLabels.source);
   expect(resumed.allCalls[0]?.prompt).not.toContain('"id": "n2"');
   expect(
     campaign.records().filter((entry) => entry.kind === "candidate"),
@@ -477,15 +499,15 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
       },
     },
     {
-      codex: {
-        verdicts: [verdict("n1", "INCONCLUSIVE"), verdict("n2")].map((v) => ({
-          ...v,
-          externalResults: [],
-          sources: [],
-        })),
+      submission: {
+        verdicts: [correctnessVerdict("n1"), correctnessVerdict("n2")],
       },
     },
-    check("PASS", "n2"),
+    {
+      codex: {
+        verdicts: [sourceVerdict("n1", "INCONCLUSIVE"), sourceVerdict("n2")],
+      },
+    },
     check("PASS", "n2"),
     { submission: { statement: "P holds." } },
     proof(),
@@ -562,22 +584,18 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
         explorerGuidance: "Prove P.",
         support: ["n1"],
         verify: [
-          { note: "n1", verifiers: ["source", "correctness"] },
+          { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: [...verifierNames] },
         ],
       },
     },
     {
-      codex: {
-        verdicts: [verdict("n1"), verdict("n2")].map((v) => ({
-          ...v,
-          externalResults: [],
-          sources: [],
-        })),
+      submission: {
+        verdicts: [
+          correctnessVerdict("n1", "INCONCLUSIVE"),
+          correctnessVerdict("n2"),
+        ],
       },
-    },
-    {
-      submission: { verdicts: [verdict("n1", "INCONCLUSIVE"), verdict("n2")] },
     },
   ]);
   expect(
@@ -594,5 +612,6 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
     [false, false],
     [false, false],
   ]);
+  expect(first.codexCalls).toHaveLength(0);
   campaign.close();
 });

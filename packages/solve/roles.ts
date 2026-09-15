@@ -57,8 +57,8 @@ export const roleNames = ["explorer", "coordinator", "verifier"] as const;
 export type RoleName = (typeof roleNames)[number];
 /** The verifiers in the order they run; the coordinator asks for a prefix of this order. */
 export const verifierNames = [
-  "source",
   "correctness",
+  "source",
   "requirements",
   "reconstruction",
 ] as const;
@@ -316,9 +316,9 @@ export function coordinatorResultFor(
       ["verify"],
     );
     // A note is verified only over verified support: every note in its
-    // support is verified already or listed earlier with the correctness
+    // support is verified already or listed earlier with the source
     // verifier, so it is verified in the same verification first.
-    const listedWithCorrectness = new Set<string>();
+    const listedWithSource = new Set<string>();
     for (const [index, entry] of value.verify.entries()) {
       const target = notes.find(({ id }) => id === entry.note);
       if (target === undefined) continue;
@@ -331,18 +331,18 @@ export function coordinatorResultFor(
       }
       if (
         target.support.some(
-          (id) => !verified.has(id) && !listedWithCorrectness.has(id),
+          (id) => !verified.has(id) && !listedWithSource.has(id),
         )
       ) {
         ctx.addIssue({
           code: "custom",
           message:
-            "a note is verified only after every note in its support is verified or listed earlier with the correctness verifier",
+            "a note is verified only after every note in its support is verified or listed earlier with the source verifier",
           path: ["verify", index, "note"],
         });
       }
-      if (entry.verifiers.includes("correctness")) {
-        listedWithCorrectness.add(entry.note);
+      if (entry.verifiers.includes("source")) {
+        listedWithSource.add(entry.note);
       }
     }
   });
@@ -560,6 +560,23 @@ export function verdictsFor(judged: readonly string[]) {
   return verdictsOver(verdict.omit({ verifier: true }), judged);
 }
 
+/** Exact external premises identified while checking the complete argument. */
+export const externalResults = z
+  .array(nonblank)
+  .refine(
+    (values) => new Set(values).size === values.length,
+    "external results must be distinct",
+  );
+const correctnessVerdict = verdict
+  .omit({ verifier: true })
+  .extend({ externalResults });
+export const correctnessVerdicts = z.strictObject({
+  verdicts: z.array(correctnessVerdict),
+});
+export function correctnessVerdictsFor(judged: readonly string[]) {
+  return verdictsOver(correctnessVerdict, judged);
+}
+
 /** A note verdict, or a corrected statement with no mathematical verdict. */
 export const reconstructionResult = z
   .strictObject({
@@ -624,8 +641,26 @@ const sourceVerdict = verdict
 export const sourceVerdicts = z.strictObject({
   verdicts: z.array(sourceVerdict),
 });
-export function sourceVerdictsFor(judged: readonly string[]) {
-  return verdictsOver(sourceVerdict, judged);
+export function sourceVerdictsFor(
+  judged: readonly string[],
+  assigned?: readonly {
+    readonly note: string;
+    readonly externalResults: readonly string[];
+  }[],
+) {
+  return verdictsOver(sourceVerdict, judged).refine(
+    (value) =>
+      assigned === undefined ||
+      value.verdicts.every((verdict) => {
+        const expected = assigned.find(({ note }) => note === verdict.note);
+        return (
+          expected !== undefined &&
+          JSON.stringify(verdict.externalResults) ===
+            JSON.stringify(expected.externalResults)
+        );
+      }),
+    "externalResults must preserve the exact assigned external premises",
+  );
 }
 
 export type VerifierResult = readonly Verdict[];

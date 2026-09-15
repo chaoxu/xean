@@ -73,20 +73,19 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
     result: { outcome: "accepted", note: { id: "n2" } },
     spend: { logicalProviderRequests: 10, requestErrors: 0 },
     accounting: {
-      complete: false,
+      complete: true,
       unmeasuredRequests: 0,
       unaccountedCalls: [],
       potentialRequests: [],
     },
   });
-  // Native Codex source calls report tokens, but no price is journaled for them.
-  expect(inspection.accounting.unpricedCalls).toHaveLength(2);
+  // The self-contained proof records a local source PASS with no provider cost.
+  expect(inspection.accounting.unpricedCalls).toHaveLength(0);
   expect(
     inspection.calls.map(({ role }: { readonly role: string }) => role),
   ).toEqual([
     "explorer",
     "coordinator",
-    "verifier",
     "verifier",
     "explorer",
     "coordinator",
@@ -104,12 +103,11 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   ).toEqual([
     null,
     null,
-    "source",
     "correctness",
     null,
     null,
-    "source",
     "correctness",
+    "source",
     "requirements",
     "reconstruction",
     "reconstruction",
@@ -128,7 +126,7 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
       }) => [id, verdicts.length, dead],
     ),
   ).toEqual([
-    ["n1", 2, true],
+    ["n1", 1, true],
     ["n2", 4, false],
   ]);
 
@@ -221,7 +219,7 @@ test("a provider failure leaves no verdict", async () => {
   const settings = await writeSettings(directory);
   const input = await writeJson(directory, "verifier.json", {
     task: { problem: "Prove P.", completionCriteria: "Give a proof." },
-    verify: [{ note: "n1", verifiers: ["source", "correctness"] }],
+    verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
     notes: [
       {
         id: "n1",
@@ -242,9 +240,9 @@ test("a provider failure leaves no verdict", async () => {
   const inspection = JSON.parse(
     (await cli(directory, "inspect", campaign)).stdout,
   );
-  expect(inspection.calls).toHaveLength(2);
-  expect(inspection.calls[0]).toMatchObject({ verifier: "source" });
-  expect(inspection.calls[1]).not.toHaveProperty("submission");
+  expect(inspection.calls).toHaveLength(1);
+  expect(inspection.calls[0]).toMatchObject({ verifier: "correctness" });
+  expect(inspection.calls[0]).not.toHaveProperty("submission");
   expect(inspection.spend.requestErrors).toBeGreaterThanOrEqual(1);
 });
 

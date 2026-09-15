@@ -20,17 +20,21 @@ import {
   createPiRoles,
   piProviders,
   solveSettings,
+  localSourceRequest,
+  localSourceResult,
   type SolveSettings,
 } from "./pi-roles";
 import {
   applicationId,
   coordinatorInput,
   coordinatorResult,
+  correctnessVerdicts,
   explorerInput,
   explorerResult,
   explorerContinuationResult,
   jsonSnapshot,
   roleFromLabel,
+  returnedOutput,
   roleNames,
   proof,
   reconstructionCalls,
@@ -111,6 +115,14 @@ function visibleSubmission(
 ): Json | undefined {
   const verifier = verifierFromLabel(call.label);
   try {
+    if (
+      verifier === "source" &&
+      localSourceRequest.safeParse(call.request).success
+    ) {
+      const output = returnedOutput(records, call.seq);
+      if (output === undefined) return undefined;
+      return { verifier, ...localSourceResult.parse(output.output) };
+    }
     if (verifier === "source" && codexRequest.safeParse(call.request).success) {
       const submission = codexSubmission(records, call.seq);
       if (submission === undefined) return undefined;
@@ -153,6 +165,9 @@ function visibleSubmission(
     if (verifier === "reconstruction") {
       return { verifier, ...reconstructionResult.parse(submission.input) };
     }
+    if (verifier === "correctness") {
+      return { verifier, ...correctnessVerdicts.parse(submission.input) };
+    }
     return { verifier, ...verdicts.parse(submission.input) };
   } catch {
     return undefined;
@@ -168,9 +183,11 @@ function callDiagnostic(
   if (result.state === "threw") return { error: result.error };
   const parsed = piRequest.safeParse(call.request).success
     ? piResultRecord.safeParse(result.output)
-    : codexRequest.safeParse(call.request).success
-      ? codexResult.safeParse(result.output)
-      : undefined;
+    : localSourceRequest.safeParse(call.request).success
+      ? localSourceResult.safeParse(result.output)
+      : codexRequest.safeParse(call.request).success
+        ? codexResult.safeParse(result.output)
+        : undefined;
   if (!parsed?.success) return {};
   return {
     outcome: parsed.data.state,

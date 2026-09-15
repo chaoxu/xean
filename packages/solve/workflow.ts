@@ -13,7 +13,7 @@ import {
   RoleCallError,
   sameRequest,
   solveSettings,
-  sourceCall,
+  verifierCall,
   type RoleCall,
 } from "./pi-roles";
 import {
@@ -42,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 7;
+export const workflowSchemaVersion = 8;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -349,7 +349,7 @@ export async function deriveWorkflow(
         const target = pick(filed, note);
         if (target.dead || target.support.some((id) => !available.has(id)))
           return false;
-        if (verifiers.includes("correctness")) available.add(note);
+        if (verifiers.includes("source")) available.add(note);
         return true;
       });
       if (remaining.length === 0) break;
@@ -367,17 +367,14 @@ export async function deriveWorkflow(
           pick(filed, id),
         ),
       });
-      // The source call opens every verification with an exact Codex request.
-      const judged = judgedBy(verifierRequest, [], "source");
+      // Correctness opens every verification and freezes its complete proof input.
+      const judged = judgedBy(verifierRequest, [], "correctness");
       const first = firstCall(
         records,
         cursor,
         "verifier",
-        verifierLabels.source,
-        jsonSnapshot(
-          (await sourceCall(config.settings.source, verifierRequest, judged))
-            .request,
-        ),
+        verifierLabels.correctness,
+        await verifierCall("correctness", verifierRequest, judged),
       );
       if (first === undefined) {
         return {

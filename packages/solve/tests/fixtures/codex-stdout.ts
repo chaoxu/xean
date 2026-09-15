@@ -9,7 +9,11 @@ export function codexStdout(message: Json, searched = true): string {
       ? [
           {
             type: "item.completed",
-            item: { type: "web_search", query: "authoritative source" },
+            item: {
+              id: "search-1",
+              type: "web_search",
+              query: "authoritative source",
+            },
           },
         ]
       : []),

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign } from "xean";
+import { createCampaign, type EntryId } from "xean";
 
 import {
   createPiRoles,
@@ -125,7 +125,7 @@ test("support closure combines roots, shares ancestors, and sorts numeric ids", 
   );
 });
 
-test("each verifier and reconstruction stage receives inherited context exactly once", async () => {
+test("correctness and reconstruction retain support while source reads only assigned premises", async () => {
   const calls = await Promise.all([
     verifierCall("correctness", input, ["n3"]),
     verifierCall("requirements", input, ["n3"]),
@@ -136,12 +136,26 @@ test("each verifier and reconstruction stage receives inherited context exactly 
     { provider: "codex", model: "test", reasoning: "low", search: true },
     input,
     ["n3"],
+    {
+      call: 1 as EntryId,
+      verdicts: [
+        {
+          note: "n3",
+          verdict: "PASS",
+          report: "Conditional.",
+          externalResults: ["An exact external theorem."],
+        },
+      ],
+    },
   );
-  for (const prompt of [...calls.map((c) => c.prompt), native.request.prompt]) {
+  for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt.split(first.text)).toHaveLength(3); // summary plus proof, one note object
     expect(prompt).toContain(inherited.text);
     expect(prompt).not.toContain(unrelated.text);
   }
+  expect(native.request.prompt).not.toContain(first.text);
+  expect(native.request.prompt).not.toContain(inherited.text);
+  expect(native.request.prompt).toContain(target.text);
   const reconstructed = await proofCall(input, target, {
     statement: "Coverage holds.",
   });
@@ -165,8 +179,8 @@ test("the verification window counts transitive shared texts once without droppi
     note("n4", "d".repeat(10), ["n2"]),
   ];
   const verify: Verification[] = [
-    { note: "n3", verifiers: ["source", "correctness"] },
-    { note: "n4", verifiers: ["source", "correctness"] },
+    { note: "n3", verifiers: ["correctness", "source"] },
+    { note: "n4", verifiers: ["correctness", "source"] },
   ];
   expect(
     (await verificationPrefix(verify, notes, 125)).map((v) => v.note),
@@ -193,26 +207,18 @@ test("workflow construction and per-call selection both retain ancestors across 
           filings: [{ note: n.id, summary: n.summary! }],
           explorerGuidance: "Complete coverage.",
           support: [n.id],
-          verify: [{ note: n.id, verifiers: ["source", "correctness"] }],
-        },
-      },
-      {
-        codex: {
-          verdicts: [
-            {
-              note: n.id,
-              verdict: "PASS",
-              report: "Known sources.",
-              externalResults: [],
-              sources: [],
-            },
-          ],
+          verify: [{ note: n.id, verifiers: ["correctness", "source"] }],
         },
       },
       {
         submission: {
           verdicts: [
-            { note: n.id, verdict: "PASS", report: "Inherited facts apply." },
+            {
+              note: n.id,
+              verdict: "PASS",
+              report: "Inherited facts apply.",
+              externalResults: [],
+            },
           ],
         },
       },
@@ -244,7 +250,10 @@ test("workflow construction and per-call selection both retain ancestors across 
       { id: inherited.id, text: inherited.text },
     ]);
     expect(thirdPrompt).not.toContain("UNRELATED PROOF");
-    expect(phase.notes[0]!.verdicts[0]!.report).toBe("Known sources.");
+    expect(phase.notes[0]!.verdicts[1]!.report).toContain(
+      "No source inference or retrieval was needed.",
+    );
+    expect(drive.codexCalls).toHaveLength(0);
   } finally {
     campaign.close();
   }
