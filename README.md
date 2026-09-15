@@ -83,7 +83,7 @@ The source verifier inspects primary-source passages for nonroutine external res
 bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json
 ```
 
-Solver workflow declarations use schema 6. Earlier declarations require their original runtime. Start a fresh campaign with the new version and use `submit` or `guide` to carry selected prior work forward. The SQLite journal and execution contract remain at schema 1.
+Solver workflow declarations use schema 7. Earlier declarations require their original runtime. Start a fresh campaign with the new version and use `submit` or `guide` to carry selected prior work forward. The SQLite journal and execution contract remain at schema 1.
 
 ## Development
 

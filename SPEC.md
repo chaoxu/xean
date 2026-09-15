@@ -1,6 +1,6 @@
-# xean core specification 1.1.0
+# xean core specification 1.1.1
 
-This file is the normative contract for xean 1.1.0.
+This file is the normative contract for xean 1.1.1.
 
 ## Purpose and boundary
 
@@ -21,7 +21,7 @@ Runtime and dependency versions are pinned in `package.json` and `bun.lock`. xea
 
 A campaign is one SQLite database. The database uses SQLite's `journal_mode=DELETE` rollback journal, `synchronous=FULL`, a five-second busy timeout, strict tables, and append-only triggers. Each journal entry is one atomic row insertion. A payload and its input items commit in one transaction. `createCampaign` creates a new artifact, `openCampaign` reopens an existing artifact for appends and performs any required rollback-journal recovery, and `openReader` opens an existing artifact without write access. WAL-format headers and `-wal` or `-shm` sidecars are outside the artifact contract and are rejected before SQLite opens the file. SQLite serializes writes. Applications remain responsible for ensuring that only one writer attempts a logical phase at a time.
 
-xean 1.1.0 campaigns use SQLite schema 1. The declaration records the schema and application identity, and a reader rejects an artifact whose schema is not the current one.
+xean 1.1.1 campaigns use SQLite schema 1. The declaration records the schema and application identity, and a reader rejects an artifact whose schema is not the current one.
 
 Creation uses an exclusive private file create and never overwrites an existing path. The schema and campaign identity commit together. A crash before that commit may leave an invalid file, which readers reject and an operator must remove before retry. The artifact is not tamper-resistant against an operator with raw filesystem or SQL access.
 

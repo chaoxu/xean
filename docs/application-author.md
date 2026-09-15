@@ -1,9 +1,9 @@
 # Building an xean application
 
-Install xean 1.1.0 from GitHub:
+Install xean 1.1.1 from GitHub:
 
 ```sh
-bun add github:chaoxu/xean#v1.1.0 zod@4.5.4
+bun add github:chaoxu/xean#v1.1.1 zod@4.5.4
 ```
 
 ## Create and verify a candidate

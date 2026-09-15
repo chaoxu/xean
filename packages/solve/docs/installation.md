@@ -1,11 +1,11 @@
 # Install the solver
 
-Xean requires Bun 1.3.13 or newer. Install the Xean 1.1.0 kernel and solver archives in a project directory:
+Xean requires Bun 1.3.13 or newer. Install the Xean 1.1.1 kernel and solver archives in a project directory:
 
 ```sh
 mkdir xean-project
 cd xean-project
-bun add --minimum-release-age 86400 /path/to/xean-1.1.0.tgz /path/to/xean-solve-1.1.0.tgz
+bun add --minimum-release-age 86400 /path/to/xean-1.1.1.tgz /path/to/xean-solve-1.1.1.tgz
 bun run xean-solve contract
 ```
 
