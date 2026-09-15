@@ -386,7 +386,7 @@ test("omitted continuation and response budget are saved explicitly and match ex
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 9,
+        schemaVersion: 10,
         settings: { explorerContinuation: true, maxExplorerResponses: 4 },
       },
     });
@@ -406,7 +406,7 @@ test("omitted continuation and response budget are saved explicitly and match ex
   ).toMatchObject({ created: false });
 });
 
-test.each([1, 2, 3, 4, 5, 6, 7])(
+test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
   "previous workflow schema %s is rejected without changing the journal",
   async (schemaVersion) => {
     const { explorerContinuation: _, ...settings } = roleSettings();

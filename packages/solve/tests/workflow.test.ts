@@ -198,7 +198,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     expect(verifier.candidate).toBe(phase.candidate);
   }
   expect(correctness.prompt).toContain(
-    "Verifier:\ncorrectness\n\nObligation:\nJudge each text on its own terms",
+    "Verifier:\ncorrectness\n\nObligation:\nJudge whether each note establishes its stated result",
   );
   expect((await runWorkflow(campaign, roles)).kind).toBe("accepted");
   expect(drive.calls).toHaveLength(7);

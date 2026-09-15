@@ -124,9 +124,7 @@ test("correctness lists hidden premises and preserves mathematical defects befor
   expect(call.prompt).toContain(
     "An isolated theorem note may cite its external source directly without proving that theorem",
   );
-  expect(call.prompt).toContain(
-    "An explicitly false supporting claim is a defect",
-  );
+  expect(call.prompt).toContain("an unsupported essential premise");
   expect(
     correctnessVerdictsFor(["n1"]).safeParse({
       verdicts: [{ note: "n1", verdict: "PASS", report: "Correct." }],

@@ -4,7 +4,11 @@ import { isDeepStrictEqual } from "node:util";
 import { createCampaign, openCampaign } from "xean";
 import { z } from "zod";
 
-import { codexProfile, sourceAssessment } from "./pi-roles";
+import {
+  codexProfile,
+  correctionAssessment,
+  sourceAssessment,
+} from "./pi-roles";
 import {
   hasSourcePassages,
   jsonSnapshot,
@@ -38,9 +42,10 @@ export const reviewSystem = [
   "Check every supporting proof as well as the final conclusion: all directions, quantifiers, hypotheses, cases, reductions, computational models, and bounds. No supporting claim, citation, or earlier verification label is established merely because the argument says so. Seek concrete counterexamples and missing justifications. Do not assume an imported theorem is true while checking its application.",
   "List every nonroutine external result used anywhere in the argument in externalResults, with its exact hypotheses and conclusion. Immediate routine facts and results fully proved in the argument need no entry.",
   sourceAssessment,
+  correctionAssessment,
   "Judge the mathematical argument and the explicit task requirements. Internal support-note bookkeeping is not a completion requirement: a verified external theorem may be cited directly without a separate theorem note. A missing mathematical premise or an unsupported application remains a defect. If FAIL rests on an unmet task requirement, quote that requirement from the supplied task and explain the violation.",
   "Audit the whole packet even though it is divided into notes. Notes in this packet are all under review; a support link does not exempt a proof or citation from checking. You may use web search to retrieve and read primary sources. Do not use other runs, internal solver verdicts, or tools other than web search.",
-  "PASS requires a complete correct resolution of the task. Partial progress or an unmet completion requirement is FAIL. A concrete mathematical defect is FAIL. Citation corrections that leave the mathematics verified belong in the report and do not change the verdict. An unresolved necessary proof step or inaccessible necessary source is INCONCLUSIVE. Explain the decisive evidence and cite the passages you checked. Return one JSON object matching the output schema.",
+  "Apply the correction policy to every supporting proof and the final conclusion. PASS requires a complete resolution of the exact task under that policy. Partial progress or an unmet completion requirement is FAIL. Explain the decisive evidence and cite the passages you checked. Return one JSON object matching the output schema.",
 ].join("\n\n");
 
 const reviewInput = z.strictObject({

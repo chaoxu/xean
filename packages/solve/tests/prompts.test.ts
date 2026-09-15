@@ -6,6 +6,7 @@ import type { PiSubmissionGate } from "xean/pi";
 
 import {
   coordinatorCall,
+  correctionAssessment,
   explorerCall,
   reconstructionCall,
   sourceCall,
@@ -13,6 +14,7 @@ import {
   proofCall,
   verifierCall,
 } from "../pi-roles";
+import { reviewSystem } from "../review";
 import { sourceVerdictsFor, verdictsFor, verifierNames } from "../roles";
 import { z } from "zod";
 import { workflowSchemaVersion } from "../workflow";
@@ -320,11 +322,66 @@ test("correctness permits valid partial claims and reserves task completion for 
     "A correct partial result passes even when it explicitly leaves the task unfinished.",
   );
   expect(correctness.prompt).toContain(
-    "Fail a note when an inference is unsupported, a stated conclusion is unproved",
+    "Fail a note when an essential inference remains unsupported, its stated conclusion remains unproved",
   );
   expect(requirements.prompt).toContain(
     "Decide whether each note meets every completion criterion of the exact task.",
   );
+});
+
+test("internal and final checks share the local-correction policy without editing notes", async () => {
+  const input = {
+    task,
+    notes: [note],
+    support: [],
+    verify: [{ note: "n1", verifiers: [...verifierNames] }],
+  };
+  const before = structuredClone(input);
+  const calls = [
+    await verifierCall("correctness", input, ["n1"]),
+    await verifierCall("requirements", input, ["n1"]),
+    await reconstructionCall(
+      input,
+      note,
+      { statement: "P holds." },
+      "Independent proof of P.",
+    ),
+  ];
+  const source = await sourceCall(
+    { provider: "codex", model: "test", reasoning: "low", search: true },
+    input,
+    ["n1"],
+    {
+      call: 1 as EntryId,
+      verdicts: [
+        {
+          note: "n1",
+          verdict: "PASS",
+          report: "Conditional.",
+          externalResults: ["The exact external theorem."],
+        },
+      ],
+    },
+  );
+  for (const instructions of [
+    ...calls.map((call) => call.system + "\n" + call.prompt),
+    source.request.developerInstructions,
+    reviewSystem,
+  ]) {
+    expect(instructions).toContain(correctionAssessment);
+    expect(instructions).not.toContain("even when it is obvious or small");
+    expect(instructions).not.toContain(
+      "An explicitly false supporting claim is a defect",
+    );
+  }
+  expect(correctionAssessment).toContain(
+    "Record each correction and its justification in the existing report.",
+  );
+  expect(correctionAssessment).toContain(
+    "For an algorithmic correction, verify soundness, completeness, and the claimed running time.",
+  );
+  expect(correctionAssessment).toContain("an unsupported essential premise");
+  expect(input).toEqual(before);
 });
 
 test("prompt bytes are frozen with the workflow schema version", async () => {
@@ -415,8 +472,8 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
   // Changing any role prompt changes the bytes the workflow fold matches
   // against journals, so bump workflowSchemaVersion and update this digest
   // in the same change.
-  expect(workflowSchemaVersion).toBe(9);
+  expect(workflowSchemaVersion).toBe(10);
   expect(digest.digest("hex")).toBe(
-    "bd6f5a19965521fa0156cb2dc6839c8ee648001eb172e299df6b3de4b4879f97",
+    "3e5eee4a28b4ae4452b2e0a96a62e2ff8094d91827def15453f60e48b4e87dc9",
   );
 });
