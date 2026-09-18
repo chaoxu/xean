@@ -112,3 +112,17 @@ export class ReasoningRecovery {
     });
   }
 }
+
+/** The model-input view without reasoning blocks; the transcript keeps them. */
+export function withoutReasoning(messages: AgentMessage[]): AgentMessage[] {
+  return messages.flatMap((message): AgentMessage[] => {
+    if (message.role !== "assistant") return [message];
+    const content = message.content.filter(
+      (block): block is Exclude<typeof block, ThinkingContent> =>
+        block.type !== "thinking",
+    );
+    if (content.length === 0) return [];
+    const trimmed: AssistantMessage = { ...message, content };
+    return [trimmed];
+  });
+}

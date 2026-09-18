@@ -33,7 +33,7 @@ import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { z } from "zod";
 
 import { entryId, json } from "./schemas";
-import { ReasoningRecovery } from "./pi-recovery";
+import { ReasoningRecovery, withoutReasoning } from "./pi-recovery";
 import type {
   AuditedTool,
   Campaign,
@@ -90,6 +90,8 @@ export interface PiRunOptions {
   readonly signal?: AbortSignal;
   readonly transport?: Transport;
   readonly cacheKey?: string;
+  /** False keeps completed reasoning out of later model input in this call. */
+  readonly replayReasoning?: boolean;
 }
 
 type PiOutcomeBase = {
@@ -267,6 +269,7 @@ export const piRequest = z.strictObject({
   maxLengthContinuations: z.number().int().min(1).max(31).optional(),
   submissionGate: piSubmissionGate.optional(),
   cacheKey: z.string().min(1).max(64).optional(),
+  replayReasoning: z.literal(false).optional(),
 });
 
 const lengthContinuation =
@@ -1266,6 +1269,12 @@ async function runPiBody(
   // recovery attempt. The ID is transport configuration and is not persisted.
   const sessionId = crypto.randomUUID();
   const recovery = new ReasoningRecovery();
+  // The transcript always retains reasoning; only the model-input view drops
+  // it when the request declines replay.
+  const modelInput = (messages: AgentMessage[]): AgentMessage[] =>
+    exact.replayReasoning === false
+      ? withoutReasoning(recovery.forModel(messages))
+      : recovery.forModel(messages);
   const startSpan = createTypedSpanStarter(telemetry, [
     XEAN_PI_TELEMETRY_SCHEMA,
   ]);
@@ -1292,7 +1301,7 @@ async function runPiBody(
         const contextState = (context: AgentContext) =>
           submissionContext(gate!, options.model, {
             ...context,
-            messages: convertToLlm(recovery.forModel(context.messages)),
+            messages: convertToLlm(modelInput(context.messages)),
           });
         const agentContext = (
           messages: readonly AgentMessage[],
@@ -1321,8 +1330,7 @@ async function runPiBody(
             agentContext(prior),
             {
               model: options.model,
-              convertToLlm: (messages) =>
-                convertToLlm(recovery.forModel(messages)),
+              convertToLlm: (messages) => convertToLlm(modelInput(messages)),
               toolExecution: "sequential",
               sessionId,
               ...(options.transport === undefined
@@ -1465,7 +1473,7 @@ async function runPiBody(
           if (!interrupted) break;
           const projected =
             retry && final.rawStopReason === "incomplete.max_messages"
-              ? recovery.forModel(messages)
+              ? modelInput(messages)
               : undefined;
           if (projected !== undefined) {
             // Preserve completed reasoning, while charging every provider error
@@ -1557,6 +1565,9 @@ export async function runPi(
       ? {}
       : { submissionGate: options.submissionGate }),
     ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+    ...(options.replayReasoning === false
+      ? { replayReasoning: false as const }
+      : {}),
   });
   if (parsed.submissionGate !== undefined) {
     if (!parsed.stopAfterToolResult || options.tools?.length !== 1)

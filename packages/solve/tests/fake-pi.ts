@@ -32,6 +32,7 @@ export function fakePiRequest(options: PiRunOptions): Json {
     maxRecoveries: options.maxRecoveries,
     maxLengthContinuations: options.maxLengthContinuations,
     cacheKey: options.cacheKey,
+    replayReasoning: options.replayReasoning === false ? false : undefined,
   };
   // The round-trip drops undefined-valued fields, matching the
   // omit-when-absent shape of real journaled requests; stopAfterToolResult is

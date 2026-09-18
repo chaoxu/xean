@@ -71,6 +71,9 @@ const piRoleProfile = z.strictObject({
   provider: nonblank,
   model: nonblank,
   reasoning: piReasoning,
+  // False sends each later response of a call the transcript without its
+  // earlier reasoning items. Absent means the provider default: replay them.
+  replayReasoning: z.boolean().optional(),
 });
 type PiRoleProfile = z.output<typeof piRoleProfile>;
 
@@ -584,6 +587,7 @@ async function runCall<S extends z.ZodType>(
     system: roleCall.system,
     prompt: roleCall.prompt,
     reasoning: profile.reasoning,
+    ...(profile.replayReasoning === false ? { replayReasoning: false } : {}),
     tools: [submitTool],
     stopAfterToolResult: true,
     submissionGate: roleCall.submissionGate,

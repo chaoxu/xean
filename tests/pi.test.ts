@@ -457,6 +457,7 @@ async function gatedRun(
   tool = gatedTool,
   cancelOnRequest?: AbortController,
   gate: PiSubmissionGate = submissionGate,
+  extra: { readonly replayReasoning?: boolean } = {},
 ) {
   const requests: { context: Context; maxTokens: number | undefined }[] = [];
   const wire = models(replies, (context, options) => {
@@ -482,6 +483,7 @@ async function gatedRun(
         ? {}
         : { signal: cancelOnRequest.signal }),
       ...(enabled ? { submissionGate: gate } : {}),
+      ...extra,
     });
     return { result, requests, records: [...c.records()] };
   } finally {
@@ -533,6 +535,38 @@ test("submission gate saves every partial in the same context before the near-li
   expect(
     requests.every((request) => request.maxTokens! <= model.maxTokens),
   ).toBe(true);
+});
+
+test("replayReasoning false keeps completed reasoning out of later model input", async () => {
+  const { result, requests, records } = await gatedRun(
+    [
+      gateReply(1, 1000, false),
+      gateReply(2, 3200, false),
+      gateReply(3, 4000, true),
+    ],
+    true,
+    2,
+    gatedTool,
+    undefined,
+    submissionGate,
+    { replayReasoning: false },
+  );
+  expect(result.state).toBe("succeeded");
+  expect(requests).toHaveLength(3);
+  for (const request of requests.slice(1)) {
+    const assistants = request.context.messages.filter(
+      (message) => message.role === "assistant",
+    );
+    expect(assistants.length).toBeGreaterThan(0);
+    expect(JSON.stringify(assistants)).not.toContain('"thinking"');
+    expect(JSON.stringify(assistants)).toContain('"toolCall"');
+  }
+  expect(JSON.stringify(result.transcript)).toContain("retained-1");
+  expect(
+    records.find(
+      (entry) => entry.kind === "call" && entry.label === "submission-gate",
+    ),
+  ).toMatchObject({ request: { replayReasoning: false } });
 });
 
 test.each([1, 4, 5])(

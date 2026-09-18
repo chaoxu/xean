@@ -349,6 +349,7 @@ test.each([
   { explorerContinuation: false },
   { explorerContextBudgetTokens: 500_000 },
   { maxExplorerResponses: 2 },
+  { explorer: { ...roleSettings().explorer, replayReasoning: false } },
 ])("continuation settings remain frozen on resume: %j", async (change) => {
   const path = campaignPath(),
     settings = { ...roleSettings(), explorerContinuation: true };

@@ -141,6 +141,47 @@ function shorthand(notes: readonly { verdicts: readonly Verdict[] }[]) {
   );
 }
 
+test("a role profile with replayReasoning false passes the toggle to its Pi request", async () => {
+  const path = campaignPath();
+  const settings = roleSettings();
+  const workflow = workflowConfiguration({
+    task,
+    settings: {
+      ...settings,
+      explorer: { ...settings.explorer, replayReasoning: false },
+    },
+  });
+  const campaign = createCampaign(path, applicationId, workflow);
+  const drive = dependencies([
+    { submission: { notes: [good] } },
+    { submission: coordination("n1") },
+    ...passes("n1"),
+  ]);
+  try {
+    const phase = await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    );
+    expect(phase.kind).toBe("accepted");
+    expect(drive.calls[0]).toMatchObject({
+      label: "xean-solve/explorer",
+      replayReasoning: false,
+    });
+    expect(drive.calls[1]!.label).toBe("xean-solve/coordinator");
+    expect("replayReasoning" in drive.calls[1]!).toBe(false);
+    expect(
+      campaign
+        .records()
+        .find(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/explorer",
+        ),
+    ).toMatchObject({ request: { replayReasoning: false } });
+  } finally {
+    campaign.close();
+  }
+});
+
 test("the durable workflow accepts a note every verifier passed", async () => {
   const path = campaignPath();
   const workflow = config();
