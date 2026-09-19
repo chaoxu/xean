@@ -2,7 +2,7 @@
 
 An agent operates Xean through command-line calls and JSON output. It can read progress, supply mathematical notes, and append Explorer guidance while a run is active. Xean stores the submissions and their delivery boundaries in the campaign database.
 
-The examples below run from the repository root with Bun. [Installation](installation.md) covers released packages and provider credentials. In an installed project, use `bun run xean-solve` in place of `bun packages/solve/solve.ts`, and find the examples under `node_modules/xean-solve/examples/`.
+The examples below run from the repository root with Bun. [Installation](installation.md) covers the current GitHub `main` checkout and provider credentials.
 
 ## Start and inspect
 
@@ -195,7 +195,7 @@ The workflow drains requested verification batches before another Explorer turn 
 
 Inspection includes saved notes before handoff and after interruption. A fresh role call receives their full texts with stable IDs and the same guidance, with a fresh response budget. Internal provider retries share the existing response count. Every retryable provider error, including `incomplete.max_messages`, consumes the `maxRecoveries` allowance while preserving completed reasoning. Empty submissions are successful handoffs and do not consume error recoveries. See [Explorer continuation](../README.md#explorer-continuation) for context headroom. Coordinator advice uses `explorerGuidance`, and inconclusive verification returns its report to Explorer. Resuming requires the task, settings, and request contracts recorded in the campaign.
 
-The workflow declaration uses schema 9 and the execution contract uses schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result with zero Explorer turns after all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
+Workflow declarations are versioned independently of the execution contract, which uses schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result with zero Explorer turns after all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
 
 All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/xean/blob/main/SPEC.md) for recovery and copy rules.
 

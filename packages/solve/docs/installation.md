@@ -1,17 +1,17 @@
 # Install the solver
 
-Xean requires Bun 1.3.13 or newer. Install the Xean 1.1.1 kernel and solver archives in a project directory:
+The [`main` branch on GitHub](https://github.com/chaoxu/xean) is the current release. Install and update from that branch. Existing numbered releases are historical archives.
+
+Xean requires Bun 1.3.13 or newer on macOS or Linux. Clone the repository and install its locked dependencies:
 
 ```sh
-mkdir xean-project
-cd xean-project
-bun add --minimum-release-age 86400 /path/to/xean-1.1.1.tgz /path/to/xean-solve-1.1.1.tgz
-bun run xean-solve contract
+git clone --branch main https://github.com/chaoxu/xean.git
+cd xean
+bun install --frozen-lockfile
+bun packages/solve/solve.ts contract
 ```
 
-Replace the archive paths with your downloaded or locally packed files. The install command uses Bun's one-day release-age filter for upstream dependencies. Both packages include the MIT license. Campaigns use Bun's SQLite database, with TypeScript computing note verification and support closure.
-
-From a source checkout, install dependencies with `bun install --frozen-lockfile` and run `bun packages/solve/solve.ts`. The examples below use installed packages. In a checkout, their files are under `packages/solve/examples`.
+The checkout contains the kernel, solver, and examples under the MIT license. Run the commands below from its root. Campaigns use Bun's SQLite database, with TypeScript computing note verification and support closure.
 
 ## Choose a provider
 
@@ -26,13 +26,13 @@ Xean uses Pi's saved credential for these roles. Source verification and indepen
 After logging in and exiting Pi, run the small setup example. This profile uses the public Codex endpoint at `https://chatgpt.com/backend-api` and Luna with low reasoning for every role:
 
 ```sh
-bun run xean-solve run node_modules/xean-solve/examples/task-even-sum.json campaign.db node_modules/xean-solve/examples/settings-openai-codex.json
+bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
 ```
 
 With an OpenAI API account, configure `OPENAI_API_KEY` in your environment or the OpenAI credential through Pi. This profile uses `https://api.openai.com/v1`:
 
 ```sh
-bun run xean-solve run node_modules/xean-solve/examples/task-even-sum.json campaign.db node_modules/xean-solve/examples/settings-openai.json
+bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai.json
 ```
 
 Explorer, coordinator, correctness, requirements, and reconstruction use public provider endpoints and Pi credentials. Source verification also requires the Codex CLI and configured credentials, and always enables web search. The examples require no Fleet services, private model registry, or lab certificate. Use a new campaign path when changing profiles because the settings are frozen.
@@ -78,10 +78,21 @@ When reporting a failure, include the exact command, package version or Git revi
 ## Inspect and guide
 
 ```sh
-bun run xean-solve inspect campaign.db
-bun run xean-solve guide --id try-direct-proof campaign.db node_modules/xean-solve/examples/guidance.txt
-bun run xean-solve inspect --include-guidance campaign.db
-bun run xean-solve export campaign.db
+bun packages/solve/solve.ts inspect campaign.db
+bun packages/solve/solve.ts guide --id try-direct-proof campaign.db packages/solve/examples/guidance.txt
+bun packages/solve/solve.ts inspect --include-guidance campaign.db
+bun packages/solve/solve.ts export campaign.db
 ```
 
 Submit guidance while a campaign is active or paused for delivery to a future Explorer turn. Advice on a completed campaign remains pending. Repeat the original `run` command after an interruption to resume, and use `export` after acceptance to obtain the argument for external review. [Agent usage](agent-usage.md) explains receipts, delivery, and recovery.
+
+## Update and reproduce a run
+
+In a clean checkout of `main`, update the source and its dependencies together:
+
+```sh
+git pull --ff-only
+bun install --frozen-lockfile
+```
+
+Record `git rev-parse HEAD` with each run. For a reproducible installation, check out that exact commit and run `bun install --frozen-lockfile`. Keep the original revision available for unfinished campaigns because changed workflow declarations can require their original runtime. Use a separate checkout when running old and current campaigns together.

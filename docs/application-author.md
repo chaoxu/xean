@@ -1,10 +1,12 @@
 # Building an xean application
 
-Install xean 1.1.1 from GitHub:
+Install xean from the current `main` branch on GitHub:
 
 ```sh
-bun add github:chaoxu/xean#v1.1.1 zod@4.5.4
+bun add github:chaoxu/xean#main zod@4.5.4
 ```
+
+Commit the generated lockfile to preserve the resolved revision. For an explicit revision, replace `main` with a full Git commit. Existing numbered releases are historical archives.
 
 ## Create and verify a candidate
 

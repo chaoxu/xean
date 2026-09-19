@@ -15,14 +15,15 @@ The kernel records facts and enforces journal, call, tool, candidate, verdict, a
 
 ## Install and run
 
-Use Bun 1.3.13 or newer on macOS or Linux. From a checkout:
+The [`main` branch on GitHub](https://github.com/chaoxu/xean) is the current release. Install and update from that branch. Existing numbered releases are historical archives.
+
+Use Bun 1.3.13 or newer on macOS or Linux:
 
 ```sh
+git clone --branch main https://github.com/chaoxu/xean.git
+cd xean
 bun install --frozen-lockfile
 bun packages/solve/solve.ts contract
-bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
-bun packages/solve/solve.ts inspect campaign.db
-bun packages/solve/solve.ts export campaign.db
 ```
 
 The Codex profile uses Pi's OpenAI Codex provider. Authenticate it with Pi:
@@ -33,7 +34,17 @@ bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
 
 Enter `/login`, choose **OpenAI Codex**, and exit. The OpenAI API profile uses `OPENAI_API_KEY` and `packages/solve/examples/settings-openai.json`. Provider access, credentials, and model availability come from Pi and the selected profile. The solver examples use public OpenAI endpoints and need no xean-lab service.
 
-Source verification and independent review also require the Codex CLI with native credentials. Install the CLI and authenticate with `codex login` before running either profile. Xean selects the CLI through `XEAN_CODEX_COMMAND` or the path, reads its credential from `CODEX_HOME` or `~/.codex`, and enables web search for these checks.
+Source verification and independent review also require the Codex CLI with configured credentials. Install the CLI and authenticate with `codex login` before running either profile. Xean selects the CLI through `XEAN_CODEX_COMMAND` or the path, reads its configuration from `CODEX_HOME` or `~/.codex`, and enables web search for these checks. [Provider setup](packages/solve/docs/installation.md#choose-a-provider) also covers custom endpoints.
+
+After authenticating, run the small example:
+
+```sh
+bun packages/solve/solve.ts run packages/solve/examples/task-even-sum.json campaign.db packages/solve/examples/settings-openai-codex.json
+bun packages/solve/solve.ts inspect campaign.db
+bun packages/solve/solve.ts export campaign.db
+```
+
+To update the checkout, run `git pull --ff-only` followed by `bun install --frozen-lockfile`. Record `git rev-parse HEAD` with a run so its runtime can be reproduced. Keep the original revision available when resuming an older campaign. The [installation guide](packages/solve/docs/installation.md) gives the complete setup and update instructions.
 
 The task is one JSON object:
 
@@ -83,7 +94,7 @@ The source verifier inspects primary-source passages for nonroutine external res
 bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json
 ```
 
-Solver workflow declarations use schema 7. Earlier declarations require their original runtime. Start a fresh campaign with the new version and use `submit` or `guide` to carry selected prior work forward. The SQLite journal and execution contract remain at schema 1.
+Solver workflow declarations are versioned. An incompatible declaration requires its original runtime. Start a fresh campaign with the current revision and use `submit` or `guide` to carry selected prior work forward. The SQLite journal and execution contract remain at schema 1.
 
 ## Development
 
