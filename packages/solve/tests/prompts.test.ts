@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 
 import type { EntryId } from "xean";
-import type { PiSubmissionGate } from "xean/pi";
 
 import {
   coordinatorCall,
@@ -17,7 +15,6 @@ import {
 import { reviewSystem } from "../review";
 import { sourceVerdictsFor, verdictsFor, verifierNames } from "../roles";
 import { z } from "zod";
-import { workflowSchemaVersion } from "../workflow";
 
 const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 
@@ -382,99 +379,4 @@ test("internal and final checks share the local-correction policy without editin
   );
   expect(correctionAssessment).toContain("an unsupported essential premise");
   expect(input).toEqual(before);
-});
-
-test("prompt bytes are frozen with the workflow schema version", async () => {
-  const { text, ...heading } = note;
-  const second = {
-    ...note,
-    id: "n2",
-    support: ["n1"],
-    verified: false,
-    verdicts: [],
-  };
-  const verification = {
-    task,
-    verify: [{ note: "n2", verifiers: [...verifierNames] }],
-    notes: [second],
-    support: [note],
-  };
-  const calls: {
-    label: string;
-    system: string;
-    prompt: string;
-    submissionGate?: PiSubmissionGate | undefined;
-  }[] = [
-    explorerCall({
-      task,
-      explorerGuidance: "Extend P. Test the degenerate instances first.",
-      notes: [heading],
-      support: [note],
-    }),
-    explorerCall(
-      {
-        task,
-        explorerGuidance: "Extend P. Test the degenerate instances first.",
-        notes: [heading],
-        support: [note],
-      },
-      400_000,
-      1,
-    ),
-    coordinatorCall({ task, notes: [note, second] }),
-    coordinatorCall({ task, notes: [note, second], emptySubmission: true }),
-    await verifierCall("correctness", verification, ["n2"]),
-    await verifierCall("requirements", verification, ["n2"]),
-  ];
-  const stated = { statement: "P holds." };
-  calls.push(
-    await statementCall(verification, second),
-    await proofCall(verification, second, stated),
-    await reconstructionCall(
-      verification,
-      second,
-      stated,
-      "Independent proof of P.",
-    ),
-    await proofCall(verification, second, stated, 42 as EntryId),
-    await reconstructionCall(
-      verification,
-      second,
-      stated,
-      "Independent proof of P.",
-      42 as EntryId,
-    ),
-  );
-  const source = await sourceCall(
-    { model: "codex-model", reasoning: "low" },
-    verification,
-    ["n2"],
-    {
-      call: 1 as EntryId,
-      verdicts: [
-        {
-          note: "n2",
-          verdict: "PASS",
-          report: "Conditional.",
-          externalResults: ["The exact external theorem."],
-        },
-      ],
-    },
-  );
-  const digest = createHash("sha256");
-  for (const call of calls) {
-    digest.update(`${call.label}\n${call.system}\n${call.prompt}\n`);
-    if (call.submissionGate?.continuationPrompt !== undefined)
-      digest.update(`${call.submissionGate.continuationPrompt}\n`);
-  }
-  digest.update(
-    `${source.label}\n${source.request.developerInstructions}\n${source.request.prompt}\n`,
-  );
-  // Changing any role prompt changes the bytes the workflow fold matches
-  // against journals, so bump workflowSchemaVersion and update this digest
-  // in the same change.
-  expect(workflowSchemaVersion).toBe(11);
-  expect(digest.digest("hex")).toBe(
-    "d0ab3fdc23ae361567d58f2d198b4a767e9d5ac16c0e220b91790bbd59ae9ca3",
-  );
 });

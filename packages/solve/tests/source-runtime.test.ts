@@ -43,6 +43,13 @@ const request: CodexRequest = {
   outputSchema: { type: "object" },
 };
 
+test("Codex requests require live web search", () => {
+  expect(codexRequest.parse(request).search).toBe(true);
+  expect(codexRequest.safeParse({ ...request, search: false }).success).toBe(
+    false,
+  );
+});
+
 test("the precise compaction warning preserves a completed final submission", () => {
   for (const events of [
     [...start, warning, search("s1"), final, completed],

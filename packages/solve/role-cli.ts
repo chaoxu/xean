@@ -66,6 +66,10 @@ import {
 } from "./workflow";
 
 const callsConfig = z.strictObject({ kind: z.literal("calls") });
+const inspectionConfig = z.discriminatedUnion("kind", [
+  workflowConfig,
+  callsConfig,
+]);
 export type RoleCommand = RoleName;
 
 export function isRoleCommand(value: string | undefined): value is RoleCommand {
@@ -114,22 +118,22 @@ function visibleSubmission(
 ): Json | undefined {
   const verifier = verifierFromLabel(call.label);
   try {
-    if (
-      verifier === "source" &&
-      localSourceRequest.safeParse(call.request).success
-    ) {
-      const output = returnedOutput(records, call.seq);
-      if (output === undefined) return undefined;
-      return { verifier, ...localSourceResult.parse(output.output) };
-    }
-    if (verifier === "source" && codexRequest.safeParse(call.request).success) {
-      const submission = codexSubmission(records, call.seq);
-      if (submission === undefined) return undefined;
-      return {
-        verifier,
-        ...sourceVerdicts.parse(submission.input),
-        usage: submission.usage,
-      };
+    if (verifier === "source") {
+      if (localSourceRequest.safeParse(call.request).success) {
+        const output = returnedOutput(records, call.seq);
+        if (output === undefined) return undefined;
+        return { verifier, ...localSourceResult.parse(output.output) };
+      }
+      if (codexRequest.safeParse(call.request).success) {
+        const submission = codexSubmission(records, call.seq);
+        if (submission === undefined) return undefined;
+        return {
+          verifier,
+          ...sourceVerdicts.parse(submission.input),
+          usage: submission.usage,
+        };
+      }
+      return undefined;
     }
     for (const [name, schema] of [
       ["statement", statement],
@@ -230,6 +234,10 @@ async function projectCampaignRecords(
   includeCandidate: boolean,
 ): Promise<{ inspection: Json; candidate?: Uint8Array }> {
   assertApplication(records[0]);
+  const declaration = records[0];
+  const config = inspectionConfig.parse(
+    declaration?.kind === "campaign" ? declaration.config : undefined,
+  );
   const results = new Map(
     records
       .filter((entry) => entry.kind === "call-result")
@@ -269,11 +277,8 @@ async function projectCampaignRecords(
         ...(options.includeRequests === true ? { request: entry.request } : {}),
       };
     });
-  const declaration = records[0];
-  const config = workflowConfig.safeParse(
-    declaration?.kind === "campaign" ? declaration.config : undefined,
-  );
-  const snapshot = config.success ? await deriveWorkflow(records) : undefined;
+  const snapshot =
+    config.kind === "workflow" ? await deriveWorkflow(records) : undefined;
   const phase = snapshot?.phase;
   const report =
     phase?.kind === "accepted" || phase?.kind === "turn-limit"

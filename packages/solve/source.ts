@@ -17,9 +17,9 @@ import { z } from "zod";
 
 import { nonblank, returnedOutput } from "./roles";
 
-// The source verifier runs Codex, with web search only when the request asks
-// for it, isolated in a fresh CODEX_HOME. Only the selected provider's connection
-// settings and credentials are inherited; other Codex features stay disabled.
+// The source verifier runs Codex with live web search, isolated in a fresh
+// CODEX_HOME. Only the selected provider's connection settings and credentials
+// are inherited; other Codex features stay disabled.
 // Its request and stdout are journaled like any call.
 
 /** The reasoning levels the Codex CLI accepts for model_reasoning_effort. */
@@ -35,7 +35,7 @@ export const codexRequest = z.strictObject({
   protocol: z.literal("xean/codex-exec/v1"),
   model: nonblank,
   reasoning: codexReasoning,
-  search: z.boolean(),
+  search: z.literal(true),
   maxWebActions: z.number().int().positive().optional(),
   developerInstructions: nonblank,
   prompt: nonblank,
@@ -646,7 +646,7 @@ export function codexExec(
           request.model,
           ...providerArgs,
           "-c",
-          `web_search="${request.search ? "live" : "disabled"}"`,
+          'web_search="live"',
           ...disabledFeatures.flatMap((feature) => [
             "-c",
             `features.${feature}=false`,

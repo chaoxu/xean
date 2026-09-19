@@ -53,11 +53,11 @@ Xean uses Pi's context estimate, anchored to the latest applicable provider usag
 
 Each Explorer call uses its response budget and context occupancy in place of Pi's ordinary 32-turn and eight-length-continuation limits. Transient-error recovery has its own bound, and interruption remains available. All these provider requests count as one Explorer turn. Use two fresh campaign databases with the same task and settings except for the response budget when comparing behavior. Compare cost and externally checked outcomes as well as turns.
 
-### Migrating settings
+### Updates
 
-New campaigns use workflow declaration schema 11. The execution-contract schema remains 1. For new runs, remove `explorerContinuation: true` from older settings. Replace `explorerContinuation: false` with `maxExplorerResponses: 1` when a single response is desired. This limit is stricter than the old handoff mode: plain text, length-limited output, and invalid submissions consume that response, and exhaustion without a valid submission fails the call. Provider errors retain their separate recovery allowance. Remove `provider` and `search` from source and independent-review profiles, leaving `{model, reasoning}`.
+Xean supports the current settings and journal formats only. Use the current example settings for new campaigns. Older formats are rejected without migration or fallback readers. An incompatible update requires a fresh campaign.
 
-Resume historical campaigns with their exact pinned runtime commit and dependency lockfile. Keep their declarations, settings, and journal entries unchanged. Settings migration applies to new runs and does not rewrite existing campaigns.
+Keep archived journals unchanged. Git history and the recorded dependency lockfile retain the original implementation. You can carry selected earlier work into a new campaign with `submit` or `guide`.
 
 ## Run
 
@@ -126,7 +126,7 @@ String support IDs must name existing campaign notes that are not dead. Positive
 
 Both commands make zero model calls. `submit` works alongside the runner. Notes received during an Explorer call are numbered after its returned notes and before the next coordinator input. A frozen coordinator or verifier input keeps its original content, so later submissions wait for another intake boundary. A terminal campaign keeps the submission pending without reopening. `inspect --include-submissions` exposes receipts, delivery boundaries, coordinator call IDs, assigned note IDs, and pending status. The [agent guide](docs/agent-usage.md#supply-mathematical-notes) covers these fields and external verification in detail.
 
-The caller prepares the text, including PDF or CSV conversion, retrieval, dataset analysis, and selection of useful prior-run work. Preserve separate theorem and proof notes and their dependency edges when transferring a graph. Bundling the graph into one text with empty support loses those edges. Xean places supplied notes in the existing support closure and context formatting. File preparation adds no solver role. Workflow declarations record local support references. Earlier campaigns retain their pinned runtime.
+The caller prepares the text, including PDF or CSV conversion, retrieval, dataset analysis, and selection of useful prior-run work. Preserve separate theorem and proof notes and their dependency edges when transferring a graph. Bundling the graph into one text with empty support loses those edges. Xean places supplied notes in the existing support closure and context formatting. File preparation adds no solver role. Workflow declarations record local support references.
 
 ## Guide an active or paused campaign
 

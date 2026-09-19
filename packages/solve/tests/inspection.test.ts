@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createCampaign, openReader } from "xean";
+import { createCampaign, defineTool, openReader } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
-import { applicationId } from "../roles";
+import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
 import { workflowConfiguration } from "../workflow";
 import {
   campaignPath,
@@ -14,6 +14,72 @@ import {
 } from "./harness";
 
 afterEach(cleanupCampaigns);
+
+test.each([
+  { kind: "workflow", schemaVersion: 0 },
+  { kind: "calls", unknown: true },
+  { kind: "unknown" },
+])(
+  "inspection rejects unsupported declarations without changing the journal: %j",
+  async (config) => {
+    const path = campaignPath();
+    createCampaign(path, applicationId, config).close();
+    const before = await Bun.file(path).arrayBuffer();
+    await expect(inspectCampaign(path)).rejects.toThrow();
+    expect(await Bun.file(path).arrayBuffer()).toEqual(before);
+  },
+);
+
+test("inspection does not interpret a Pi submission as source verification", async () => {
+  const path = campaignPath();
+  const campaign = createCampaign(path, applicationId, { kind: "calls" });
+  const drive = dependencies([
+    {
+      submission: {
+        verdicts: [
+          {
+            note: "n1",
+            verdict: "PASS",
+            report: "Unsupported source submission.",
+          },
+        ],
+      },
+    },
+  ]);
+  const profile = roleSettings().correctness;
+  const model = drive.models.getModel(profile.provider, profile.model);
+  if (model === undefined) throw new Error("missing fixture model");
+  try {
+    await drive.run(campaign, {
+      models: drive.models,
+      model,
+      label: verifierLabels.source,
+      role: "verifier",
+      prompt: "Unsupported Pi source request.",
+      transport: "sse",
+      stopAfterToolResult: true,
+      tools: [
+        defineTool({
+          name: roleTools.verifier,
+          description: "Submit a verifier result",
+          input: verdicts,
+          replay: "safe",
+          async run() {
+            return null;
+          },
+        }),
+      ],
+    });
+    const report: any = await inspectCampaign(path);
+    expect(report.calls[0]).toMatchObject({
+      verifier: "source",
+      state: "returned",
+    });
+    expect(report.calls[0]).not.toHaveProperty("submission");
+  } finally {
+    campaign.close();
+  }
+});
 
 test("inspection uses one journal prefix when Explorer finishes during the read", async () => {
   const config = workflowConfiguration({

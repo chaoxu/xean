@@ -506,35 +506,32 @@ test("omitted response budget is saved explicitly and matches its explicit defau
   ).toMatchObject({ created: false });
 });
 
-test.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])(
-  "previous workflow schema %s is rejected without changing the journal",
-  async (schemaVersion) => {
-    const settings = roleSettings();
-    const path = campaignPath();
-    createCampaign(
-      path,
-      applicationId,
-      jsonSnapshot({
-        kind: "workflow",
-        schemaVersion,
-        task,
-        settings,
-      }),
-    ).close();
-    const before = await Bun.file(path).arrayBuffer();
-    await expect(
-      run(
-        { task, campaignPath: path, settings },
-        {
-          models: async () => {
-            throw new Error("must reject the schema before provider setup");
-          },
+test("an unsupported workflow schema is rejected without changing the journal", async () => {
+  const settings = roleSettings();
+  const path = campaignPath();
+  createCampaign(
+    path,
+    applicationId,
+    jsonSnapshot({
+      kind: "workflow",
+      schemaVersion: 0,
+      task,
+      settings,
+    }),
+  ).close();
+  const before = await Bun.file(path).arrayBuffer();
+  await expect(
+    run(
+      { task, campaignPath: path, settings },
+      {
+        models: async () => {
+          throw new Error("must reject the schema before provider setup");
         },
-      ),
-    ).rejects.toThrow("schemaVersion");
-    expect(await Bun.file(path).arrayBuffer()).toEqual(before);
-  },
-);
+      },
+    ),
+  ).rejects.toThrow("schemaVersion");
+  expect(await Bun.file(path).arrayBuffer()).toEqual(before);
+});
 
 test.each([1, 3])(
   "Explorer response limit %s reaches execution and replay with all saved notes",

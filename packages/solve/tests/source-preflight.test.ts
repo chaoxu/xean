@@ -162,6 +162,7 @@ test("preflight and execution share the isolated auth and environment boundary",
     }
   }
   expect(captures.at(-1)?.input).toBe(prompt);
+  expect(captures.at(-1)?.args).toContain('web_search="live"');
   expectCleaned(captures);
   expect(existsSync(join(setup.authHome, "auth.json"))).toBe(true);
 });

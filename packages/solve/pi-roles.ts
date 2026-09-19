@@ -900,11 +900,10 @@ export function sameRequest(
   return JSON.stringify(journaled) === JSON.stringify(request);
 }
 
-/** The source verdicts in a Codex submission, or undefined when they fail the schema, list sources without a search, or searched without search. */
+/** Accept source verdicts only with valid claims and inspected or supplied passages. */
 function sourceVerdictsOf(
   schema: ReturnType<typeof sourceVerdictsFor>,
   submission: ReturnType<typeof codexSubmission>,
-  search: boolean,
   passages: readonly SourcePassage[] = [],
 ): z.output<ReturnType<typeof sourceVerdictsFor>> | undefined {
   const parsed = schema.safeParse(submission?.input);
@@ -920,8 +919,7 @@ function sourceVerdictsOf(
             ),
         ),
       )
-    ) &&
-    (search || submission.searches === 0)
+    )
     ? parsed.data
     : undefined;
 }
@@ -967,7 +965,6 @@ function inspectedPassages(
         assigned,
       ),
       submission,
-      request.data.search,
       supplied,
     );
     for (const verdict of value?.verdicts ?? []) {
@@ -1182,12 +1179,7 @@ async function runSource(
         })),
       });
     }
-    return sourceVerdictsOf(
-      schema,
-      codexSubmission(records, call),
-      true,
-      passages,
-    );
+    return sourceVerdictsOf(schema, codexSubmission(records, call), passages);
   };
   const prior = settled(
     campaign.records({ kinds: ["call"], labels: [verifierLabels.source] }),
@@ -1244,7 +1236,7 @@ async function runSource(
   }
   if (value === undefined) {
     throw new RoleCallError(
-      "the source verdicts fail their assigned premises or evidence schema, list new sources without a search, or searched without search",
+      "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search",
     );
   }
   return conclude({ call: receipt.call, value });
