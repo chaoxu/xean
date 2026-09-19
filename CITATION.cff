@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: If you use xean in published work, cite it with the metadata below.
+type: software
+title: "xean: mathematical exploration with durable evidence"
+abstract: >-
+  A Bun and TypeScript toolkit for LLM-driven mathematical exploration. A
+  campaign is a SQLite journal recording the task, model calls, tool activity,
+  candidate material, verdicts, request checkpoints, and provider accounting.
+  xean-solve runs an explorer, coordinator, and independent verifier workflow
+  over that journal.
+authors:
+  - family-names: Xu
+    given-names: Chao
+license: MIT
+repository-code: https://github.com/chaoxu/xean
+url: https://github.com/chaoxu/xean
+version: 1.1.1
+date-released: "2026-09-14"
+keywords:
+  - mathematics
+  - automated reasoning
+  - large language models
+  - proof verification
