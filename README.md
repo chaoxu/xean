@@ -108,18 +108,16 @@ Run logs, measurements, reviews, and research material belong in ignored `runs/`
 
 ## Cite
 
-Cite the version you used. GitHub's "Cite this repository" button reads [`CITATION.cff`](CITATION.cff); the BibTeX below is for 1.1.1, and `git describe --tags` names the exact revision of a checkout.
+Cite the repository rather than a version. GitHub's "Cite this repository" button reads [`CITATION.cff`](CITATION.cff), and this BibTeX matches it:
 
 ```bibtex
 @software{xu2026xean,
   author  = {Xu, Chao},
   title   = {xean: mathematical exploration with durable evidence},
-  version = {1.1.1},
   year    = {2026},
-  month   = sep,
   url     = {https://github.com/chaoxu/xean},
   license = {MIT}
 }
 ```
 
-A result produced with xean should also name the model and provider recorded in the campaign journal, since the journal, not xean, is the evidence for the mathematics.
+Where reproducibility matters, add the tag or commit of the checkout to the entry's `note` field. A result produced with xean should also name the model and provider recorded in the campaign journal, since the journal, not xean, is the evidence for the mathematics.

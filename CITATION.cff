@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: If you use xean in published work, cite it with the metadata below.
+message: If you use xean in published work, cite the repository with the metadata below.
 type: software
 title: "xean: mathematical exploration with durable evidence"
 abstract: >-
@@ -14,8 +14,6 @@ authors:
 license: MIT
 repository-code: https://github.com/chaoxu/xean
 url: https://github.com/chaoxu/xean
-version: 1.1.1
-date-released: "2026-09-14"
 keywords:
   - mathematics
   - automated reasoning
