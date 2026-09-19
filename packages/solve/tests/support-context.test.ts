@@ -133,7 +133,7 @@ test("correctness and reconstruction retain support while source reads only assi
     proofCall(input, target, { statement: "Coverage holds." }),
   ]);
   const native = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: true },
+    { model: "test", reasoning: "low" },
     input,
     ["n3"],
     {
@@ -201,7 +201,12 @@ test("workflow construction and per-call selection both retain ancestors across 
   const replies: Reply[] = [];
   for (const n of [first, inherited, target]) {
     replies.push(
-      { submission: { notes: [{ text: n.text, support: n.support }] } },
+      {
+        submission: {
+          solution: false,
+          notes: [{ text: n.text, support: n.support }],
+        },
+      },
       {
         submission: {
           filings: [{ note: n.id, summary: n.summary! }],

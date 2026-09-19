@@ -185,7 +185,7 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     await proofCall(input, target, { statement: "P holds." }),
   ];
   const native = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: true },
+    { model: "test", reasoning: "low" },
     input,
     ["n2"],
     {
@@ -288,7 +288,7 @@ test("correctness permits valid partial claims and reserves task completion for 
     "n14",
   ]);
   const { request: sourceRequest } = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: true },
+    { model: "test", reasoning: "low" },
     verification,
     ["n14"],
     {
@@ -348,7 +348,7 @@ test("internal and final checks share the local-correction policy without editin
     ),
   ];
   const source = await sourceCall(
-    { provider: "codex", model: "test", reasoning: "low", search: true },
+    { model: "test", reasoning: "low" },
     input,
     ["n1"],
     {
@@ -418,7 +418,8 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
         notes: [heading],
         support: [note],
       },
-      true,
+      400_000,
+      1,
     ),
     coordinatorCall({ task, notes: [note, second] }),
     coordinatorCall({ task, notes: [note, second], emptySubmission: true }),
@@ -445,7 +446,7 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
     ),
   );
   const source = await sourceCall(
-    { provider: "codex", model: "codex-model", reasoning: "low", search: true },
+    { model: "codex-model", reasoning: "low" },
     verification,
     ["n2"],
     {
@@ -472,8 +473,8 @@ test("prompt bytes are frozen with the workflow schema version", async () => {
   // Changing any role prompt changes the bytes the workflow fold matches
   // against journals, so bump workflowSchemaVersion and update this digest
   // in the same change.
-  expect(workflowSchemaVersion).toBe(10);
+  expect(workflowSchemaVersion).toBe(11);
   expect(digest.digest("hex")).toBe(
-    "3e5eee4a28b4ae4452b2e0a96a62e2ff8094d91827def15453f60e48b4e87dc9",
+    "d0ab3fdc23ae361567d58f2d198b4a767e9d5ac16c0e220b91790bbd59ae9ca3",
   );
 });

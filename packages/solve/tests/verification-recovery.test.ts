@@ -83,7 +83,7 @@ const proof = (value = "Independent proof."): Reply => ({
 });
 
 const start: readonly Reply[] = [
-  { submission: { notes: [{ text, support: [] }] } },
+  { submission: { solution: false, notes: [{ text, support: [] }] } },
   {
     submission: {
       filings: [{ note: "n1", summary: "P holds." }],
@@ -134,7 +134,10 @@ test.each([...verifierNames])(
     const nextExplorer = replies.length;
     replies.push(
       {
-        submission: { notes: [{ text: "A new approach to P.", support: [] }] },
+        submission: {
+          solution: false,
+          notes: [{ text: "A new approach to P.", support: [] }],
+        },
       },
       {
         submission: {
@@ -219,6 +222,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   const resumed = dependencies([
     {
       submission: {
+        solution: false,
         notes: [{ text: "A self-contained proof of P.", support: [] }],
       },
     },
@@ -402,6 +406,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
   const first = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "P.", support: [] },
@@ -478,6 +483,7 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "An unrelated lemma.", support: [] },
           { text: "Proof of P.", support: [] },
@@ -569,6 +575,7 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
   const first = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "P from L.", support: ["n1"] },

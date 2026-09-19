@@ -93,6 +93,8 @@ Use that structured path for an LLM verifier. An application-owned deterministic
 
 Use `stopAfterToolResult` when the verdict-submission tool is the call's only tool. Gather source inspections or other observations in earlier calls so finalization has one unambiguous submission.
 
+For a call with `submissionGate`, `runPi` infers `stopAfterToolResult: true` when omitted. The gate decides which valid submission ends the call, and the normalized journal request still records `stopAfterToolResult: true`.
+
 The candidate envelope is application-owned. Include every fact that must be audited together: statement revision, answer or proof, cited sources, imported assumptions, and dependency versions. `deriveCandidateStatus(records, candidate).verified` is derived from the supplied log snapshot; xean stores no promotion event. Publishing or adopting a verified candidate belongs to the application.
 
 ## Give a model one narrow tool

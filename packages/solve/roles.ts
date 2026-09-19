@@ -5,7 +5,6 @@ import {
   type Json,
   type Reader,
 } from "xean";
-import { piRequest } from "xean/pi";
 import { z } from "zod";
 
 import { byId, supportClosure } from "./support";
@@ -217,12 +216,7 @@ export const explorerInput = z
 export type ExplorerInput = z.output<typeof explorerInput>;
 
 export const explorerResult = z.strictObject({
-  notes: z
-    .array(z.strictObject({ text: nonblank, support: z.array(noteId) }))
-    .min(1),
-});
-export const explorerContinuationResult = explorerResult.extend({
-  notes: z.array(explorerResult.shape.notes.element),
+  notes: z.array(z.strictObject({ text: nonblank, support: z.array(noteId) })),
   solution: z.boolean(),
 });
 export type ExplorerResult = z.output<typeof explorerResult>;
@@ -237,12 +231,8 @@ export function noteIdAfter(count: number, position: number): string {
  * same turn. Mathematical verification checks whether that support suffices;
  * validation does not infer dependencies from the note's prose or notation.
  */
-export function explorerResultFor(
-  notes: readonly Pick<Note, "id" | "dead">[],
-  continuation = false,
-) {
-  const schema = continuation ? explorerContinuationResult : explorerResult;
-  return schema.superRefine((value, ctx) => {
+export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
+  return explorerResult.superRefine((value, ctx) => {
     const allowed = new Set(
       notes.filter(({ dead }) => !dead).map(({ id }) => id),
     );
@@ -763,7 +753,7 @@ export function savedExplorerSubmission(
 ):
   | {
       readonly settled: EntryId;
-      readonly input: z.output<typeof explorerContinuationResult>;
+      readonly input: ExplorerResult;
       readonly emptySubmission: boolean;
     }
   | undefined {
@@ -774,7 +764,7 @@ export function savedExplorerSubmission(
       ? [
           {
             seq: entry.seq,
-            value: explorerContinuationResult.parse(entry.input),
+            value: explorerResult.parse(entry.input),
           },
         ]
       : [],
@@ -808,16 +798,7 @@ export function succeededSubmission(
     return undefined;
   }
   try {
-    const owner = records.find(
-      (entry) => entry.kind === "call" && entry.seq === call,
-    );
-    const request =
-      owner?.kind === "call" ? piRequest.safeParse(owner.request) : undefined;
-    if (
-      tool === roleTools.explorer &&
-      request?.success &&
-      request.data.submissionGate !== undefined
-    ) {
+    if (tool === roleTools.explorer) {
       const saved = savedExplorer ?? savedExplorerSubmission(records, call);
       return saved === undefined
         ? undefined

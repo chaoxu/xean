@@ -31,7 +31,6 @@ import {
   correctnessVerdicts,
   explorerInput,
   explorerResult,
-  explorerContinuationResult,
   jsonSnapshot,
   roleFromLabel,
   returnedOutput,
@@ -146,17 +145,13 @@ function visibleSubmission(
         ? undefined
         : schema.parse(submission.input);
     }
-    const continuation =
-      role === "explorer" &&
-      piRequest.parse(call.request).submissionGate !== undefined;
-    const submission = continuation
-      ? savedExplorerSubmission(records, call.seq)
-      : succeededSubmission(records, call.seq, roleTools[role]);
+    const submission =
+      role === "explorer"
+        ? savedExplorerSubmission(records, call.seq)
+        : succeededSubmission(records, call.seq, roleTools[role]);
     if (submission === undefined) return undefined;
     if (role === "explorer") {
-      return (continuation ? explorerContinuationResult : explorerResult).parse(
-        submission.input,
-      );
+      return explorerResult.parse(submission.input);
     }
     if (role === "coordinator") {
       return jsonSnapshot(coordinatorResult.parse(submission.input));

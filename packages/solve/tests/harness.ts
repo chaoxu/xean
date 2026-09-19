@@ -60,17 +60,14 @@ export function roleSettings(): SolveSettings {
   return {
     maxExplorerTurns: 4,
     window: 100_000,
-    explorerContinuation: false,
-    maxExplorerResponses: 4,
+    maxExplorerResponses: 1,
     maxSourceWebActions: 16,
     explorer: profile,
     coordinator: profile,
     correctness: profile,
     source: {
-      provider: "codex",
       model: "codex-model",
       reasoning: "low",
-      search: true,
     },
     requirements: profile,
     reconstruction: profile,

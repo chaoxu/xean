@@ -476,13 +476,12 @@ async function gatedRun(
       label: "submission-gate",
       prompt: "Work on the task and use submit_result.",
       tools: [tool],
-      stopAfterToolResult: true,
       maxRecoveries,
       maxLengthContinuations: 8,
       ...(cancelOnRequest === undefined
         ? {}
         : { signal: cancelOnRequest.signal }),
-      ...(enabled ? { submissionGate: gate } : {}),
+      ...(enabled ? { submissionGate: gate } : { stopAfterToolResult: true }),
       ...extra,
     });
     return { result, requests, records: [...c.records()] };
@@ -531,7 +530,7 @@ test("submission gate saves every partial in the same context before the near-li
     records.find(
       (entry) => entry.kind === "call" && entry.label === "submission-gate",
     ),
-  ).toMatchObject({ request: { submissionGate } });
+  ).toMatchObject({ request: { submissionGate, stopAfterToolResult: true } });
   expect(
     requests.every((request) => request.maxTokens! <= model.maxTokens),
   ).toBe(true);
@@ -1208,16 +1207,15 @@ test("the submission gate preserves the consecutive transient-error recovery bud
   expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(0);
 });
 
-test("a submission gate requires one terminal tool before creating a call", async () => {
+test("a submission gate requires one tool before creating a call", async () => {
   const c = campaign();
   try {
     for (const options of [
       {},
-      { tools: [gatedTool] },
-      { tools: [gatedTool, submitVerdict], stopAfterToolResult: true as const },
+      { tools: [] },
+      { tools: [gatedTool, submitVerdict] },
       {
         tools: [gatedTool],
-        stopAfterToolResult: true as const,
         submissionGate: { ...submissionGate, completeArgument: " \n" },
       },
     ]) {
@@ -1239,7 +1237,6 @@ test("a submission gate requires one terminal tool before creating a call", asyn
         label: "bad-reserve",
         prompt: "test",
         tools: [gatedTool],
-        stopAfterToolResult: true,
         submissionGate: {
           ...submissionGate,
           reserveTokens: model.contextWindow,

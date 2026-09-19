@@ -56,5 +56,5 @@ test("the all-max example uses one profile per Pi call", () => {
     expect(value[name].model).toBe("gpt-5.6-sol");
     expect(value[name].reasoning).toBe("max");
   }
-  expect(value.source.provider).toBe("codex");
+  expect(value.source).toEqual({ model: "gpt-5.6-sol", reasoning: "high" });
 });

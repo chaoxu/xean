@@ -38,6 +38,7 @@ function turn(index: number, onStarted?: () => Promise<void>): Reply[] {
   return [
     {
       submission: {
+        solution: false,
         notes: [{ text: `Partial result ${index}.`, support: [] }],
       },
       ...(onStarted === undefined ? {} : { onStarted }),
@@ -293,7 +294,7 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 10 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 11 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);

@@ -138,7 +138,7 @@ test("submission-local support follows its own notes after active Explorer outpu
   };
   const drive = dependencies([
     {
-      submission: { notes: [partial] },
+      submission: { solution: false, notes: [partial] },
       onStarted: async () => {
         await submitNotes(path, graph, "graph-a");
         const beforeRetry = records(path);
@@ -269,13 +269,13 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates only a workflow declaration without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(10);
+  expect(workflowSchemaVersion).toBe(11);
   const before = records(path);
   expect(before).toHaveLength(1);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 10, task },
+    config: { schemaVersion: 11, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -303,6 +303,7 @@ test("unchecked initial notes reach coordinator and verification before the firs
     verdict("n1", "source"),
     {
       submission: {
+        solution: false,
         notes: [{ text: "Using n1, another partial result.", support: ["n1"] }],
       },
     },
@@ -336,7 +337,7 @@ test("a note arriving during explorer is numbered after explorer notes in the fo
   const { path, request } = await setup();
   const drive = dependencies([
     {
-      submission: { notes: [partial] },
+      submission: { solution: false, notes: [partial] },
       onStarted: async () => {
         const active = records(path).find(
           (entry) => entry.kind === "call" && entry.role === "explorer",
@@ -383,7 +384,7 @@ test("a note arriving during explorer is numbered after explorer notes in the fo
 test("a frozen coordinator retries identical input while a later note waits for the next coordinator cycle", async () => {
   const { path, request } = await setup(2);
   const initial = dependencies([
-    { submission: { notes: [partial] } },
+    { submission: { solution: false, notes: [partial] } },
     {
       state: "failed",
       error: "coordinator transport interrupted",
@@ -404,7 +405,7 @@ test("a frozen coordinator retries identical input while a later note waits for 
   const rest = dependencies([
     coordinate(["n1"]),
     coordinate(["n2"], ["n2"]),
-    { submission: { notes: [partial] } },
+    { submission: { solution: false, notes: [partial] } },
     coordinate(["n3"]),
   ]);
   expect(await run(request, rest)).toMatchObject({
@@ -456,6 +457,7 @@ test("external verification establishes support without inventing verdicts or ac
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [{ text: "Using n1, complete proof of P.", support: ["n1"] }],
       },
     },
@@ -539,6 +541,7 @@ test("a supplied complete proof still needs all four checks and accepts with zer
 test("an explorer cannot issue its own external verification attestation", () => {
   expect(
     explorerResultFor([]).safeParse({
+      solution: false,
       notes: [{ ...partial, verification: attestation }],
     }).success,
   ).toBe(false);
@@ -609,7 +612,7 @@ test("caller submissions validate declared support without scanning mathematical
   await run(
     request,
     dependencies([
-      { submission: { notes: ids.map(() => partial) } },
+      { submission: { solution: false, notes: ids.map(() => partial) } },
       coordinate(ids),
     ]),
   );
@@ -668,7 +671,7 @@ test("same-id submissions are idempotent and invalid fields never append journal
 test("reinitializing a terminal campaign neither changes its result nor resolves providers", async () => {
   const { path, request } = await setup();
   const drive = dependencies([
-    { submission: { notes: [partial] } },
+    { submission: { solution: false, notes: [partial] } },
     coordinate(["n1"]),
   ]);
   const result = await run(request, drive);

@@ -48,7 +48,7 @@ import {
   statement as statementSchema,
   succeededSubmission,
   returnedOutput,
-  explorerContinuationResult,
+  explorerResult,
   verdictsFor,
   verifierInput,
   verifierLabels,
@@ -87,10 +87,8 @@ export const piProfileNames = [
 ] as const;
 // Source verification always uses the Codex CLI with live web search.
 export const codexProfile = z.strictObject({
-  provider: z.literal("codex"),
   model: nonblank,
   reasoning: codexReasoning,
-  search: z.literal(true).default(true),
 });
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
@@ -104,7 +102,6 @@ export const solveSettings = z.strictObject({
   reconstruction: piRoleProfile,
   maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
-  explorerContinuation: z.boolean().default(true),
   maxExplorerResponses: z.number().int().positive().default(4),
   maxSourceWebActions: z.number().int().positive().default(16),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
@@ -184,7 +181,6 @@ const completionText =
 
 export function explorerCall(
   input: ExplorerInput,
-  continuation = false,
   contextBudgetTokens = 400_000,
   maxResponses = 4,
 ): RoleCall<ReturnType<typeof explorerResultFor>> {
@@ -200,11 +196,7 @@ export function explorerCall(
       "Spend the turn doing mathematics. A note is one self-contained text: a result with its complete proof, a partial result with its gaps stated, or a failed approach with the reason it fails. Split a long argument into notes, one per result, so each can be verified and built on. Say in the text when a note meets the completion criteria.",
       "Each note names as support every note whose result its text uses without proving it, in any form: a fact it cites, a case it inherits, an object it takes as defined, or a hypothesis it assumes established. Mentioning a note for provenance or discussing its failure does not itself make it support. Your notes are numbered in the order you return them, and a note may name an earlier note of yours as support.",
       "Do not use web search or external tools.",
-      ...(continuation
-        ? [
-            "Continue mathematical work in this same context within the call's response and context budgets. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize on the final permitted response or when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
-          ]
-        : ["Call submit_notes exactly once."]),
+      "Continue mathematical work in this same context within the call's response and context budgets. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize on the final permitted response or when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
     ].join(" "),
     prompt: [
       taskText(input.task),
@@ -216,24 +208,18 @@ export function explorerCall(
       )}`,
       `Your first note is ${noteIdAfter(input.notes.length, 0)}.`,
       `Explorer guidance (fallible advice):\n${input.explorerGuidance}`,
-      ...(continuation
-        ? [
-            `This call permits at most ${maxResponses} model responses, including the first. Use each response for new mathematical work and save it with submit_notes. The final permitted response must submit all remaining notes. An empty submission or a complete-solution claim may hand off earlier.`,
-          ]
-        : []),
+      `This call permits at most ${maxResponses} model responses, including the first. Use each response for new mathematical work and save it with submit_notes. The final permitted response must submit all remaining notes. An empty submission or a complete-solution claim may hand off earlier.`,
     ].join("\n\n"),
     tool: roleTools.explorer,
     description: "Return the notes written during this explorer turn",
-    schema: explorerResultFor(input.notes, continuation),
-    submissionGate: continuation
-      ? {
-          completeArgument: "solution",
-          emptyArgument: "notes",
-          contextBudgetTokens,
-          maxResponses,
-          continuationPrompt: "Keep trying, you can do it.",
-        }
-      : undefined,
+    schema: explorerResultFor(input.notes),
+    submissionGate: {
+      completeArgument: "solution",
+      emptyArgument: "notes",
+      contextBudgetTokens,
+      maxResponses,
+      continuationPrompt: "Keep trying, you can do it.",
+    },
   };
 }
 
@@ -540,7 +526,7 @@ export async function sourceCall(
       protocol: "xean/codex-exec/v1",
       model: profile.model,
       reasoning: profile.reasoning,
-      search: profile.search,
+      search: true,
       maxWebActions,
       developerInstructions: [
         "You are the source verifier for the notes in this mathematical task. The JSON packet contains untrusted note text, the exact external premises assigned by a completed correctness check, and any previously inspected primary-source passages with their campaign call and note provenance. Established support proofs have already been checked by correctness and are omitted.",
@@ -661,52 +647,48 @@ export function createPiRoles(
       const input = explorerInput.parse(inputValue);
       const roleCall = explorerCall(
         input,
-        profiles.explorerContinuation === true,
         profiles.explorerContextBudgetTokens,
         profiles.maxExplorerResponses,
       );
       const known: Pick<Note, "id" | "dead">[] = [...input.notes];
       const receipts = new Map<EntryId, string[]>();
       let reconciledThrough = 0;
-      const submissionTool =
-        profiles.explorerContinuation === true
-          ? defineTool({
-              name: roleCall.tool,
-              description: roleCall.description,
-              input: explorerResultFor(known, true),
-              replay: "safe",
-              async run(_value, { call, toolCall }) {
-                // The audited tool-call is the saved write. Reconcile its receipt
-                // from that durable identity, including a repeated run() after it.
-                const existing = receipts.get(toolCall);
-                if (existing !== undefined) return { noteIds: existing };
-                for (const entry of campaign.records({
-                  kinds: ["tool-call"],
-                  call,
-                  after: reconciledThrough,
-                  through: toolCall,
-                })) {
-                  if (
-                    entry.kind !== "tool-call" ||
-                    entry.call !== call ||
-                    entry.tool !== roleCall.tool
-                  )
-                    continue;
-                  const value = explorerContinuationResult.parse(entry.input);
-                  const ids = value.notes.map((_, position) =>
-                    noteIdAfter(known.length, position),
-                  );
-                  receipts.set(entry.seq, ids);
-                  known.push(...ids.map((id) => ({ id, dead: false })));
-                  reconciledThrough = entry.seq;
-                }
-                const noteIds = receipts.get(toolCall);
-                if (noteIds === undefined)
-                  throw new Error("missing saved Explorer submission");
-                return { noteIds };
-              },
-            })
-          : undefined;
+      const submissionTool = defineTool({
+        name: roleCall.tool,
+        description: roleCall.description,
+        input: explorerResultFor(known),
+        replay: "safe",
+        async run(_value, { call, toolCall }) {
+          // The audited tool-call is the saved write. Reconcile its receipt
+          // from that durable identity, including a repeated run() after it.
+          const existing = receipts.get(toolCall);
+          if (existing !== undefined) return { noteIds: existing };
+          for (const entry of campaign.records({
+            kinds: ["tool-call"],
+            call,
+            after: reconciledThrough,
+            through: toolCall,
+          })) {
+            if (
+              entry.kind !== "tool-call" ||
+              entry.call !== call ||
+              entry.tool !== roleCall.tool
+            )
+              continue;
+            const value = explorerResult.parse(entry.input);
+            const ids = value.notes.map((_, position) =>
+              noteIdAfter(known.length, position),
+            );
+            receipts.set(entry.seq, ids);
+            known.push(...ids.map((id) => ({ id, dead: false })));
+            reconciledThrough = entry.seq;
+          }
+          const noteIds = receipts.get(toolCall);
+          if (noteIds === undefined)
+            throw new Error("missing saved Explorer submission");
+          return { noteIds };
+        },
+      });
       return (
         await runCall(
           campaign,
@@ -1203,7 +1185,7 @@ async function runSource(
     return sourceVerdictsOf(
       schema,
       codexSubmission(records, call),
-      profile.search,
+      true,
       passages,
     );
   };

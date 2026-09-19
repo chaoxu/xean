@@ -691,6 +691,75 @@ export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
 
 export type PiSpendSummary = ReturnType<typeof summarizePiSpend>;
 
+/** @internal Reconcile one call against the caller's captured journal indexes. */
+export function derivePiCallOperations(
+  call: EntryId,
+  stored: z.output<typeof piResultRecord> | undefined,
+  attempts: readonly PiRequestAttempt[],
+  results: ReadonlyMap<EntryId, Extract<Entry, { kind: "call-result" }>>,
+): PiSpendOperation[] {
+  const durable = new Map<EntryId, PiSpendOperation>();
+  for (const attempt of attempts) {
+    const completion = results.get(attempt.call);
+    if (completion?.state !== "returned") continue;
+    const value = piRequestCompletion.parse(completion.output);
+    if (
+      value.parent !== call ||
+      value.operation.provider !== attempt.model.provider ||
+      value.operation.requestedModel !== attempt.model.id ||
+      value.operation.api !== attempt.model.api
+    )
+      throw new Error("invalid Pi request completion " + attempt.call);
+    durable.set(attempt.call, value.operation);
+  }
+  if (stored === undefined) return [...durable.values()];
+  if (stored.call !== call) throw new Error("invalid Pi result owner " + call);
+  const { spans } = stored.telemetry;
+  if (new Set(spans.map(({ id }) => id)).size !== spans.length)
+    throw new Error("duplicate Pi telemetry span in call " + call);
+  const roots = spans.filter(
+    ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
+  );
+  if (roots.length !== 1 || !roots[0]!.settled)
+    throw new Error("invalid Pi telemetry root in call " + call);
+  const operations = spans.flatMap((span): PiSpendOperation[] => {
+    if (span.name !== "pi.ai.request" || span.parentId !== roots[0]!.id)
+      return [];
+    if (!span.settled)
+      throw new Error("unsettled Pi request span in call " + call);
+    const checkpoint = span.attributes["xean.pi.request.checkpoint"];
+    if (checkpoint !== undefined) {
+      const id = entryId.parse(checkpoint);
+      const operation = durable.get(id);
+      if (operation === undefined)
+        throw new Error("missing or duplicate Pi request completion " + id);
+      durable.delete(id);
+      return [operation];
+    }
+    // Failures before payload construction have only a logical-call span.
+    // A checkpointed request is counted through its completion once.
+    const attributes = requestAttributes.parse(span.attributes);
+    return [
+      {
+        provider: attributes["pi.ai.provider"],
+        requestedModel: attributes["pi.ai.model"],
+        ...(attributes["pi.ai.response.model"] === undefined
+          ? {}
+          : { servedModel: attributes["pi.ai.response.model"] }),
+        api: attributes["pi.ai.api"],
+        ...(attributes["pi.ai.response.stop_reason"] === undefined
+          ? {}
+          : { stopReason: attributes["pi.ai.response.stop_reason"] }),
+        error: span.status.status === "error",
+        usage: measuredUsage(span.attributes),
+      },
+    ];
+  });
+  if (durable.size !== 0)
+    throw new Error("unmatched Pi request completion in call " + call);
+  return operations;
+}
+
 export function derivePiSpend(entries: readonly Entry[]) {
   const calls = entries.filter(
     (item): item is Extract<Entry, { kind: "call" }> =>
@@ -713,79 +782,21 @@ export function derivePiSpend(entries: readonly Entry[]) {
   })[] = [];
   const unaccountedCalls: EntryId[] = [];
   for (const call of calls) {
-    const durable = new Map<EntryId, PiSpendOperation>();
-    for (const attempt of attemptsByParent.get(call.seq) ?? []) {
-      const completion = results.get(attempt.call);
-      if (completion?.state !== "returned") continue;
-      const value = piRequestCompletion.parse(completion.output);
-      if (
-        value.parent !== call.seq ||
-        value.operation.provider !== attempt.model.provider ||
-        value.operation.requestedModel !== attempt.model.id ||
-        value.operation.api !== attempt.model.api
-      )
-        throw new Error("invalid Pi request completion " + attempt.call);
-      durable.set(attempt.call, value.operation);
-    }
     const result = results.get(call.seq);
-    if (result?.state !== "returned") {
-      unaccountedCalls.push(call.seq);
-      if (durable.size > 0) {
-        const operations = [...durable.values()];
-        accounted.push({
-          call: call.seq,
-          operations,
-          ...summarizePiSpend(operations),
-        });
-      }
-      continue;
-    }
-    const stored = piResultRecord.parse(result.output);
-    if (stored.call !== call.seq)
-      throw new Error("invalid Pi result owner " + call.seq);
-    const { spans } = stored.telemetry;
-    if (new Set(spans.map(({ id }) => id)).size !== spans.length)
-      throw new Error("duplicate Pi telemetry span in call " + call.seq);
-    const roots = spans.filter(
-      ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
+    const stored =
+      result?.state === "returned"
+        ? piResultRecord.parse(result.output)
+        : undefined;
+    const operations = derivePiCallOperations(
+      call.seq,
+      stored,
+      attemptsByParent.get(call.seq) ?? [],
+      results,
     );
-    if (roots.length !== 1 || !roots[0]!.settled)
-      throw new Error("invalid Pi telemetry root in call " + call.seq);
-    const operations = spans.flatMap((span): PiSpendOperation[] => {
-      if (span.name !== "pi.ai.request" || span.parentId !== roots[0]!.id)
-        return [];
-      if (!span.settled)
-        throw new Error("unsettled Pi request span in call " + call.seq);
-      const checkpoint = span.attributes["xean.pi.request.checkpoint"];
-      if (checkpoint !== undefined) {
-        const id = entryId.parse(checkpoint);
-        const operation = durable.get(id);
-        if (operation === undefined)
-          throw new Error("missing or duplicate Pi request completion " + id);
-        durable.delete(id);
-        return [operation];
-      }
-      // Failures before payload construction have only a logical-call span.
-      // A checkpointed request is counted through its completion once.
-      const attributes = requestAttributes.parse(span.attributes);
-      return [
-        {
-          provider: attributes["pi.ai.provider"],
-          requestedModel: attributes["pi.ai.model"],
-          ...(attributes["pi.ai.response.model"] === undefined
-            ? {}
-            : { servedModel: attributes["pi.ai.response.model"] }),
-          api: attributes["pi.ai.api"],
-          ...(attributes["pi.ai.response.stop_reason"] === undefined
-            ? {}
-            : { stopReason: attributes["pi.ai.response.stop_reason"] }),
-          error: span.status.status === "error",
-          usage: measuredUsage(span.attributes),
-        },
-      ];
-    });
-    if (durable.size !== 0)
-      throw new Error("unmatched Pi request completion in call " + call.seq);
+    if (stored === undefined) {
+      unaccountedCalls.push(call.seq);
+      if (operations.length === 0) continue;
+    }
     accounted.push({
       call: call.seq,
       operations,
@@ -1552,7 +1563,8 @@ export async function runPi(
     ...(options.reasoning === undefined
       ? {}
       : { reasoning: options.reasoning }),
-    ...(options.stopAfterToolResult === true
+    ...(options.stopAfterToolResult === true ||
+    options.submissionGate !== undefined
       ? { stopAfterToolResult: true as const }
       : {}),
     ...(options.maxRecoveries === undefined
@@ -1570,7 +1582,7 @@ export async function runPi(
       : {}),
   });
   if (parsed.submissionGate !== undefined) {
-    if (!parsed.stopAfterToolResult || options.tools?.length !== 1)
+    if (options.tools?.length !== 1)
       throw new TypeError("Pi submission gate requires one terminal tool");
     submissionContext(parsed.submissionGate, options.model, { messages: [] });
   }

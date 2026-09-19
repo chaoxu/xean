@@ -295,7 +295,7 @@ async function writeSettings(directory: string): Promise<string> {
     explorer: profile,
     coordinator: profile,
     correctness: profile,
-    source: { provider: "codex", model: "e2e-model", reasoning: "low" },
+    source: { model: "e2e-model", reasoning: "low" },
     requirements: profile,
     reconstruction: profile,
   });

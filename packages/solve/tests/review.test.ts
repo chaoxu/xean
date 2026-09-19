@@ -16,7 +16,6 @@ const input = () => ({
   argument:
     "Supporting theorem: Global-BiCut is UGC-hard, citing Global and fixed-terminal cuts in digraphs. The final claim follows by identity reduction.",
   profile: {
-    provider: "codex" as const,
     model: "gpt-6-astra",
     reasoning: "xhigh" as const,
   },
@@ -29,6 +28,24 @@ const evidence = {
   url: "https://arxiv.org/html/1612.00156v2",
   quote: "we do not have a hardness result",
 };
+
+test.each([{ provider: "codex" }, { search: true }, { search: false }])(
+  "review rejects removed profile fields before setup: %j",
+  async (removed) => {
+    const request = input();
+    await expect(
+      review(
+        { ...request, profile: { ...request.profile, ...removed } },
+        {
+          codex: async () => {
+            throw new Error("must reject before Codex setup");
+          },
+        },
+      ),
+    ).rejects.toThrow("Unrecognized key");
+    expect(await Bun.file(request.campaignPath).exists()).toBe(false);
+  },
+);
 
 test("the source gate rejects an unsupported PASS and retains explicit uncertainty", () => {
   const schema = sourceVerdictsFor(["n24"]);

@@ -1,6 +1,6 @@
 import { openReader } from "./campaign";
 import {
-  derivePiSpend,
+  derivePiCallOperations,
   piRequest,
   piRequestAttempts,
   piResultRecord,
@@ -160,7 +160,6 @@ interface RecordIndex {
   readonly results: ReadonlyMap<EntryId, CallResultEntry>;
   readonly tools: ReadonlyMap<EntryId, readonly ToolCallEntry[]>;
   readonly attemptsByParent: ReadonlyMap<EntryId, readonly PiRequestAttempt[]>;
-  readonly callsById: ReadonlyMap<EntryId, CallEntry>;
   readonly candidates: readonly CandidateEntry[];
   readonly verdicts: ReadonlyMap<EntryId, readonly CoreVerdictObservationV1[]>;
   readonly statuses: ReadonlyMap<EntryId, CandidateStatus>;
@@ -451,7 +450,6 @@ function indexRecords(records: readonly Entry[]): RecordIndex {
     results,
     tools,
     attemptsByParent,
-    callsById,
     candidates,
     verdicts,
     statuses: deriveCandidateStatuses(records),
@@ -481,15 +479,17 @@ function indexAccounting(index: RecordIndex): AccountingIndex {
           ? piResultRecord.parse(result.output)
           : undefined;
       if (stored !== undefined) storedResults.set(call.seq, stored);
-      const projected = derivePiSpend(piEntries(index, call));
-      const row = projected.calls.find(({ call: id }) => id === call.seq);
-      if (row === undefined && stored === undefined) {
+      const operations = derivePiCallOperations(
+        call.seq,
+        stored,
+        index.attemptsByParent.get(call.seq) ?? [],
+        index.results,
+      );
+      if (operations.length === 0 && stored === undefined) {
         byCall.set(call.seq, { state: "unaccounted" });
         continue;
       }
-      if (row === undefined)
-        throw new Error("settled Pi call was not accounted");
-      const { operations, call: _, ...spend } = row;
+      const spend = summarizePiSpend(operations);
       const recovered = stored === undefined ? [] : recoveredErrors(stored);
       const assistantUsage = stored?.assistantUsage ?? [];
       const first = operations.slice(0, 1);
@@ -537,19 +537,6 @@ function indexAccounting(index: RecordIndex): AccountingIndex {
     unsupportedCalls,
     unaccountedCalls,
   };
-}
-
-function piEntries(index: RecordIndex, call: CallEntry): readonly Entry[] {
-  const entries: Entry[] = [call];
-  const result = index.results.get(call.seq);
-  if (result !== undefined) entries.push(result);
-  for (const attempt of index.attemptsByParent.get(call.seq) ?? []) {
-    const attemptCall = index.callsById.get(attempt.call);
-    if (attemptCall !== undefined) entries.push(attemptCall);
-    const attemptResult = index.results.get(attempt.call);
-    if (attemptResult !== undefined) entries.push(attemptResult);
-  }
-  return entries;
 }
 
 function projectCall(

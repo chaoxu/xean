@@ -55,7 +55,7 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
       campaignPath: path,
       settings: {
         ...roleSettings(),
-        explorerContinuation: true,
+        maxExplorerResponses: 4,
         maxExplorerTurns: 1,
       },
     },

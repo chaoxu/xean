@@ -27,7 +27,12 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
       fixture,
       config.settings,
       dependencies([
-        { submission: { notes: [{ text: "A partial result.", support: [] }] } },
+        {
+          submission: {
+            solution: false,
+            notes: [{ text: "A partial result.", support: [] }],
+          },
+        },
       ]),
     ).explorer({
       task: config.task,
@@ -132,7 +137,10 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
       config.settings,
       dependencies([
         {
-          submission: { notes: [{ text: "A partial proof.", support: [] }] },
+          submission: {
+            solution: false,
+            notes: [{ text: "A partial proof.", support: [] }],
+          },
           onStarted: async () => {
             const retry: any = await inspectCampaign(path);
             expect(retry.phase).toBe("explorer");

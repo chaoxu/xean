@@ -439,59 +439,73 @@ test("summarizes without response, evidence, operation, or material payloads", a
   expect(summary).not.toHaveProperty("applicationConfig");
 });
 
-test("keeps understood spend when another Pi telemetry record is unsupported", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(campaign, call, {
-          "pi.ai.provider": "provider",
-          "pi.ai.model": "model",
-          "pi.ai.api": "responses",
-          "pi.ai.usage.input_tokens": 8,
-          "pi.ai.usage.output_tokens": 5,
-          "pi.ai.usage.cache_read_tokens": 2,
-          "pi.ai.usage.cache_write_tokens": 0,
-          "pi.ai.usage.total_tokens": 13,
-          "pi.ai.usage.cost": 0.25,
-        }),
-    );
-    await campaign.call(
-      { label: "workflow/future", request: piRequest() },
-      async () => ({
-        state: "succeeded",
-        text: "done",
-        transcript: [],
-        telemetry: { schemaVersions: { future: 1 }, spans: [] },
-      }),
-    );
-  } finally {
-    campaign.close();
-  }
+test.each(["schema", "checkpoint"] as const)(
+  "keeps understood spend when another Pi %s is unsupported",
+  async (unsupported) => {
+    const path = campaignPath();
+    const campaign = createCampaign(path, "changing-workflow", null);
+    try {
+      await campaign.call(
+        { label: "workflow/measured", request: piRequest() },
+        async ({ call }) =>
+          piResult(campaign, call, {
+            "pi.ai.provider": "provider",
+            "pi.ai.model": "model",
+            "pi.ai.api": "responses",
+            "pi.ai.usage.input_tokens": 8,
+            "pi.ai.usage.output_tokens": 5,
+            "pi.ai.usage.cache_read_tokens": 2,
+            "pi.ai.usage.cache_write_tokens": 0,
+            "pi.ai.usage.total_tokens": 13,
+            "pi.ai.usage.cost": 0.25,
+          }),
+      );
+      await campaign.call(
+        { label: "workflow/future", request: piRequest() },
+        async ({ call }) =>
+          unsupported === "schema"
+            ? {
+                state: "succeeded",
+                text: "done",
+                transcript: [],
+                telemetry: { schemaVersions: { future: 1 }, spans: [] },
+              }
+            : piResult(campaign, call, {
+                ...attributes(firstUsage),
+                "xean.pi.request.checkpoint": 999,
+              }),
+      );
+    } finally {
+      campaign.close();
+    }
 
-  const observation = inspectCoreCampaign(path);
-  expect(observation.calls.map((call) => call.pi?.accounting.state)).toEqual([
-    "available",
-    "unsupported",
-  ]);
-  expect(observation.spend).toMatchObject({
-    logicalProviderRequests: 1,
-    requestErrors: 0,
-    unmeasuredRequests: 0,
-    measuredUsage: {
-      input: 8,
-      output: 5,
-      cacheRead: 2,
-      cacheWrite: 0,
-      totalTokens: 13,
-      estimatedCostUsd: 0.25,
-    },
-    unsupportedCalls: [4],
-    unaccountedCalls: [],
-  });
-});
+    const observation = inspectCoreCampaign(path);
+    expect(observation.calls.map((call) => call.pi?.accounting.state)).toEqual([
+      "available",
+      "unsupported",
+    ]);
+    if (unsupported === "checkpoint")
+      expect(observation.calls[1]?.pi).toMatchObject({
+        outcome: "succeeded",
+        responseText: "done",
+      });
+    expect(observation.spend).toMatchObject({
+      logicalProviderRequests: 1,
+      requestErrors: 0,
+      unmeasuredRequests: 0,
+      measuredUsage: {
+        input: 8,
+        output: 5,
+        cacheRead: 2,
+        cacheWrite: 0,
+        totalTokens: 13,
+        estimatedCostUsd: 0.25,
+      },
+      unsupportedCalls: [4],
+      unaccountedCalls: [],
+    });
+  },
+);
 
 test("reports missing usage as unmeasured instead of zero", async () => {
   const path = campaignPath();

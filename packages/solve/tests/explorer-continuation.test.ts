@@ -1,12 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, openCampaign } from "xean";
-import { z } from "zod";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 
 import {
   createPiRoles,
   explorerCall,
   sameRequest,
   solveSettings,
+  type PiRoleDependencies,
 } from "../pi-roles";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
@@ -33,48 +37,45 @@ const input = {
 };
 const note = { text: "An alleged complete proof.", support: [] };
 
-test("Explorer continuation defaults on and only its enabled schema requires a solution claim", () => {
-  const ordinary = explorerCall(input),
-    off = explorerCall(input, false),
-    on = explorerCall(input, true);
-  expect(off.system).toBe(ordinary.system);
-  expect(off.prompt).toBe(ordinary.prompt);
-  expect(z.toJSONSchema(off.schema)).toEqual(z.toJSONSchema(ordinary.schema));
-  expect(off.submissionGate).toBeUndefined();
-  expect(on.submissionGate).toEqual({
+test("Explorer always requires a solution claim and defaults to four responses", () => {
+  const call = explorerCall(input);
+  expect(call.submissionGate).toEqual({
     completeArgument: "solution",
     emptyArgument: "notes",
     contextBudgetTokens: 400_000,
     maxResponses: 4,
     continuationPrompt: "Keep trying, you can do it.",
   });
-  expect(ordinary.schema.safeParse({ notes: [note] }).success).toBe(true);
+  expect(call.schema.safeParse({ notes: [note] }).success).toBe(false);
   expect(
-    ordinary.schema.safeParse({ notes: [note], solution: false }).success,
+    call.schema.safeParse({ notes: [note], solution: "true" }).success,
   ).toBe(false);
-  expect(on.schema.safeParse({ notes: [note] }).success).toBe(false);
-  expect(on.schema.safeParse({ notes: [note], solution: "true" }).success).toBe(
-    false,
-  );
   for (const solution of [false, true])
-    expect(on.schema.parse({ notes: [note], solution })).toHaveProperty(
+    expect(call.schema.parse({ notes: [note], solution })).toHaveProperty(
       "solution",
       solution,
     );
-  expect(on.system).toContain("does not bypass mathematical verification");
-  const {
-    explorerContinuation: _,
-    maxExplorerResponses: __,
-    ...settings
-  } = roleSettings();
-  expect(solveSettings.parse(settings).explorerContinuation).toBe(true);
+  expect(call.schema.parse({ notes: [], solution: false })).toEqual({
+    notes: [],
+    solution: false,
+  });
+  expect(call.system).toContain("does not bypass mathematical verification");
+  const { maxExplorerResponses: _, ...settings } = roleSettings();
   expect(solveSettings.parse(settings).maxExplorerResponses).toBe(4);
-  expect(on.prompt).toContain("at most 4 model responses, including the first");
-  expect(
-    solveSettings.parse({ ...roleSettings(), explorerContinuation: false })
-      .explorerContinuation,
-  ).toBe(false);
+  expect(call.prompt).toContain(
+    "at most 4 model responses, including the first",
+  );
 });
+
+test.each([false, true])(
+  "removed Explorer continuation setting is rejected: %s",
+  (explorerContinuation) => {
+    expect(
+      solveSettings.safeParse({ ...roleSettings(), explorerContinuation })
+        .success,
+    ).toBe(false);
+  },
+);
 
 test.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
   "Explorer rejects an invalid response limit: %s",
@@ -95,8 +96,8 @@ test("Explorer accepts a large response limit", () => {
   ).toBe(1_000_000_000_000_000);
 });
 
-test("omitted continuation enables only Explorer's gate; a solution claim still goes through ordinary verification", async () => {
-  const { explorerContinuation: _, ...defaults } = roleSettings();
+test("only Explorer uses a gate; a solution claim still goes through ordinary verification", async () => {
+  const { maxExplorerResponses: _, ...defaults } = roleSettings();
   const path = campaignPath(),
     settings = {
       ...defaults,
@@ -104,7 +105,7 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
     };
   const config = workflowConfiguration({ task, settings }),
     campaign = createCampaign(path, applicationId, config);
-  expect(config.settings.explorerContinuation).toBe(true);
+  expect(config.settings.maxExplorerResponses).toBe(4);
   const drive = dependencies([
     { submission: { notes: [note], solution: true } },
     {
@@ -139,8 +140,8 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
       emptyArgument: "notes",
       contextBudgetTokens: 400_000,
       maxResponses: 4,
-      continuationPrompt: explorerCall(input, true).submissionGate!
-        .continuationPrompt,
+      continuationPrompt:
+        explorerCall(input).submissionGate!.continuationPrompt,
     });
     expect(
       drive.calls.slice(1).every((call) => call.submissionGate === undefined),
@@ -160,36 +161,27 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
     expect(
       sameRequest(
         explored.request,
-        explorerCall({ ...input, explorerGuidance: "" }, true),
+        explorerCall({ ...input, explorerGuidance: "" }),
       ),
     ).toBe(true);
     const altered: any = structuredClone(explored.request);
     delete altered.submissionGate;
     expect(
-      sameRequest(
-        altered,
-        explorerCall({ ...input, explorerGuidance: "" }, true),
-      ),
+      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
     ).toBe(false);
     altered.submissionGate = {
       ...drive.calls[0]!.submissionGate,
       reserveTokens: 1024,
     };
     expect(
-      sameRequest(
-        altered,
-        explorerCall({ ...input, explorerGuidance: "" }, true),
-      ),
+      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
     ).toBe(false);
     altered.submissionGate = {
       ...drive.calls[0]!.submissionGate,
       continuationPrompt: "Different research assignment.",
     };
     expect(
-      sameRequest(
-        altered,
-        explorerCall({ ...input, explorerGuidance: "" }, true),
-      ),
+      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
     ).toBe(false);
     expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
       "turn-limit",
@@ -199,22 +191,133 @@ test("omitted continuation enables only Explorer's gate; a solution claim still 
   }
 });
 
-test("explicitly disabled Explorer omits the kernel gate", async () => {
+test("a one-response Explorer keeps the gate and returns assigned note IDs", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
   });
-  const drive = dependencies([{ submission: { notes: [note] } }]);
+  const drive = dependencies([
+    { submission: { notes: [note], solution: false } },
+  ]);
   try {
-    await createPiRoles(
-      campaign,
-      { ...roleSettings(), explorerContinuation: false },
-      drive,
-    ).explorer(input);
-    expect(drive.calls[0]?.submissionGate).toBeUndefined();
+    await createPiRoles(campaign, roleSettings(), drive).explorer(input);
+    expect(drive.calls[0]?.submissionGate?.maxResponses).toBe(1);
+    expect(
+      campaign.records().find((entry) => entry.kind === "tool-result"),
+    ).toMatchObject({
+      state: "returned",
+      output: { noteIds: ["n1"] },
+    });
   } finally {
     campaign.close();
   }
 });
+
+test.each([
+  { first: "invalid", maxExplorerResponses: 1, succeeds: false },
+  { first: "invalid", maxExplorerResponses: 2, succeeds: true },
+  { first: "length", maxExplorerResponses: 1, succeeds: false },
+  { first: "length", maxExplorerResponses: 2, succeeds: true },
+  { first: "stop", maxExplorerResponses: 1, succeeds: false },
+  { first: "stop", maxExplorerResponses: 2, succeeds: true },
+  { first: "error", maxExplorerResponses: 1, succeeds: true },
+] as const)(
+  "Explorer response budget $maxExplorerResponses handles a first $first response",
+  async ({ first, maxExplorerResponses, succeeds }) => {
+    const settings = { ...roleSettings(), maxExplorerResponses };
+    const catalog = dependencies([]).models;
+    const model = catalog.getModel(
+      settings.explorer.provider,
+      settings.explorer.model,
+    );
+    if (model === undefined) throw new Error("missing fixture model");
+    const submission = (solution?: boolean): AssistantMessage["content"] => [
+      {
+        type: "toolCall",
+        id: solution === undefined ? "missing-solution" : "valid-submission",
+        name: "submit_notes",
+        arguments: {
+          notes: [note],
+          ...(solution === undefined ? {} : { solution }),
+        },
+      },
+    ];
+    const reply = (
+      content: AssistantMessage["content"],
+      stopReason: AssistantMessage["stopReason"],
+    ): AssistantMessage => ({
+      role: "assistant",
+      content,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 18,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason,
+      timestamp: Date.now(),
+      ...(stopReason === "error"
+        ? { errorMessage: "upstream_error: Codex upstream request failed" }
+        : {}),
+    });
+    const replies = [
+      reply(
+        first === "invalid"
+          ? submission()
+          : [{ type: "text", text: "Partial reasoning." }],
+        first === "invalid" ? "toolUse" : first,
+      ),
+      reply(submission(false), "toolUse"),
+    ];
+    let requests = 0;
+    const models: PiRoleDependencies["models"] = {
+      ...catalog,
+      streamSimple(requestModel, context, options) {
+        const message = replies[requests++];
+        if (message === undefined)
+          throw new Error("unexpected fixture request");
+        const stream = createAssistantMessageEventStream();
+        void (async () => {
+          await options?.onPayload?.(
+            { model: requestModel.id, context },
+            requestModel,
+          );
+          if (message.stopReason === "error")
+            stream.push({ type: "error", reason: "error", error: message });
+          else if (
+            message.stopReason === "toolUse" ||
+            message.stopReason === "length" ||
+            message.stopReason === "stop"
+          )
+            stream.push({ type: "done", reason: message.stopReason, message });
+          else throw new Error("unexpected fixture stop reason");
+        })();
+        return stream;
+      },
+    };
+    const campaign = createCampaign(campaignPath(), applicationId, {
+      kind: "calls",
+    });
+    try {
+      const result = createPiRoles(campaign, settings, { models }).explorer(
+        input,
+      );
+      if (succeeds)
+        expect(await result).toEqual({ notes: [note], solution: false });
+      else await expect(result).rejects.toThrow("explorer failed:");
+      expect(requests).toBe(succeeds ? 2 : 1);
+      expect(
+        campaign.records().filter((entry) => entry.kind === "tool-call"),
+      ).toHaveLength(succeeds ? 1 : 0);
+    } finally {
+      campaign.close();
+    }
+  },
+);
 
 test.each(["openai-responses", "openai-codex-responses"] as const)(
   "Solver selects transport for the model adapter: %s",
@@ -222,7 +325,9 @@ test.each(["openai-responses", "openai-codex-responses"] as const)(
     const campaign = createCampaign(campaignPath(), applicationId, {
       kind: "calls",
     });
-    const drive = dependencies([{ submission: { notes: [note] } }]);
+    const drive = dependencies([
+      { submission: { notes: [note], solution: false } },
+    ]);
     const models = {
       ...drive.models,
       getModel(provider: string, id: string) {
@@ -253,7 +358,7 @@ test.each([false, true])(
       settings: {
         ...roleSettings(),
         maxExplorerTurns: 2,
-        explorerContinuation: true,
+        maxExplorerResponses: 4,
       },
     });
     const campaign = createCampaign(campaignPath(), applicationId, config);
@@ -346,13 +451,12 @@ test.each([false, true])(
 );
 
 test.each([
-  { explorerContinuation: false },
   { explorerContextBudgetTokens: 500_000 },
   { maxExplorerResponses: 2 },
   { explorer: { ...roleSettings().explorer, replayReasoning: false } },
-])("continuation settings remain frozen on resume: %j", async (change) => {
+])("Explorer settings remain frozen on resume: %j", async (change) => {
   const path = campaignPath(),
-    settings = { ...roleSettings(), explorerContinuation: true };
+    settings = roleSettings();
   await init({ task, campaignPath: path, settings });
   const before = await Bun.file(path).arrayBuffer();
   await expect(
@@ -375,20 +479,16 @@ test.each([
   });
 });
 
-test("omitted continuation and response budget are saved explicitly and match explicit defaults on resume", async () => {
-  const {
-    explorerContinuation: _,
-    maxExplorerResponses: __,
-    ...settings
-  } = roleSettings();
+test("omitted response budget is saved explicitly and matches its explicit default on resume", async () => {
+  const { maxExplorerResponses: _, ...settings } = roleSettings();
   const path = campaignPath();
   await init({ task, campaignPath: path, settings });
   const campaign = openCampaign(path);
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 10,
-        settings: { explorerContinuation: true, maxExplorerResponses: 4 },
+        schemaVersion: 11,
+        settings: { maxExplorerResponses: 4 },
       },
     });
   } finally {
@@ -400,17 +500,16 @@ test("omitted continuation and response budget are saved explicitly and match ex
       campaignPath: path,
       settings: {
         ...settings,
-        explorerContinuation: true,
         maxExplorerResponses: 4,
       },
     }),
   ).toMatchObject({ created: false });
 });
 
-test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
+test.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])(
   "previous workflow schema %s is rejected without changing the journal",
   async (schemaVersion) => {
-    const { explorerContinuation: _, ...settings } = roleSettings();
+    const settings = roleSettings();
     const path = campaignPath();
     createCampaign(
       path,
@@ -445,7 +544,6 @@ test.each([1, 3])(
       settings: {
         ...roleSettings(),
         maxExplorerTurns: 1,
-        explorerContinuation: true,
         explorerContextBudgetTokens: 80_000,
         maxExplorerResponses,
       },
@@ -507,19 +605,19 @@ test.each([1, 3])(
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, true, 80_000, maxExplorerResponses),
+          explorerCall(initial, 80_000, maxExplorerResponses),
         ),
       ).toBe(true);
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, true, 90_000, maxExplorerResponses),
+          explorerCall(initial, 90_000, maxExplorerResponses),
         ),
       ).toBe(false);
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, true, 80_000, maxExplorerResponses + 1),
+          explorerCall(initial, 80_000, maxExplorerResponses + 1),
         ),
       ).toBe(false);
       const before = campaign.records();
@@ -540,7 +638,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
     task,
     settings: {
       ...roleSettings(),
-      explorerContinuation: true,
+      maxExplorerResponses: 4,
       maxExplorerTurns: 1,
     },
   });
@@ -676,7 +774,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
     task,
     settings: {
       ...roleSettings(),
-      explorerContinuation: true,
+      maxExplorerResponses: 4,
       maxExplorerTurns: 1,
     },
   });

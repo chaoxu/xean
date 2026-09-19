@@ -153,7 +153,7 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
   });
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     ...passes("n1"),
   ]);
@@ -187,7 +187,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   const workflow = config();
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     ...passes("n1"),
   ]);
@@ -346,7 +346,12 @@ test("one verification judges several notes, kills the failed one, and accepts o
   const workflow = config();
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [{ text: "Lemma L.", support: [] }] } },
+    {
+      submission: {
+        solution: false,
+        notes: [{ text: "Lemma L.", support: [] }],
+      },
+    },
     {
       submission: coordination("n1", {
         read: [],
@@ -357,6 +362,7 @@ test("one verification judges several notes, kills the failed one, and accepts o
     sourceOf(["n1"]),
     {
       submission: {
+        solution: false,
         notes: [
           { text: "P from L, wrong.", support: ["n1"] },
           { text: "P from L.", support: ["n1"] },
@@ -445,6 +451,7 @@ test("a listed note whose support failed in the same verification is skipped, an
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "P from L.", support: ["n1"] },
@@ -496,11 +503,13 @@ test("a listed note whose support failed in the same verification is skipped, an
   expect(drive.codexCalls).toHaveLength(0);
   expect(
     explorerResultFor(phase.notes).safeParse({
+      solution: false,
       notes: [{ text: "P again.", support: ["n2"] }],
     }).success,
   ).toBe(false);
   expect(
     explorerResultFor(phase.notes).safeParse({
+      solution: false,
       notes: [{ text: "P anew.", support: [] }],
     }).success,
   ).toBe(true);
@@ -511,7 +520,9 @@ test("resume reconstructs the next role from the journal", async () => {
   const path = campaignPath();
   const workflow = config();
   let campaign = createCampaign(path, applicationId, workflow);
-  const first = dependencies([{ submission: { notes: [good] } }]);
+  const first = dependencies([
+    { submission: { solution: false, notes: [good] } },
+  ]);
   const paused = await runWorkflow(
     campaign,
     createPiRoles(campaign, workflow.settings, first),
@@ -539,7 +550,7 @@ test("provider continuation recovery preserves completed verifier checks and the
   const workflow = config();
   const campaign = createCampaign(campaignPath(), applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"]),
     sourceOf(["n1"]),
@@ -580,7 +591,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   const workflow = config();
   let campaign = createCampaign(path, applicationId, workflow);
   const first = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"]),
     sourceOf(["n1"]),
@@ -624,7 +635,9 @@ test("a journal written by other prompts is refused", async () => {
   const path = campaignPath();
   const workflow = config();
   const campaign = createCampaign(path, applicationId, workflow);
-  const drive = dependencies([{ submission: { notes: [good] } }]);
+  const drive = dependencies([
+    { submission: { solution: false, notes: [good] } },
+  ]);
   const roles = createPiRoles(campaign, workflow.settings, drive);
   await roles.explorer({
     task,
@@ -648,7 +661,7 @@ test("the turn limit ends a workflow without a verified note", async () => {
       campaign,
       workflow.settings,
       dependencies([
-        { submission: { notes: [good] } },
+        { submission: { solution: false, notes: [good] } },
         { submission: coordination("n1", { verify: [] }) },
       ]),
     ),
@@ -662,7 +675,7 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   const workflow = config(2);
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"], "PASS", () => [
       "Smith's bound for all n.",
@@ -680,7 +693,12 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
         ],
       },
     },
-    { submission: { notes: [{ text: "P without Smith.", support: [] }] } },
+    {
+      submission: {
+        solution: false,
+        notes: [{ text: "P without Smith.", support: [] }],
+      },
+    },
     { submission: coordination("n2", { verify: [] }) },
   ]);
   const phase = await runWorkflow(
@@ -716,7 +734,7 @@ test("a source PASS that confirms sources without searching is an operational er
   const workflow = config(1);
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"], "PASS", () => ["Every X is Y."]),
     {
@@ -748,18 +766,27 @@ test("a source PASS that confirms sources without searching is an operational er
   campaign.close();
 });
 
-test("source profiles require Codex with web search", () => {
+test("source profiles contain only model and reasoning", () => {
   const settings = roleSettings();
   expect(
     solveSettings.safeParse({ ...settings, source: settings.explorer }).success,
   ).toBe(false);
-  expect(
-    solveSettings.safeParse({
-      ...settings,
-      source: { ...settings.source, search: false },
-    }).success,
-  ).toBe(false);
-  expect(solveSettings.parse(settings).source.search).toBe(true);
+  for (const removed of [
+    { search: false },
+    { search: true },
+    { provider: "codex" },
+  ]) {
+    expect(
+      solveSettings.safeParse({
+        ...settings,
+        source: { ...settings.source, ...removed },
+      }).success,
+    ).toBe(false);
+  }
+  expect(solveSettings.parse(settings).source).toEqual({
+    model: "codex-model",
+    reasoning: "low",
+  });
 });
 
 test("explorer notes name only live earlier notes as support", () => {
@@ -769,6 +796,7 @@ test("explorer notes name only live earlier notes as support", () => {
   ]);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [
         { text: "a", support: ["n1"] },
         { text: "b", support: ["n1", "n3"] },
@@ -776,16 +804,26 @@ test("explorer notes name only live earlier notes as support", () => {
     }).success,
   ).toBe(true);
   expect(
-    schema.safeParse({ notes: [{ text: "a", support: ["n2"] }] }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({ notes: [{ text: "a", support: ["n3"] }] }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({ notes: [{ text: "a", support: ["n1", "n1"] }] }).success,
+    schema.safeParse({
+      solution: false,
+      notes: [{ text: "a", support: ["n2"] }],
+    }).success,
   ).toBe(false);
   expect(
     schema.safeParse({
+      solution: false,
+      notes: [{ text: "a", support: ["n3"] }],
+    }).success,
+  ).toBe(false);
+  expect(
+    schema.safeParse({
+      solution: false,
+      notes: [{ text: "a", support: ["n1", "n1"] }],
+    }).success,
+  ).toBe(false);
+  expect(
+    schema.safeParse({
+      solution: false,
       notes: [
         { text: "a", support: ["n4"] },
         { text: "b", support: [] },
@@ -794,21 +832,25 @@ test("explorer notes name only live earlier notes as support", () => {
   ).toBe(false);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [{ text: "By the case analysis of n1, P.", support: ["n1"] }],
     }).success,
   ).toBe(true);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [{ text: "By the case analysis of n1, P.", support: [] }],
     }).success,
   ).toBe(true); // Mathematical verification judges omitted dependencies.
   expect(
     schema.safeParse({
+      solution: false,
       notes: [{ text: "This replaces the dead n2.", support: ["n1"] }],
     }).success,
   ).toBe(true);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [
         { text: "First note n3; the rest is in n4.", support: [] },
         { text: "Second note n4, after n3.", support: ["n3"] },
@@ -817,6 +859,7 @@ test("explorer notes name only live earlier notes as support", () => {
   ).toBe(true);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [
         { text: "First note n3.", support: [] },
         { text: "Uses the case from n3.", support: [] },
@@ -825,6 +868,7 @@ test("explorer notes name only live earlier notes as support", () => {
   ).toBe(true);
   expect(
     schema.safeParse({
+      solution: false,
       notes: [{ text: "Let $n_1$ be the count; see (n1).", support: ["n1"] }],
     }).success,
   ).toBe(true);
@@ -838,6 +882,7 @@ test.each(["n2^{-q}", "n4^{-L}", "n8^(-L)"])(
       dead: false,
     }));
     const submitted = {
+      solution: false,
       notes: [{ text: `The bound is ${expression}.`, support: [] }],
     };
     expect(explorerResultFor(notes).parse(submitted)).toEqual(submitted);
@@ -1145,6 +1190,7 @@ test("drains requested verification batches at the turn cap and stops at the fir
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "Lemma M from L.", support: ["n1"] },
@@ -1219,6 +1265,7 @@ test.each([
     const drive = dependencies([
       {
         submission: {
+          solution: false,
           notes: [
             { text: "Lemma L.", support: [] },
             { text: "Lemma M from L.", support: ["n1"] },
@@ -1280,6 +1327,7 @@ test("an interrupted later verification batch resumes on its own candidate witho
   const first = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "P from L.", support: ["n1"] },
@@ -1351,6 +1399,7 @@ test("later batches can use verified support that failed task completion", async
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "P from L.", support: ["n1"] },
@@ -1397,6 +1446,7 @@ test("the next explorer starts only after all requested partial-result batches s
   const drive = dependencies([
     {
       submission: {
+        solution: false,
         notes: [
           { text: "Lemma L.", support: [] },
           { text: "Lemma M from L.", support: ["n1"] },
@@ -1433,7 +1483,6 @@ test("the next explorer starts only after all requested partial-result batches s
 });
 
 test("a self-contained proof records a local source PASS without calling Codex", async () => {
-  const search = true;
   const path = campaignPath();
   const settings = roleSettings();
   const workflow = workflowConfiguration({
@@ -1442,16 +1491,14 @@ test("a self-contained proof records a local source PASS without calling Codex",
       ...settings,
       maxExplorerTurns: 1,
       source: {
-        provider: "codex",
         model: "codex-model",
         reasoning: "low",
-        search,
       },
     },
   });
   const campaign = createCampaign(path, applicationId, workflow);
   const drive = dependencies([
-    { submission: { notes: [good] } },
+    { submission: { solution: false, notes: [good] } },
     {
       submission: coordination("n1", {
         verify: [{ note: "n1", verifiers: lemma }],

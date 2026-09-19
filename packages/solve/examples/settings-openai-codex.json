@@ -14,10 +14,8 @@
     "reasoning": "low"
   },
   "source": {
-    "provider": "codex",
     "model": "gpt-5.6-luna",
-    "reasoning": "low",
-    "search": true
+    "reasoning": "low"
   },
   "correctness": {
     "provider": "openai-codex",

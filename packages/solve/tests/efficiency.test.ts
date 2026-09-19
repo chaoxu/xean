@@ -309,7 +309,7 @@ test("Explorer receipts reconcile only new owned submissions and reuse durable i
   try {
     const result = await createPiRoles(
       campaign,
-      { ...roleSettings(), explorerContinuation: true },
+      { ...roleSettings(), maxExplorerResponses: 4 },
       drive,
     ).explorer({
       task: { problem: "Prove P.", completionCriteria: "A complete proof." },
@@ -326,7 +326,7 @@ test("Explorer receipts reconcile only new owned submissions and reuse durable i
 test("completed Explorer replay reads submissions once and preserves tool and settlement boundaries", async () => {
   const config = workflowConfiguration({
     task: { problem: "Prove P.", completionCriteria: "A complete proof." },
-    settings: { ...roleSettings(), explorerContinuation: true },
+    settings: { ...roleSettings(), maxExplorerResponses: 4 },
   });
   const campaign = createCampaign(campaignPath(), applicationId, config);
   const first = { text: "A durable partial proof.", support: [] };

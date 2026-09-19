@@ -93,7 +93,12 @@ test("a completed campaign is returned before initializing models or checking cr
     settings,
   };
   const drive = dependencies([
-    { submission: { notes: [{ text: "An unfinished idea.", support: [] }] } },
+    {
+      submission: {
+        solution: false,
+        notes: [{ text: "An unfinished idea.", support: [] }],
+      },
+    },
     {
       submission: {
         filings: [{ note: "n1", summary: "An unfinished idea." }],
@@ -122,7 +127,12 @@ test("run honors an injected source executor instead of invoking the CLI", async
   process.env["XEAN_CODEX_COMMAND"] = join(dirname(path), "codex-must-not-run");
   try {
     const drive = dependencies([
-      { submission: { notes: [{ text: "Proof of P.", support: [] }] } },
+      {
+        submission: {
+          solution: false,
+          notes: [{ text: "Proof of P.", support: [] }],
+        },
+      },
       {
         submission: {
           filings: [{ note: "n1", summary: "P holds." }],

@@ -42,7 +42,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 10;
+export const workflowSchemaVersion = 11;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -265,7 +265,6 @@ export async function deriveWorkflow(
         });
         const roleCall = explorerCall(
           explorerRequest,
-          config.settings.explorerContinuation === true,
           config.settings.explorerContextBudgetTokens,
           config.settings.maxExplorerResponses,
         );
@@ -286,19 +285,15 @@ export async function deriveWorkflow(
             notesAfter: cursor,
           };
         }
-        const savedContinuation =
-          config.settings.explorerContinuation === true
-            ? savedExplorerSubmission(records, call.seq)
-            : undefined;
+        const saved = savedExplorerSubmission(records, call.seq);
         const completed = succeededSubmission(
           records,
           call.seq,
           roleCall.tool,
-          savedContinuation,
+          saved,
         );
         // Saved notes become visible at the last tool call; the next phase
         // starts only at the outer call-result, which can occur later.
-        const saved = savedContinuation ?? completed;
         if (saved !== undefined) {
           const value = roleCall.schema.parse(saved.input);
           const notes = value.notes.map((entry, position) => ({
@@ -310,7 +305,7 @@ export async function deriveWorkflow(
           known = projection.at(saved.settled);
         }
         if (completed !== undefined) {
-          emptySubmission = savedContinuation?.emptySubmission === true;
+          emptySubmission = saved?.emptySubmission === true;
           cursor = completed.settled;
           turns += 1;
           break;
