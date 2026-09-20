@@ -204,28 +204,35 @@ function distinctKnown(
   }
 }
 
-const literatureFinding = z.strictObject({
-  title: nonblank,
-  authors: z.array(nonblank),
-  year: z.number().int().positive().optional(),
-  url: z.string().refine((value) => {
-    if (!URL.canParse(value)) return false;
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  }, "must be an HTTP or HTTPS URL"),
-  summary: nonblank,
-  relevance: nonblank,
+/** The literature model's free-form discovery report. */
+export const literatureReport = z.strictObject({
+  report: nonblank,
 });
+export type LiteratureReport = z.output<typeof literatureReport>;
 
-/** A durable literature result. It is discovery context, never mathematical evidence. */
+/** A durable literature result. The request binds the report for replay. */
 export const literatureResult = z.strictObject({
   request: nonblank,
-  findings: z.array(literatureFinding),
-  synthesis: nonblank,
-  limitations: nonblank,
+  report: nonblank,
 });
 export type LiteratureResult = z.output<typeof literatureResult>;
 export type LiteraturePacket = LiteratureResult;
+
+/** Whether the coordinator has attempted or completed literature discovery. */
+export const literatureStatus = z.enum([
+  "not-started",
+  "completed",
+  "inconclusive",
+]);
+export type LiteratureStatus = z.output<typeof literatureStatus>;
+
+/** Structured scheduling policy plus optional coordinator instructions. */
+export const coordinatorBehavior = z.strictObject({
+  literature: z.enum(["optional", "never", "required-if-not-started"]),
+  verification: z.enum(["decide", "always"]),
+  instructions: nonblank.optional(),
+});
+export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
 
 export const literatureInput = z.strictObject({
   task,
@@ -290,6 +297,8 @@ export const coordinatorInput = z.strictObject({
   task,
   notes: z.array(note),
   literature: z.array(literatureResult).optional(),
+  literatureStatus: literatureStatus.optional(),
+  coordinatorBehavior: coordinatorBehavior.optional(),
   emptySubmission: z.literal(true).optional(),
 });
 export type CoordinatorInput = z.output<typeof coordinatorInput>;
@@ -334,7 +343,12 @@ export function coordinatorResultFor(
     Note,
     "id" | "summary" | "support" | "verified" | "dead"
   >[],
-  options: { readonly requireAction?: boolean } = {},
+  options: {
+    readonly requireAction?: boolean;
+    readonly requireLiteratureAction?: boolean;
+    readonly requireVerifierAction?: boolean;
+    readonly forbidLiteratureAction?: boolean;
+  } = {},
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -348,6 +362,31 @@ export function coordinatorResultFor(
       ctx.addIssue({
         code: "custom",
         message: "controller coordination must choose a next role",
+        path: ["action"],
+      });
+    }
+    if (
+      options.requireLiteratureAction &&
+      value.action?.role !== "literature"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "campaign behavior requires a literature action before another role",
+        path: ["action"],
+      });
+    }
+    if (options.requireVerifierAction && value.action?.role !== "verifier") {
+      ctx.addIssue({
+        code: "custom",
+        message: "campaign behavior requires a verifier action for a live note",
+        path: ["action"],
+      });
+    }
+    if (options.forbidLiteratureAction && value.action?.role === "literature") {
+      ctx.addIssue({
+        code: "custom",
+        message: "campaign behavior forbids literature discovery",
         path: ["action"],
       });
     }

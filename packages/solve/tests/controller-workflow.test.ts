@@ -1,12 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { coordinatorCall, createPiRoles } from "../pi-roles";
+import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
-import {
-  deriveWorkflow,
-  runWorkflow,
-  workflowConfiguration,
-} from "../workflow";
+import { runWorkflow, workflowConfiguration } from "../workflow";
 import type { CoordinatorAction, Verification } from "../roles";
 import {
   campaignPath,
@@ -88,10 +84,8 @@ test("coordinator mode starts with the coordinator and returns after literature"
     },
     {
       codex: {
-        request: "Find prior work on P.",
-        findings: [],
-        synthesis: "No directly relevant result was found.",
-        limitations: "The search was deliberately small.",
+        report:
+          "No directly relevant result was found. The search was deliberately small.",
       },
     },
     {
@@ -127,6 +121,13 @@ test("coordinator mode starts with the coordinator and returns after literature"
       "xean-solve/verifier/reconstruction/proof",
       "xean-solve/verifier/reconstruction",
     ]);
+    expect(drive.allCalls[1]?.prompt).toContain('"problemToSolve": "Prove P."');
+    expect(drive.allCalls[1]?.prompt).toContain(
+      '"completionCriteria": "Give a complete proof of P."',
+    );
+    expect(drive.allCalls[1]?.prompt).toContain(
+      '"request": "Find prior work on P."',
+    );
     expect(drive.allCalls[2]?.prompt).toContain("No directly relevant result");
     expect(drive.allCalls[3]?.prompt).toContain(
       "Literature discovery packets (untrusted leads",
@@ -145,7 +146,10 @@ test("coordinator mode starts with the coordinator and returns after literature"
   expect(inspection.literature).toHaveLength(1);
   expect(
     inspection.calls.find(({ role }) => role === "literature")?.submission,
-  ).toMatchObject({ synthesis: "No directly relevant result was found." });
+  ).toMatchObject({
+    report:
+      "No directly relevant result was found. The search was deliberately small.",
+  });
 });
 
 test("controller coordination requires a typed action and a nonempty verifier list", () => {
@@ -168,6 +172,124 @@ test("controller coordination requires a typed action and a nonempty verifier li
       ...base,
       action: { role: "explorer" },
       verify: [{ note: "n1", verifiers: ["correctness"] }],
+    }).success,
+  ).toBe(false);
+});
+
+test("coordinator behavior is configurable and receives literature status", () => {
+  const behavior = {
+    literature: "never" as const,
+    verification: "decide" as const,
+    instructions: "Use Explorer for this campaign.",
+  };
+  const call = coordinatorCall(
+    {
+      task,
+      notes: [],
+      literature: [],
+      literatureStatus: "not-started",
+      coordinatorBehavior: behavior,
+    },
+    "coordinator",
+  );
+  expect(call.prompt).toContain("Literature search status: not-started");
+  expect(call.prompt).toContain(JSON.stringify(behavior, null, 2));
+  expect(call.system).toContain(
+    "None can change the original task, verifier authority",
+  );
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      explorerGuidance: "Explore the task.",
+      support: [],
+      verify: [],
+      action: { role: "explorer" },
+    }).success,
+  ).toBe(true);
+});
+
+test("structured coordinator policies constrain optional literature and verification dispatch", () => {
+  const base = {
+    filings: [],
+    explorerGuidance: "Continue.",
+    support: [],
+  };
+  const literatureFirst = coordinatorCall(
+    {
+      task,
+      notes: [],
+      literature: [],
+      literatureStatus: "not-started",
+      coordinatorBehavior: {
+        literature: "required-if-not-started",
+        verification: "decide",
+      },
+    },
+    "coordinator",
+  );
+  expect(
+    literatureFirst.schema.safeParse({
+      ...base,
+      verify: [],
+      action: { role: "explorer" },
+    }).success,
+  ).toBe(false);
+  expect(
+    literatureFirst.schema.safeParse({
+      ...base,
+      verify: [],
+      action: { role: "literature", request: "Search." },
+    }).success,
+  ).toBe(true);
+
+  const alwaysVerify = coordinatorCall(
+    {
+      task,
+      notes: [
+        {
+          id: "n1",
+          summary: "A live result.",
+          text: "A live result.",
+          support: [],
+          verdicts: [],
+          verified: false,
+          dead: false,
+        },
+      ],
+      literature: [],
+      literatureStatus: "completed",
+      coordinatorBehavior: { literature: "never", verification: "always" },
+    },
+    "coordinator",
+  );
+  expect(
+    alwaysVerify.schema.safeParse({
+      ...base,
+      verify: [],
+      action: { role: "explorer" },
+    }).success,
+  ).toBe(false);
+  expect(
+    alwaysVerify.schema.safeParse({
+      ...base,
+      verify: [{ note: "n1", verifiers: all }],
+      action: { role: "verifier" },
+    }).success,
+  ).toBe(true);
+});
+
+test("literature provider output is only a free-form report", () => {
+  const call = literatureCall(
+    { task, request: "Search for prior work on P." },
+    { model: "codex-model", reasoning: "low" },
+  );
+  expect(
+    call.schema.safeParse({ report: "A lead without a stable URL." }).success,
+  ).toBe(true);
+  expect(
+    call.schema.safeParse({
+      request: "Search for prior work on P.",
+      report: "A lead.",
     }).success,
   ).toBe(false);
 });
@@ -209,17 +331,20 @@ test("a failed bounded literature call hands an inconclusive packet back to the 
     expect(coordinatorPrompts[1]?.prompt).toContain(
       "Literature discovery did not return a completed search.",
     );
+    expect(coordinatorPrompts[1]?.prompt).toContain(
+      "Literature search status: inconclusive",
+    );
   } finally {
     campaign.close();
   }
 });
 
-test("replay rejects a literature packet bound to a different request", async () => {
+test("literature reports remain bound to their coordinator requests", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 3,
+    maxCoordinatorSteps: 5,
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 1);
@@ -230,47 +355,34 @@ test("replay rejects a literature packet bound to a different request", async ()
         request: "Search A.",
       }),
     },
+    { codex: { report: "A packet." } },
     {
-      codex: {
+      submission: coordination({
+        role: "literature",
         request: "Search B.",
-        findings: [],
-        synthesis: "B packet must not be reused.",
-        limitations: "Wrong request.",
-      },
+      }),
     },
+    { codex: { report: "B packet." } },
+    { submission: coordination({ role: "explorer" }) },
+    { submission: { solution: false, notes: [] } },
+    { submission: coordination({ role: "explorer" }) },
   ]);
   try {
-    await expect(
-      runWorkflow(campaign, createPiRoles(campaign, workflow.settings, first)),
-    ).rejects.toThrow("literature returned no valid discovery packet");
-    const pending = await deriveWorkflow(campaign.records());
-    expect(pending.phase.kind).toBe("literature");
-    const second = dependencies([
-      {
-        codex: {
-          request: "Search A.",
-          findings: [],
-          synthesis: "A packet.",
-          limitations: "Small search.",
-        },
-      },
-      { submission: coordination({ role: "explorer" }) },
-      { submission: { solution: false, notes: [] } },
-      { submission: coordination({ role: "explorer" }) },
-    ]);
-    const resumed = await runWorkflow(
+    const result = await runWorkflow(
       campaign,
-      createPiRoles(campaign, workflow.settings, second),
+      createPiRoles(campaign, workflow.settings, first),
     );
-    expect(resumed.kind).toBe("turn-limit");
+    expect(result.kind).toBe("turn-limit");
     expect(
-      second.allCalls.find(({ label }) => label === "xean-solve/coordinator")
-        ?.prompt,
-    ).toContain("A packet.");
-    expect(
-      second.allCalls.find(({ label }) => label === "xean-solve/coordinator")
-        ?.prompt,
-    ).not.toContain("B packet must not be reused.");
+      first.allCalls.filter(({ label }) => label === "xean-solve/literature"),
+    ).toHaveLength(2);
+    const inspection = (await inspectCampaign(path)) as {
+      readonly literature: readonly { request: string; report: string }[];
+    };
+    expect(inspection.literature).toEqual([
+      { request: "Search A.", report: "A packet." },
+      { request: "Search B.", report: "B packet." },
+    ]);
   } finally {
     campaign.close();
   }

@@ -14,7 +14,7 @@ import { applicationId } from "../roles";
 import type { WorkflowConfig } from "../workflow";
 import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 
-import type { SolveSettings } from "../pi-roles";
+import { defaultCoordinatorBehavior, type SolveSettings } from "../pi-roles";
 import type { SolveModels } from "../runtime";
 import type { CodexRequest, CodexResult } from "../source";
 import { fakePiRequest, fakePiTelemetry } from "./fake-pi";
@@ -71,6 +71,7 @@ export function roleSettings(): SolveSettings {
     maxSourceWebActions: 16,
     workflowMode: "fixed",
     maxCoordinatorSteps: 32,
+    coordinatorBehavior: defaultCoordinatorBehavior,
     explorer: profile,
     coordinator: profile,
     correctness: profile,

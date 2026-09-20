@@ -7,7 +7,7 @@
 ```text
 explorer(task, explorerGuidance, notes, support) -> notes with support
 coordinator(task, notes, literature?) -> filings, explorerGuidance, support, verify, action?
-literature(task, request, prior?) -> literature packet
+literature(task, request, prior?) -> free-form literature report (journaled with its request)
 verifier(task, verify, notes, support)        -> verdicts
 ```
 
@@ -32,7 +32,7 @@ The task file has one schema. The completion criteria are the only statement of 
 }
 ```
 
-Settings select one model profile for the explorer, one for the coordinator, one per verifier, the cap on explorer turns, and the window. Set `workflowMode` to `coordinator` to enable the experimental coordinator dispatch loop and use `maxCoordinatorSteps` to bound it; the default is `fixed`. Literature uses the configured source Codex profile and the same bounded web-action setting. Start with the [OpenAI API example](examples/settings-openai.json) or the [Codex subscription example](examples/settings-openai-codex.json), then adjust the role profiles for your task. [Provider setup](docs/installation.md#choose-a-provider) explains credentials.
+Settings select one model profile for the explorer, one for the coordinator, one per verifier, the cap on explorer turns, and the window. Set `workflowMode` to `coordinator` to enable the experimental coordinator dispatch loop and use `maxCoordinatorSteps` to bound it; the default is `fixed`. `coordinatorBehavior` freezes a scheduling policy with `literature: optional | never | required-if-not-started`, `verification: decide | always`, and optional instructions. Literature uses the configured source Codex profile and the same bounded web-action setting. Start with the [OpenAI API example](examples/settings-openai.json) or the [Codex subscription example](examples/settings-openai-codex.json), then adjust the role profiles for your task. [Provider setup](docs/installation.md#choose-a-provider) explains credentials.
 
 The correctness, requirements, and reconstruction verifiers run through Pi. Source checks with external premises run the Codex CLI with web search. Source and independent-review profiles contain only `model` and `reasoning`. Web search is mandatory and frozen as `search: true` in every Codex request. The CLI uses the selected custom provider in `CODEX_HOME/config.toml`, or the native login when no custom provider is selected. `XEAN_CODEX_COMMAND` names the binary, default `codex`. Each source verdict preserves its assigned `externalResults` and records `sources` containing the checked result, paper and theorem location, URL, and quoted passage. A PASS missing a passage for an assigned result is rejected. Earlier recorded PASS passages from completed source calls in the same campaign may be supplied with their call and note provenance when the result matches exactly. The current source call still checks applicability. A response without browsing may cite only identical supplied passages. Correctness identifies the premises, and source judges whether the passages substantiate them. The CLI transcript does not reliably expose opened-page URLs, so URL and quotation accuracy remain model judgments preserved for inspection. `window` remains a character limit over the notes and their support. Native Codex usage is recorded without a price.
 

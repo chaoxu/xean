@@ -25,6 +25,7 @@ import {
   candidateMaterial,
   candidateVerdict,
   coordinatorInput,
+  coordinatorBehavior as coordinatorBehaviorSchema,
   coordinatorResultFor,
   correctnessVerdictsFor,
   explorerInput,
@@ -54,7 +55,9 @@ import {
   verifierLabels,
   verifierNames,
   literatureInput,
+  literatureReport,
   literatureResult,
+  literatureStatus,
   type CoordinatorInput,
   type ExplorerInput,
   type LiteratureInput,
@@ -94,6 +97,14 @@ export const codexProfile = z.strictObject({
   model: nonblank,
   reasoning: codexReasoning,
 });
+
+/** Default campaign-level policy supplied to every coordinator boundary. */
+export const defaultCoordinatorBehavior = {
+  literature: "optional" as const,
+  verification: "decide" as const,
+  instructions:
+    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator dispatch mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is optional: inspect literatureStatus, and when it is not-started decide whether background could change the mathematical search; choose literature when it could, and choose explorer when the task is self-contained. After a literature search, use its report to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
+};
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
 // taking at least the first entry of each batch.
@@ -110,6 +121,9 @@ export const solveSettings = z.strictObject({
   explorerContextBudgetTokens: z.number().int().positive().optional(),
   workflowMode: z.enum(["fixed", "coordinator"]).default("fixed"),
   maxCoordinatorSteps: z.number().int().positive().default(32),
+  coordinatorBehavior: coordinatorBehaviorSchema.default(
+    defaultCoordinatorBehavior,
+  ),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
 
@@ -237,6 +251,27 @@ export function coordinatorCall(
   input: CoordinatorInput,
   mode: "fixed" | "coordinator" = "fixed",
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
+  const behavior = coordinatorBehaviorSchema.parse(
+    input.coordinatorBehavior ?? defaultCoordinatorBehavior,
+  );
+  const status = literatureStatus.parse(
+    input.literatureStatus ??
+      (input.literature === undefined || input.literature.length === 0
+        ? "not-started"
+        : "completed"),
+  );
+  const liveUnverified = input.notes.some(
+    ({ verified, dead }) => !verified && !dead,
+  );
+  const requireLiteratureAction =
+    mode === "coordinator" &&
+    behavior.literature === "required-if-not-started" &&
+    status === "not-started";
+  const requireVerifierAction =
+    mode === "coordinator" &&
+    behavior.verification === "always" &&
+    liveUnverified &&
+    !requireLiteratureAction;
   return {
     role: "coordinator",
     label: roleLabels.coordinator,
@@ -251,32 +286,40 @@ export function coordinatorCall(
       "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
+      "After an Explorer handoff, inspect each newly submitted live note before choosing another role. When its text claims the completion criteria, list that note with all four verifiers and choose verifier immediately; do not ask Explorer to rewrite or polish a complete-looking note.",
       ...(mode === "coordinator"
         ? [
             "This run uses coordinator dispatch mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. The literature role discovers papers and relevance leads; it does not establish a theorem or proof. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
           ]
         : []),
+      "A structured campaign behavior policy appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
       ...(input.literature === undefined
         ? []
         : [
             `Literature discovery packets (untrusted context; not proof or source evidence):\n${JSON.stringify(input.literature, null, 2)}`,
           ]),
+      `Literature search status: ${status}`,
+      `Coordinator behavior (campaign policy):\n${JSON.stringify(behavior, null, 2)}`,
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
           ]
         : []),
+      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
     ].join("\n\n"),
     tool: roleTools.coordinator,
     description:
       "File every note without a summary, give explorer guidance and support for the next turn, and list the notes to verify with their verifiers",
     schema: coordinatorResultFor(input.notes, {
       requireAction: mode === "coordinator",
+      requireLiteratureAction,
+      requireVerifierAction,
+      forbidLiteratureAction:
+        mode === "coordinator" && behavior.literature === "never",
     }),
   };
 }
@@ -289,9 +332,10 @@ export function literatureCall(
 ): {
   readonly label: string;
   readonly request: Json;
-  readonly schema: typeof literatureResult;
+  readonly schema: typeof literatureReport;
 } {
   const parsed = literatureInput.parse(input);
+  const outputSchema = z.toJSONSchema(literatureReport);
   return {
     label: roleLabels.literature,
     request: jsonSnapshot(
@@ -303,22 +347,23 @@ export function literatureCall(
         maxWebActions,
         developerInstructions: [
           "You are the literature-discovery role for a mathematical task. Search for relevant papers, surveys, preprints, and primary sources that may guide the search. Discovery is separate from source verification: do not claim that a theorem is established for the task, do not write a proof, and do not turn a citation into acceptance evidence.",
-          "Return one JSON object matching the output schema. Record useful metadata, a concise summary, why each item may matter, and limitations or uncertainty. Prefer stable paper pages, DOI pages, or author repositories. Keep the search targeted and stop when the result set is useful.",
+          "Return one JSON object matching the output schema. The report is free-form Markdown or plain text: organize it with useful headings such as leads, relevance, and uncertainty when helpful. Include paper names, alternate terminology, dates, identifiers, and URLs when available, but never invent missing metadata or a URL. Explain which leads may help solve the original problem, and say what remains uncertain or unverified. Keep the search targeted and stop when the report is useful.",
           `The runtime stops this call after ${maxWebActions} observed web actions. Finish below that limit when possible.`,
         ].join(" "),
         prompt: JSON.stringify(
           {
-            task: parsed.task,
+            problemToSolve: parsed.task.problem,
+            completionCriteria: parsed.task.completionCriteria,
             request: parsed.request,
             ...(parsed.prior === undefined ? {} : { prior: parsed.prior }),
           },
           null,
           2,
         ),
-        outputSchema: z.toJSONSchema(literatureResult),
+        outputSchema,
       }),
     ),
-    schema: literatureResult,
+    schema: literatureReport,
   };
 }
 
@@ -1342,9 +1387,8 @@ async function runLiterature(
       const submission = codexSubmission(roleCallRecords(campaign, call), call);
       if (submission === undefined) return undefined;
       const parsed = schema.safeParse(submission.input);
-      if (!parsed.success || parsed.data.request !== input.request)
-        return undefined;
-      return parsed.data;
+      if (!parsed.success) return undefined;
+      return { request: input.request, report: parsed.data.report };
     } catch {
       return undefined;
     }
@@ -1402,9 +1446,7 @@ async function runLiterature(
   if (output.state !== "succeeded") {
     const value = literatureResult.parse({
       request: input.request,
-      findings: [],
-      synthesis: "Literature discovery did not return a completed search.",
-      limitations: output.error,
+      report: `Literature discovery did not return a completed search.\n\nLimitation: ${output.error}`,
     });
     const local = await campaign.call(
       {

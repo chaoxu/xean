@@ -33,6 +33,7 @@ import {
   explorerInput,
   explorerResult,
   literatureInput,
+  literatureReport,
   literatureResult,
   jsonSnapshot,
   roleFromLabel,
@@ -139,8 +140,14 @@ function visibleSubmission(
     if (role === "literature" && codexRequest.safeParse(call.request).success) {
       const submission = codexSubmission(records, call.seq);
       if (submission === undefined) return undefined;
+      const request = codexRequest.parse(call.request);
+      const prompt = JSON.parse(request.prompt) as {
+        readonly request?: unknown;
+      };
+      if (typeof prompt.request !== "string") return undefined;
       return jsonSnapshot({
-        ...literatureResult.parse(submission.input),
+        request: prompt.request,
+        ...literatureReport.parse(submission.input),
         usage: submission.usage,
       });
     }

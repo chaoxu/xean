@@ -38,12 +38,14 @@ import {
   roleLabels,
   returnedOutput,
   literatureInput,
+  literatureReport,
   literatureResult,
   workflowRecords,
   type CoordinatorInput,
   type ExplorerInput,
   type LiteratureInput,
   type LiteratureResult,
+  type LiteratureStatus,
   type Note,
   type RoleName,
   type Roles,
@@ -52,7 +54,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 13;
+export const workflowSchemaVersion = 15;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -339,6 +341,7 @@ export async function deriveWorkflow(
     const coordinatorRequest = coordinatorInput.parse({
       task: config.task,
       notes: projection.at(cursor),
+      coordinatorBehavior: config.settings.coordinatorBehavior,
       ...(emptySubmission ? { emptySubmission: true } : {}),
     });
     const coordinated = settledCall(
@@ -499,25 +502,59 @@ function recordedLiterature(
       const local = localLiteratureRequest.safeParse(entry.request);
       const output = returnedOutput(records, entry.seq);
       const submission = codexSubmission(records, entry.seq);
-      const parsed =
-        local.success && output !== undefined
-          ? literatureResult.safeParse(output.output)
-          : submission === undefined
-            ? undefined
-            : literatureResult.safeParse(submission.input);
       const expected = literatureRequestFromCall(entry.request);
-      if (
-        parsed?.success === true &&
-        expected !== undefined &&
-        parsed.data.request === expected
-      )
-        packets.push(parsed.data);
+      if (expected === undefined) continue;
+      if (local.success && output !== undefined) {
+        const parsed = literatureResult.safeParse(output.output);
+        if (parsed.success && parsed.data.request === expected)
+          packets.push(parsed.data);
+      } else if (submission !== undefined) {
+        const parsed = literatureReport.safeParse(submission.input);
+        if (parsed.success)
+          packets.push({ request: expected, report: parsed.data.report });
+      }
     } catch {
       // An unfinished or malformed discovery call remains visible in the
       // journal, but it is not durable coordinator context.
     }
   }
   return packets;
+}
+
+function literatureSearchStatus(
+  records: readonly Entry[],
+  through: EntryId,
+): LiteratureStatus {
+  const attempted = records.some(
+    (entry) =>
+      entry.kind === "call" &&
+      entry.seq <= through &&
+      entry.role === "literature" &&
+      entry.label === roleLabels.literature,
+  );
+  if (!attempted) return "not-started";
+  for (const entry of records) {
+    if (
+      entry.kind !== "call" ||
+      entry.seq > through ||
+      entry.role !== "literature" ||
+      entry.label !== roleLabels.literature ||
+      localLiteratureRequest.safeParse(entry.request).success
+    )
+      continue;
+    try {
+      const submission = codexSubmission(records, entry.seq);
+      if (
+        submission !== undefined &&
+        literatureReport.safeParse(submission.input).success
+      )
+        return "completed";
+    } catch {
+      // A failed or malformed provider call is inconclusive, even when its
+      // local fallback report remains visible to the coordinator.
+    }
+  }
+  return "inconclusive";
 }
 
 function firstLiteratureCall(
@@ -560,16 +597,26 @@ function settledLiteratureCall(
       const local = localLiteratureRequest.safeParse(call.request);
       const output = returnedOutput(records, call.seq);
       const submission = codexSubmission(records, call.seq);
-      const parsed =
+      const value =
         local.success && output !== undefined
-          ? literatureResult.safeParse(output.output)
+          ? (() => {
+              const parsed = literatureResult.safeParse(output.output);
+              return parsed.success && parsed.data.request === expectedRequest
+                ? parsed.data
+                : undefined;
+            })()
           : submission === undefined
             ? undefined
-            : literatureResult.safeParse(submission.input);
-      if (parsed?.success === true && parsed.data.request === expectedRequest) {
+            : (() => {
+                const parsed = literatureReport.safeParse(submission.input);
+                return parsed.success
+                  ? { request: expectedRequest, report: parsed.data.report }
+                  : undefined;
+              })();
+      if (value !== undefined) {
         return {
-          settled: local.success ? output!.settled : submission!.settled,
-          value: parsed.data,
+          settled: output !== undefined ? output.settled : submission!.settled,
+          value,
         };
       }
     } catch {
@@ -692,10 +739,16 @@ async function deriveCoordinatorWorkflow(
 
     const included = includeSubmitted(cursor);
     const literatureAtCoordinator = recordedLiterature(records, cursor);
+    const literatureStatusAtCoordinator = literatureSearchStatus(
+      records,
+      cursor,
+    );
     const coordinatorRequest = coordinatorInput.parse({
       task: config.task,
       notes: projection.at(cursor),
       literature: literatureAtCoordinator,
+      literatureStatus: literatureStatusAtCoordinator,
+      coordinatorBehavior: config.settings.coordinatorBehavior,
       ...(pendingEmptySubmission ? { emptySubmission: true } : {}),
     });
     const coordinated = settledCall(
