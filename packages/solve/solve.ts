@@ -36,8 +36,8 @@ export type { RunDependencies, Settings, SolveModels };
 
 const usage = `Usage:
   xean-solve contract
-  xean-solve init TASK.json CAMPAIGN.db SETTINGS.json
-  xean-solve run TASK.json CAMPAIGN.db SETTINGS.json
+  xean-solve init [--turns N] TASK.json CAMPAIGN.db SETTINGS.json
+  xean-solve run [--turns N] [--id ID] TASK.json CAMPAIGN.db SETTINGS.json
   xean-solve explorer INPUT.json CAMPAIGN.db SETTINGS.json
   xean-solve coordinator INPUT.json CAMPAIGN.db SETTINGS.json
   xean-solve verifier INPUT.json CAMPAIGN.db SETTINGS.json
@@ -49,6 +49,9 @@ const usage = `Usage:
 
 run starts or resumes the durable explorer, coordinator, and verifier workflow.
 init creates or matches its declaration without provider setup or model calls.
+--turns sets the initial allowance (default 10), outside the frozen settings.
+run --turns N --id ID adds an allowance to an exhausted campaign, then resumes.
+Reuse the same ID and turns to retry without granting more turns.
 guide appends explorer guidance from a UTF-8 file (or - for stdin).
 Guidance takes effect at the next unfrozen explorer turn. Reuse --id for retries.
 submit appends text notes and optional external verification receipts from JSON (or - for stdin).
@@ -76,6 +79,7 @@ async function main(args: readonly string[]): Promise<void> {
       "include-guidance": { type: "boolean" },
       "include-submissions": { type: "boolean" },
       id: { type: "string" },
+      turns: { type: "string" },
     },
   });
   if (parsed.values.help) {
@@ -83,6 +87,12 @@ async function main(args: readonly string[]): Promise<void> {
     return;
   }
   const [command, ...positionals] = parsed.positionals;
+  if (
+    parsed.values.turns !== undefined &&
+    command !== "init" &&
+    command !== "run"
+  )
+    throw new Error(usage);
   if (command === "review") {
     if (positionals.length !== 4 || Object.keys(parsed.values).length !== 0)
       throw new Error(usage);
@@ -115,7 +125,8 @@ async function main(args: readonly string[]): Promise<void> {
   if (
     parsed.values.id !== undefined &&
     command !== "guide" &&
-    command !== "submit"
+    command !== "submit" &&
+    command !== "run"
   )
     throw new Error(usage);
   if (command === "guide" || command === "submit") {
@@ -188,6 +199,10 @@ async function main(args: readonly string[]): Promise<void> {
     task: task.parse(await readJson(taskPath)),
     campaignPath,
     settings: workflowSettings,
+    ...(parsed.values.turns === undefined
+      ? {}
+      : { turns: Number(parsed.values.turns) }),
+    ...(parsed.values.id === undefined ? {} : { id: parsed.values.id }),
   };
   if (command === "init") {
     writeJson(await init(request));

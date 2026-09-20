@@ -291,7 +291,6 @@ async function writeSettings(directory: string): Promise<string> {
   });
   const profile = { provider: "e2e", model: "e2e-model", reasoning: "low" };
   return writeJson(directory, "settings.json", {
-    maxExplorerTurns: 3,
     explorer: profile,
     coordinator: profile,
     correctness: profile,

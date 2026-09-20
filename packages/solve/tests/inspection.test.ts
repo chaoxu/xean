@@ -7,6 +7,7 @@ import { inspectCampaign } from "../role-cli";
 import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
 import { workflowConfiguration } from "../workflow";
 import {
+  createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
@@ -87,7 +88,7 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
     settings: roleSettings(),
   });
   const fixturePath = campaignPath();
-  const fixture = createCampaign(fixturePath, applicationId, config);
+  const fixture = await createWorkflowCampaign(fixturePath, config, 4);
   try {
     await createPiRoles(
       fixture,
@@ -112,11 +113,11 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
   using source = new Database(fixturePath, { readonly: true });
   const appended = source
     .query<{ seq: number; at_ms: number; kind: string; body: string }, []>(
-      "SELECT seq, at_ms, kind, body FROM entries WHERE seq > 1 ORDER BY seq",
+      "SELECT seq, at_ms, kind, body FROM entries WHERE seq > 3 ORDER BY seq",
     )
     .all();
   const path = campaignPath();
-  createCampaign(path, applicationId, config).close();
+  (await createWorkflowCampaign(path, config, 4)).close();
   using writer = new Database(path);
   const reader = openReader(path);
   const prototype = Object.getPrototypeOf(reader) as typeof reader;
@@ -168,7 +169,7 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
     settings: roleSettings(),
   });
   const path = campaignPath(),
-    campaign = createCampaign(path, applicationId, config);
+    campaign = await createWorkflowCampaign(path, config, 4);
   const input = {
     task: config.task,
     explorerGuidance: "",

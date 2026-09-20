@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import { createCampaign, openCampaign, openReader, type Campaign } from "xean";
+import { createCampaign, openCampaign, type Campaign } from "xean";
 import { builtinPi } from "xean/pi";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { z } from "zod";
@@ -15,7 +15,13 @@ import {
   type PiRoleDependencies,
   type SolveSettings,
 } from "./pi-roles";
-import { applicationId, task, workflowRecords } from "./roles";
+import { applicationId, nonblank, task, workflowRecords } from "./roles";
+import {
+  appendAllowance,
+  initializeAllowance,
+  positiveTurns,
+  turnAllowances,
+} from "./allowance";
 import {
   codexCommand,
   requireCredentials,
@@ -37,11 +43,17 @@ import {
 export const settings = solveSettings;
 export type Settings = SolveSettings;
 
-const runRequest = z.strictObject({
-  task,
-  campaignPath: z.string().min(1),
-  settings: solveSettings,
-});
+const runRequest = z
+  .strictObject({
+    task,
+    campaignPath: z.string().min(1),
+    settings: solveSettings,
+    turns: positiveTurns.optional(),
+    id: nonblank.optional(),
+  })
+  .refine((value) => value.id === undefined || value.turns !== undefined, {
+    message: "an allowance id requires turns",
+  });
 
 export interface RunDependencies extends Omit<PiRoleDependencies, "models"> {
   readonly models?:
@@ -62,6 +74,8 @@ export type RunResult =
 /** Create or match the workflow declaration without resolving any provider. */
 export async function init(input: z.input<typeof runRequest>) {
   const request = runRequest.parse(input);
+  if (request.id !== undefined)
+    throw new Error("init does not accept an allowance id");
   const config = workflowConfiguration({
     task: request.task,
     settings: request.settings,
@@ -69,7 +83,7 @@ export async function init(input: z.input<typeof runRequest>) {
   return withCampaignLock(request.campaignPath, async () => {
     const existing = existsSync(request.campaignPath);
     const campaign = existing
-      ? openReader(request.campaignPath)
+      ? openCampaign(request.campaignPath)
       : createCampaign(request.campaignPath, applicationId, config);
     try {
       const declaration = campaign.record(1);
@@ -81,6 +95,7 @@ export async function init(input: z.input<typeof runRequest>) {
       const frozen = workflowConfig.parse(declaration.config);
       if (!isDeepStrictEqual(frozen, config))
         throw new Error("task or settings disagree with the workflow journal");
+      await initializeAllowance(campaign, request.turns);
       return {
         application: applicationId,
         campaignPath: request.campaignPath,
@@ -90,6 +105,36 @@ export async function init(input: z.input<typeof runRequest>) {
       campaign.close();
     }
   });
+}
+
+/** Explicit IDs make retries of a spending authorization idempotent. */
+async function prepareAllowance(
+  campaign: Campaign,
+  turns?: number,
+  id?: string,
+) {
+  const records = workflowRecords(campaign);
+  const allowances = turnAllowances(records);
+  if (allowances.length === 0) {
+    await appendAllowance(campaign, turns ?? 10, 0, id ?? "initial");
+    return;
+  }
+  if (turns === undefined) return;
+  const existing = allowances.find((entry) => entry.id === (id ?? "initial"));
+  if (existing !== undefined) {
+    if (existing.turns !== turns)
+      throw new Error(
+        `allowance id already has different turns: ${existing.id}`,
+      );
+    return;
+  }
+  if (id === undefined) throw new Error("adding turns requires a new --id");
+  const snapshot = await deriveWorkflow(records);
+  if (snapshot.phase.kind !== "turn-limit")
+    throw new Error(
+      "only a campaign at its turn limit can receive another allowance",
+    );
+  await appendAllowance(campaign, turns, snapshot.phase.turns, id);
 }
 
 async function drive(
@@ -164,6 +209,7 @@ export async function run(
             "task or settings disagree with the workflow journal",
           );
         }
+        await prepareAllowance(campaign, request.turns, request.id);
         const through = campaign.lastSequence();
         const snapshot = await deriveWorkflow(
           campaign.records({ excludeLabels: ["xean/pi-request"], through }),
@@ -212,6 +258,7 @@ export async function run(
         });
       }
       campaign ??= createCampaign(request.campaignPath, applicationId, config);
+      await prepareAllowance(campaign, request.turns, request.id);
       const pending = drive(campaign, config, dependencies, models, initial);
       initial = undefined;
       return await pending;

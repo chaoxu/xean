@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, type EntryId } from "xean";
+import { type EntryId } from "xean";
 
 import {
   createPiRoles,
@@ -10,7 +10,6 @@ import {
   verifierCall,
 } from "../pi-roles";
 import {
-  applicationId,
   verifierInput,
   verifierNames,
   type Note,
@@ -23,6 +22,7 @@ import {
   workflowConfiguration,
 } from "../workflow";
 import {
+  createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
@@ -195,9 +195,8 @@ test("the verification window counts transitive shared texts once without droppi
 
 test("workflow construction and per-call selection both retain ancestors across explorer turns", async () => {
   const settings = roleSettings();
-  settings.maxExplorerTurns = 3;
   const workflow = workflowConfiguration({ task, settings });
-  const campaign = createCampaign(campaignPath(), applicationId, workflow);
+  const campaign = await createWorkflowCampaign(campaignPath(), workflow, 3);
   const replies: Reply[] = [];
   for (const n of [first, inherited, target]) {
     replies.push(

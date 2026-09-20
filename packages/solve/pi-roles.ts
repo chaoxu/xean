@@ -100,7 +100,6 @@ export const solveSettings = z.strictObject({
   source: codexProfile,
   requirements: piRoleProfile,
   reconstruction: piRoleProfile,
-  maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
   maxExplorerResponses: z.number().int().positive().default(4),
   maxSourceWebActions: z.number().int().positive().default(16),

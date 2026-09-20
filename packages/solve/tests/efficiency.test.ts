@@ -20,6 +20,7 @@ import {
 } from "../workflow";
 import {
   campaignPath,
+  createWorkflowCampaign,
   cleanupCampaigns,
   dependencies,
   roleSettings,
@@ -190,7 +191,7 @@ test.each([true, false])(
 test("startup reuses its captured derivation only while the journal boundary matches", async () => {
   const task = { problem: "Prove P.", completionCriteria: "A complete proof." };
   const config = workflowConfiguration({ task, settings: roleSettings() });
-  const campaign = createCampaign(campaignPath(), applicationId, config);
+  const campaign = await createWorkflowCampaign(campaignPath(), config);
   const initial = {
     snapshot: await deriveWorkflow(campaign.records()),
     through: campaign.lastSequence(),
@@ -328,7 +329,7 @@ test("completed Explorer replay reads submissions once and preserves tool and se
     task: { problem: "Prove P.", completionCriteria: "A complete proof." },
     settings: { ...roleSettings(), maxExplorerResponses: 4 },
   });
-  const campaign = createCampaign(campaignPath(), applicationId, config);
+  const campaign = await createWorkflowCampaign(campaignPath(), config);
   const first = { text: "A durable partial proof.", support: [] };
   const drive = dependencies([
     {

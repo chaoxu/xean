@@ -56,8 +56,8 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
       settings: {
         ...roleSettings(),
         maxExplorerResponses: 4,
-        maxExplorerTurns: 1,
       },
+      turns: 1,
     },
     drive,
   );

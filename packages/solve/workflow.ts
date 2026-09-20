@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { Projection } from "./projection";
+import { turnAllowances } from "./allowance";
 import { explorerGuidance, freezeExplorerGuidance } from "./guidance";
 import { freezeSubmittedNotes, submittedNotesBoundary } from "./notes";
 import { byId, supportClosure } from "./support";
@@ -42,7 +43,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 11;
+export const workflowSchemaVersion = 12;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -83,6 +84,8 @@ export type WorkflowResult =
 
 export interface WorkflowSnapshot {
   readonly config: WorkflowConfig;
+  readonly allowances: ReturnType<typeof turnAllowances>;
+  readonly maxExplorerTurns: number;
   readonly notes: readonly Note[];
   readonly phase: WorkflowPhase;
   /** Journal boundary before the next explorer turn, used only by the driver. */
@@ -202,6 +205,11 @@ export async function deriveWorkflow(
   records: readonly Entry[],
 ): Promise<WorkflowSnapshot> {
   const config = parseConfig(records[0]);
+  const allowances = turnAllowances(records);
+  const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
+  if (maxExplorerTurns === undefined)
+    throw new Error("campaign has no initial turn allowance; run init first");
+  const base = { config, allowances, maxExplorerTurns };
   const verdicts = journalVerdicts(records);
   const projection = new Projection(verdicts);
   // Replay projections use this historical cursor, not the journal's latest state.
@@ -234,7 +242,7 @@ export async function deriveWorkflow(
     cursor = boundary.call;
     return true;
   };
-  while (turns < config.settings.maxExplorerTurns) {
+  while (turns < maxExplorerTurns) {
     let emptySubmission = false;
     // A submitted note goes directly to the coordinator. Otherwise the
     // next explorer writes notes, which may be joined by pending submissions.
@@ -277,7 +285,7 @@ export async function deriveWorkflow(
         );
         if (call === undefined) {
           return {
-            config,
+            ...base,
             noteSubmissions,
             notes: known,
             phase: { kind: "explorer", input: explorerRequest },
@@ -326,7 +334,7 @@ export async function deriveWorkflow(
     );
     if (coordinated === undefined) {
       return {
-        config,
+        ...base,
         noteSubmissions,
         notes: coordinatorRequest.notes,
         phase: { kind: "coordinator", input: coordinatorRequest },
@@ -378,7 +386,7 @@ export async function deriveWorkflow(
       );
       if (first === undefined) {
         return {
-          config,
+          ...base,
           noteSubmissions,
           notes: filed,
           phase: { kind: "verifier", input: verifierRequest },
@@ -401,7 +409,7 @@ export async function deriveWorkflow(
       if (acceptedId !== undefined) {
         const notes = projection.at(cursor);
         return {
-          config,
+          ...base,
           noteSubmissions,
           notes,
           phase: {
@@ -421,7 +429,7 @@ export async function deriveWorkflow(
         )
       ) {
         return {
-          config,
+          ...base,
           noteSubmissions,
           notes: projection.at(cursor),
           phase: { kind: "verifier", input: verifierRequest, candidate },
@@ -433,12 +441,12 @@ export async function deriveWorkflow(
   }
   const ended = projection.at(cursor);
   return {
-    config,
+    ...base,
     noteSubmissions,
     notes: ended,
     phase: {
       kind: "turn-limit",
-      turns: config.settings.maxExplorerTurns,
+      turns,
       notes: ended,
     },
   };

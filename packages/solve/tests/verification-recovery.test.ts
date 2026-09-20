@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, openCampaign } from "xean";
+import { openCampaign } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import {
-  applicationId,
   reconstructionResultFor,
   verifierLabels,
   verifierNames,
@@ -16,6 +15,7 @@ import {
   workflowConfiguration,
 } from "../workflow";
 import {
+  createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
@@ -107,11 +107,10 @@ test.each([...verifierNames])(
   "an inconclusive %s check reaches the next Explorer within the turn limit",
   async (name) => {
     const configuration = config();
-    configuration.settings.maxExplorerTurns = 2;
-    const campaign = createCampaign(
+    const campaign = await createWorkflowCampaign(
       campaignPath(),
-      applicationId,
       configuration,
+      2,
     );
     const replies: Reply[] = [...start];
     for (const verifier of verifierNames) {
@@ -185,7 +184,7 @@ test.each([...verifierNames])(
 test("reopening after an inconclusive source check lets Explorer supply a new proof", async () => {
   const path = campaignPath();
   const configuration = config();
-  let campaign = createCampaign(path, applicationId, configuration);
+  let campaign = await createWorkflowCampaign(path, configuration, 4);
   const first = dependencies([
     ...start,
     correctness(),
@@ -267,10 +266,10 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
 test("an inconclusive native source check respects the last Explorer turn", async () => {
   const configuration = workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns: 1 },
+    settings: roleSettings(),
   });
   const path = campaignPath();
-  const campaign = createCampaign(path, applicationId, configuration);
+  const campaign = await createWorkflowCampaign(path, configuration, 1);
   const drive = dependencies([
     ...start,
     correctness(),
@@ -298,7 +297,7 @@ test("an inconclusive native source check respects the last Explorer turn", asyn
 test("a corrected reconstruction statement preserves the note and all successful checks", async () => {
   const path = campaignPath();
   const configuration = config();
-  const campaign = createCampaign(path, applicationId, configuration);
+  const campaign = await createWorkflowCampaign(path, configuration, 4);
   const drive = dependencies([
     ...beforeReconstruction,
     correction("The precise proposition P."),
@@ -353,7 +352,7 @@ test("a corrected reconstruction statement preserves the note and all successful
 test("reopening after a corrected proof settled reuses it and retries only the failed verdict call", async () => {
   const path = campaignPath();
   const configuration = config();
-  let campaign = createCampaign(path, applicationId, configuration);
+  let campaign = await createWorkflowCampaign(path, configuration, 4);
   const first = dependencies([
     ...beforeReconstruction,
     correction("The precise proposition P."),
@@ -402,7 +401,7 @@ test("a corrected statement cannot also submit a mathematical verdict", () => {
 test("resuming an interrupted verification preserves inconclusive and successful checks", async () => {
   const path = campaignPath();
   const configuration = config();
-  let campaign = createCampaign(path, applicationId, configuration);
+  let campaign = await createWorkflowCampaign(path, configuration, 4);
   const first = dependencies([
     {
       submission: {
@@ -479,7 +478,11 @@ test("resuming an interrupted verification preserves inconclusive and successful
 
 test("an accepted answer ends the workflow even when an unrelated note is unresolved", async () => {
   const configuration = config();
-  const campaign = createCampaign(campaignPath(), applicationId, configuration);
+  const campaign = await createWorkflowCampaign(
+    campaignPath(),
+    configuration,
+    4,
+  );
   const drive = dependencies([
     {
       submission: {
@@ -532,7 +535,7 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
 test("repeated statement corrections stop automatic retries and remain resumable", async () => {
   const path = campaignPath();
   const configuration = config();
-  let campaign = createCampaign(path, applicationId, configuration);
+  let campaign = await createWorkflowCampaign(path, configuration, 4);
   const first = dependencies([
     ...beforeReconstruction,
     correction("Corrected P, first try."),
@@ -570,8 +573,7 @@ test("repeated statement corrections stop automatic retries and remain resumable
 test("an inconclusive supporting lemma leaves its dependent note unverified at the turn limit", async () => {
   const path = campaignPath();
   const configuration = config();
-  configuration.settings.maxExplorerTurns = 1;
-  const campaign = createCampaign(path, applicationId, configuration);
+  const campaign = await createWorkflowCampaign(path, configuration, 1);
   const first = dependencies([
     {
       submission: {

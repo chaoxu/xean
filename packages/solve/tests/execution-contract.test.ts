@@ -14,12 +14,13 @@ const note = {
 
 test("publishes one workflow execution contract", () => {
   expect(executionContract).toEqual({
-    schemaVersion: 1,
+    schemaVersion: 2,
     application: "xean-solve",
     protocol: "workflow",
     run: {
       command: "run",
       arguments: ["task", "campaign", "settings"],
+      allowance: { turnsOption: "--turns", idOption: "--id", defaultTurns: 10 },
       report: {
         schemaVersion: 1,
         outcomes: [

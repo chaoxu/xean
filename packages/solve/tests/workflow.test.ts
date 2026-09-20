@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { createCampaign, openCampaign, openReader, type Campaign } from "xean";
+import { openCampaign, openReader, type Campaign } from "xean";
 
 import { createPiRoles, solveSettings } from "../pi-roles";
 import {
-  applicationId,
   coordinatorResultFor,
   explorerResultFor,
   judgedBy,
@@ -29,6 +28,7 @@ import {
   workflowConfiguration,
 } from "../workflow";
 import {
+  createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
@@ -108,10 +108,10 @@ function passes(note: string): readonly Reply[] {
   ];
 }
 
-function config(maxExplorerTurns = 4) {
+function config() {
   return workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns },
+    settings: roleSettings(),
   });
 }
 
@@ -151,7 +151,7 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
       explorer: { ...settings.explorer, replayReasoning: false },
     },
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -185,7 +185,7 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
 test("the durable workflow accepts a note every verifier passed", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -344,7 +344,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
 test("one verification judges several notes, kills the failed one, and accepts over verified support", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
     {
       submission: {
@@ -446,8 +446,8 @@ test("one verification judges several notes, kills the failed one, and accepts o
 
 test("a listed note whose support failed in the same verification is skipped, and both die", async () => {
   const path = campaignPath();
-  const workflow = config(1);
-  const campaign = createCampaign(path, applicationId, workflow);
+  const workflow = config();
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const drive = dependencies([
     {
       submission: {
@@ -519,7 +519,7 @@ test("a listed note whose support failed in the same verification is skipped, an
 test("resume reconstructs the next role from the journal", async () => {
   const path = campaignPath();
   const workflow = config();
-  let campaign = createCampaign(path, applicationId, workflow);
+  let campaign = await createWorkflowCampaign(path, workflow, 4);
   const first = dependencies([
     { submission: { solution: false, notes: [good] } },
   ]);
@@ -548,7 +548,7 @@ test("resume reconstructs the next role from the journal", async () => {
 
 test("provider continuation recovery preserves completed verifier checks and the candidate", async () => {
   const workflow = config();
-  const campaign = createCampaign(campaignPath(), applicationId, workflow);
+  const campaign = await createWorkflowCampaign(campaignPath(), workflow, 4);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -589,7 +589,7 @@ test("provider continuation recovery preserves completed verifier checks and the
 test("a verification that fails mid-way resumes on the same candidate", async () => {
   const path = campaignPath();
   const workflow = config();
-  let campaign = createCampaign(path, applicationId, workflow);
+  let campaign = await createWorkflowCampaign(path, workflow, 4);
   const first = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -634,7 +634,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
 test("a journal written by other prompts is refused", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
   ]);
@@ -653,8 +653,8 @@ test("a journal written by other prompts is refused", async () => {
 
 test("the turn limit ends a workflow without a verified note", async () => {
   const path = campaignPath();
-  const workflow = config(1);
-  const campaign = createCampaign(path, applicationId, workflow);
+  const workflow = config();
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const phase = await runWorkflow(
     campaign,
     createPiRoles(
@@ -672,8 +672,8 @@ test("the turn limit ends a workflow without a verified note", async () => {
 
 test("a source FAIL kills a conditionally correct note before requirements, and the explorer still sees its verdict", async () => {
   const path = campaignPath();
-  const workflow = config(2);
-  const campaign = createCampaign(path, applicationId, workflow);
+  const workflow = config();
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -731,8 +731,8 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
 
 test("a source PASS that confirms sources without searching is an operational error", async () => {
   const path = campaignPath();
-  const workflow = config(1);
-  const campaign = createCampaign(path, applicationId, workflow);
+  const workflow = config();
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
@@ -1184,9 +1184,9 @@ test("drains requested verification batches at the turn cap and stops at the fir
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns: 1, window: 1 },
+    settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const drive = dependencies([
     {
       submission: {
@@ -1259,9 +1259,9 @@ test.each([
     const path = campaignPath();
     const workflow = workflowConfiguration({
       task,
-      settings: { ...roleSettings(), maxExplorerTurns: 1, window: 1 },
+      settings: { ...roleSettings(), window: 1 },
     });
-    const campaign = createCampaign(path, applicationId, workflow);
+    const campaign = await createWorkflowCampaign(path, workflow, 1);
     const drive = dependencies([
       {
         submission: {
@@ -1321,9 +1321,9 @@ test("an interrupted later verification batch resumes on its own candidate witho
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns: 1, window: 1 },
+    settings: { ...roleSettings(), window: 1 },
   });
-  let campaign = createCampaign(path, applicationId, workflow);
+  let campaign = await createWorkflowCampaign(path, workflow, 1);
   const first = dependencies([
     {
       submission: {
@@ -1393,9 +1393,9 @@ test("later batches can use verified support that failed task completion", async
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns: 1, window: 1 },
+    settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const drive = dependencies([
     {
       submission: {
@@ -1440,9 +1440,9 @@ test("the next explorer starts only after all requested partial-result batches s
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
-    settings: { ...roleSettings(), maxExplorerTurns: 2, window: 1 },
+    settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
     {
       submission: {
@@ -1489,14 +1489,13 @@ test("a self-contained proof records a local source PASS without calling Codex",
     task,
     settings: {
       ...settings,
-      maxExplorerTurns: 1,
       source: {
         model: "codex-model",
         reasoning: "low",
       },
     },
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 1);
   const drive = dependencies([
     { submission: { solution: false, notes: [good] } },
     {
@@ -1560,7 +1559,7 @@ test("the first Explorer works on the task without fixed guidance in settings", 
     task,
     settings: roleSettings(),
   });
-  const campaign = createCampaign(path, applicationId, workflow);
+  const campaign = await createWorkflowCampaign(path, workflow, 4);
   expect(await phaseOf(campaign)).toMatchObject({
     kind: "explorer",
     input: { task, explorerGuidance: "" },

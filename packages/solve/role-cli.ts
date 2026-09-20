@@ -291,6 +291,8 @@ async function projectCampaignRecords(
         ? {}
         : {
             task: snapshot.config.task,
+            maxExplorerTurns: snapshot.maxExplorerTurns,
+            allowances: snapshot.allowances,
             phase: phase?.kind,
             notes: snapshot.notes,
             ...(report === undefined

@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AuditedTool, Campaign, Json } from "xean";
+import {
+  createCampaign,
+  type AuditedTool,
+  type Campaign,
+  type Json,
+} from "xean";
+import { initializeAllowance } from "../allowance";
+import { applicationId } from "../roles";
+import type { WorkflowConfig } from "../workflow";
 import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 
 import type { SolveSettings } from "../pi-roles";
@@ -58,7 +66,6 @@ export function roleSettings(): SolveSettings {
     reasoning: "high" as const,
   };
   return {
-    maxExplorerTurns: 4,
     window: 100_000,
     maxExplorerResponses: 1,
     maxSourceWebActions: 16,
@@ -72,6 +79,16 @@ export function roleSettings(): SolveSettings {
     requirements: profile,
     reconstruction: profile,
   };
+}
+
+export async function createWorkflowCampaign(
+  path: string,
+  config: WorkflowConfig & Readonly<Record<string, Json>>,
+  turns = 4,
+) {
+  const campaign = createCampaign(path, applicationId, config);
+  await initializeAllowance(campaign, turns);
+  return campaign;
 }
 
 export function dependencies(replies: readonly Reply[]) {

@@ -36,9 +36,9 @@ async function setup(turns = 1) {
   const request = {
     task,
     campaignPath: campaign,
+    turns,
     settings: {
       ...profiles,
-      maxExplorerTurns: turns,
     },
   };
   await init(request);
@@ -188,7 +188,7 @@ test("an imported theorem graph reaches focused source checking without flatteni
     records(path)
       .filter((e) => e.kind === "call")
       .map((e) => e.label),
-  ).toEqual(["xean-solve/notes"]);
+  ).toEqual(["xean-solve/allowance", "xean-solve/notes"]);
   const drive = dependencies([
     coordinate(
       ["n1", "n2", "n3"],
@@ -267,15 +267,15 @@ test("invalid local support is rejected before appending a submission", async ()
   expect(records(path)).toEqual(before);
 });
 
-test("init creates only a workflow declaration without resolving test-only providers", async () => {
+test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(11);
+  expect(workflowSchemaVersion).toBe(12);
   const before = records(path);
-  expect(before).toHaveLength(1);
+  expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 11, task },
+    config: { schemaVersion: 12, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);

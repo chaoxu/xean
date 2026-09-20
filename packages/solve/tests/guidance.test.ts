@@ -11,6 +11,7 @@ import { run } from "../runner";
 import { deriveWorkflow, workflowConfiguration } from "../workflow";
 import {
   campaignPath,
+  createWorkflowCampaign,
   cleanupCampaigns,
   dependencies,
   roleSettings,
@@ -23,14 +24,13 @@ const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const first = "Test small counterexamples first.";
 const second = "Try a direct construction next.";
 
-function setup(turns = 2) {
+async function setup(turns = 2) {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    maxExplorerTurns: turns,
   };
   const config = workflowConfiguration({ task, settings });
-  createCampaign(path, applicationId, config).close();
+  (await createWorkflowCampaign(path, config, turns)).close();
   return { path, request: { task, settings, campaignPath: path } };
 }
 
@@ -82,7 +82,7 @@ async function cli(path: string, ...args: string[]) {
 }
 
 test("guidance leaves default inspection, settings, and historical entries unchanged", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   const before = records(path);
   const report = await inspectCampaign(path);
   const receipt = await guideCampaign(path, first, "strategy-1");
@@ -125,7 +125,7 @@ test("guidance leaves default inspection, settings, and historical entries uncha
 });
 
 test("another process can guide an active explorer without changing its request or runner lock", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   const textPath = join(dirname(path), "guidance.txt");
   writeFileSync(textPath, first);
   const drive = dependencies([
@@ -161,7 +161,7 @@ test("another process can guide an active explorer without changing its request 
 });
 
 test("guidance submitted after a frozen boundary waits through its retries and reaches the next turn", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   await guideCampaign(path, first, "a");
   const initial = dependencies([
     { state: "failed", error: "provider unavailable" },
@@ -183,7 +183,7 @@ test("guidance submitted after a frozen boundary waits through its retries and r
 });
 
 test("a crash after freezing guidance but before starting Explorer preserves the boundary", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   await guideCampaign(path, first, "a");
   const campaign = openCampaign(path);
   const snapshot = await deriveWorkflow(campaign.records());
@@ -202,7 +202,7 @@ test("a crash after freezing guidance but before starting Explorer preserves the
 });
 
 test("concurrent CLI retries through a path alias append one guidance request", async () => {
-  const { path } = setup();
+  const { path } = await setup();
   const alias = join(dirname(path), "alias.db");
   symlinkSync(path, alias);
   const textPath = join(dirname(path), "guidance.txt");
@@ -226,7 +226,7 @@ test("concurrent CLI retries through a path alias append one guidance request", 
 });
 
 test("coordinator guidance and external advice share the next Explorer input without duplicate records", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   const initial = dependencies(turn(1));
   expect(
     await run(request, {
@@ -237,7 +237,11 @@ test("coordinator guidance and external advice share the next Explorer input wit
   const before = records(path);
   expect(
     before.filter((entry) => entry.kind === "call").map((entry) => entry.label),
-  ).toEqual([roleLabels.explorer, roleLabels.coordinator]);
+  ).toEqual([
+    "xean-solve/allowance",
+    roleLabels.explorer,
+    roleLabels.coordinator,
+  ]);
   await guideCampaign(path, first, "outside-advice");
   const rest = dependencies(turn(2));
   expect((await run(request, rest)).outcome).toBe("turn-limit");
@@ -258,7 +262,7 @@ test("coordinator guidance and external advice share the next Explorer input wit
 });
 
 test("process death after guidance and boundary requests preserves receipt and replay", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   for (const mode of ["submit", "freeze"]) {
     const child = Bun.spawn(
       [
@@ -278,7 +282,7 @@ test("process death after guidance and boundary requests preserves receipt and r
   const before = records(path);
   expect(
     (await guideCampaign(path, "Use the direct construction.", "crash-1")).call,
-  ).toBe(2);
+  ).toBe(4);
   expect(records(path)).toEqual(before);
   await guideCampaign(path, second, "later");
   const drive = dependencies([...turn(1), ...turn(2)]);
@@ -291,10 +295,10 @@ test("process death after guidance and boundary requests preserves receipt and r
 });
 
 test("a run without external advice adds no guidance calls", async () => {
-  const { path, request } = setup(1);
+  const { path, request } = await setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 11 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 12 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);
@@ -302,12 +306,16 @@ test("a run without external advice adds no guidance calls", async () => {
     records(path)
       .filter((entry) => entry.kind === "call")
       .map((entry) => entry.label),
-  ).toEqual([roleLabels.explorer, roleLabels.coordinator]);
+  ).toEqual([
+    "xean-solve/allowance",
+    roleLabels.explorer,
+    roleLabels.coordinator,
+  ]);
   expect(records(path)[0]).toEqual(start);
 });
 
 test("unknown settings and unsupported workflow schemas are rejected without rewriting journals", async () => {
-  const { path, request } = setup();
+  const { path, request } = await setup();
   const before = readFileSync(path);
   await expect(
     run(
@@ -337,7 +345,7 @@ test("unknown settings and unsupported workflow schemas are rejected without rew
 });
 
 test("invalid guidance fails without creating a campaign or changing its records", async () => {
-  const { path } = setup();
+  const { path } = await setup();
   const before = readFileSync(path);
   await expect(guideCampaign(path, " \n", "empty")).rejects.toThrow();
   await expect(guideCampaign(path, first, " ")).rejects.toThrow();

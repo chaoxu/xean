@@ -21,6 +21,7 @@ import {
   workflowConfiguration,
 } from "../workflow";
 import {
+  createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
@@ -110,10 +111,9 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
   const path = campaignPath(),
     settings = {
       ...defaults,
-      maxExplorerTurns: 1,
     };
   const config = workflowConfiguration({ task, settings }),
-    campaign = createCampaign(path, applicationId, config);
+    campaign = await createWorkflowCampaign(path, config, 1);
   expect(config.settings.maxExplorerResponses).toBe(4);
   const drive = dependencies([
     { submission: { notes: [note], solution: true } },
@@ -366,11 +366,10 @@ test.each([false, true])(
       task,
       settings: {
         ...roleSettings(),
-        maxExplorerTurns: 2,
         maxExplorerResponses: 4,
       },
     });
-    const campaign = createCampaign(campaignPath(), applicationId, config);
+    const campaign = await createWorkflowCampaign(campaignPath(), config, 2);
     const guidance =
       "Try a counting argument instead of the failed construction.";
     const nextId = saveFirst ? "n2" : "n1";
@@ -496,7 +495,7 @@ test("omitted response budget is saved explicitly and matches its explicit defau
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         settings: { maxExplorerResponses: 4 },
       },
     });
@@ -549,12 +548,11 @@ test.each([1, 3])(
       task,
       settings: {
         ...roleSettings(),
-        maxExplorerTurns: 1,
         explorerContextBudgetTokens: 80_000,
         maxExplorerResponses,
       },
     });
-    const campaign = createCampaign(campaignPath(), applicationId, config);
+    const campaign = await createWorkflowCampaign(campaignPath(), config, 1);
     const notes = Array.from({ length: maxExplorerResponses }, (_, index) => ({
       text: `Partial work ${index + 1}.`,
       support: [],
@@ -645,10 +643,9 @@ test("every saved submission reaches the coordinator, including early proofs bef
     settings: {
       ...roleSettings(),
       maxExplorerResponses: 4,
-      maxExplorerTurns: 1,
     },
   });
-  const campaign = createCampaign(path, applicationId, config);
+  const campaign = await createWorkflowCampaign(path, config, 1);
   const first = {
     text: "An early detailed lemma, including its complete argument.",
     support: [],
@@ -781,7 +778,6 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
     settings: {
       ...roleSettings(),
       maxExplorerResponses: 4,
-      maxExplorerTurns: 1,
     },
   });
   const first = {
@@ -792,7 +788,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
     text: "Using n1, the remaining case follows.",
     support: ["n1"],
   };
-  const campaign = createCampaign(path, applicationId, config);
+  const campaign = await createWorkflowCampaign(path, config, 1);
   const initial = dependencies([
     {
       state: "failed",

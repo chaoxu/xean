@@ -86,11 +86,12 @@ test("unsupported late-role reasoning is rejected before any provider call", asy
 
 test("a completed campaign is returned before initializing models or checking credentials", async () => {
   const path = campaignPath();
-  const settings = { ...roleSettings(), maxExplorerTurns: 1 };
+  const settings = roleSettings();
   const request = {
     task: { problem: "P", completionCriteria: "Prove P" },
     campaignPath: path,
     settings,
+    turns: 1,
   };
   const drive = dependencies([
     {
@@ -172,7 +173,8 @@ test("run honors an injected source executor instead of invoking the CLI", async
         {
           task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
           campaignPath: path,
-          settings: { ...roleSettings(), maxExplorerTurns: 1 },
+          settings: roleSettings(),
+          turns: 1,
         },
         drive,
       ),

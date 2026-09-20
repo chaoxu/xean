@@ -1,5 +1,4 @@
 {
-  "maxExplorerTurns": 10,
   "window": 100000,
   "explorer": {
     "provider": "codex-lb",
