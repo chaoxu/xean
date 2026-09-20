@@ -37,6 +37,15 @@ const input = {
 };
 const note = { text: "An alleged complete proof.", support: [] };
 
+test("sameRequest compares generic JSON by value rather than key order", () => {
+  expect(
+    sameRequest(
+      { kind: "request", nested: { first: 1, second: ["x", "y"] } },
+      { nested: { second: ["x", "y"], first: 1 }, kind: "request" },
+    ),
+  ).toBe(true);
+});
+
 test("Explorer always requires a solution claim and defaults to four responses", () => {
   const call = explorerCall(input);
   expect(call.submissionGate).toEqual({

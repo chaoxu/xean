@@ -239,6 +239,49 @@ test("exact passages reuse recorded earlier source PASS evidence within the same
   }
 });
 
+test("a malformed matching source transcript is not retried as a paid call", async () => {
+  const campaign = createCampaign(campaignPath(), applicationId, {
+    kind: "calls",
+  });
+  const packet = input([makeNote("n1")]);
+  const first = {
+    ...dependencies([correctness([{ note: "n1", externalResults: [result] }])]),
+    codex: async () => ({
+      state: "succeeded" as const,
+      codexVersion: "fake",
+      stdout: "not-json\n",
+      stderr: "",
+    }),
+  };
+  try {
+    await expect(
+      createPiRoles(campaign, roleSettings(), first).verifier(packet),
+    ).rejects.toThrow();
+    const candidate = calls(campaign).find((call) =>
+      call.label.endsWith("/correctness"),
+    )?.candidate;
+    if (candidate === undefined) throw new Error("missing candidate");
+
+    let replacements = 0;
+    const second = {
+      ...dependencies([]),
+      codex: async () => {
+        replacements += 1;
+        throw new Error("replacement paid call");
+      },
+    };
+    await expect(
+      createPiRoles(campaign, roleSettings(), second).verifier(
+        packet,
+        candidate,
+      ),
+    ).rejects.toThrow();
+    expect(replacements).toBe(0);
+  } finally {
+    campaign.close();
+  }
+});
+
 test("new evidence without retrieval or a changed reused quotation cannot pass", async () => {
   for (const changed of [false, true]) {
     const campaign = createCampaign(campaignPath(), applicationId, {

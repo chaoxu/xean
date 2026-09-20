@@ -93,48 +93,73 @@ function eventObject(value: Json): Record<string, Json> {
   return value as Record<string, Json>;
 }
 
-/** The final agent message, the searches made, and the usage of one Codex run. */
-export function codexTranscript(stdout: string): {
-  readonly message: string;
-  readonly searches: number;
-  readonly usage: CodexUsage;
-} {
-  let searches = 0;
-  let usage: CodexUsage | undefined;
-  let stage: "start" | "thread" | "turn" | "complete" = "start";
-  let message: string | undefined;
-  let last: string | undefined;
-  for (const line of stdout.split("\n")) {
-    if (line.trim() === "") continue;
-    const event = eventObject(z.json().parse(JSON.parse(line)));
+type CodexStage = "start" | "thread" | "turn" | "complete";
+
+/**
+ * Validates Codex JSONL once for both complete transcripts and live action
+ * limits. The live mode keeps lifecycle validation permissive because it may
+ * stop before the terminal events arrive; item and action validation stays
+ * identical in both modes.
+ */
+class CodexJsonlParser {
+  readonly #strictLifecycle: boolean;
+  #stage: CodexStage = "start";
+  #searches = 0;
+  #actions = new Set<string>();
+  #usage: CodexUsage | undefined;
+  #message: string | undefined;
+  #last: string | undefined;
+
+  constructor(strictLifecycle: boolean) {
+    this.#strictLifecycle = strictLifecycle;
+  }
+
+  get searches(): number {
+    return this.#searches;
+  }
+
+  get webActions(): number {
+    return this.#actions.size;
+  }
+
+  acceptLine(line: string): void {
+    if (line.trim() === "") return;
+    this.accept(eventObject(z.json().parse(JSON.parse(line))));
+  }
+
+  private accept(event: Record<string, Json>): void {
     const type = z.string().parse(event["type"]);
     if (type === "thread.started") {
-      if (stage !== "start") throw new Error("thread.started out of order");
-      stage = "thread";
-      continue;
+      if (this.#strictLifecycle && this.#stage !== "start")
+        throw new Error("thread.started out of order");
+      this.#stage = "thread";
+      return;
     }
     if (type === "turn.started") {
-      if (stage !== "thread") throw new Error("turn.started out of order");
-      stage = "turn";
-      continue;
+      if (this.#strictLifecycle && this.#stage !== "thread")
+        throw new Error("turn.started out of order");
+      this.#stage = "turn";
+      return;
     }
     if (type === "turn.completed") {
-      if (stage !== "turn") throw new Error("turn.completed out of order");
+      if (this.#strictLifecycle && this.#stage !== "turn")
+        throw new Error("turn.completed out of order");
       const raw = eventObject(event["usage"] ?? {});
-      usage = codexUsage.parse({
+      this.#usage = codexUsage.parse({
         input: raw["input_tokens"],
         cacheRead: raw["cached_input_tokens"],
         cacheWrite: raw["cache_write_input_tokens"],
         output: raw["output_tokens"],
         reasoning: raw["reasoning_output_tokens"],
       });
-      stage = "complete";
-      continue;
+      this.#stage = "complete";
+      return;
     }
     if (!["item.started", "item.updated", "item.completed"].includes(type)) {
       throw new Error(`Codex emitted forbidden event type: ${type}`);
     }
-    if (stage !== "turn") throw new Error(`${type} outside an active turn`);
+    if (this.#strictLifecycle && this.#stage !== "turn")
+      throw new Error(`${type} outside an active turn`);
     const item = eventObject(event["item"] ?? null);
     const itemType = z.string().parse(item["type"]);
     if (
@@ -142,22 +167,50 @@ export function codexTranscript(stdout: string): {
       itemType === "error" &&
       item["message"] === compactionWarning
     ) {
-      continue;
+      return;
     }
     if (!["reasoning", "agent_message", "web_search"].includes(itemType)) {
       throw new Error(`Codex used forbidden item type: ${itemType}`);
     }
-    if (type !== "item.completed") continue;
-    if (itemType === "web_search") searches += 1;
-    last = itemType;
-    if (itemType === "agent_message") message = nonblank.parse(item["text"]);
+    if (itemType === "web_search") {
+      this.#actions.add(nonblank.parse(item["id"]));
+    }
+    if (type !== "item.completed") return;
+    if (itemType === "web_search") this.#searches += 1;
+    this.#last = itemType;
+    if (itemType === "agent_message")
+      this.#message = nonblank.parse(item["text"]);
   }
-  if (stage !== "complete") throw new Error("Codex emitted no complete turn");
-  if (usage === undefined) throw new Error("Codex emitted no completed usage");
-  if (last !== "agent_message" || message === undefined) {
-    throw new Error("Codex emitted no final completed agent message");
+
+  result(): {
+    readonly message: string;
+    readonly searches: number;
+    readonly usage: CodexUsage;
+  } {
+    if (this.#stage !== "complete")
+      throw new Error("Codex emitted no complete turn");
+    if (this.#usage === undefined)
+      throw new Error("Codex emitted no completed usage");
+    if (this.#last !== "agent_message" || this.#message === undefined) {
+      throw new Error("Codex emitted no final completed agent message");
+    }
+    return {
+      message: this.#message,
+      searches: this.#searches,
+      usage: this.#usage,
+    };
   }
-  return { message, searches, usage };
+}
+
+/** The final agent message, the searches made, and the usage of one Codex run. */
+export function codexTranscript(stdout: string): {
+  readonly message: string;
+  readonly searches: number;
+  readonly usage: CodexUsage;
+} {
+  const parser = new CodexJsonlParser(true);
+  for (const line of stdout.split("\n")) parser.acceptLine(line);
+  return parser.result();
 }
 
 /** The parsed final message of a succeeded Codex call, with its searches and usage. Throws on a malformed transcript. */
@@ -231,7 +284,10 @@ async function runCommand(
     let exhausted = false;
     let error: string | undefined;
     let termination: ReturnType<typeof setTimeout> | undefined;
-    const actions = new Set<string>();
+    const parser =
+      options.maxWebActions === undefined
+        ? undefined
+        : new CodexJsonlParser(false);
     const kill = (signal: NodeJS.Signals) => {
       if (child.pid === undefined) return;
       try {
@@ -267,30 +323,8 @@ async function runCommand(
         return;
       }
       try {
-        const event = eventObject(z.json().parse(JSON.parse(line)));
-        const type = z.string().parse(event["type"]);
-        if (["thread.started", "turn.started", "turn.completed"].includes(type))
-          return;
-        if (!["item.started", "item.updated", "item.completed"].includes(type))
-          throw new Error(`Codex emitted forbidden event type: ${type}`);
-        const item = eventObject(event["item"] ?? null);
-        const itemType = z.string().parse(item["type"]);
-        if (
-          type === "item.completed" &&
-          itemType === "error" &&
-          item["message"] === compactionWarning
-        ) {
-          return;
-        }
-        if (!["reasoning", "agent_message", "web_search"].includes(itemType))
-          throw new Error(`Codex used forbidden item type: ${itemType}`);
-        if (itemType !== "web_search") return;
-        const id = nonblank.safeParse(item["id"]);
-        if (!id.success) {
-          throw new Error("Codex web-search item has no nonblank ID");
-        }
-        actions.add(id.data);
-        if (actions.size >= options.maxWebActions) {
+        parser!.acceptLine(line);
+        if (parser!.webActions >= options.maxWebActions) {
           exhausted = true;
           stop();
         }

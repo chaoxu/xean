@@ -849,7 +849,8 @@ export function createPiRoles(
 /**
  * The settled call of one label on this candidate whose journaled request
  * equals `request` and whose submission `read` accepts, else undefined. A
- * submission that fails to parse is not reused, so a fresh call is made.
+ * missing or invalid submission is not reused. Errors reading a matching
+ * journal entry propagate so corruption cannot become a paid cache miss.
  */
 function settled<T>(
   records: readonly Entry[],
@@ -867,12 +868,7 @@ function settled<T>(
     ) {
       continue;
     }
-    let value: T | undefined;
-    try {
-      value = read(entry.seq);
-    } catch {
-      continue;
-    }
+    const value = read(entry.seq);
     if (value !== undefined) return { call: entry.seq, value };
   }
   return undefined;
@@ -897,7 +893,7 @@ export function sameRequest(
       parsed.data.prompt === request.prompt
     );
   }
-  return JSON.stringify(journaled) === JSON.stringify(request);
+  return isDeepStrictEqual(journaled, request);
 }
 
 /** Accept source verdicts only with valid claims and inspected or supplied passages. */

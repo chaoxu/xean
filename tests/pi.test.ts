@@ -2545,6 +2545,63 @@ describe("thin Pi runner", () => {
   });
 
   test.each([
+    {
+      name: "transport diagnostic",
+      diagnostic: { type: "provider_transport_failure", timestamp: 1 },
+      retryable: true,
+    },
+    {
+      name: "forbidden response status",
+      diagnostic: {
+        type: "provider_response_failure",
+        timestamp: 1,
+        details: { status: 403 },
+      },
+      retryable: false,
+    },
+    {
+      name: "quota response code",
+      diagnostic: {
+        type: "provider_response_failure",
+        timestamp: 1,
+        error: {
+          message: "opaque provider failure",
+          code: "insufficient_quota",
+        },
+      },
+      retryable: false,
+    },
+    {
+      name: "specific transient detail beats generic code and text",
+      diagnostic: {
+        type: "provider_response_failure",
+        timestamp: 1,
+        error: { message: "opaque provider failure", code: "provider_error" },
+        details: { failure_detail: "upstream_unavailable" },
+      },
+      errorMessage: "403 opaque provider failure",
+      retryable: true,
+    },
+  ])(
+    "classifies structured provider diagnostics before text: $name",
+    async ({ diagnostic, errorMessage, retryable }) => {
+      const failed = assistant([], "error");
+      failed.errorMessage = errorMessage ?? "opaque provider failure";
+      failed.diagnostics = [diagnostic];
+      const result = await runPi(campaign(), {
+        models: models([failed]),
+        model,
+        label: "structured-classification/v1",
+        prompt: "Classify",
+      });
+      expect(result).toMatchObject({
+        state: "failed",
+        providerRetryable: retryable,
+      });
+    },
+  );
+
+  test.each([
     "401 invalid_api_key: authentication failed",
     "403 permission denied",
     "429 insufficient_quota: billing hard limit reached",
