@@ -52,7 +52,12 @@ export function roleCallRecords(
     ...results,
   ].sort((left, right) => left.seq - right.seq);
 }
-export const roleNames = ["explorer", "coordinator", "verifier"] as const;
+export const roleNames = [
+  "explorer",
+  "coordinator",
+  "literature",
+  "verifier",
+] as const;
 export type RoleName = (typeof roleNames)[number];
 /** The verifiers in the order they run; the coordinator asks for a prefix of this order. */
 export const verifierNames = [
@@ -65,6 +70,7 @@ export type VerifierName = (typeof verifierNames)[number];
 export const roleLabels = {
   explorer: `${applicationId}/explorer`,
   coordinator: `${applicationId}/coordinator`,
+  literature: `${applicationId}/literature`,
   verifier: `${applicationId}/verifier`,
 } as const satisfies Readonly<Record<RoleName, string>>;
 export const verifierLabels = {
@@ -88,7 +94,7 @@ export const roleTools = {
   explorer: "submit_notes",
   coordinator: "submit_coordination",
   verifier: "submit_verdict",
-} as const satisfies Readonly<Record<RoleName, string>>;
+} as const satisfies Readonly<Record<Exclude<RoleName, "literature">, string>>;
 
 export function verifierFromLabel(label: string): VerifierName | undefined {
   return verifierNames.find(
@@ -198,12 +204,43 @@ function distinctKnown(
   }
 }
 
+const literatureFinding = z.strictObject({
+  title: nonblank,
+  authors: z.array(nonblank),
+  year: z.number().int().positive().optional(),
+  url: z.string().refine((value) => {
+    if (!URL.canParse(value)) return false;
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  }, "must be an HTTP or HTTPS URL"),
+  summary: nonblank,
+  relevance: nonblank,
+});
+
+/** A durable literature result. It is discovery context, never mathematical evidence. */
+export const literatureResult = z.strictObject({
+  request: nonblank,
+  findings: z.array(literatureFinding),
+  synthesis: nonblank,
+  limitations: nonblank,
+});
+export type LiteratureResult = z.output<typeof literatureResult>;
+export type LiteraturePacket = LiteratureResult;
+
+export const literatureInput = z.strictObject({
+  task,
+  request: nonblank,
+  prior: z.array(literatureResult).optional(),
+});
+export type LiteratureInput = z.output<typeof literatureInput>;
+
 export const explorerInput = z
   .strictObject({
     task,
     explorerGuidance: z.string(),
     notes: z.array(noteFields.omit({ text: true }).refine(...distinctSupport)),
     support: z.array(note),
+    literature: z.array(literatureResult).optional(),
   })
   .superRefine((value, ctx) => {
     distinctKnown(
@@ -252,6 +289,7 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
 export const coordinatorInput = z.strictObject({
   task,
   notes: z.array(note),
+  literature: z.array(literatureResult).optional(),
   emptySubmission: z.literal(true).optional(),
 });
 export type CoordinatorInput = z.output<typeof coordinatorInput>;
@@ -272,19 +310,31 @@ const verification = z
   );
 export type Verification = z.output<typeof verification>;
 
+/** The coordinator's scheduling choice in the experimental controller loop. */
+export const coordinatorAction = z.discriminatedUnion("role", [
+  z.strictObject({ role: z.literal("explorer") }),
+  z.strictObject({ role: z.literal("literature"), request: nonblank }),
+  z.strictObject({ role: z.literal("verifier") }),
+]);
+export type CoordinatorAction = z.output<typeof coordinatorAction>;
+
 export const coordinatorResult = z.strictObject({
   filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
   explorerGuidance: nonblank,
   support: z.array(noteId),
   verify: z.array(verification),
+  action: coordinatorAction.optional(),
 });
-export type CoordinatorResult = z.output<typeof coordinatorResult>;
+export type CoordinatorResult = z.output<typeof coordinatorResult> & {
+  readonly action?: CoordinatorAction | undefined;
+};
 
 export function coordinatorResultFor(
   notes: readonly Pick<
     Note,
     "id" | "summary" | "support" | "verified" | "dead"
   >[],
+  options: { readonly requireAction?: boolean } = {},
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -294,6 +344,32 @@ export function coordinatorResultFor(
     notes.filter(({ verified }) => verified).map(({ id }) => id),
   );
   return coordinatorResult.superRefine((value, ctx) => {
+    if (options.requireAction && value.action === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "controller coordination must choose a next role",
+        path: ["action"],
+      });
+    }
+    if (value.action?.role === "verifier" && value.verify.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "controller verifier action must list a note to verify",
+        path: ["verify"],
+      });
+    }
+    if (
+      value.action !== undefined &&
+      value.action.role !== "verifier" &&
+      value.verify.length > 0
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "controller explorer or literature action cannot carry a verification list",
+        path: ["verify"],
+      });
+    }
     const filed = new Set<string>();
     for (const [index, filing] of value.filings.entries()) {
       if (!withoutSummary.has(filing.note) || filed.has(filing.note)) {
@@ -816,6 +892,7 @@ export function succeededSubmission(
 export interface Roles {
   readonly explorer: (input: ExplorerInput) => Promise<ExplorerResult>;
   readonly coordinator: (input: CoordinatorInput) => Promise<CoordinatorResult>;
+  readonly literature: (input: LiteratureInput) => Promise<LiteratureResult>;
   readonly verifier: (
     input: VerifierInput,
     candidate?: EntryId,

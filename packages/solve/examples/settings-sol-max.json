@@ -28,5 +28,7 @@
     "provider": "codex-lb",
     "model": "gpt-5.6-sol",
     "reasoning": "max"
-  }
+  },
+  "workflowMode": "fixed",
+  "maxCoordinatorSteps": 32
 }

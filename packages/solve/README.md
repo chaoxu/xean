@@ -6,7 +6,8 @@
 
 ```text
 explorer(task, explorerGuidance, notes, support) -> notes with support
-coordinator(task, notes) -> filings, explorerGuidance, support, verify
+coordinator(task, notes, literature?) -> filings, explorerGuidance, support, verify, action?
+literature(task, request, prior?) -> literature packet
 verifier(task, verify, notes, support)        -> verdicts
 ```
 
@@ -31,7 +32,7 @@ The task file has one schema. The completion criteria are the only statement of 
 }
 ```
 
-Settings select one model profile for the explorer, one for the coordinator, one per verifier, the cap on explorer turns, and the window. Start with the [OpenAI API example](examples/settings-openai.json) or the [Codex subscription example](examples/settings-openai-codex.json), then adjust the role profiles for your task. [Provider setup](docs/installation.md#choose-a-provider) explains credentials.
+Settings select one model profile for the explorer, one for the coordinator, one per verifier, the cap on explorer turns, and the window. Set `workflowMode` to `coordinator` to enable the experimental coordinator dispatch loop and use `maxCoordinatorSteps` to bound it; the default is `fixed`. Literature uses the configured source Codex profile and the same bounded web-action setting. Start with the [OpenAI API example](examples/settings-openai.json) or the [Codex subscription example](examples/settings-openai-codex.json), then adjust the role profiles for your task. [Provider setup](docs/installation.md#choose-a-provider) explains credentials.
 
 The correctness, requirements, and reconstruction verifiers run through Pi. Source checks with external premises run the Codex CLI with web search. Source and independent-review profiles contain only `model` and `reasoning`. Web search is mandatory and frozen as `search: true` in every Codex request. The CLI uses the selected custom provider in `CODEX_HOME/config.toml`, or the native login when no custom provider is selected. `XEAN_CODEX_COMMAND` names the binary, default `codex`. Each source verdict preserves its assigned `externalResults` and records `sources` containing the checked result, paper and theorem location, URL, and quoted passage. A PASS missing a passage for an assigned result is rejected. Earlier recorded PASS passages from completed source calls in the same campaign may be supplied with their call and note provenance when the result matches exactly. The current source call still checks applicability. A response without browsing may cite only identical supplied passages. Correctness identifies the premises, and source judges whether the passages substantiate them. The CLI transcript does not reliably expose opened-page URLs, so URL and quotation accuracy remain model judgments preserved for inspection. `window` remains a character limit over the notes and their support. Native Codex usage is recorded without a price.
 
@@ -78,7 +79,7 @@ bun packages/solve/solve.ts run --turns 10 --id more-1 task.json campaign.db set
 
 The next Explorer turn is turn 11. Notes, support edges, failed routes, source passages, guidance, completed checks, and cumulative spending remain in the campaign. Repeating the same ID and count resumes that allowance without adding turns. A new ID grants more turns only after the previous allowance is exhausted. Plain `run` resumes unfinished work and leaves an exhausted campaign stopped. Accepted campaigns stay accepted. `init --turns N` can record the initial allowance before any model call.
 
-`inspect` reports the cumulative `maxExplorerTurns` and the `allowances` receipts, including each ID, added `turns`, and `afterTurns`. These are separate from `maxExplorerResponses`, which still defaults to four responses, allowing three “keep going” continuations within each Explorer turn. This format uses workflow schema 12. Archived campaigns require their pinned older runtime and remain unchanged.
+`inspect` reports the cumulative `maxExplorerTurns` and the `allowances` receipts, including each ID, added `turns`, and `afterTurns`. These are separate from `maxExplorerResponses`, which still defaults to four responses, allowing three “keep going” continuations within each Explorer turn. Workflow schema 13 also supports the experimental `workflowMode: "coordinator"`, bounded by `maxCoordinatorSteps`; it starts with the coordinator and dispatches one Explorer, literature, or verifier role at a time. The default `workflowMode: "fixed"` preserves the existing loop. Archived campaigns require their pinned older runtime and remain unchanged.
 
 `run` creates a campaign or resumes the existing campaign after matching the exact task and settings against its declaration. Before a fresh campaign or unfinished resume makes a model call, it resolves every configured Pi role and its requested reasoning level, checks available provider credentials, and checks the source CLI and its configured credentials. These checks make no paid model request and do not establish backend reachability or account entitlement. A completed campaign returns before provider initialization, so it needs no model registry or credentials. A second process cannot drive the same database. `contract` reports execution-contract schema 2 (execution reports use schema 1) with application `xean-solve`, protocol `workflow`, and arguments `task`, `campaign`, and `settings`.
 
@@ -91,10 +92,11 @@ Each role can also run alone:
 ```sh
 bun packages/solve/solve.ts explorer input.json roles.db settings.json
 bun packages/solve/solve.ts coordinator input.json roles.db settings.json
+bun packages/solve/solve.ts literature input.json roles.db settings.json
 bun packages/solve/solve.ts verifier input.json roles.db settings.json
 ```
 
-Standalone role commands are boundary diagnostics. They use the same role schemas and journal machinery and are not a second workflow. An Explorer input carries one `explorerGuidance` string, empty when there is no advice. A coordinator result supplies that field for the next turn.
+Standalone role commands are boundary diagnostics. They use the same role schemas and journal machinery and are not a second workflow. An Explorer input carries one `explorerGuidance` string, empty when there is no advice, plus optional literature discovery context. A coordinator result supplies that field for the next turn. The literature command accepts `{task, request, prior?}` and returns a discovery packet; it does not create mathematical notes or verifier evidence by itself.
 
 ## Independent review
 

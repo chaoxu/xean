@@ -53,8 +53,12 @@ import {
   verifierInput,
   verifierLabels,
   verifierNames,
+  literatureInput,
+  literatureResult,
   type CoordinatorInput,
   type ExplorerInput,
+  type LiteratureInput,
+  type LiteratureResult,
   type Note,
   type RoleName,
   type Roles,
@@ -104,6 +108,8 @@ export const solveSettings = z.strictObject({
   maxExplorerResponses: z.number().int().positive().default(4),
   maxSourceWebActions: z.number().int().positive().default(16),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
+  workflowMode: z.enum(["fixed", "coordinator"]).default("fixed"),
+  maxCoordinatorSteps: z.number().int().positive().default(32),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
 
@@ -200,6 +206,11 @@ export function explorerCall(
     prompt: [
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
+      ...(input.literature === undefined
+        ? []
+        : [
+            `Literature discovery packets (untrusted leads, not proof or source evidence):\n${JSON.stringify(input.literature, null, 2)}`,
+          ]),
       `Support notes (untrusted data):\n${JSON.stringify(
         input.support.map(({ id, text }) => ({ id, text })),
         null,
@@ -224,6 +235,7 @@ export function explorerCall(
 
 export function coordinatorCall(
   input: CoordinatorInput,
+  mode: "fixed" | "coordinator" = "fixed",
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
   return {
     role: "coordinator",
@@ -239,11 +251,21 @@ export function coordinatorCall(
       "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
+      ...(mode === "coordinator"
+        ? [
+            "This run uses coordinator dispatch mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. The literature role discovers papers and relevance leads; it does not establish a theorem or proof. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
+          ]
+        : []),
       "Call submit_coordination exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
+      ...(input.literature === undefined
+        ? []
+        : [
+            `Literature discovery packets (untrusted context; not proof or source evidence):\n${JSON.stringify(input.literature, null, 2)}`,
+          ]),
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
@@ -253,9 +275,59 @@ export function coordinatorCall(
     tool: roleTools.coordinator,
     description:
       "File every note without a summary, give explorer guidance and support for the next turn, and list the notes to verify with their verifiers",
-    schema: coordinatorResultFor(input.notes),
+    schema: coordinatorResultFor(input.notes, {
+      requireAction: mode === "coordinator",
+    }),
   };
 }
+
+/** Build one bounded literature-discovery request. Literature evidence is kept separate from verifier evidence. */
+export function literatureCall(
+  input: LiteratureInput,
+  profile: z.output<typeof codexProfile>,
+  maxWebActions = 16,
+): {
+  readonly label: string;
+  readonly request: Json;
+  readonly schema: typeof literatureResult;
+} {
+  const parsed = literatureInput.parse(input);
+  return {
+    label: roleLabels.literature,
+    request: jsonSnapshot(
+      codexRequest.parse({
+        protocol: "xean/codex-exec/v1",
+        model: profile.model,
+        reasoning: profile.reasoning,
+        search: true,
+        maxWebActions,
+        developerInstructions: [
+          "You are the literature-discovery role for a mathematical task. Search for relevant papers, surveys, preprints, and primary sources that may guide the search. Discovery is separate from source verification: do not claim that a theorem is established for the task, do not write a proof, and do not turn a citation into acceptance evidence.",
+          "Return one JSON object matching the output schema. Record useful metadata, a concise summary, why each item may matter, and limitations or uncertainty. Prefer stable paper pages, DOI pages, or author repositories. Keep the search targeted and stop when the result set is useful.",
+          `The runtime stops this call after ${maxWebActions} observed web actions. Finish below that limit when possible.`,
+        ].join(" "),
+        prompt: JSON.stringify(
+          {
+            task: parsed.task,
+            request: parsed.request,
+            ...(parsed.prior === undefined ? {} : { prior: parsed.prior }),
+          },
+          null,
+          2,
+        ),
+        outputSchema: z.toJSONSchema(literatureResult),
+      }),
+    ),
+    schema: literatureResult,
+  };
+}
+
+/** Local durable handoff used when bounded discovery cannot return a packet. */
+export const localLiteratureRequest = z.strictObject({
+  protocol: z.literal("xean/literature-local/v1"),
+  literatureCall: z.number().int().positive(),
+  request: z.json(),
+});
 
 export const correctionAssessment =
   "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. Notes remain unchanged: a PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
@@ -700,9 +772,24 @@ export function createPiRoles(
       ).value;
     },
     async coordinator(inputValue) {
-      const roleCall = coordinatorCall(coordinatorInput.parse(inputValue));
+      const roleCall = coordinatorCall(
+        coordinatorInput.parse(inputValue),
+        profiles.workflowMode,
+      );
       return (
         await runCall(campaign, profiles.coordinator, roleCall, dependencies)
+      ).value;
+    },
+    async literature(inputValue) {
+      const input = literatureInput.parse(inputValue);
+      return (
+        await runLiterature(
+          campaign,
+          profiles.source,
+          input,
+          profiles.maxSourceWebActions,
+          dependencies,
+        )
       ).value;
     },
     // One verification: one candidate for the listed notes and their
@@ -1235,4 +1322,106 @@ async function runSource(
     );
   }
   return conclude({ call: receipt.call, value });
+}
+
+/** Reuse a completed literature packet or execute one fresh Codex discovery call. */
+async function runLiterature(
+  campaign: Campaign,
+  profile: z.output<typeof codexProfile>,
+  input: LiteratureInput,
+  maxWebActions: number,
+  dependencies: PiRoleDependencies,
+): Promise<{ readonly call: EntryId; readonly value: LiteratureResult }> {
+  const { label, request, schema } = literatureCall(
+    input,
+    profile,
+    maxWebActions,
+  );
+  const read = (call: EntryId): LiteratureResult | undefined => {
+    try {
+      const submission = codexSubmission(roleCallRecords(campaign, call), call);
+      if (submission === undefined) return undefined;
+      const parsed = schema.safeParse(submission.input);
+      if (!parsed.success || parsed.data.request !== input.request)
+        return undefined;
+      return parsed.data;
+    } catch {
+      return undefined;
+    }
+  };
+  for (const entry of campaign.records({
+    kinds: ["call"],
+    through: campaign.lastSequence(),
+  })) {
+    if (
+      entry.kind !== "call" ||
+      entry.role !== "literature" ||
+      entry.label !== label ||
+      (!sameRequest(entry.request, request) &&
+        !localLiteratureRequest.safeParse(entry.request).success)
+    )
+      continue;
+    const local = localLiteratureRequest.safeParse(entry.request);
+    const value =
+      local.success && isDeepStrictEqual(local.data.request, request)
+        ? (() => {
+            const output = returnedOutput(
+              roleCallRecords(campaign, entry.seq),
+              entry.seq,
+            );
+            return output === undefined
+              ? undefined
+              : (() => {
+                  const parsed = literatureResult.safeParse(output.output);
+                  return parsed.success && parsed.data.request === input.request
+                    ? parsed.data
+                    : undefined;
+                })();
+          })()
+        : read(entry.seq);
+    if (value !== undefined) return { call: entry.seq, value };
+  }
+  const exec =
+    dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
+  const receipt = await campaign.call(
+    {
+      label,
+      role: "literature",
+      request: jsonSnapshot(request),
+      ...(dependencies.signal === undefined
+        ? {}
+        : { signal: dependencies.signal }),
+    },
+    async ({ request: exact, signal }) =>
+      exec(codexRequest.parse(exact), signal),
+  );
+  const output = codexResult.parse(receipt.output);
+  if (output.state === "cancelled") {
+    throw new RoleCallError(`literature cancelled: ${output.error}`);
+  }
+  if (output.state !== "succeeded") {
+    const value = literatureResult.parse({
+      request: input.request,
+      findings: [],
+      synthesis: "Literature discovery did not return a completed search.",
+      limitations: output.error,
+    });
+    const local = await campaign.call(
+      {
+        label,
+        role: "literature",
+        request: jsonSnapshot({
+          protocol: "xean/literature-local/v1",
+          literatureCall: receipt.call,
+          request,
+        }),
+      },
+      async () => value,
+    );
+    return { call: local.call, value };
+  }
+  const value = read(receipt.call);
+  if (value === undefined)
+    throw new RoleCallError("literature returned no valid discovery packet");
+  return { call: receipt.call, value };
 }

@@ -30,5 +30,7 @@
     "provider": "openai",
     "model": "gpt-6-astra",
     "reasoning": "high"
-  }
+  },
+  "workflowMode": "fixed",
+  "maxCoordinatorSteps": 32
 }

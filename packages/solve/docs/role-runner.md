@@ -5,6 +5,7 @@ One task contains the exact `problem` and `completionCriteria`. The campaign and
 ```text
 ExplorerInput    -> ExplorerResult
 CoordinatorInput -> CoordinatorResult
+LiteratureInput  -> LiteratureResult
 VerifierInput    -> VerifierResult
 ```
 
@@ -56,11 +57,13 @@ The command records advice without checking or changing the workflow phase. Advi
 
 ## Coordinator
 
-`CoordinatorInput` contains the task and every note, including new notes without summaries and dead notes with verdicts. `CoordinatorResult` files each new note with a summary, gives `explorerGuidance` for the next turn, selects `support` notes to read in full, and lists `verify` entries in priority order. Each verification asks for a nonempty prefix of correctness, source, requirements, reconstruction. A listed note must be live and its support must be verified or listed earlier with source, so an accepted note's closure is verified by induction.
+`CoordinatorInput` contains the task and every note, including new notes without summaries and dead notes with verdicts. In coordinator mode it also contains prior literature packets as untrusted discovery context. `CoordinatorResult` files each new note with a summary, gives `explorerGuidance` for the next turn, selects `support` notes to read in full, and lists `verify` entries in priority order. In coordinator mode it also returns one typed `action`: Explorer, literature with a discovery request, or verifier. Each verification asks for a nonempty prefix of correctness, source, requirements, reconstruction. A listed note must be live and its support must be verified or listed earlier with source, so an accepted note's closure is verified by induction.
 
 Guidance recommends useful mathematical work from the recorded evidence and explains the coordinator's uncertainty. The Explorer can reject that advice, choose another method, or move beyond a suggested intermediate step. The original task remains its objective. The coordinator never asks it to check, polish, or restate a verified note and has no authority to change verdicts or completion criteria.
 
 A summary is for navigation and is never verified. It is the note's exact statement as a mathematician would state the result, not a description of the note, plus only what the text itself says about its status: a gap it leaves, a failed approach, or a claim to meet the completion criteria; it repeats nothing the note's fields say and never judges the text. The coordinator has no correctness authority.
+
+The literature role is invoked only by the coordinator action. It uses bounded web search to return a packet of paper metadata, summaries, relevance, and limitations. Discovery can suggest sources for later work, but the source verifier separately opens and checks any theorem a proof actually relies on.
 
 ## Verifier
 
@@ -80,7 +83,7 @@ A verification interrupted after some calls resumes on the same candidate and ma
 
 A model role call is one logical model invocation, which may include provider continuations: Pi for Explorer, coordinator, correctness, requirements, and reconstruction, and Codex for source verification. Its prompt is a deterministic function of the role input, and its structured result is its submission, a submit tool call or the source verifier's final JSON message. A Pi call-result stores compact outcome and accounting metadata with `textRef` and `transcriptRef` attachments. `readPiResult(output, reader)` reconstructs and validates its full text and transcript. The workflow fold starts from the declared task, derives each role input, and matches the explorer and coordinator calls by their prompt bytes and the correctness call that opens each verification by its exact Pi prompt; the remaining verifier calls are found by the candidate they bind to. A source call is also matched against its assigned correctness submission, exact premises, previously inspected passages, and frozen action limit. Local source conclusions have their own exact requests and contain no provider usage. A call whose bytes differ means the journal was written by other prompts, and the fold refuses it rather than running the role again.
 
-The fold replays settled calls in order:
+With the default `workflowMode: "fixed"`, the fold replays settled calls in order:
 
 ```text
 explorer -> coordinator -> explorer
@@ -89,6 +92,8 @@ explorer -> coordinator -> explorer
 ```
 
 Notes are numbered `n1`, `n2`, and so on as Explorer results and frozen submissions enter the workflow. Submitted notes can enter the coordinator before an Explorer call, so coordinator work and verification do not themselves consume Explorer turns. Note verdicts and flags are derived from the external verification, support edges, and kernel verdict entries available before each role call. Repeating `run` invokes the first role whose settled call is missing. Repeating it on a completed campaign makes no model request.
+
+The experimental `workflowMode: "coordinator"` starts with a coordinator call. Its typed `action` selects exactly one next role: Explorer, literature discovery, or verifier. The selected role settles, its durable result is added to the next coordinator input, and the loop repeats. Literature packets are passed to the coordinator and Explorer as untrusted discovery context. They contain metadata and limitations only; they never enter the note graph or establish source evidence. `maxCoordinatorSteps` bounds the number of dispatches so a coordinator cannot create an unbounded role loop. The mode is selected in the frozen settings and can be compared with the default fixed loop on a separate campaign.
 
 `accepted` and `turn-limit` are terminal results. `paused`, `call-failure`, and `interrupted` leave the campaign resumable.
 

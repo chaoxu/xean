@@ -11,12 +11,15 @@ import { byId, supportClosure } from "./support";
 import {
   coordinatorCall,
   explorerCall,
+  literatureCall,
+  localLiteratureRequest,
   RoleCallError,
   sameRequest,
   solveSettings,
   verifierCall,
   type RoleCall,
 } from "./pi-roles";
+import { codexRequest, codexSubmission } from "./source";
 import {
   applicationId,
   coordinatorInput,
@@ -32,9 +35,15 @@ import {
   verificationComplete,
   verifierInput,
   verifierLabels,
+  roleLabels,
+  returnedOutput,
+  literatureInput,
+  literatureResult,
   workflowRecords,
   type CoordinatorInput,
   type ExplorerInput,
+  type LiteratureInput,
+  type LiteratureResult,
   type Note,
   type RoleName,
   type Roles,
@@ -43,7 +52,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 12;
+export const workflowSchemaVersion = 13;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -71,6 +80,7 @@ export type WorkflowTerminal = AcceptedPhase | TurnLimitPhase;
 export type WorkflowPhase =
   | { readonly kind: "explorer"; readonly input: ExplorerInput }
   | { readonly kind: "coordinator"; readonly input: CoordinatorInput }
+  | { readonly kind: "literature"; readonly input: LiteratureInput }
   | {
       readonly kind: "verifier";
       readonly input: VerifierInput;
@@ -87,6 +97,8 @@ export interface WorkflowSnapshot {
   readonly allowances: ReturnType<typeof turnAllowances>;
   readonly maxExplorerTurns: number;
   readonly notes: readonly Note[];
+  /** Discovery packets returned by the optional literature role. */
+  readonly literature: readonly LiteratureResult[];
   readonly phase: WorkflowPhase;
   /** Journal boundary before the next explorer turn, used only by the driver. */
   readonly explorerAfter?: EntryId;
@@ -205,11 +217,13 @@ export async function deriveWorkflow(
   records: readonly Entry[],
 ): Promise<WorkflowSnapshot> {
   const config = parseConfig(records[0]);
+  if (config.settings.workflowMode === "coordinator")
+    return deriveCoordinatorWorkflow(records);
   const allowances = turnAllowances(records);
   const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
   if (maxExplorerTurns === undefined)
     throw new Error("campaign has no initial turn allowance; run init first");
-  const base = { config, allowances, maxExplorerTurns };
+  const base = { config, allowances, maxExplorerTurns, literature: [] };
   const verdicts = journalVerdicts(records);
   const projection = new Projection(verdicts);
   // Replay projections use this historical cursor, not the journal's latest state.
@@ -452,6 +466,443 @@ export async function deriveWorkflow(
   };
 }
 
+/** Read successfully returned discovery packets without treating them as notes or proof evidence. */
+function literatureRequestFromCall(request: Json): string | undefined {
+  const local = localLiteratureRequest.safeParse(request);
+  if (local.success) return literatureRequestFromCall(local.data.request);
+  const codex = codexRequest.safeParse(request);
+  if (!codex.success) return undefined;
+  try {
+    const value = JSON.parse(codex.data.prompt) as {
+      readonly request?: unknown;
+    };
+    return typeof value.request === "string" ? value.request : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordedLiterature(
+  records: readonly Entry[],
+  through: EntryId,
+): LiteratureResult[] {
+  const packets: LiteratureResult[] = [];
+  for (const entry of records) {
+    if (
+      entry.kind !== "call" ||
+      entry.seq > through ||
+      entry.role !== "literature" ||
+      entry.label !== roleLabels.literature
+    )
+      continue;
+    try {
+      const local = localLiteratureRequest.safeParse(entry.request);
+      const output = returnedOutput(records, entry.seq);
+      const submission = codexSubmission(records, entry.seq);
+      const parsed =
+        local.success && output !== undefined
+          ? literatureResult.safeParse(output.output)
+          : submission === undefined
+            ? undefined
+            : literatureResult.safeParse(submission.input);
+      const expected = literatureRequestFromCall(entry.request);
+      if (
+        parsed?.success === true &&
+        expected !== undefined &&
+        parsed.data.request === expected
+      )
+        packets.push(parsed.data);
+    } catch {
+      // An unfinished or malformed discovery call remains visible in the
+      // journal, but it is not durable coordinator context.
+    }
+  }
+  return packets;
+}
+
+function firstLiteratureCall(
+  records: readonly Entry[],
+  after: EntryId,
+  request: Json,
+): CallEntry | undefined {
+  for (const entry of records) {
+    if (
+      entry.kind === "call" &&
+      entry.seq > after &&
+      entry.role === "literature" &&
+      entry.label === roleLabels.literature &&
+      (isDeepStrictEqual(entry.request, request) ||
+        (() => {
+          const local = localLiteratureRequest.safeParse(entry.request);
+          return (
+            local.success && isDeepStrictEqual(local.data.request, request)
+          );
+        })())
+    ) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function settledLiteratureCall(
+  records: readonly Entry[],
+  after: EntryId,
+  request: Json,
+  expectedRequest: string,
+): { readonly settled: EntryId; readonly value: LiteratureResult } | undefined {
+  for (
+    let call = firstLiteratureCall(records, after, request);
+    call !== undefined;
+    call = firstLiteratureCall(records, call.seq, request)
+  ) {
+    try {
+      const local = localLiteratureRequest.safeParse(call.request);
+      const output = returnedOutput(records, call.seq);
+      const submission = codexSubmission(records, call.seq);
+      const parsed =
+        local.success && output !== undefined
+          ? literatureResult.safeParse(output.output)
+          : submission === undefined
+            ? undefined
+            : literatureResult.safeParse(submission.input);
+      if (parsed?.success === true && parsed.data.request === expectedRequest) {
+        return {
+          settled: local.success ? output!.settled : submission!.settled,
+          value: parsed.data,
+        };
+      }
+    } catch {
+      // Retry from the next journal boundary; the malformed call is retained.
+    }
+  }
+  return undefined;
+}
+
+function acceptedControllerPhase(
+  records: readonly Entry[],
+  projection: Projection,
+  cursor: EntryId,
+  base: Omit<
+    WorkflowSnapshot,
+    "phase" | "notes" | "noteSubmissions" | "literature"
+  > & {
+    readonly literature: readonly LiteratureResult[];
+  },
+  turns: number,
+  noteSubmissions: readonly {
+    readonly call: EntryId;
+    readonly noteIds: readonly string[];
+  }[],
+): Promise<WorkflowSnapshot | undefined> {
+  const accepted = projection.accepted(cursor);
+  if (accepted.length === 0) return Promise.resolve(undefined);
+  const notes = projection.at(cursor);
+  const noteId = accepted.at(-1)!;
+  const candidate = journalVerdicts(
+    records.filter((entry) => entry.seq <= cursor),
+  ).findLast(({ verdict }) => verdict.note === noteId)?.candidate;
+  if (candidate === undefined)
+    throw new Error(`accepted note ${noteId} has no candidate`);
+  return supportClosure([pick(notes, noteId)], notes).then((closure) => ({
+    ...base,
+    noteSubmissions,
+    notes,
+    phase: {
+      kind: "accepted" as const,
+      turns,
+      note: pick(notes, noteId),
+      notes,
+      candidate,
+      closure,
+    },
+  }));
+}
+
+/**
+ * Experimental controller loop. Every completed role returns to a fresh
+ * coordinator decision; literature discovery is durable context, never a
+ * verifier result. The fixed Explorer -> coordinator -> verifier loop above
+ * remains the default mode for comparison.
+ */
+async function deriveCoordinatorWorkflow(
+  records: readonly Entry[],
+): Promise<WorkflowSnapshot> {
+  const config = parseConfig(records[0]);
+  const allowances = turnAllowances(records);
+  const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
+  if (maxExplorerTurns === undefined)
+    throw new Error("campaign has no initial turn allowance; run init first");
+  const base = { config, allowances, maxExplorerTurns };
+  const verdicts = journalVerdicts(records);
+  const projection = new Projection(verdicts);
+  let cursor = records[0]!.seq;
+  let guidance = "";
+  let support: readonly string[] = [];
+  let turns = 0;
+  let dispatches = 0;
+  let pendingEmptySubmission = false;
+  const noteSubmissions: { call: EntryId; noteIds: string[] }[] = [];
+  const includeSubmitted = (after: EntryId): boolean => {
+    const boundary = submittedNotesBoundary(records, after);
+    if (boundary === undefined) return false;
+    let count = projection.at(after).length;
+    for (const submission of boundary.submissions) {
+      const entries = submission.notes.map((entry, index) => ({
+        id: noteIdAfter(count, index),
+        ...entry,
+        support: entry.support.map((reference) =>
+          typeof reference === "number"
+            ? noteIdAfter(count, reference - 1)
+            : reference,
+        ),
+      }));
+      projection.add(entries, boundary.call);
+      noteSubmissions.push({
+        call: submission.call,
+        noteIds: entries.map(({ id }) => id),
+      });
+      count += entries.length;
+    }
+    cursor = boundary.call;
+    return true;
+  };
+
+  for (;;) {
+    const literature = recordedLiterature(records, cursor);
+    const accepted = await acceptedControllerPhase(
+      records,
+      projection,
+      cursor,
+      { ...base, literature },
+      turns,
+      noteSubmissions,
+    );
+    if (accepted !== undefined) return accepted;
+    if (dispatches >= config.settings.maxCoordinatorSteps) {
+      const notes = projection.at(cursor);
+      return {
+        ...base,
+        literature,
+        noteSubmissions,
+        notes,
+        phase: { kind: "turn-limit", turns, notes },
+      };
+    }
+
+    const included = includeSubmitted(cursor);
+    const literatureAtCoordinator = recordedLiterature(records, cursor);
+    const coordinatorRequest = coordinatorInput.parse({
+      task: config.task,
+      notes: projection.at(cursor),
+      literature: literatureAtCoordinator,
+      ...(pendingEmptySubmission ? { emptySubmission: true } : {}),
+    });
+    const coordinated = settledCall(
+      records,
+      cursor,
+      coordinatorCall(coordinatorRequest, "coordinator"),
+    );
+    if (coordinated === undefined) {
+      return {
+        ...base,
+        literature: literatureAtCoordinator,
+        noteSubmissions,
+        notes: coordinatorRequest.notes,
+        phase: { kind: "coordinator", input: coordinatorRequest },
+        ...(included ? {} : { notesAfter: cursor }),
+      };
+    }
+    cursor = coordinated.settled;
+    projection.file(coordinated.value.filings, cursor);
+    guidance = coordinated.value.explorerGuidance;
+    support = coordinated.value.support;
+    pendingEmptySubmission = false;
+    const action = coordinated.value.action;
+    if (action === undefined)
+      throw new Error("controller coordinator returned no role action");
+    dispatches += 1;
+
+    if (action.role === "literature") {
+      const input = literatureInput.parse({
+        task: config.task,
+        request: action.request,
+        prior: recordedLiterature(records, cursor),
+      });
+      const call = literatureCall(
+        input,
+        config.settings.source,
+        config.settings.maxSourceWebActions,
+      );
+      const settled = settledLiteratureCall(
+        records,
+        cursor,
+        call.request,
+        input.request,
+      );
+      if (settled === undefined) {
+        return {
+          ...base,
+          literature: recordedLiterature(records, cursor),
+          noteSubmissions,
+          notes: projection.at(cursor),
+          phase: { kind: "literature", input },
+        };
+      }
+      cursor = settled.settled;
+      continue;
+    }
+
+    if (action.role === "explorer") {
+      if (turns >= maxExplorerTurns) {
+        const notes = projection.at(cursor);
+        return {
+          ...base,
+          literature: recordedLiterature(records, cursor),
+          noteSubmissions,
+          notes,
+          phase: { kind: "turn-limit", turns, notes },
+        };
+      }
+      let after = cursor;
+      let known = projection.at(cursor);
+      const selected = [...support];
+      const advice = explorerGuidance(records, cursor, guidance);
+      for (;;) {
+        const explorerRequest = explorerInput.parse({
+          task: config.task,
+          explorerGuidance: advice,
+          notes: known.map(({ text, ...rest }) => rest),
+          literature: recordedLiterature(records, cursor),
+          support: [
+            ...new Set([
+              ...selected,
+              ...(await supportClosure(
+                selected.map((id) => pick(known, id)),
+                known,
+              )),
+            ]),
+          ]
+            .sort(byId)
+            .map((id) => pick(known, id)),
+        });
+        const roleCall = explorerCall(
+          explorerRequest,
+          config.settings.explorerContextBudgetTokens,
+          config.settings.maxExplorerResponses,
+        );
+        const call = firstCall(
+          records,
+          after,
+          roleCall.role,
+          roleCall.label,
+          roleCall,
+        );
+        if (call === undefined) {
+          return {
+            ...base,
+            literature: recordedLiterature(records, cursor),
+            noteSubmissions,
+            notes: known,
+            phase: { kind: "explorer", input: explorerRequest },
+            explorerAfter: cursor,
+            notesAfter: cursor,
+          };
+        }
+        const saved = savedExplorerSubmission(records, call.seq);
+        const completed = succeededSubmission(
+          records,
+          call.seq,
+          roleCall.tool,
+          saved,
+        );
+        if (saved !== undefined) {
+          const value = roleCall.schema.parse(saved.input);
+          const notes = value.notes.map((entry, position) => ({
+            id: noteIdAfter(known.length, position),
+            ...entry,
+          }));
+          if (notes.length > 0) projection.add(notes, saved.settled);
+          selected.push(...notes.map(({ id }) => id));
+          known = projection.at(saved.settled);
+        }
+        if (completed !== undefined) {
+          pendingEmptySubmission = saved?.emptySubmission === true;
+          cursor = completed.settled;
+          turns += 1;
+          break;
+        }
+        after = call.seq;
+      }
+      continue;
+    }
+
+    const filed = projection.at(cursor);
+    const verify = await verificationPrefix(
+      coordinated.value.verify,
+      filed,
+      config.settings.window,
+    );
+    if (verify.length === 0)
+      throw new Error("controller verifier action selected no fitting note");
+    const listed = verify.map(({ note }) => pick(filed, note));
+    const verifierRequest = await verifierInput.parseAsync({
+      task: config.task,
+      verify,
+      notes: listed,
+      support: (await supportClosure(listed, filed)).map((id) =>
+        pick(filed, id),
+      ),
+    });
+    const judged = judgedBy(verifierRequest, [], "correctness");
+    const first = firstCall(
+      records,
+      cursor,
+      "verifier",
+      verifierLabels.correctness,
+      await verifierCall("correctness", verifierRequest, judged),
+    );
+    if (first === undefined) {
+      return {
+        ...base,
+        literature: recordedLiterature(records, cursor),
+        noteSubmissions,
+        notes: filed,
+        phase: { kind: "verifier", input: verifierRequest },
+      };
+    }
+    const candidate = first.candidate;
+    if (candidate === undefined)
+      throw new Error(`verifier call ${first.seq} is not bound to a candidate`);
+    const recorded = verdicts.filter(({ candidate: id }) => id === candidate);
+    cursor = Math.max(cursor, ...recorded.map(({ seq }) => seq));
+    const acceptedAfterVerification = await acceptedControllerPhase(
+      records,
+      projection,
+      cursor,
+      { ...base, literature: recordedLiterature(records, cursor) },
+      turns,
+      noteSubmissions,
+    );
+    if (acceptedAfterVerification !== undefined)
+      return acceptedAfterVerification;
+    if (
+      !verificationComplete(
+        verifierRequest,
+        recorded.map(({ verdict }) => verdict),
+      )
+    ) {
+      return {
+        ...base,
+        literature: recordedLiterature(records, cursor),
+        noteSubmissions,
+        notes: projection.at(cursor),
+        phase: { kind: "verifier", input: verifierRequest, candidate },
+      };
+    }
+  }
+}
+
 export function workflowResult(phase: WorkflowTerminal): WorkflowResult {
   if (phase.kind === "accepted") {
     const { kind, closure, ...result } = phase;
@@ -506,6 +957,8 @@ export async function runWorkflow(
         await roles.explorer(phase.input);
       } else if (phase.kind === "coordinator") {
         await roles.coordinator(phase.input);
+      } else if (phase.kind === "literature") {
+        await roles.literature(phase.input);
       } else {
         await roles.verifier(phase.input, phase.candidate);
       }

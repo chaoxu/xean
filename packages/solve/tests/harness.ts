@@ -69,6 +69,8 @@ export function roleSettings(): SolveSettings {
     window: 100_000,
     maxExplorerResponses: 1,
     maxSourceWebActions: 16,
+    workflowMode: "fixed",
+    maxCoordinatorSteps: 32,
     explorer: profile,
     coordinator: profile,
     correctness: profile,
@@ -135,9 +137,14 @@ export function dependencies(replies: readonly Reply[]) {
     },
     async codex(request: CodexRequest): Promise<CodexResult> {
       codexCalls.push(request);
+      const literature = request.developerInstructions.includes(
+        "literature-discovery role",
+      );
       allCalls.push({
-        label: "xean-solve/verifier/source",
-        role: "verifier",
+        label: literature
+          ? "xean-solve/literature"
+          : "xean-solve/verifier/source",
+        role: literature ? "literature" : "verifier",
         system: request.developerInstructions,
         prompt: request.prompt,
       });

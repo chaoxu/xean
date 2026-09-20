@@ -1,8 +1,12 @@
 export type {
+  CoordinatorAction,
   CoordinatorInput,
   CoordinatorResult,
   ExplorerInput,
   ExplorerResult,
+  LiteratureInput,
+  LiteraturePacket,
+  LiteratureResult,
   Note,
   Roles,
   Task,

@@ -9,7 +9,7 @@ import {
   type Entry,
   type Json,
 } from "xean";
-import { derivePiSpend, piRequest, piResultRecord } from "xean/pi";
+import { builtinPi, derivePiSpend, piRequest, piResultRecord } from "xean/pi";
 import { z } from "zod";
 
 import { campaignAccounting } from "./accounting";
@@ -18,6 +18,7 @@ import { appendSubmittedNotes, inspectSubmittedNotes } from "./notes";
 import { executionReport } from "./execution-contract";
 import {
   createPiRoles,
+  localLiteratureRequest,
   piProviders,
   solveSettings,
   localSourceRequest,
@@ -31,6 +32,8 @@ import {
   correctnessVerdicts,
   explorerInput,
   explorerResult,
+  literatureInput,
+  literatureResult,
   jsonSnapshot,
   roleFromLabel,
   returnedOutput,
@@ -52,12 +55,18 @@ import {
 } from "./roles";
 import {
   createModelRuntime,
+  codexCommand,
   modelRegistryPath,
   requireCredentials,
   withCampaignLock,
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
-import { codexRequest, codexResult, codexSubmission } from "./source";
+import {
+  codexRequest,
+  codexResult,
+  codexSubmission,
+  requireCodex,
+} from "./source";
 import {
   deriveWorkflow,
   workflowConfig,
@@ -118,6 +127,23 @@ function visibleSubmission(
 ): Json | undefined {
   const verifier = verifierFromLabel(call.label);
   try {
+    if (
+      role === "literature" &&
+      localLiteratureRequest.safeParse(call.request).success
+    ) {
+      const output = returnedOutput(records, call.seq);
+      return output === undefined
+        ? undefined
+        : jsonSnapshot(literatureResult.parse(output.output));
+    }
+    if (role === "literature" && codexRequest.safeParse(call.request).success) {
+      const submission = codexSubmission(records, call.seq);
+      if (submission === undefined) return undefined;
+      return jsonSnapshot({
+        ...literatureResult.parse(submission.input),
+        usage: submission.usage,
+      });
+    }
     if (verifier === "source") {
       if (localSourceRequest.safeParse(call.request).success) {
         const output = returnedOutput(records, call.seq);
@@ -149,6 +175,7 @@ function visibleSubmission(
         ? undefined
         : schema.parse(submission.input);
     }
+    if (role === "literature") return undefined;
     const submission =
       role === "explorer"
         ? savedExplorerSubmission(records, call.seq)
@@ -180,6 +207,8 @@ function callDiagnostic(
 ) {
   if (result === undefined) return {};
   if (result.state === "threw") return { error: result.error };
+  if (localLiteratureRequest.safeParse(call.request).success)
+    return result.state === "returned" ? { outcome: "succeeded" } : {};
   const parsed = piRequest.safeParse(call.request).success
     ? piResultRecord.safeParse(result.output)
     : localSourceRequest.safeParse(call.request).success
@@ -295,6 +324,7 @@ async function projectCampaignRecords(
             allowances: snapshot.allowances,
             phase: phase?.kind,
             notes: snapshot.notes,
+            literature: snapshot.literature,
             ...(report === undefined
               ? {}
               : { result: executionReport(report) }),
@@ -430,12 +460,21 @@ export async function runRoleCommand(
   const input = await readJson(inputPath);
   if (command === "explorer") explorerInput.parse(input);
   else if (command === "coordinator") coordinatorInput.parse(input);
+  else if (command === "literature") literatureInput.parse(input);
   else await verifierInput.parseAsync(input);
-  const runtime = await createModelRuntime({
-    modelsPath: modelRegistryPath(process.env),
-  });
-  await requireCredentials(runtime, piProviders(settings, command));
-  const models = withSerialToolCalls(runtime);
+  const runtime =
+    command === "literature"
+      ? undefined
+      : await createModelRuntime({
+          modelsPath: modelRegistryPath(process.env),
+        });
+  if (command === "literature") {
+    await requireCodex({ command: codexCommand(process.env) });
+  } else {
+    await requireCredentials(runtime!, piProviders(settings, command));
+  }
+  const models =
+    runtime === undefined ? builtinPi() : withSerialToolCalls(runtime);
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.on("SIGINT", stop);

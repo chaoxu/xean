@@ -269,13 +269,13 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(12);
+  expect(workflowSchemaVersion).toBe(13);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 12, task },
+    config: { schemaVersion: 13, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
