@@ -100,10 +100,10 @@ export const codexProfile = z.strictObject({
 
 /** Default campaign-level policy supplied to every coordinator boundary. */
 export const defaultCoordinatorBehavior = {
-  literature: "optional" as const,
+  literature: "never" as const,
   verification: "decide" as const,
   instructions:
-    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator dispatch mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is optional: inspect literatureStatus, and when it is not-started decide whether background could change the mathematical search; choose literature when it could, and choose explorer when the task is self-contained. After a literature search, use its report to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
+    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator dispatch mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the campaign policy explicitly opts in. After an explicitly enabled literature search, use its report to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
 };
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always

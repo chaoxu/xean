@@ -1,6 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
+import {
+  coordinatorCall,
+  createPiRoles,
+  defaultCoordinatorBehavior,
+  literatureCall,
+} from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
 import { runWorkflow, workflowConfiguration } from "../workflow";
 import type { CoordinatorAction, Verification } from "../roles";
@@ -72,6 +77,10 @@ test("coordinator mode starts with the coordinator and returns after literature"
     ...roleSettings(),
     workflowMode: "coordinator" as const,
     maxCoordinatorSteps: 12,
+    coordinatorBehavior: {
+      literature: "required-if-not-started" as const,
+      verification: "decide" as const,
+    },
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 2);
@@ -208,6 +217,21 @@ test("coordinator behavior is configurable and receives literature status", () =
   ).toBe(true);
 });
 
+test("new campaigns disable literature unless their policy opts in", () => {
+  expect(defaultCoordinatorBehavior.literature).toBe("never");
+  const call = coordinatorCall({ task, notes: [] }, "coordinator");
+  expect(call.prompt).toContain('"literature": "never"');
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      explorerGuidance: "Explore the task.",
+      support: [],
+      verify: [],
+      action: { role: "literature", request: "Search." },
+    }).success,
+  ).toBe(false);
+});
+
 test("structured coordinator policies constrain optional literature and verification dispatch", () => {
   const base = {
     filings: [],
@@ -300,6 +324,10 @@ test("a failed bounded literature call hands an inconclusive packet back to the 
     ...roleSettings(),
     workflowMode: "coordinator" as const,
     maxCoordinatorSteps: 2,
+    coordinatorBehavior: {
+      literature: "required-if-not-started" as const,
+      verification: "decide" as const,
+    },
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 1);
@@ -345,6 +373,10 @@ test("literature reports remain bound to their coordinator requests", async () =
     ...roleSettings(),
     workflowMode: "coordinator" as const,
     maxCoordinatorSteps: 5,
+    coordinatorBehavior: {
+      literature: "required-if-not-started" as const,
+      verification: "decide" as const,
+    },
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 1);
