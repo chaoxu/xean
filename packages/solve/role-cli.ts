@@ -331,7 +331,6 @@ async function projectCampaignRecords(
             allowances: snapshot.allowances,
             phase: phase?.kind,
             notes: snapshot.notes,
-            literature: snapshot.literature,
             ...(report === undefined
               ? {}
               : { result: executionReport(report) }),

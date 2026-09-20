@@ -139,7 +139,7 @@ export function dependencies(replies: readonly Reply[]) {
     async codex(request: CodexRequest): Promise<CodexResult> {
       codexCalls.push(request);
       const literature = request.developerInstructions.includes(
-        "literature-discovery role",
+        "literature-note writer",
       );
       allCalls.push({
         label: literature

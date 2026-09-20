@@ -8,6 +8,7 @@ import {
 } from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
 import { runWorkflow, workflowConfiguration } from "../workflow";
+import { codexRequest } from "../source";
 import type { CoordinatorAction, Verification } from "../roles";
 import {
   campaignPath,
@@ -48,7 +49,7 @@ const passes = [
     submission: {
       verdicts: [
         {
-          note: "n1",
+          note: "n2",
           verdict: "PASS",
           report: "Correct.",
           externalResults: [],
@@ -58,7 +59,7 @@ const passes = [
   },
   {
     submission: {
-      verdicts: [{ note: "n1", verdict: "PASS", report: "Meets the task." }],
+      verdicts: [{ note: "n2", verdict: "PASS", report: "Meets the task." }],
     },
   },
   { submission: { statement: "P." } },
@@ -66,7 +67,7 @@ const passes = [
   {
     submission: {
       statement: null,
-      verdicts: [{ note: "n1", verdict: "PASS", report: "Independent." }],
+      verdicts: [{ note: "n2", verdict: "PASS", report: "Independent." }],
     },
   },
 ];
@@ -93,19 +94,27 @@ test("coordinator mode starts with the coordinator and returns after literature"
     },
     {
       codex: {
-        report:
-          "No directly relevant result was found. The search was deliberately small.",
+        notes: [
+          {
+            text: "A cited result relevant to P. Source: Example et al., Theorem 1.",
+            support: [],
+          },
+        ],
       },
     },
     {
-      submission: coordination({ role: "explorer" }),
+      submission: coordination(
+        { role: "explorer" },
+        [],
+        [{ note: "n1", summary: "A cited result relevant to P." }],
+      ),
     },
     { submission: { solution: false, notes: [good] } },
     {
       submission: coordination(
         { role: "verifier" },
-        [{ note: "n1", verifiers: all }],
-        [{ note: "n1", summary: "P." }],
+        [{ note: "n2", verifiers: all }],
+        [{ note: "n2", summary: "P." }],
       ),
     },
     ...passes,
@@ -137,27 +146,35 @@ test("coordinator mode starts with the coordinator and returns after literature"
     expect(drive.allCalls[1]?.prompt).toContain(
       '"request": "Find prior work on P."',
     );
-    expect(drive.allCalls[2]?.prompt).toContain("No directly relevant result");
-    expect(drive.allCalls[3]?.prompt).toContain(
-      "Literature discovery packets (untrusted leads",
+    expect(drive.allCalls[2]?.prompt).toContain(
+      "A cited result relevant to P.",
     );
   } finally {
     campaign.close();
   }
   expect(accepted).toBe(true);
   const inspection = (await inspectCampaign(path)) as {
-    readonly literature: readonly unknown[];
+    readonly notes: readonly unknown[];
     readonly calls: readonly {
       readonly role: string;
       readonly submission?: unknown;
     }[];
   };
-  expect(inspection.literature).toHaveLength(1);
+  expect(inspection.notes).toContainEqual(
+    expect.objectContaining({
+      id: "n1",
+      text: "A cited result relevant to P. Source: Example et al., Theorem 1.",
+    }),
+  );
   expect(
     inspection.calls.find(({ role }) => role === "literature")?.submission,
   ).toMatchObject({
-    report:
-      "No directly relevant result was found. The search was deliberately small.",
+    notes: [
+      {
+        text: "A cited result relevant to P. Source: Example et al., Theorem 1.",
+        support: [],
+      },
+    ],
   });
 });
 
@@ -195,7 +212,6 @@ test("coordinator behavior is configurable and receives literature status", () =
     {
       task,
       notes: [],
-      literature: [],
       literatureStatus: "not-started",
       coordinatorBehavior: behavior,
     },
@@ -242,7 +258,6 @@ test("structured coordinator policies constrain optional literature and verifica
     {
       task,
       notes: [],
-      literature: [],
       literatureStatus: "not-started",
       coordinatorBehavior: {
         literature: "required-if-not-started",
@@ -280,7 +295,6 @@ test("structured coordinator policies constrain optional literature and verifica
           dead: false,
         },
       ],
-      literature: [],
       literatureStatus: "completed",
       coordinatorBehavior: { literature: "never", verification: "always" },
     },
@@ -302,120 +316,43 @@ test("structured coordinator policies constrain optional literature and verifica
   ).toBe(true);
 });
 
-test("literature provider output is only a free-form report", () => {
+test("literature output is only note candidates", () => {
   const call = literatureCall(
     { task, request: "Search for prior work on P." },
     { model: "codex-model", reasoning: "low" },
   );
   expect(
-    call.schema.safeParse({ report: "A lead without a stable URL." }).success,
+    call.schema.safeParse({
+      notes: [{ text: "A cited theorem and its source.", support: [] }],
+    }).success,
   ).toBe(true);
   expect(
     call.schema.safeParse({
-      request: "Search for prior work on P.",
-      report: "A lead.",
+      notes: [{ text: "A cited theorem and its source.", support: [] }],
+      report: "extra fields are rejected",
     }).success,
   ).toBe(false);
-});
-
-test("a failed bounded literature call hands an inconclusive packet back to the coordinator", async () => {
-  const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
-    coordinatorBehavior: {
-      literature: "required-if-not-started" as const,
-      verification: "decide" as const,
-    },
-  };
-  const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
-  const drive = dependencies([
-    {
-      submission: coordination({
-        role: "literature",
-        request: "Search briefly for P.",
-      }),
-    },
-    {
-      codex: {},
-      state: "failed",
-      error: "search unavailable",
-    },
-    { submission: coordination({ role: "explorer" }) },
-    { submission: { solution: false, notes: [] } },
-  ]);
-  try {
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase.kind).toBe("turn-limit");
-    const coordinatorPrompts = drive.allCalls.filter(
-      ({ label }) => label === "xean-solve/coordinator",
-    );
-    expect(coordinatorPrompts).toHaveLength(2);
-    expect(coordinatorPrompts[1]?.prompt).toContain(
-      "Literature discovery did not return a completed search.",
-    );
-    expect(coordinatorPrompts[1]?.prompt).toContain(
-      "Literature search status: inconclusive",
-    );
-  } finally {
-    campaign.close();
-  }
-});
-
-test("literature reports remain bound to their coordinator requests", async () => {
-  const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 5,
-    coordinatorBehavior: {
-      literature: "required-if-not-started" as const,
-      verification: "decide" as const,
-    },
-  };
-  const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
-  const first = dependencies([
-    {
-      submission: coordination({
-        role: "literature",
-        request: "Search A.",
-      }),
-    },
-    { codex: { report: "A packet." } },
-    {
-      submission: coordination({
-        role: "literature",
-        request: "Search B.",
-      }),
-    },
-    { codex: { report: "B packet." } },
-    { submission: coordination({ role: "explorer" }) },
-    { submission: { solution: false, notes: [] } },
-    { submission: coordination({ role: "explorer" }) },
-  ]);
-  try {
-    const result = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, first),
-    );
-    expect(result.kind).toBe("turn-limit");
-    expect(
-      first.allCalls.filter(({ label }) => label === "xean-solve/literature"),
-    ).toHaveLength(2);
-    const inspection = (await inspectCampaign(path)) as {
-      readonly literature: readonly { request: string; report: string }[];
-    };
-    expect(inspection.literature).toEqual([
-      { request: "Search A.", report: "A packet." },
-      { request: "Search B.", report: "B packet." },
-    ]);
-  } finally {
-    campaign.close();
-  }
+  expect(
+    call.schema.safeParse({
+      notes: [{ text: "A self-dependent claim.", support: [1] }],
+    }).success,
+  ).toBe(false);
+  expect(
+    call.schema.safeParse({
+      notes: [
+        { text: "First claim.", support: [] },
+        { text: "Duplicate dependency claim.", support: [1, 1] },
+      ],
+    }).success,
+  ).toBe(false);
+  const request = codexRequest.parse(call.request);
+  expect(request.maxWebActions).toBeUndefined();
+  expect(request.developerInstructions).toContain(
+    "Your only deliverable is a JSON object with a notes array",
+  );
+  expect(request.developerInstructions).toContain(
+    "source verifier will independently open and check",
+  );
+  expect(request.prompt).toContain('"problemToSolve": "Prove P."');
+  expect(request.prompt).toContain('"request": "Search for prior work on P."');
 });

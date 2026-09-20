@@ -6,7 +6,6 @@ export type {
   ExplorerInput,
   ExplorerResult,
   LiteratureInput,
-  LiteraturePacket,
   LiteratureReport,
   LiteratureResult,
   LiteratureStatus,

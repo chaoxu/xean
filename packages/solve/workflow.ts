@@ -6,12 +6,17 @@ import { z } from "zod";
 import { Projection } from "./projection";
 import { turnAllowances } from "./allowance";
 import { explorerGuidance, freezeExplorerGuidance } from "./guidance";
-import { freezeSubmittedNotes, submittedNotesBoundary } from "./notes";
+import {
+  freezeSubmittedNotes,
+  hasSubmittedNotes,
+  submittedNotesBoundary,
+} from "./notes";
 import { byId, supportClosure } from "./support";
 import {
   coordinatorCall,
   explorerCall,
   literatureCall,
+  literatureNotesId,
   localLiteratureRequest,
   RoleCallError,
   sameRequest,
@@ -19,7 +24,7 @@ import {
   verifierCall,
   type RoleCall,
 } from "./pi-roles";
-import { codexRequest, codexSubmission } from "./source";
+import { codexSubmission } from "./source";
 import {
   applicationId,
   coordinatorInput,
@@ -54,7 +59,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 15;
+export const workflowSchemaVersion = 16;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -99,8 +104,6 @@ export interface WorkflowSnapshot {
   readonly allowances: ReturnType<typeof turnAllowances>;
   readonly maxExplorerTurns: number;
   readonly notes: readonly Note[];
-  /** Discovery packets returned by the optional literature role. */
-  readonly literature: readonly LiteratureResult[];
   readonly phase: WorkflowPhase;
   /** Journal boundary before the next explorer turn, used only by the driver. */
   readonly explorerAfter?: EntryId;
@@ -225,7 +228,7 @@ export async function deriveWorkflow(
   const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
   if (maxExplorerTurns === undefined)
     throw new Error("campaign has no initial turn allowance; run init first");
-  const base = { config, allowances, maxExplorerTurns, literature: [] };
+  const base = { config, allowances, maxExplorerTurns };
   const verdicts = journalVerdicts(records);
   const projection = new Projection(verdicts);
   // Replay projections use this historical cursor, not the journal's latest state.
@@ -469,58 +472,6 @@ export async function deriveWorkflow(
   };
 }
 
-/** Read successfully returned discovery packets without treating them as notes or proof evidence. */
-function literatureRequestFromCall(request: Json): string | undefined {
-  const local = localLiteratureRequest.safeParse(request);
-  if (local.success) return literatureRequestFromCall(local.data.request);
-  const codex = codexRequest.safeParse(request);
-  if (!codex.success) return undefined;
-  try {
-    const value = JSON.parse(codex.data.prompt) as {
-      readonly request?: unknown;
-    };
-    return typeof value.request === "string" ? value.request : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function recordedLiterature(
-  records: readonly Entry[],
-  through: EntryId,
-): LiteratureResult[] {
-  const packets: LiteratureResult[] = [];
-  for (const entry of records) {
-    if (
-      entry.kind !== "call" ||
-      entry.seq > through ||
-      entry.role !== "literature" ||
-      entry.label !== roleLabels.literature
-    )
-      continue;
-    try {
-      const local = localLiteratureRequest.safeParse(entry.request);
-      const output = returnedOutput(records, entry.seq);
-      const submission = codexSubmission(records, entry.seq);
-      const expected = literatureRequestFromCall(entry.request);
-      if (expected === undefined) continue;
-      if (local.success && output !== undefined) {
-        const parsed = literatureResult.safeParse(output.output);
-        if (parsed.success && parsed.data.request === expected)
-          packets.push(parsed.data);
-      } else if (submission !== undefined) {
-        const parsed = literatureReport.safeParse(submission.input);
-        if (parsed.success)
-          packets.push({ request: expected, report: parsed.data.report });
-      }
-    } catch {
-      // An unfinished or malformed discovery call remains visible in the
-      // journal, but it is not durable coordinator context.
-    }
-  }
-  return packets;
-}
-
 function literatureSearchStatus(
   records: readonly Entry[],
   through: EntryId,
@@ -610,10 +561,15 @@ function settledLiteratureCall(
             : (() => {
                 const parsed = literatureReport.safeParse(submission.input);
                 return parsed.success
-                  ? { request: expectedRequest, report: parsed.data.report }
+                  ? { request: expectedRequest, notes: parsed.data.notes }
                   : undefined;
               })();
       if (value !== undefined) {
+        if (
+          value.notes.length > 0 &&
+          !hasSubmittedNotes(records, literatureNotesId(expectedRequest))
+        )
+          continue;
         return {
           settled: output !== undefined ? output.settled : submission!.settled,
           value,
@@ -630,12 +586,7 @@ function acceptedControllerPhase(
   records: readonly Entry[],
   projection: Projection,
   cursor: EntryId,
-  base: Omit<
-    WorkflowSnapshot,
-    "phase" | "notes" | "noteSubmissions" | "literature"
-  > & {
-    readonly literature: readonly LiteratureResult[];
-  },
+  base: Omit<WorkflowSnapshot, "phase" | "notes" | "noteSubmissions">,
   turns: number,
   noteSubmissions: readonly {
     readonly call: EntryId;
@@ -668,8 +619,8 @@ function acceptedControllerPhase(
 
 /**
  * Experimental controller loop. Every completed role returns to a fresh
- * coordinator decision; literature discovery is durable context, never a
- * verifier result. The fixed Explorer -> coordinator -> verifier loop above
+ * coordinator decision; literature notes enter the ordinary note graph, never
+ * a verifier result. The fixed Explorer -> coordinator -> verifier loop above
  * remains the default mode for comparison.
  */
 async function deriveCoordinatorWorkflow(
@@ -716,12 +667,11 @@ async function deriveCoordinatorWorkflow(
   };
 
   for (;;) {
-    const literature = recordedLiterature(records, cursor);
     const accepted = await acceptedControllerPhase(
       records,
       projection,
       cursor,
-      { ...base, literature },
+      { ...base },
       turns,
       noteSubmissions,
     );
@@ -730,7 +680,6 @@ async function deriveCoordinatorWorkflow(
       const notes = projection.at(cursor);
       return {
         ...base,
-        literature,
         noteSubmissions,
         notes,
         phase: { kind: "turn-limit", turns, notes },
@@ -738,7 +687,6 @@ async function deriveCoordinatorWorkflow(
     }
 
     const included = includeSubmitted(cursor);
-    const literatureAtCoordinator = recordedLiterature(records, cursor);
     const literatureStatusAtCoordinator = literatureSearchStatus(
       records,
       cursor,
@@ -746,7 +694,6 @@ async function deriveCoordinatorWorkflow(
     const coordinatorRequest = coordinatorInput.parse({
       task: config.task,
       notes: projection.at(cursor),
-      literature: literatureAtCoordinator,
       literatureStatus: literatureStatusAtCoordinator,
       coordinatorBehavior: config.settings.coordinatorBehavior,
       ...(pendingEmptySubmission ? { emptySubmission: true } : {}),
@@ -759,7 +706,6 @@ async function deriveCoordinatorWorkflow(
     if (coordinated === undefined) {
       return {
         ...base,
-        literature: literatureAtCoordinator,
         noteSubmissions,
         notes: coordinatorRequest.notes,
         phase: { kind: "coordinator", input: coordinatorRequest },
@@ -780,13 +726,8 @@ async function deriveCoordinatorWorkflow(
       const input = literatureInput.parse({
         task: config.task,
         request: action.request,
-        prior: recordedLiterature(records, cursor),
       });
-      const call = literatureCall(
-        input,
-        config.settings.source,
-        config.settings.maxSourceWebActions,
-      );
+      const call = literatureCall(input, config.settings.source);
       const settled = settledLiteratureCall(
         records,
         cursor,
@@ -796,7 +737,6 @@ async function deriveCoordinatorWorkflow(
       if (settled === undefined) {
         return {
           ...base,
-          literature: recordedLiterature(records, cursor),
           noteSubmissions,
           notes: projection.at(cursor),
           phase: { kind: "literature", input },
@@ -811,7 +751,6 @@ async function deriveCoordinatorWorkflow(
         const notes = projection.at(cursor);
         return {
           ...base,
-          literature: recordedLiterature(records, cursor),
           noteSubmissions,
           notes,
           phase: { kind: "turn-limit", turns, notes },
@@ -826,7 +765,6 @@ async function deriveCoordinatorWorkflow(
           task: config.task,
           explorerGuidance: advice,
           notes: known.map(({ text, ...rest }) => rest),
-          literature: recordedLiterature(records, cursor),
           support: [
             ...new Set([
               ...selected,
@@ -854,7 +792,6 @@ async function deriveCoordinatorWorkflow(
         if (call === undefined) {
           return {
             ...base,
-            literature: recordedLiterature(records, cursor),
             noteSubmissions,
             notes: known,
             phase: { kind: "explorer", input: explorerRequest },
@@ -918,7 +855,6 @@ async function deriveCoordinatorWorkflow(
     if (first === undefined) {
       return {
         ...base,
-        literature: recordedLiterature(records, cursor),
         noteSubmissions,
         notes: filed,
         phase: { kind: "verifier", input: verifierRequest },
@@ -933,7 +869,7 @@ async function deriveCoordinatorWorkflow(
       records,
       projection,
       cursor,
-      { ...base, literature: recordedLiterature(records, cursor) },
+      { ...base },
       turns,
       noteSubmissions,
     );
@@ -947,7 +883,6 @@ async function deriveCoordinatorWorkflow(
     ) {
       return {
         ...base,
-        literature: recordedLiterature(records, cursor),
         noteSubmissions,
         notes: projection.at(cursor),
         phase: { kind: "verifier", input: verifierRequest, candidate },

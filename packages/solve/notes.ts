@@ -34,6 +34,13 @@ function receipts(records: readonly Entry[]) {
   );
 }
 
+export function hasSubmittedNotes(
+  records: readonly Entry[],
+  id: string,
+): boolean {
+  return receipts(records).some((receipt) => receipt.id === id);
+}
+
 function boundaries(records: readonly Entry[]) {
   const submitted = receipts(records),
     seen = new Set<number>();
@@ -115,6 +122,35 @@ export async function appendSubmittedNotes(
   throw new Error(
     "campaign changed while validating submitted notes; retry the same id",
   );
+}
+
+/**
+ * Append role-produced notes while the workflow runner already owns its
+ * campaign lock. The deterministic id makes a retry after a process
+ * interruption idempotent; delivery still happens only at the normal boundary.
+ */
+export async function appendSubmittedNotesLocked(
+  campaign: Campaign,
+  input: z.input<typeof submittedNotes>,
+  id: string,
+) {
+  const request = requestSchema.parse({
+    schemaVersion: 1,
+    id,
+    notes: submittedNotes.parse(input).notes,
+  });
+  const records = campaign.records({ kinds: ["call"], labels: [notesLabel] });
+  const prior = receipts(records).find((entry) => entry.id === request.id);
+  if (prior !== undefined) {
+    if (!isDeepStrictEqual(prior.notes, request.notes))
+      throw new Error(`notes id already has a different submission: ${id}`);
+    return prior;
+  }
+  const result = await campaign.call(
+    { label: notesLabel, request: jsonSnapshot(request) },
+    async () => null,
+  );
+  return receipts([campaign.record(result.call)!])[0]!;
 }
 
 export function submittedNotesBoundary(

@@ -204,19 +204,38 @@ function distinctKnown(
   }
 }
 
-/** The literature model's free-form discovery report. */
+/** Notes returned by literature discovery; local support uses one-based positions. */
+const literatureNote = z
+  .strictObject({
+    text: nonblank,
+    support: z.array(z.number().int().positive()),
+  })
+  .superRefine((value, context) => {
+    const seen = new Set<number>();
+    for (const [index, support] of value.support.entries()) {
+      if (support > index || seen.has(support)) {
+        context.addIssue({
+          code: "custom",
+          path: ["support", index],
+          message:
+            "literature support must name a distinct earlier note in this submission",
+        });
+      }
+      seen.add(support);
+    }
+  });
+
 export const literatureReport = z.strictObject({
-  report: nonblank,
+  notes: z.array(literatureNote),
 });
 export type LiteratureReport = z.output<typeof literatureReport>;
 
-/** A durable literature result. The request binds the report for replay. */
+/** A durable literature result. The request binds the note candidates for replay. */
 export const literatureResult = z.strictObject({
   request: nonblank,
-  report: nonblank,
+  notes: z.array(literatureNote),
 });
 export type LiteratureResult = z.output<typeof literatureResult>;
-export type LiteraturePacket = LiteratureResult;
 
 /** Whether the coordinator has attempted or completed literature discovery. */
 export const literatureStatus = z.enum([
@@ -237,7 +256,6 @@ export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
 export const literatureInput = z.strictObject({
   task,
   request: nonblank,
-  prior: z.array(literatureResult).optional(),
 });
 export type LiteratureInput = z.output<typeof literatureInput>;
 
@@ -247,7 +265,6 @@ export const explorerInput = z
     explorerGuidance: z.string(),
     notes: z.array(noteFields.omit({ text: true }).refine(...distinctSupport)),
     support: z.array(note),
-    literature: z.array(literatureResult).optional(),
   })
   .superRefine((value, ctx) => {
     distinctKnown(
@@ -296,7 +313,6 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
 export const coordinatorInput = z.strictObject({
   task,
   notes: z.array(note),
-  literature: z.array(literatureResult).optional(),
   literatureStatus: literatureStatus.optional(),
   coordinatorBehavior: coordinatorBehavior.optional(),
   emptySubmission: z.literal(true).optional(),

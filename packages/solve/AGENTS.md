@@ -1,12 +1,27 @@
 # Development workflow
 
+## Current-only literature contract
+
+The literature role is a thin Codex-backed note producer. Its output is
+`{notes: [{text, support}]}` and is delivered through the ordinary submitted
+note path. Coordinators, Explorers, and verifiers consume the resulting notes;
+they do not receive a separate literature report or retrieval context. A
+literature note is untrusted until the normal correctness and source checks
+establish it. Keep external retrieval and source inspection at this service
+boundary; the kernel remains unaware of the network.
+
+This repository supports only the current role and journal schemas. Do not add
+compatibility readers, migration branches, or legacy output formats. Add tests
+only for a contract or failure that would otherwise be easy to regress; prefer
+one focused boundary test over broad tests that mirror implementation details.
+
 ## Simplicity invariant
 
 Use the vocabulary in [`../../docs/terms.md`](../../docs/terms.md) for every schema field, prompt, document, and identifier. Do not introduce a new term or a synonym; when a change needs a new concept, add its entry there in the same change.
 
 `xean-solve` has one durable workflow. A task is one JSON object with `problem` and `completionCriteria`. `init TASK.json CAMPAIGN.db SETTINGS.json` creates or matches its declaration without provider setup or model calls. `run` takes the same arguments and starts or resumes that workflow. `inspect CAMPAIGN.db` derives its phase and terminal result from the journal.
 
-Turn allowances are local journal calls, outside the frozen settings. Fresh `init` and `run` default to ten turns, overridden by `--turns N`. `run --turns N --id ID` grants an exhausted campaign another allowance and resumes it. Reusing the ID and count cannot grant it twice. New allowances require `turn-limit`, and accepted campaigns stay accepted. The runner lock fences allowance changes and execution. Inspection exposes the effective `maxExplorerTurns` and allowance receipts from its captured journal boundary. Completed checks and all historical entries retain their authority. Workflow schema is 15, execution-contract schema is 2, and execution reports retain schema 1.
+Turn allowances are local journal calls, outside the frozen settings. Fresh `init` and `run` default to ten turns, overridden by `--turns N`. `run --turns N --id ID` grants an exhausted campaign another allowance and resumes it. Reusing the ID and count cannot grant it twice. New allowances require `turn-limit`, and accepted campaigns stay accepted. The runner lock fences allowance changes and execution. Inspection exposes the effective `maxExplorerTurns` and allowance receipts from its captured journal boundary. Completed checks and all historical entries retain their authority. Workflow schema is 16, execution-contract schema is 2, and execution reports retain schema 1.
 
 Support only the current workflow declaration and execution contract. Change the workflow schema version when its stored format or the meaning of recorded evidence changes, including verifier policy changes. Prompt wording edits alone do not require a bump. Change the execution contract when its report shape or meaning changes. Notes may carry external `verification`, and an accepted result may have zero Explorer turns when a submitted proof passes all normal checks. Standalone role commands exercise the same typed boundaries and are not a second workflow. Xean Lab must derive a worker result from `inspect.result`, not trust solver stdout as a second authority.
 
