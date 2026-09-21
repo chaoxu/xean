@@ -199,7 +199,7 @@ Inspection includes saved notes before handoff and after interruption. A fresh r
 
 Workflow declarations are versioned independently of the execution contract, which uses schema 2. Execution reports use schema 1. Notes may carry external `verification`, and a submitted proof can produce an accepted result after one turn, its verifier dispatch, once all normal checks pass. `--include-guidance` and `--include-submissions` expose the corresponding inspection fields.
 
-All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock`, `.guidance.lock`, and `.notes.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/xean/blob/main/SPEC.md) for recovery and copy rules.
+All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock` and `.inbox.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot. See the kernel [durability contract](https://github.com/chaoxu/xean/blob/main/SPEC.md) for recovery and copy rules.
 
 ## Export and review
 

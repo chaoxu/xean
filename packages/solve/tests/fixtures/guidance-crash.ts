@@ -11,7 +11,7 @@ const campaign = openCampaign(path);
 
 /** The journal boundary before the pending Explorer call. */
 async function explorerBoundary(): Promise<number> {
-  const after = (await deriveWorkflow(workflowRecords(campaign))).explorerAfter;
+  const after = (await deriveWorkflow(workflowRecords(campaign))).after;
   if (after === undefined)
     throw new Error("the campaign is not at an Explorer boundary");
   return after;

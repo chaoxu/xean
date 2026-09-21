@@ -106,10 +106,8 @@ export interface WorkflowSnapshot {
   readonly maxTurns: number;
   readonly notes: readonly Note[];
   readonly phase: WorkflowPhase;
-  /** Journal boundary before the next Explorer call, used only by the driver. */
-  readonly explorerAfter?: EntryId;
-  /** An unfrozen boundary where submitted notes may enter the coordinator. */
-  readonly notesAfter?: EntryId;
+  /** An unfrozen boundary where inbox entries may enter the next role input, used only by the driver. */
+  readonly after?: EntryId;
   readonly noteSubmissions: readonly {
     readonly call: EntryId;
     readonly noteIds: readonly string[];
@@ -252,14 +250,14 @@ function snapshot(
   fold: Fold,
   phase: WorkflowPhase,
   notes: readonly Note[] = fold.projection.at(fold.cursor),
-  boundaries: Pick<WorkflowSnapshot, "explorerAfter" | "notesAfter"> = {},
+  boundary: Pick<WorkflowSnapshot, "after"> = {},
 ): WorkflowSnapshot {
   return {
     ...fold.base,
     noteSubmissions: fold.noteSubmissions,
     notes,
     phase,
-    ...boundaries,
+    ...boundary,
   };
 }
 
@@ -277,7 +275,7 @@ function includeSubmitted(fold: Fold, after: EntryId): boolean {
   const boundary = submittedNotesBoundary(fold.records, after);
   if (boundary === undefined) return false;
   let count = fold.projection.at(after).length;
-  for (const submission of boundary.submissions) {
+  for (const submission of boundary.receipts) {
     const entries = submission.notes.map((entry, index) => ({
       id: noteIdAfter(count, index),
       ...entry,
@@ -349,7 +347,7 @@ async function replayExplorerTurn(
         fold,
         { kind: "explorer", input: explorerRequest },
         known,
-        { explorerAfter: fold.cursor, notesAfter: fold.cursor },
+        { after: fold.cursor },
       );
     }
     const saved = savedExplorerSubmission(records, call.seq);
@@ -497,7 +495,7 @@ function replayCoordinator(
       fold,
       { kind: "coordinator", input },
       input.notes,
-      included ? {} : { notesAfter: fold.cursor },
+      included ? {} : { after: fold.cursor },
     );
   }
   fold.cursor = coordinated.settled;
@@ -676,9 +674,10 @@ export async function runWorkflow(
       return phase;
     }
     if (dependencies.pauseRequested?.()) return phase;
+    // Notes freeze first in every phase; guidance follows in the explorer phase.
     if (
-      snapshot.notesAfter !== undefined &&
-      (await freezeSubmittedNotes(campaign, snapshot.notesAfter))
+      snapshot.after !== undefined &&
+      (await freezeSubmittedNotes(campaign, snapshot.after))
     ) {
       snapshot = await deriveWorkflow(workflowRecords(campaign));
       phase = snapshot.phase;
@@ -688,7 +687,7 @@ export async function runWorkflow(
     const verifying = phase.kind === "verifier" ? phase.input : undefined;
     try {
       if (phase.kind === "explorer") {
-        if (await freezeExplorerGuidance(campaign, snapshot.explorerAfter!)) {
+        if (await freezeExplorerGuidance(campaign, snapshot.after!)) {
           snapshot = await deriveWorkflow(workflowRecords(campaign));
           phase = snapshot.phase;
           if (phase.kind !== "explorer")

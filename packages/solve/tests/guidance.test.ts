@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createCampaign, openCampaign, openReader } from "xean";
 
 import { freezeExplorerGuidance, inspectGuidance } from "../guidance";
-import { guideCampaign, inspectCampaign } from "../role-cli";
+import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { applicationId, jsonSnapshot, roleLabels } from "../roles";
 import { run } from "../runner";
 import { deriveWorkflow, workflowConfiguration } from "../workflow";
@@ -122,7 +122,7 @@ test("guidance leaves default inspection, settings, and historical entries uncha
   const ended = readFileSync(path);
   expect(await guideCampaign(path, first, "strategy-1")).toEqual(receipt);
   await expect(guideCampaign(path, second, "strategy-1")).rejects.toThrow(
-    "different text",
+    "already has a different request",
   );
   expect(readFileSync(path)).toEqual(ended);
   const terminal = await inspectCampaign(path);
@@ -206,9 +206,7 @@ test("a crash after freezing guidance but before starting Explorer preserves the
   await guideCampaign(path, first, "a");
   const campaign = openCampaign(path);
   const snapshot = await deriveWorkflow(campaign.records());
-  expect(await freezeExplorerGuidance(campaign, snapshot.explorerAfter!)).toBe(
-    true,
-  );
+  expect(await freezeExplorerGuidance(campaign, snapshot.after!)).toBe(true);
   campaign.close();
   await guideCampaign(path, second, "b");
   const rest = dependencies([explore(1), ...turn(2)]);
@@ -218,6 +216,49 @@ test("a crash after freezing guidance but before starting Explorer preserves the
   expect(explorers[0]!.prompt).not.toContain(second);
   expect(explorers[1]!.prompt).toContain(second);
   expect(explorers[1]!.prompt).not.toContain(first);
+});
+
+test("a note submitted after guidance is frozen waits for the coordinator after that Explorer turn", async () => {
+  const { path, request } = await setup();
+  const initial = dependencies([coordinate(1)]);
+  expect(
+    await run(request, {
+      ...initial,
+      pauseRequested: () => initial.calls.length === 1,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
+  await guideCampaign(path, first, "a");
+  const campaign = openCampaign(path);
+  const snapshot = await deriveWorkflow(campaign.records());
+  expect(await freezeExplorerGuidance(campaign, snapshot.after!)).toBe(true);
+  campaign.close();
+  const lemma = "A submitted lemma.";
+  await submitNotes(path, { notes: [{ text: lemma, support: [] }] }, "lemma");
+  const rest = dependencies([
+    explore(1),
+    {
+      submission: {
+        filings: [
+          { note: "n1", summary: "Partial result 1." },
+          { note: "n2", summary: "The submitted lemma." },
+        ],
+        explorerGuidance: "Prove the remaining case.",
+        support: [],
+        verify: [],
+        action: { role: "explorer" },
+      },
+    },
+    explore(2),
+  ]);
+  expect((await run(request, rest)).outcome).toBe("turn-limit");
+  expect(rest.calls[0]!.role).toBe("explorer");
+  expect(rest.calls[0]!.prompt).toContain(first);
+  expect(rest.calls[0]!.prompt).not.toContain(lemma);
+  expect(rest.calls[1]!.role).toBe("coordinator");
+  expect(rest.calls[1]!.prompt).toContain(lemma);
+  expect(
+    await inspectCampaign(path, { includeSubmissions: true }),
+  ).toMatchObject({ submissions: [{ id: "lemma", noteIds: ["n2"] }] });
 });
 
 test("concurrent CLI retries through a path alias append one guidance request", async () => {
