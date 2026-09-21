@@ -495,7 +495,7 @@ test("omitted response budget is saved explicitly and matches its explicit defau
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 16,
+        schemaVersion: 17,
         settings: { maxExplorerResponses: 4 },
       },
     });

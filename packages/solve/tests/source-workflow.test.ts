@@ -1,12 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, type Campaign } from "xean";
 
-import {
-  createPiRoles,
-  localSourceRequest,
-  solveSettings,
-  verifierCall,
-} from "../pi-roles";
+import { createPiRoles, localSourceRequest, verifierCall } from "../pi-roles";
 import {
   applicationId,
   correctnessVerdictsFor,
@@ -15,7 +10,6 @@ import {
   type VerifierInput,
 } from "../roles";
 import { inspectCampaign } from "../role-cli";
-import { init } from "../runner";
 import {
   campaignPath,
   cleanupCampaigns,
@@ -88,29 +82,6 @@ const calls = (campaign: Campaign) =>
     .records({ kinds: ["call"] })
     .filter((entry) => entry.kind === "call");
 
-test("source settings default, validate, and freeze the observed action limit", async () => {
-  const { maxSourceWebActions: _, ...settings } = roleSettings();
-  expect(solveSettings.parse(settings).maxSourceWebActions).toBe(16);
-  for (const limit of [0, -1, 1.5, Infinity]) {
-    expect(
-      solveSettings.safeParse({ ...settings, maxSourceWebActions: limit })
-        .success,
-    ).toBe(false);
-  }
-  const path = campaignPath();
-  const request = {
-    task: input([makeNote("n1")]).task,
-    campaignPath: path,
-    settings,
-  };
-  await init(request);
-  const before = await Bun.file(path).arrayBuffer();
-  await expect(
-    init({ ...request, settings: { ...settings, maxSourceWebActions: 17 } }),
-  ).rejects.toThrow();
-  expect(await Bun.file(path).arrayBuffer()).toEqual(before);
-});
-
 test("correctness lists hidden premises and preserves mathematical defects before source checking", async () => {
   const call = await verifierCall("correctness", input([makeNote("n1")]), [
     "n1",
@@ -162,7 +133,6 @@ test("mixed verification sends only notes with external premises and journals lo
     expect(prompt.correctnessCall).toBe(
       calls(campaign).find((call) => call.label.endsWith("/correctness"))!.seq,
     );
-    expect(drive.codexCalls[0]!.maxWebActions).toBe(16);
     const local = calls(campaign).find(
       (call) => localSourceRequest.safeParse(call.request).success,
     )!;
@@ -344,58 +314,6 @@ test("a failed source assessment never supplies reusable evidence", async () => 
       "list new sources without a search",
     );
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([]);
-  } finally {
-    campaign.close();
-  }
-});
-
-test("exhausted source calls record candidate-bound INCONCLUSIVE and never infer again on replay", async () => {
-  const campaign = createCampaign(campaignPath(), applicationId, {
-    kind: "calls",
-  });
-  const packet = input([makeNote("n1")]);
-  const drive = dependencies([
-    correctness([{ note: "n1", externalResults: [result] }]),
-  ]);
-  let executions = 0;
-  const recordVerdict = campaign.recordVerdict.bind(campaign);
-  campaign.recordVerdict = (call, ...args) => {
-    const owner = campaign.record(call);
-    if (owner?.kind === "call" && owner.label.endsWith("/source"))
-      throw new Error("Interrupted before source verdict.");
-    return recordVerdict(call, ...args);
-  };
-  try {
-    const roles = createPiRoles(campaign, roleSettings(), {
-      ...drive,
-      codex: async () => {
-        executions += 1;
-        return {
-          state: "exhausted",
-          stdout: "",
-          stderr: "",
-          error: "Reached the observed web-action limit.",
-        };
-      },
-    });
-    await expect(roles.verifier(packet)).rejects.toThrow(
-      "Interrupted before source verdict.",
-    );
-    campaign.recordVerdict = recordVerdict;
-    const candidate = calls(campaign)[0]!.candidate!;
-    const first = await roles.verifier(packet, candidate);
-    expect(first.at(-1)).toMatchObject({
-      verifier: "source",
-      note: "n1",
-      verdict: "INCONCLUSIVE",
-    });
-    expect(first.at(-1)?.report).toContain(
-      "Required primary-source evidence remains unverified",
-    );
-    const before = campaign.lastSequence();
-    expect(await roles.verifier(packet, candidate)).toEqual(first);
-    expect(campaign.lastSequence()).toBe(before);
-    expect(executions).toBe(1);
   } finally {
     campaign.close();
   }

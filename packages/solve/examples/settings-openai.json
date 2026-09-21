@@ -1,6 +1,5 @@
 {
   "maxExplorerResponses": 4,
-  "maxSourceWebActions": 16,
   "window": 100000,
   "explorer": {
     "provider": "openai",

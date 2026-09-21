@@ -68,7 +68,6 @@ export function roleSettings(): SolveSettings {
   return {
     window: 100_000,
     maxExplorerResponses: 1,
-    maxSourceWebActions: 16,
     workflowMode: "fixed",
     maxCoordinatorSteps: 32,
     coordinatorBehavior: defaultCoordinatorBehavior,

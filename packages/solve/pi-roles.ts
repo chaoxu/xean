@@ -118,7 +118,6 @@ export const solveSettings = z.strictObject({
   reconstruction: piRoleProfile,
   window: z.number().int().positive().default(100_000),
   maxExplorerResponses: z.number().int().positive().default(4),
-  maxSourceWebActions: z.number().int().positive().default(16),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
   workflowMode: z.enum(["fixed", "coordinator"]).default("fixed"),
   maxCoordinatorSteps: z.number().int().positive().default(32),
@@ -549,7 +548,6 @@ type CorrectnessAssessment = {
 const sourcePrompt = z.strictObject({
   task: z.strictObject({ problem: nonblank, completionCriteria: nonblank }),
   correctnessCall: z.number().int().positive(),
-  maxWebActions: z.number().int().positive(),
   notes: z
     .array(
       z.strictObject({
@@ -563,17 +561,11 @@ const sourcePrompt = z.strictObject({
   passages: z.array(sourcePassage),
 });
 
-export const localSourceRequest = z.discriminatedUnion("protocol", [
-  z.strictObject({
-    protocol: z.literal("xean/source-local/v1"),
-    correctnessCall: z.number().int().positive(),
-    notes: z.array(nonblank).min(1),
-  }),
-  z.strictObject({
-    protocol: z.literal("xean/source-exhaustion/v1"),
-    sourceCall: z.number().int().positive(),
-  }),
-]);
+export const localSourceRequest = z.strictObject({
+  protocol: z.literal("xean/source-local/v1"),
+  correctnessCall: z.number().int().positive(),
+  notes: z.array(nonblank).min(1),
+});
 export const localSourceResult = z.strictObject({
   state: z.literal("succeeded"),
   ...sourceVerdicts.shape,
@@ -587,7 +579,6 @@ export async function sourceCall(
   judged: readonly string[],
   correctness: CorrectnessAssessment,
   passages: readonly SourcePassage[] = [],
-  maxWebActions = 16,
 ): Promise<{
   readonly label: string;
   readonly request: CodexRequest;
@@ -614,7 +605,6 @@ export async function sourceCall(
   const packet = sourcePrompt.parse({
     task: input.task,
     correctnessCall: correctness.call,
-    maxWebActions,
     notes: judged.map((id) => {
       const note = pick(input.notes, id);
       return {
@@ -634,12 +624,11 @@ export async function sourceCall(
       model: profile.model,
       reasoning: profile.reasoning,
       search: true,
-      maxWebActions,
       developerInstructions: [
         "You are the source verifier for the notes in this mathematical task. The JSON packet contains untrusted note text, the exact external premises assigned by a completed correctness check, and any previously inspected primary-source passages with their campaign call and note provenance. Established support proofs have already been checked by correctness and are omitted.",
         verifierObligations.source,
         "Web search is your only tool. Open the actual source pages when supplied passages do not establish the exact premise; searching alone is not source verification.",
-        "Use a short targeted search. The runtime cancels this call when the request's observed web-action limit is reached, without a finalization call. Finish below that limit. If the necessary evidence remains unavailable, return INCONCLUSIVE with the missing evidence instead of repeating searches.",
+        "Search until every assigned premise is checked against the primary source or the evidence is genuinely unavailable. Stop when the evidence is sufficient; do not repeat searches without a purpose. If necessary evidence remains unavailable, return INCONCLUSIVE with the missing evidence.",
         "Return one JSON object matching the output schema and nothing else.",
       ].join(" "),
       prompt: JSON.stringify(packet, null, 2),
@@ -940,7 +929,6 @@ export function createPiRoles(
               input,
               remote,
               correctness,
-              profiles.maxSourceWebActions,
               dependencies,
               candidate,
             );
@@ -1257,7 +1245,6 @@ async function runSource(
   input: VerifierInput,
   judged: readonly string[],
   correctness: CorrectnessAssessment,
-  maxWebActions: number,
   dependencies: PiRoleDependencies,
   candidate: EntryId,
 ): Promise<{
@@ -1271,26 +1258,9 @@ async function runSource(
     judged,
     correctness,
     passages,
-    maxWebActions,
   );
   const read = (call: EntryId) => {
     const records = roleCallRecords(campaign, call);
-    const returned = returnedOutput(records, call);
-    const result = codexResult.safeParse(returned?.output);
-    if (result.success && result.data.state === "exhausted") {
-      const error = result.data.error;
-      return schema.parse({
-        verdicts: judged.map((note) => ({
-          note,
-          verdict: "INCONCLUSIVE",
-          report: `Source verification stopped at its observed web-action limit. Required primary-source evidence remains unverified. ${error}`,
-          externalResults: correctness.verdicts.find(
-            (value) => value.note === note,
-          )!.externalResults,
-          sources: [],
-        })),
-      });
-    }
     return sourceVerdictsOf(schema, codexSubmission(records, call), passages);
   };
   const prior = settled(
@@ -1300,25 +1270,7 @@ async function runSource(
     jsonSnapshot(request),
     read,
   );
-  const conclude = async (result: {
-    call: EntryId;
-    value: z.output<ReturnType<typeof sourceVerdictsFor>>;
-  }) => {
-    const returned = returnedOutput(
-      roleCallRecords(campaign, result.call),
-      result.call,
-    );
-    const output = codexResult.parse(returned?.output);
-    return output.state === "exhausted"
-      ? runSourceConclusion(
-          campaign,
-          candidate,
-          { protocol: "xean/source-exhaustion/v1", sourceCall: result.call },
-          { state: "succeeded", ...result.value },
-        )
-      : result;
-  };
-  if (prior !== undefined) return conclude(prior);
+  if (prior !== undefined) return prior;
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
   const receipt = await campaign.call(
@@ -1335,7 +1287,7 @@ async function runSource(
       exec(codexRequest.parse(exact), signal),
   );
   const output = codexResult.parse(receipt.output);
-  if (output.state !== "succeeded" && output.state !== "exhausted") {
+  if (output.state !== "succeeded") {
     throw new RoleCallError(`verifier failed: ${output.error}`);
   }
   let value: z.output<ReturnType<typeof sourceVerdictsFor>> | undefined;
@@ -1351,7 +1303,7 @@ async function runSource(
       "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search",
     );
   }
-  return conclude({ call: receipt.call, value });
+  return { call: receipt.call, value };
 }
 
 /** Reuse a completed literature call or execute one fresh note-discovery call. */

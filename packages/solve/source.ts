@@ -36,7 +36,6 @@ export const codexRequest = z.strictObject({
   model: nonblank,
   reasoning: codexReasoning,
   search: z.literal(true),
-  maxWebActions: z.number().int().positive().optional(),
   developerInstructions: nonblank,
   prompt: nonblank,
   outputSchema: z.json(),
@@ -57,11 +56,6 @@ export const codexResult = z.discriminatedUnion("state", [
     stderr: z.string(),
   }),
   z.strictObject({ state: z.literal("failed"), ...execution, error: nonblank }),
-  z.strictObject({
-    state: z.literal("exhausted"),
-    ...execution,
-    error: nonblank,
-  }),
   z.strictObject({
     state: z.literal("cancelled"),
     ...execution,
@@ -96,30 +90,19 @@ function eventObject(value: Json): Record<string, Json> {
 type CodexStage = "start" | "thread" | "turn" | "complete";
 
 /**
- * Validates Codex JSONL once for both complete transcripts and live action
- * limits. The live mode keeps lifecycle validation permissive because it may
- * stop before the terminal events arrive; item and action validation stays
- * identical in both modes.
+ * Validates one complete Codex JSONL transcript. The live process is allowed
+ * to finish naturally; the caller's abort signal remains the only cancellation
+ * boundary.
  */
 class CodexJsonlParser {
-  readonly #strictLifecycle: boolean;
   #stage: CodexStage = "start";
   #searches = 0;
-  #actions = new Set<string>();
   #usage: CodexUsage | undefined;
   #message: string | undefined;
   #last: string | undefined;
 
-  constructor(strictLifecycle: boolean) {
-    this.#strictLifecycle = strictLifecycle;
-  }
-
   get searches(): number {
     return this.#searches;
-  }
-
-  get webActions(): number {
-    return this.#actions.size;
   }
 
   acceptLine(line: string): void {
@@ -130,19 +113,19 @@ class CodexJsonlParser {
   private accept(event: Record<string, Json>): void {
     const type = z.string().parse(event["type"]);
     if (type === "thread.started") {
-      if (this.#strictLifecycle && this.#stage !== "start")
+      if (this.#stage !== "start")
         throw new Error("thread.started out of order");
       this.#stage = "thread";
       return;
     }
     if (type === "turn.started") {
-      if (this.#strictLifecycle && this.#stage !== "thread")
+      if (this.#stage !== "thread")
         throw new Error("turn.started out of order");
       this.#stage = "turn";
       return;
     }
     if (type === "turn.completed") {
-      if (this.#strictLifecycle && this.#stage !== "turn")
+      if (this.#stage !== "turn")
         throw new Error("turn.completed out of order");
       const raw = eventObject(event["usage"] ?? {});
       this.#usage = codexUsage.parse({
@@ -158,7 +141,7 @@ class CodexJsonlParser {
     if (!["item.started", "item.updated", "item.completed"].includes(type)) {
       throw new Error(`Codex emitted forbidden event type: ${type}`);
     }
-    if (this.#strictLifecycle && this.#stage !== "turn")
+    if (this.#stage !== "turn")
       throw new Error(`${type} outside an active turn`);
     const item = eventObject(event["item"] ?? null);
     const itemType = z.string().parse(item["type"]);
@@ -171,9 +154,6 @@ class CodexJsonlParser {
     }
     if (!["reasoning", "agent_message", "web_search"].includes(itemType)) {
       throw new Error(`Codex used forbidden item type: ${itemType}`);
-    }
-    if (itemType === "web_search") {
-      this.#actions.add(nonblank.parse(item["id"]));
     }
     if (type !== "item.completed") return;
     if (itemType === "web_search") this.#searches += 1;
@@ -208,7 +188,7 @@ export function codexTranscript(stdout: string): {
   readonly searches: number;
   readonly usage: CodexUsage;
 } {
-  const parser = new CodexJsonlParser(true);
+  const parser = new CodexJsonlParser();
   for (const line of stdout.split("\n")) parser.acceptLine(line);
   return parser.result();
 }
@@ -243,7 +223,6 @@ interface CommandResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly cancelled: boolean;
-  readonly exhausted: boolean;
   readonly error?: string;
 }
 
@@ -255,7 +234,6 @@ async function runCommand(
     readonly env?: NodeJS.ProcessEnv;
     readonly input?: string;
     readonly signal?: AbortSignal;
-    readonly maxWebActions?: number;
   } = {},
 ): Promise<CommandResult> {
   if (options.signal?.aborted) {
@@ -264,7 +242,6 @@ async function runCommand(
       stdout: "",
       stderr: "",
       cancelled: true,
-      exhausted: false,
     };
   }
   return await new Promise<CommandResult>((complete) => {
@@ -279,15 +256,9 @@ async function runCommand(
     });
     let stdout = "";
     let stderr = "";
-    let pending = "";
     let cancelled = false;
-    let exhausted = false;
     let error: string | undefined;
     let termination: ReturnType<typeof setTimeout> | undefined;
-    const parser =
-      options.maxWebActions === undefined
-        ? undefined
-        : new CodexJsonlParser(false);
     const kill = (signal: NodeJS.Signals) => {
       if (child.pid === undefined) return;
       try {
@@ -312,38 +283,10 @@ async function runCommand(
       error ??= reason instanceof Error ? reason.message : String(reason);
       stop();
     };
-    const observe = (line: string) => {
-      if (
-        options.maxWebActions === undefined ||
-        exhausted ||
-        cancelled ||
-        error !== undefined ||
-        line.trim() === ""
-      ) {
-        return;
-      }
-      try {
-        parser!.acceptLine(line);
-        if (parser!.webActions >= options.maxWebActions) {
-          exhausted = true;
-          stop();
-        }
-      } catch (reason) {
-        failure(reason);
-      }
-    };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
-      if (options.maxWebActions === undefined) return;
-      pending += chunk;
-      let end: number;
-      while ((end = pending.indexOf("\n")) !== -1) {
-        observe(pending.slice(0, end));
-        pending = pending.slice(end + 1);
-      }
     });
-    child.stdout.on("end", () => observe(pending));
     child.stdout.on("error", failure);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
@@ -360,7 +303,6 @@ async function runCommand(
         stdout,
         stderr,
         cancelled,
-        exhausted,
         ...(error === undefined ? {} : { error }),
       });
     });
@@ -725,9 +667,6 @@ export function codexExec(
           cwd: directory,
           env,
           input: request.prompt,
-          ...(request.maxWebActions === undefined
-            ? {}
-            : { maxWebActions: request.maxWebActions }),
           ...(signal === undefined ? {} : { signal }),
         },
       );
@@ -742,16 +681,6 @@ export function codexExec(
           stderr,
           exitCode,
           error: "source verification cancelled",
-        };
-      }
-      if (run.exhausted) {
-        return {
-          state: "exhausted",
-          codexVersion,
-          stdout,
-          stderr,
-          exitCode,
-          error: `source verification reached maxWebActions=${request.maxWebActions}; stopped after observing the limit, including any work already in flight`,
         };
       }
       if (run.error !== undefined) {

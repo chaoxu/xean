@@ -346,7 +346,6 @@ test("literature output is only note candidates", () => {
     }).success,
   ).toBe(false);
   const request = codexRequest.parse(call.request);
-  expect(request.maxWebActions).toBeUndefined();
   expect(request.developerInstructions).toContain(
     "Your only deliverable is a JSON object with a notes array",
   );
