@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { openReader } from "xean";
 
 import { review, reviewVerdict } from "../review";
-import { sourceVerdictsFor } from "../roles";
+import { externalResultId, sourceVerdictsFor } from "../roles";
 import { codexStdout } from "./fixtures/codex-stdout";
 import type { CodexRequest } from "../source";
 import { campaignPath, cleanupCampaigns } from "./harness";
@@ -71,6 +71,22 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
       ],
     }).success,
   ).toBe(false);
+  expect(
+    schema.safeParse({
+      verdicts: [
+        {
+          ...value,
+          sources: [
+            {
+              ...evidence,
+              result: "Global-BiCut is hard, with harmless restatement.",
+              resultId: externalResultId(claim),
+            },
+          ],
+        },
+      ],
+    }).success,
+  ).toBe(true);
 });
 
 test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
@@ -91,6 +107,14 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
         report: value.report,
         externalResults: [],
         sources: [evidence],
+      }).success,
+    ).toBe(false);
+    expect(
+      reviewVerdict.safeParse({
+        verdict,
+        report: value.report,
+        externalResults: [],
+        sources: [{ ...evidence, resultId: "external-arbitrary" }],
       }).success,
     ).toBe(false);
     expect(

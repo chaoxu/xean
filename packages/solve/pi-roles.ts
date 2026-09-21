@@ -28,6 +28,7 @@ import {
   coordinatorBehavior as coordinatorBehaviorSchema,
   coordinatorResultFor,
   correctnessVerdictsFor,
+  externalResultId,
   explorerInput,
   explorerResultFor,
   journalVerdicts,
@@ -368,11 +369,11 @@ export const correctionAssessment =
   "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. Notes remain unchanged: a PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
 
 export const sourceAssessment =
-  "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected: result repeats its externalResults entry exactly, source identifies the paper and theorem or section, url identifies the page you opened, and quote gives the relevant passage from that source. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
+  "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected with its assigned result ID, source identifying the paper and theorem or section, url for the page you opened, and quote giving the relevant passage. The result description may be restated in ordinary language, but the assigned ID must be preserved. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
 
 const verifierObligations = {
   correctness: `Judge whether each note establishes its stated result under the correction policy below. A correct partial result passes even when it explicitly leaves the task unfinished. Check every load-bearing inference, and search for counterexamples, missing cases, invalid bounds, and reasons the stated conclusions do not follow. Fail a note when an essential inference remains unsupported, its stated conclusion remains unproved, or a blocking defect remains after permitted local corrections. Check that every substantive result the text uses is proved there or supplied by that note's declared support and its transitive closure. An application of a nonroutine external theorem must name a support note stating that theorem with its exact hypotheses and conclusion; fail an undeclared substantive dependency or an application that does not meet those hypotheses. An isolated theorem note may cite its external source directly without proving that theorem: assess its precise statement conditionally, pending source validation, rather than failing solely because its primary-source premise is not yet verified. For every verdict, list all nonroutine external premises that this note directly requires in externalResults. Each entry is self-contained: include exact hypotheses, conclusion, source identification when present, and the claimed application. Include hidden external premises even when the citation is vague or absent. Use [] only when the note relies entirely on its own proof, its declared established support, and immediate routine facts. Do not repeat external premises already supplied by declared support; their theorem notes receive their own source check. A correctness PASS is conditional on all listed premises, and establishes no source evidence. Other notes in the verification batch are not additional premises. A note ID mentioned only for provenance or a mathematical expression resembling an ID is not a dependency. ${correctionAssessment}`,
-  source: `Check the exact externalResults assigned by the completed correctness check. Preserve each assigned entry exactly; do not omit or weaken an entry. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
+  source: `Check every external result assigned by the completed correctness check. Each assigned result has a stable ID in the source packet. Preserve every ID exactly; do not omit, merge, or weaken an assigned result. A returned result description may use ordinary wording or harmless punctuation changes, but its source passage must name the assigned ID. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result ID: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
   requirements: `Decide whether each note meets every completion criterion of the exact task. A sound partial result that does not meet them fails, and the report says so plainly. ${correctionAssessment}`,
   reconstruction: `Compare the note's text with a proof written from the statement and the support notes alone. First check that the supplied statement faithfully states what the note establishes, with its hypotheses and conclusion and without its proof method or steps. If the statement misstates the note or gives away its method, return a corrected statement in the statement field and an empty verdicts list. This repairs the verification input and makes no verdict on the note. Otherwise set statement to null and return one verdict: PASS when both establish the statement and the note's text uses no result beyond its support and the statement's hypotheses; FAIL when the statement remains unproved after permitted local corrections or the note relies on an undeclared substantive result; INCONCLUSIVE when the independent proof left something unproved and no concrete defect in the note was found. ${correctionAssessment}`,
 } as const satisfies Readonly<Record<VerifierName, string>>;
@@ -534,6 +535,7 @@ export async function reconstructionCall(
 }
 
 const sourcePassage = sources.element.extend({
+  resultId: nonblank,
   call: z.number().int().positive(),
   note: nonblank,
 });
@@ -554,7 +556,9 @@ const sourcePrompt = z.strictObject({
         id: nonblank,
         text: nonblank,
         support: z.array(nonblank),
-        externalResults: z.array(nonblank).min(1),
+        externalResults: z
+          .array(z.strictObject({ id: nonblank, text: nonblank }))
+          .min(1),
       }),
     )
     .min(1),
@@ -600,7 +604,9 @@ export async function sourceCall(
   });
   const schema = sourceVerdictsFor(judged, assigned);
   const needed = new Set(
-    assigned.flatMap(({ externalResults }) => externalResults),
+    assigned.flatMap(({ externalResults }) =>
+      externalResults.map(externalResultId),
+    ),
   );
   const packet = sourcePrompt.parse({
     task: input.task,
@@ -611,11 +617,15 @@ export async function sourceCall(
         id,
         text: note.text,
         support: note.support,
-        externalResults: assigned.find(({ note }) => note === id)!
-          .externalResults,
+        externalResults: assigned
+          .find(({ note }) => note === id)!
+          .externalResults.map((text) => ({
+            id: externalResultId(text),
+            text,
+          })),
       };
     }),
-    passages: passages.filter(({ result }) => needed.has(result)),
+    passages: passages.filter(({ resultId }) => needed.has(resultId)),
   });
   return {
     label: verifierLabels.source,
@@ -1000,28 +1010,66 @@ export function sameRequest(
   return isDeepStrictEqual(journaled, request);
 }
 
+type AssignedExternalResults = readonly {
+  readonly note: string;
+  readonly externalResults: readonly string[];
+}[];
+
+function canonicalSourceVerdicts(
+  value: z.output<ReturnType<typeof sourceVerdictsFor>>,
+  assigned: AssignedExternalResults,
+): z.output<ReturnType<typeof sourceVerdictsFor>> {
+  return {
+    verdicts: value.verdicts.map((verdict) => {
+      const expected = assigned.find(({ note }) => note === verdict.note);
+      if (expected === undefined) return verdict;
+      const resultById = new Map(
+        expected.externalResults.map((result) => [
+          externalResultId(result),
+          result,
+        ]),
+      );
+      return {
+        ...verdict,
+        externalResults: [...expected.externalResults],
+        sources: verdict.sources.map((source) => ({
+          ...source,
+          result:
+            source.resultId === undefined
+              ? source.result
+              : (resultById.get(source.resultId) ?? source.result),
+        })),
+      };
+    }),
+  } as z.output<ReturnType<typeof sourceVerdictsFor>>;
+}
+
 /** Accept source verdicts only with valid claims and inspected or supplied passages. */
 function sourceVerdictsOf(
   schema: ReturnType<typeof sourceVerdictsFor>,
   submission: ReturnType<typeof codexSubmission>,
   passages: readonly SourcePassage[] = [],
+  assigned?: AssignedExternalResults,
 ): z.output<ReturnType<typeof sourceVerdictsFor>> | undefined {
   const parsed = schema.safeParse(submission?.input);
-  return submission !== undefined &&
-    parsed.success &&
-    !(
-      submission.searches === 0 &&
-      parsed.data.verdicts.some(({ sources }) =>
-        sources.some(
-          (source) =>
-            !passages.some(({ call: _, note: __, ...passage }) =>
-              isDeepStrictEqual(source, passage),
-            ),
-        ),
-      )
+  if (submission === undefined || !parsed.success) return undefined;
+  const value =
+    assigned === undefined
+      ? parsed.data
+      : canonicalSourceVerdicts(parsed.data, assigned);
+  if (
+    submission.searches === 0 &&
+    value.verdicts.some(({ sources }) =>
+      sources.some(
+        (source) =>
+          !passages.some(({ call: _, note: __, ...passage }) =>
+            isDeepStrictEqual(source, passage),
+          ),
+      ),
     )
-    ? parsed.data
-    : undefined;
+  )
+    return undefined;
+  return value;
 }
 
 /** Reuse only recorded PASS evidence from completed earlier source calls in this campaign. */
@@ -1057,7 +1105,7 @@ function inspectedPassages(
     );
     const assigned = packet.notes.map(({ id: note, externalResults }) => ({
       note,
-      externalResults,
+      externalResults: externalResults.map(({ text }) => text),
     }));
     const value = sourceVerdictsOf(
       sourceVerdictsFor(
@@ -1066,6 +1114,7 @@ function inspectedPassages(
       ),
       submission,
       supplied,
+      assigned,
     );
     for (const verdict of value?.verdicts ?? []) {
       if (
@@ -1074,12 +1123,19 @@ function inspectedPassages(
       )
         continue;
       for (const source of verdict.sources) {
+        const { resultId } = source;
+        if (resultId === undefined) continue;
         if (
           !passages.some(({ call: _, note: __, ...known }) =>
             isDeepStrictEqual(known, source),
           )
         ) {
-          passages.push({ call: entry.seq, note: verdict.note, ...source });
+          passages.push({
+            call: entry.seq,
+            note: verdict.note,
+            ...source,
+            resultId,
+          });
         }
       }
     }
@@ -1259,9 +1315,20 @@ async function runSource(
     correctness,
     passages,
   );
+  const assigned = judged.map((note) => ({
+    note,
+    externalResults: correctness.verdicts.find(
+      (assessment) => assessment.note === note,
+    )!.externalResults,
+  }));
   const read = (call: EntryId) => {
     const records = roleCallRecords(campaign, call);
-    return sourceVerdictsOf(schema, codexSubmission(records, call), passages);
+    return sourceVerdictsOf(
+      schema,
+      codexSubmission(records, call),
+      passages,
+      assigned,
+    );
   };
   const inconclusive = (call: EntryId, report: string) => ({
     call,

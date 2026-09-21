@@ -8,7 +8,7 @@ import {
   inspectCampaignRecords,
   submitNotes,
 } from "../role-cli";
-import { applicationId } from "../roles";
+import { applicationId, externalResultId } from "../roles";
 import { init, run } from "../runner";
 import { withCampaignLock } from "../runtime";
 import { workflowConfiguration } from "../workflow";
@@ -99,6 +99,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
             externalResults: ["Theorem T"],
             sources: [
               {
+                resultId: externalResultId("Theorem T"),
                 result: "Theorem T",
                 source: "Theorem 1",
                 url: "https://example.org/theorem",

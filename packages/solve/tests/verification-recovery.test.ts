@@ -4,6 +4,7 @@ import { openCampaign } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import {
+  externalResultId,
   reconstructionResultFor,
   verifierLabels,
   verifierNames,
@@ -55,6 +56,7 @@ const sourceVerdict = (note = "n1", value = "PASS") => ({
     value === "PASS"
       ? [
           {
+            resultId: externalResultId(externalResults(note)[0]!),
             result: externalResults(note)[0]!,
             source: "Example Theorem 1",
             url: "https://example.org/theorem",

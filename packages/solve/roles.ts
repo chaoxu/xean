@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   returnedToolSubmission,
   type Entry,
@@ -742,6 +744,7 @@ export const proof = z.strictObject({ proof: nonblank });
 // rejects the JSON Schema "uri" format; the shape is checked after parsing.
 export const sources = z.array(
   z.strictObject({
+    resultId: nonblank.optional(),
     result: nonblank,
     source: nonblank,
     url: z.string().refine((value) => URL.canParse(value), "must be a URL"),
@@ -755,13 +758,20 @@ export const sourceEvidence = z.strictObject({
 export function hasSourcePassages(
   value: z.output<typeof sourceEvidence> & { verdict: string },
 ): boolean {
+  const resultIds = new Set(value.externalResults.map(externalResultId));
   return (
     value.sources.every((source) =>
-      value.externalResults.includes(source.result),
+      source.resultId === undefined
+        ? value.externalResults.includes(source.result)
+        : resultIds.has(source.resultId),
     ) &&
     (value.verdict !== "PASS" ||
       value.externalResults.every((result) =>
-        value.sources.some((source) => source.result === result),
+        value.sources.some(
+          (source) =>
+            source.result === result ||
+            source.resultId === externalResultId(result),
+        ),
       ))
   );
 }
@@ -776,6 +786,20 @@ const sourceVerdict = verdict
 export const sourceVerdicts = z.strictObject({
   verdicts: z.array(sourceVerdict),
 });
+const sourceWithResultId = sources.element.extend({ resultId: nonblank });
+const sourceEvidenceWithResultIds = z.strictObject({
+  externalResults: z.array(nonblank),
+  sources: z.array(sourceWithResultId),
+});
+const sourceVerdictWithResultIds = verdict
+  .omit({ verifier: true })
+  .extend(sourceEvidenceWithResultIds.shape);
+
+/** Stable identity for one correctness-assigned external premise. */
+export function externalResultId(result: string): string {
+  return `external-${createHash("sha256").update(result).digest("hex")}`;
+}
+
 export function sourceVerdictsFor(
   judged: readonly string[],
   assigned?: readonly {
@@ -783,18 +807,26 @@ export function sourceVerdictsFor(
     readonly externalResults: readonly string[];
   }[],
 ) {
-  return verdictsOver(sourceVerdict, judged).refine(
+  if (assigned === undefined) return verdictsOver(sourceVerdict, judged);
+  return verdictsOver(sourceVerdictWithResultIds, judged).refine(
     (value) =>
-      assigned === undefined ||
       value.verdicts.every((verdict) => {
         const expected = assigned.find(({ note }) => note === verdict.note);
+        if (
+          expected === undefined ||
+          verdict.externalResults.length !== expected.externalResults.length
+        )
+          return false;
+        const ids = expected.externalResults.map(externalResultId);
+        const sourceIds = verdict.sources.map(({ resultId }) => resultId);
         return (
-          expected !== undefined &&
-          JSON.stringify(verdict.externalResults) ===
-            JSON.stringify(expected.externalResults)
+          sourceIds.every((id) => ids.includes(id)) &&
+          new Set(sourceIds).size === sourceIds.length &&
+          (verdict.verdict !== "PASS" ||
+            ids.every((id) => sourceIds.includes(id)))
         );
       }),
-    "externalResults must preserve the exact assigned external premises",
+    "source evidence must reference the assigned external premise IDs",
   );
 }
 

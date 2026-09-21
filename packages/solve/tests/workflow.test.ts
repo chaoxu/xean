@@ -5,6 +5,7 @@ import { openCampaign, openReader, type Campaign } from "xean";
 import { createPiRoles, solveSettings } from "../pi-roles";
 import {
   coordinatorResultFor,
+  externalResultId,
   explorerResultFor,
   judgedBy,
   reconstructionResultFor,
@@ -79,6 +80,7 @@ function sourceOf(notes: readonly string[], verdict = "PASS"): Reply {
           verdict === "PASS"
             ? [
                 {
+                  resultId: externalResultId(externalResults(note)[0]!),
                   result: externalResults(note)[0]!,
                   source: "Example Theorem 1",
                   url: "https://example.org/theorem",
@@ -221,7 +223,14 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   expect(JSON.parse(drive.codexCalls[0]!.prompt)).toMatchObject({
     task,
     notes: [
-      { id: "n1", text: good.text, externalResults: externalResults("n1") },
+      {
+        id: "n1",
+        text: good.text,
+        externalResults: externalResults("n1").map((text) => ({
+          id: externalResultId(text),
+          text,
+        })),
+      },
     ],
   });
   expect(drive.calls[0]?.prompt).toContain(`Problem:\n${task.problem}`);
@@ -729,7 +738,7 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   campaign.close();
 });
 
-test("a source PASS that confirms sources without searching is an operational error", async () => {
+test("a source PASS that confirms sources without searching is inconclusive", async () => {
   const path = campaignPath();
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 1);
@@ -747,6 +756,7 @@ test("a source PASS that confirms sources without searching is an operational er
             externalResults: ["Every X is Y."],
             sources: [
               {
+                resultId: externalResultId("Every X is Y."),
                 result: "Every X is Y.",
                 source: "Smith 2020",
                 url: "https://example.org/smith",
@@ -759,10 +769,13 @@ test("a source PASS that confirms sources without searching is an operational er
       searched: false,
     },
   ]);
-  await expect(
-    runWorkflow(campaign, createPiRoles(campaign, workflow.settings, drive)),
-  ).rejects.toThrow("without a search");
-  expect((await phaseOf(campaign)).kind).toBe("verifier");
+  expect(
+    await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    ),
+  ).toMatchObject({ kind: "turn-limit" });
+  expect((await phaseOf(campaign)).kind).toBe("turn-limit");
   campaign.close();
 });
 

@@ -5,6 +5,7 @@ import { createPiRoles, localSourceRequest, verifierCall } from "../pi-roles";
 import {
   applicationId,
   correctnessVerdictsFor,
+  externalResultId,
   sourceVerdictsFor,
   type Note,
   type VerifierInput,
@@ -72,7 +73,10 @@ const checked = (note: string, searched = true, sources = [source]): Reply => ({
         report:
           "The exact source establishes the stated premise and applicability.",
         externalResults: [result],
-        sources,
+        sources: sources.map((value) => ({
+          ...value,
+          resultId: externalResultId(value.result),
+        })),
       },
     ],
   },
@@ -165,7 +169,7 @@ test("source cannot silently remove, weaken, or leave a passing assigned premise
     verdict: "PASS",
     report: "Checked.",
     externalResults: [result],
-    sources: [source],
+    sources: [{ ...source, resultId: externalResultId(result) }],
   };
   expect(schema.safeParse({ verdicts: [value] }).success).toBe(true);
   for (const change of [
@@ -201,7 +205,12 @@ test("exact passages reuse recorded earlier source PASS evidence within the same
     const verdicts = await roles.verifier(input([makeNote("n2")]));
     expect(verdicts.at(-1)?.verdict).toBe("PASS");
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([
-      { call: old.seq, note: "n1", ...source },
+      {
+        call: old.seq,
+        note: "n1",
+        resultId: externalResultId(result),
+        ...source,
+      },
     ]);
     expect(JSON.parse(drive.codexCalls[0]!.prompt).passages).toEqual([]);
   } finally {
@@ -224,7 +233,9 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
     }),
   };
   try {
-    const originalRecordVerdict = campaign.recordVerdict.bind(campaign);
+    const originalRecordVerdict = campaign.recordVerdict.bind(campaign) as (
+      ...args: any[]
+    ) => unknown;
     let interrupted = false;
     (campaign as any).recordVerdict = (...args: any[]) => {
       const entry = campaign.record(args[0]);

@@ -155,16 +155,19 @@ function visibleSubmission(
       if (localSourceRequest.safeParse(call.request).success) {
         const output = returnedOutput(records, call.seq);
         if (output === undefined) return undefined;
-        return { verifier, ...localSourceResult.parse(output.output) };
+        return jsonSnapshot({
+          verifier,
+          ...localSourceResult.parse(output.output),
+        });
       }
       if (codexRequest.safeParse(call.request).success) {
         const submission = codexSubmission(records, call.seq);
         if (submission === undefined) return undefined;
-        return {
+        return jsonSnapshot({
           verifier,
           ...sourceVerdicts.parse(submission.input),
           usage: submission.usage,
-        };
+        });
       }
       return undefined;
     }

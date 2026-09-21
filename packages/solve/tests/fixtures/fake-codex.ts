@@ -54,7 +54,7 @@ if (args[0] === "--version") {
 } else {
   const notes = JSON.parse(input).notes as {
     id: string;
-    externalResults: string[];
+    externalResults: { id: string; text: string }[];
   }[];
   if (notes.length === 0) throw new Error("prompt names no note");
   console.log(
@@ -64,9 +64,10 @@ if (args[0] === "--version") {
           note,
           verdict: "PASS",
           report: "The primary source establishes each assigned result.",
-          externalResults,
-          sources: externalResults.map((result) => ({
-            result,
+          externalResults: externalResults.map(({ text }) => text),
+          sources: externalResults.map(({ id, text }) => ({
+            resultId: id,
+            result: text,
             source: "Primary theorem.",
             url: "https://example.test/theorem",
             quote: "The exact statement.",
