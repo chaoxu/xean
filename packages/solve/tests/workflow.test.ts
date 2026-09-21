@@ -5,7 +5,6 @@ import { openCampaign, openReader, type Campaign } from "xean";
 import { createPiRoles, solveSettings } from "../pi-roles";
 import {
   coordinatorResultFor,
-  externalResultId,
   explorerResultFor,
   judgedBy,
   reconstructionResultFor,
@@ -76,12 +75,11 @@ function sourceOf(notes: readonly string[], verdict = "PASS"): Reply {
         note,
         verdict,
         report: `source ${verdict.toLowerCase()}.`,
-        externalResults: externalResults(note),
         sources:
           verdict === "PASS"
             ? [
                 {
-                  resultId: externalResultId(externalResults(note)[0]!),
+                  resultId: `${note}#1`,
                   result: externalResults(note)[0]!,
                   source: "Example Theorem 1",
                   url: "https://example.org/theorem",
@@ -234,7 +232,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
         id: "n1",
         text: good.text,
         externalResults: externalResults("n1").map((text) => ({
-          id: externalResultId(text),
+          id: "n1#1",
           text,
         })),
       },
@@ -325,7 +323,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     candidate: phase.candidate,
     submission: {
       verdicts: [
-        { note: "n1", verdict: "PASS", externalResults: externalResults("n1") },
+        { note: "n1", verdict: "PASS", sources: [{ resultId: "n1#1" }] },
       ],
       usage: { input: 10 },
     },
@@ -708,7 +706,6 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
             note: "n1",
             verdict: "FAIL",
             report: "Smith 2020 states the bound for n > 2 only.",
-            externalResults: ["Smith's bound for all n."],
             sources: [],
           },
         ],
@@ -767,10 +764,9 @@ test("a source PASS that confirms sources without searching is inconclusive", as
             note: "n1",
             verdict: "PASS",
             report: "confirmed",
-            externalResults: ["Every X is Y."],
             sources: [
               {
-                resultId: externalResultId("Every X is Y."),
+                resultId: "n1#1",
                 result: "Every X is Y.",
                 source: "Smith 2020",
                 url: "https://example.org/smith",
@@ -1582,7 +1578,6 @@ test("a self-contained proof records a local source PASS without calling Codex",
             expect.objectContaining({
               note: "n1",
               verdict: "PASS",
-              externalResults: [],
               sources: [],
             }),
           ],

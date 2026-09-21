@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import {
   returnedToolSubmission,
   type Entry,
@@ -738,33 +736,37 @@ export const sourceLocation = {
   url: z.string().refine((value) => URL.canParse(value), "must be a URL"),
   quote: nonblank,
 };
-/** Passages inspected by the source verifier, each bound to an assigned external result, including evidence of a mismatch. */
-export const sources = z.array(
-  z.strictObject({ resultId: nonblank, result: nonblank, ...sourceLocation }),
-);
+/** One inspected passage, bound by `resultId` to an assigned external result, including evidence of a mismatch. */
+const passage = (resultId: z.ZodType<string>) =>
+  z.strictObject({ resultId, result: nonblank, ...sourceLocation });
+/** Passages inspected by the source verifier, each bound to an assigned external result. */
+export const sources = z.array(passage(nonblank));
 /** The journaled shape of one source submission, before its evidence is judged against the assigned premises. */
 export const sourceSubmission = z.strictObject({
-  verdicts: z.array(
-    verdict
-      .omit({ verifier: true })
-      .extend({ externalResults: z.array(nonblank), sources }),
-  ),
+  verdicts: z.array(verdict.omit({ verifier: true }).extend({ sources })),
 });
-
-/**
- * Stable identity for one correctness-assigned external premise: the first
- * 16 hex digits of its SHA-256, short enough for a model to copy exactly.
- */
-export function externalResultId(result: string): string {
-  const digest = createHash("sha256").update(result).digest("hex");
-  return `external-${digest.slice(0, 16)}`;
-}
 
 /** The external premises a completed correctness check assigned to each judged note. */
 export type AssignedExternalResults = readonly {
   readonly note: string;
   readonly externalResults: readonly string[];
 }[];
+
+/** The ID of one assigned premise within one source call: its note and one-based position, as `n4#1`. */
+function premiseId(note: string, position: number): string {
+  return `${note}#${position + 1}`;
+}
+
+/** Every premise of one source call under its ID, in note order. */
+export function assignedPremises(assigned: AssignedExternalResults) {
+  return assigned.flatMap(({ note, externalResults }) =>
+    externalResults.map((result, position) => ({
+      note,
+      resultId: premiseId(note, position),
+      result,
+    })),
+  );
+}
 
 /** One source verdict per judged note, before evidence binding. */
 export function sourceVerdictsOver(judged: readonly string[]) {
@@ -773,9 +775,8 @@ export function sourceVerdictsOver(judged: readonly string[]) {
 
 /**
  * Whether one source verdict's passages bind to its note's assigned premise
- * IDs, with a passage for every ID on PASS. The verdict's echoed
- * externalResults list is ignored: the assigned list is restored on every
- * recorded verdict, so the echo carries no evidence.
+ * IDs, with a passage for every ID on PASS. The output schema already limits
+ * IDs to this call's; a PASS missing a passage remains possible.
  */
 export function sourceVerdictBinds(
   verdict: z.output<typeof sourceSubmission>["verdicts"][number],
@@ -783,7 +784,7 @@ export function sourceVerdictBinds(
 ): boolean {
   const expected = assigned.find(({ note }) => note === verdict.note);
   if (expected === undefined) return false;
-  const ids = expected.externalResults.map(externalResultId);
+  const ids = assignedPremises([expected]).map(({ resultId }) => resultId);
   const sourceIds = verdict.sources.map(({ resultId }) => resultId);
   return (
     sourceIds.every((id) => ids.includes(id)) &&
@@ -791,12 +792,18 @@ export function sourceVerdictBinds(
   );
 }
 
-/** Source verdicts over the judged notes, every one bound to its assigned premises. */
+/** The Codex output schema of one source call: verdicts over the judged notes, each passage bound to one of this call's premise IDs. */
 export function sourceVerdictsFor(
   judged: readonly string[],
   assigned: AssignedExternalResults,
 ) {
-  return sourceVerdictsOver(judged).refine(
+  const ids = assignedPremises(assigned).map(({ resultId }) => resultId);
+  return verdictsOver(
+    verdict
+      .omit({ verifier: true })
+      .extend({ sources: z.array(passage(z.enum(ids))) }),
+    judged,
+  ).refine(
     (value) =>
       value.verdicts.every((verdict) => sourceVerdictBinds(verdict, assigned)),
     "source evidence must reference the assigned external premise IDs",

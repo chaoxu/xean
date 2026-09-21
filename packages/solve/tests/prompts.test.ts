@@ -13,7 +13,7 @@ import {
   verifierCall,
 } from "../pi-roles";
 import { reviewSystem } from "../review";
-import { sourceVerdictsFor, verdictsFor, verifierNames } from "../roles";
+import { verdictsFor, verifierNames } from "../roles";
 import { z } from "zod";
 
 const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
@@ -235,36 +235,27 @@ test("changing guidance follows all selected mathematics", () => {
   );
 });
 
-test("verifier schemas stay stable while runtime rejects missing, duplicate, and wrong note IDs", () => {
-  const sourceFactory = (judged: readonly string[]) =>
-    sourceVerdictsFor(
-      judged,
-      judged.map((note) => ({ note, externalResults: [] })),
-    );
-  for (const factory of [verdictsFor, sourceFactory]) {
-    expect(z.toJSONSchema(factory(["n1"]))).toEqual(
-      z.toJSONSchema(factory(["n2", "n3"])),
-    );
-    const value = (note: string) => ({
-      note,
-      verdict: "PASS",
-      report: "Checked.",
-      ...(factory === sourceFactory
-        ? { externalResults: [], sources: [] }
-        : {}),
-    });
-    expect(factory(["n1"]).safeParse({ verdicts: [value("n1")] }).success).toBe(
-      true,
-    );
-    expect(factory(["n1"]).safeParse({ verdicts: [value("n2")] }).success).toBe(
-      false,
-    );
-    expect(factory(["n1"]).safeParse({ verdicts: [] }).success).toBe(false);
-    expect(
-      factory(["n1", "n2"]).safeParse({ verdicts: [value("n1"), value("n1")] })
-        .success,
-    ).toBe(false);
-  }
+test("verdict schemas stay stable while runtime rejects missing, duplicate, and wrong note IDs", () => {
+  expect(z.toJSONSchema(verdictsFor(["n1"]))).toEqual(
+    z.toJSONSchema(verdictsFor(["n2", "n3"])),
+  );
+  const value = (note: string) => ({
+    note,
+    verdict: "PASS",
+    report: "Checked.",
+  });
+  expect(
+    verdictsFor(["n1"]).safeParse({ verdicts: [value("n1")] }).success,
+  ).toBe(true);
+  expect(
+    verdictsFor(["n1"]).safeParse({ verdicts: [value("n2")] }).success,
+  ).toBe(false);
+  expect(verdictsFor(["n1"]).safeParse({ verdicts: [] }).success).toBe(false);
+  expect(
+    verdictsFor(["n1", "n2"]).safeParse({
+      verdicts: [value("n1"), value("n1")],
+    }).success,
+  ).toBe(false);
 });
 
 test("correctness permits valid partial claims and reserves task completion for requirements", async () => {

@@ -328,7 +328,7 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = await setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 25 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 26 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);

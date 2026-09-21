@@ -29,7 +29,7 @@ import {
   coordinatorResultFor,
   defaultCoordinatorBehavior,
   correctnessVerdictsFor,
-  externalResultId,
+  assignedPremises,
   sourceVerdictBinds,
   sourceVerdictsOver,
   type AssignedExternalResults,
@@ -403,7 +403,7 @@ export const sourceAssessment =
 
 const verifierObligations = {
   correctness: `Judge whether each note establishes its stated result under the correction policy below. A correct partial result passes even when it explicitly leaves the task unfinished. Check every load-bearing inference, and search for counterexamples, missing cases, invalid bounds, and reasons the stated conclusions do not follow. Fail a note when an essential inference remains unsupported, its stated conclusion remains unproved, or a blocking defect remains after permitted local corrections. Check that every substantive result the text uses is proved there or supplied by that note's declared support and its transitive closure. An application of a nonroutine external theorem must name a support note stating that theorem with its exact hypotheses and conclusion; fail an undeclared substantive dependency or an application that does not meet those hypotheses. An isolated theorem note may cite its external source directly without proving that theorem: assess its precise statement conditionally, pending source validation, rather than failing solely because its primary-source premise is not yet verified. For every verdict, list all nonroutine external premises that this note directly requires in externalResults. Each entry is self-contained: include exact hypotheses, conclusion, source identification when present, and the claimed application. Include hidden external premises even when the citation is vague or absent. Use [] only when the note relies entirely on its own proof, its declared established support, and immediate routine facts. Do not repeat external premises already supplied by declared support; their theorem notes receive their own source check. A correctness PASS is conditional on all listed premises, and establishes no source evidence. Other notes in the verification batch are not additional premises. A note ID mentioned only for provenance or a mathematical expression resembling an ID is not a dependency. ${correctionAssessment}`,
-  source: `Check every external result assigned by the completed correctness check. Each assigned result has a stable ID in the source packet. Preserve every ID exactly; do not omit, merge, or weaken an assigned result. Each source entry carries the resultId of the premise it establishes; its result description may use ordinary wording or harmless punctuation changes, but the assigned ID must be preserved. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result ID: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
+  source: `Check every external result assigned by the completed correctness check. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result ID: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
   requirements: `Decide whether each note meets every completion criterion of the exact task. A sound partial result that does not meet them fails, and the report says so plainly. ${correctionAssessment}`,
   reconstruction: `Compare the note's text with a proof written from the statement and the support notes alone. First check that the supplied statement faithfully states what the note establishes, with its hypotheses and conclusion and without its proof method or steps. If the statement misstates the note or gives away its method, return a corrected statement in the statement field and an empty verdicts list. This repairs the verification input and makes no verdict on the note. Otherwise set statement to null and return one verdict: PASS when both establish the statement and the note's text uses no result beyond its support and the statement's hypotheses; FAIL when the statement remains unproved after permitted local corrections or the note relies on an undeclared substantive result; INCONCLUSIVE when the independent proof left something unproved and no concrete defect in the note was found. ${correctionAssessment}`,
 } as const satisfies Readonly<Record<VerifierName, string>>;
@@ -564,11 +564,22 @@ export async function reconstructionCall(
   };
 }
 
+// A packet supplies an earlier passage under this call's premise ID, with
+// the call and note that inspected it.
 const sourcePassage = sources.element.extend({
   call: z.number().int().positive(),
   note: nonblank,
 });
 type SourcePassage = z.output<typeof sourcePassage>;
+/** A recorded passage with its provenance; its ID is per call, so it carries none. */
+type InspectedPassage = Omit<SourcePassage, "resultId">;
+type Evidence = Pick<SourcePassage, "result" | "source" | "url" | "quote">;
+const evidence = ({ result, source, url, quote }: Evidence): Evidence => ({
+  result,
+  source,
+  url,
+  quote,
+});
 type CorrectnessAssessment = {
   readonly call: EntryId;
   readonly verdicts: z.output<
@@ -611,7 +622,7 @@ export async function sourceCall(
   input: VerifierInput,
   judged: readonly string[],
   correctness: CorrectnessAssessment,
-  passages: readonly SourcePassage[] = [],
+  passages: readonly InspectedPassage[] = [],
 ): Promise<{
   readonly label: string;
   readonly request: CodexRequest;
@@ -632,11 +643,7 @@ export async function sourceCall(
     return assessment;
   });
   const schema = sourceVerdictsFor(judged, assigned);
-  const needed = new Set(
-    assigned.flatMap(({ externalResults }) =>
-      externalResults.map(externalResultId),
-    ),
-  );
+  const premises = assignedPremises(assigned);
   const packet = sourcePrompt.parse({
     task: input.task,
     correctnessCall: correctness.call,
@@ -646,15 +653,17 @@ export async function sourceCall(
         id,
         text: note.text,
         support: note.support,
-        externalResults: assigned
-          .find(({ note }) => note === id)!
-          .externalResults.map((text) => ({
-            id: externalResultId(text),
-            text,
-          })),
+        externalResults: premises
+          .filter((premise) => premise.note === id)
+          .map(({ resultId, result }) => ({ id: resultId, text: result })),
       };
     }),
-    passages: passages.filter(({ resultId }) => needed.has(resultId)),
+    // An earlier passage for an assigned result enters under this call's ID.
+    passages: premises.flatMap(({ resultId, result }) =>
+      passages
+        .filter((passage) => passage.result === result)
+        .map((passage) => ({ ...passage, resultId })),
+    ),
   });
   return {
     label: verifierLabels.source,
@@ -1042,14 +1051,12 @@ export function sameRequest(
 /** A note's INCONCLUSIVE source verdict when a response cannot be used: its assigned premises stand unchecked. */
 function unusableSourceVerdict(
   note: string,
-  externalResults: readonly string[],
   reason: string,
-): z.output<ReturnType<typeof sourceVerdictsFor>>["verdicts"][number] {
+): z.output<typeof sourceSubmission>["verdicts"][number] {
   return {
     note,
     verdict: "INCONCLUSIVE",
     report: `The source verifier response was not usable: ${reason} No source conclusion was drawn, and its evidence was discarded.`,
-    externalResults: [...externalResults],
     sources: [],
   };
 }
@@ -1062,39 +1069,39 @@ function unusableSourceVerdict(
  */
 export function sourceVerdictsOf(
   submission: ReturnType<typeof codexSubmission>,
-  passages: readonly SourcePassage[],
+  passages: readonly Evidence[],
   assigned: AssignedExternalResults,
-): z.output<ReturnType<typeof sourceVerdictsFor>> | undefined {
+): z.output<typeof sourceSubmission> | undefined {
   const judged = assigned.map(({ note }) => note);
   const parsed = sourceVerdictsOver(judged).safeParse(submission?.input);
   if (submission === undefined || !parsed.success) return undefined;
+  const resultById = new Map(
+    assignedPremises(assigned).map(({ resultId, result }) => [
+      resultId,
+      result,
+    ]),
+  );
   return {
     verdicts: parsed.data.verdicts.map((verdict) => {
-      const { externalResults } = assigned.find(
-        ({ note }) => note === verdict.note,
-      )!;
       const unusable = (reason: string) =>
-        unusableSourceVerdict(verdict.note, externalResults, reason);
+        unusableSourceVerdict(verdict.note, reason);
       if (!sourceVerdictBinds(verdict, assigned))
         return unusable(
           "its evidence for this note does not bind to the assigned premises.",
         );
-      const resultById = new Map(
-        externalResults.map((result) => [externalResultId(result), result]),
-      );
       const sources = verdict.sources.map((source) => ({
         ...source,
         result: resultById.get(source.resultId)!,
       }));
-      const supplied = (source: (typeof sources)[number]) =>
-        passages.some(({ call: _, note: __, ...passage }) =>
-          isDeepStrictEqual(source, passage),
+      const supplied = (source: Evidence) =>
+        passages.some((passage) =>
+          isDeepStrictEqual(evidence(source), evidence(passage)),
         );
       if (submission.searches === 0 && !sources.every(supplied))
         return unusable(
           "it cites a passage for this note that was not supplied, without a search.",
         );
-      return { ...verdict, externalResults: [...externalResults], sources };
+      return { ...verdict, sources };
     }),
   };
 }
@@ -1103,7 +1110,7 @@ export function sourceVerdictsOf(
 function inspectedPassages(
   campaign: Campaign,
   before: EntryId,
-): SourcePassage[] {
+): InspectedPassage[] {
   const records = campaign.records({ through: before - 1 });
   const passes = new Set(
     journalVerdicts(records).flatMap(({ seq, verdict }) => {
@@ -1113,7 +1120,11 @@ function inspectedPassages(
       return entry?.kind === "verdict" ? [`${entry.call}/${verdict.note}`] : [];
     }),
   );
-  const passages: SourcePassage[] = [];
+  const passages: InspectedPassage[] = [];
+  const known = (source: Evidence): boolean =>
+    passages.some((passage) =>
+      isDeepStrictEqual(evidence(passage), evidence(source)),
+    );
   for (const entry of records) {
     if (entry.kind !== "call" || entry.label !== verifierLabels.source)
       continue;
@@ -1127,9 +1138,7 @@ function inspectedPassages(
     } catch {
       continue;
     }
-    const supplied = packet.passages.filter((passage) =>
-      passages.some((known) => isDeepStrictEqual(known, passage)),
-    );
+    const supplied = packet.passages.filter(known);
     const assigned = packet.notes.map(({ id: note, externalResults }) => ({
       note,
       externalResults: externalResults.map(({ text }) => text),
@@ -1142,12 +1151,12 @@ function inspectedPassages(
       )
         continue;
       for (const source of verdict.sources) {
-        if (
-          !passages.some(({ call: _, note: __, ...known }) =>
-            isDeepStrictEqual(known, source),
-          )
-        )
-          passages.push({ call: entry.seq, note: verdict.note, ...source });
+        if (!known(source))
+          passages.push({
+            call: entry.seq,
+            note: verdict.note,
+            ...evidence(source),
+          });
       }
     }
   }
@@ -1171,7 +1180,6 @@ async function runLocalSource(
       note,
       verdict: "PASS",
       report: `The completed correctness check in call ${correctnessCall} identified no nonroutine external premise. No source inference or retrieval was needed.`,
-      externalResults: [],
       sources: [],
     })),
   });
@@ -1316,7 +1324,7 @@ async function runSource(
   candidate: EntryId,
 ): Promise<{
   readonly call: EntryId;
-  readonly value: z.output<ReturnType<typeof sourceVerdictsFor>>;
+  readonly value: z.output<typeof sourceSubmission>;
 }> {
   const passages = inspectedPassages(campaign, candidate);
   const { label, request, schema } = await sourceCall(
@@ -1338,9 +1346,7 @@ async function runSource(
   };
   const unusable = (reason: string) =>
     schema.parse({
-      verdicts: assigned.map(({ note, externalResults }) =>
-        unusableSourceVerdict(note, externalResults, reason),
-      ),
+      verdicts: assigned.map(({ note }) => unusableSourceVerdict(note, reason)),
     });
   const successful = (call: EntryId): boolean => {
     const returned = returnedOutput(roleCallRecords(campaign, call), call);

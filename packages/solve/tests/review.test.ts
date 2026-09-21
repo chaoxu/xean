@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { openReader } from "xean";
 
 import { review, reviewVerdict } from "../review";
-import { externalResultId, sourceVerdictsFor } from "../roles";
+import { sourceVerdictsFor } from "../roles";
 import { codexStdout } from "./fixtures/codex-stdout";
 import type { CodexRequest } from "../source";
 import { campaignPath, cleanupCampaigns } from "./harness";
@@ -56,7 +56,6 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
     note: "n24",
     verdict: "PASS",
     report: "From my knowledge of the cited result.",
-    externalResults: [claim],
     sources: [],
   };
   expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
@@ -77,7 +76,7 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
             {
               ...evidence,
               result: "Global-BiCut is hard, with harmless restatement.",
-              resultId: externalResultId(claim),
+              resultId: "n24#1",
             },
           ],
         },
@@ -97,8 +96,7 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
       note: "n24",
       verdict,
       report: "Source assessment.",
-      externalResults: [claim],
-      sources: [{ ...evidence, resultId: "external-arbitrary" }],
+      sources: [{ ...evidence, resultId: "n24#2" }],
     };
     expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
     expect(
@@ -106,7 +104,7 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
         verdicts: [
           {
             ...value,
-            sources: [{ ...evidence, resultId: externalResultId(claim) }],
+            sources: [{ ...evidence, resultId: "n24#1" }],
           },
         ],
       }).success,

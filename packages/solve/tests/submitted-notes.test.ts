@@ -5,7 +5,6 @@ import { openReader } from "xean";
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import {
-  externalResultId,
   explorerResultFor,
   verifierNames,
   type Note,
@@ -95,10 +94,9 @@ function verdict(note: string, name: string, result = "PASS"): Reply {
             note,
             verdict: result,
             report: `${name}: ${result}.`,
-            externalResults: [`External theorem for ${note}.`],
             sources: [
               {
-                resultId: externalResultId(`External theorem for ${note}.`),
+                resultId: `${note}#1`,
                 result: `External theorem for ${note}.`,
                 source: "Primary theorem.",
                 url: "https://example.test/theorem",
@@ -278,13 +276,13 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(25);
+  expect(workflowSchemaVersion).toBe(26);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 25, task },
+    config: { schemaVersion: 26, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);

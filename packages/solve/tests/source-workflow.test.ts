@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, type Campaign, type Json } from "xean";
+import { z } from "zod";
 
 import {
   createPiRoles,
@@ -10,7 +11,6 @@ import {
 import {
   applicationId,
   correctnessVerdictsFor,
-  externalResultId,
   sourceVerdictsFor,
   type Note,
   type VerifierInput,
@@ -77,11 +77,7 @@ const checked = (note: string, searched = true, sources = [source]): Reply => ({
         verdict: "PASS",
         report:
           "The exact source establishes the stated premise and applicability.",
-        externalResults: [result],
-        sources: sources.map((value) => ({
-          ...value,
-          resultId: externalResultId(value.result),
-        })),
+        sources: sources.map((value) => ({ ...value, resultId: `${note}#1` })),
       },
     ],
   },
@@ -154,9 +150,7 @@ test("mixed verification sends only notes with external premises and journals lo
     expect(
       inspection.calls.find((call: any) => call.call === local.seq).submission,
     ).toMatchObject({
-      verdicts: [
-        { note: "n2", verdict: "PASS", externalResults: [], sources: [] },
-      ],
+      verdicts: [{ note: "n2", verdict: "PASS", sources: [] }],
     });
     expect(inspection.accounting.unpricedCalls).toHaveLength(1);
   } finally {
@@ -172,103 +166,42 @@ const usage = {
   reasoning: 0,
 };
 
-test("an external result ID is 16 hex digits of the premise text", () => {
-  expect(externalResultId(result)).toMatch(/^external-[0-9a-f]{16}$/);
-  expect(externalResultId(result)).toBe(externalResultId(result));
-  expect(externalResultId("Another theorem.")).not.toBe(
-    externalResultId(result),
-  );
-});
-
-test("a passage with a mangled premise ID discards only that note's source evidence", () => {
-  const premises: Record<string, string> = {
-    n1: result,
-    n2: "Another theorem.",
-  };
-  const assigned = ["n1", "n2"].map((note) => ({
-    note,
-    externalResults: [premises[note]!],
-  }));
-  const ids = {
-    n1: externalResultId(result),
-    n2: externalResultId("Another theorem."),
-  };
-  const verdict = (
-    note: string,
-    resultId: string,
-    changes: { result?: string; externalResults?: string[] } = {},
-  ) => ({
+test("a PASS missing a passage for an assigned ID is inconclusive for that note alone", () => {
+  const assigned = [
+    { note: "n1", externalResults: [result] },
+    { note: "n2", externalResults: ["Another theorem."] },
+  ];
+  const verdict = (note: string, sources: Json[]) => ({
     note,
     verdict: "PASS",
     report: "Checked.",
-    externalResults: changes.externalResults ?? [premises[note]!],
-    sources: [
-      {
-        ...source,
-        result: changes.result ?? premises[note]!,
-        resultId,
-      },
-    ],
+    sources,
   });
-  const outcome = (
-    verdicts: Json[],
-    searches: number,
-    supplied: Parameters<typeof sourceVerdictsOf>[1] = [],
-  ) =>
+  const outcome = (verdicts: Json[]) =>
     sourceVerdictsOf(
-      { settled: 1, input: { verdicts }, searches, usage },
-      supplied,
+      { settled: 1, input: { verdicts }, searches: 1, usage },
+      [],
       assigned,
     )?.verdicts;
-  const states = (value: ReturnType<typeof outcome>) =>
-    value?.map(({ note, verdict }) => [note, verdict]);
-  const mangled = `${ids.n2.slice(0, 12)}${ids.n2.slice(-3)}`;
   expect(
-    outcome([verdict("n1", ids.n1), verdict("n2", mangled)], 1),
+    outcome([
+      verdict("n1", [{ ...source, result: "Restated.", resultId: "n1#1" }]),
+      verdict("n2", []),
+    ]),
   ).toMatchObject([
-    { note: "n1", verdict: "PASS", sources: [{ resultId: ids.n1, result }] },
+    { note: "n1", verdict: "PASS", sources: [{ resultId: "n1#1", result }] },
     {
       note: "n2",
       verdict: "INCONCLUSIVE",
       report: expect.stringContaining("not usable"),
-      externalResults: ["Another theorem."],
       sources: [],
     },
   ]);
-  // Another note's valid ID does not bind.
-  expect(
-    states(outcome([verdict("n1", ids.n1), verdict("n2", ids.n1)], 1)),
-  ).toEqual([
-    ["n1", "PASS"],
-    ["n2", "INCONCLUSIVE"],
-  ]);
-  // Without any search, a passage not inspected earlier is unusable for its
-  // note only. The supplied passage still serves n1 even when the model
-  // restates its result text, which the ID restores.
-  const inspected = { call: 1, note: "n1", resultId: ids.n1, ...source };
-  expect(
-    outcome(
-      [
-        verdict("n1", ids.n1, { result: "Restated.", externalResults: [] }),
-        verdict("n2", ids.n2),
-      ],
-      0,
-      [inspected],
-    ),
-  ).toMatchObject([
-    {
-      note: "n1",
-      verdict: "PASS",
-      externalResults: [result],
-      sources: [{ resultId: ids.n1, result }],
-    },
-    { note: "n2", verdict: "INCONCLUSIVE" },
-  ]);
   // Not one verdict per judged note: nothing is usable.
-  expect(outcome([verdict("n1", ids.n1)], 1)).toBeUndefined();
+  expect(outcome([verdict("n1", [])])).toBeUndefined();
 });
 
-test("source cannot silently remove, weaken, or leave a passing assigned premise without evidence", () => {
+test("the source output schema admits only this call's premise IDs and requires a passage for each on PASS", () => {
   const schema = sourceVerdictsFor(
     ["n1"],
     [{ note: "n1", externalResults: [result] }],
@@ -277,21 +210,25 @@ test("source cannot silently remove, weaken, or leave a passing assigned premise
     note: "n1",
     verdict: "PASS",
     report: "Checked.",
-    externalResults: [result],
-    sources: [{ ...source, resultId: externalResultId(result) }],
+    sources: [{ ...source, resultId: "n1#1" }],
   };
+  expect(z.toJSONSchema(schema)).toMatchObject({
+    properties: {
+      verdicts: {
+        items: {
+          properties: {
+            sources: {
+              items: { properties: { resultId: { enum: ["n1#1"] } } },
+            },
+          },
+        },
+      },
+    },
+  });
   expect(schema.safeParse({ verdicts: [value] }).success).toBe(true);
-  // Binding is by resultId; the echoed externalResults list is ignored.
-  expect(
-    schema.safeParse({ verdicts: [{ ...value, externalResults: [] }] }).success,
-  ).toBe(true);
-  for (const change of [
-    { externalResults: [], sources: [] },
-    { externalResults: ["Weaker theorem."], sources: [] },
-    { sources: [] },
-  ]) {
+  for (const sources of [[], [{ ...source, resultId: "n1#2" }]]) {
     expect(
-      schema.safeParse({ verdicts: [{ ...value, ...change }] }).success,
+      schema.safeParse({ verdicts: [{ ...value, sources }] }).success,
     ).toBe(false);
   }
   expect(
@@ -301,7 +238,7 @@ test("source cannot silently remove, weaken, or leave a passing assigned premise
   ).toBe(true);
 });
 
-test("exact passages reuse recorded earlier source PASS evidence within the same campaign", async () => {
+test("an earlier PASS passage is supplied under the new call's premise ID and reused without a search", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
   });
@@ -318,12 +255,7 @@ test("exact passages reuse recorded earlier source PASS evidence within the same
     const verdicts = await roles.verifier(input([makeNote("n2")]));
     expect(verdicts.at(-1)?.verdict).toBe("PASS");
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([
-      {
-        call: old.seq,
-        note: "n1",
-        resultId: externalResultId(result),
-        ...source,
-      },
+      { call: old.seq, note: "n1", resultId: "n2#1", ...source },
     ]);
     expect(JSON.parse(drive.codexCalls[0]!.prompt).passages).toEqual([]);
   } finally {
@@ -450,8 +382,7 @@ test("a failed source assessment never supplies reusable evidence", async () => 
             note: "n1",
             verdict: "FAIL",
             report: "The theorem's hypotheses do not match.",
-            externalResults: [result],
-            sources: [{ ...source, resultId: externalResultId(result) }],
+            sources: [{ ...source, resultId: "n1#1" }],
           },
         ],
       },
