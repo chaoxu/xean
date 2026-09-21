@@ -1400,8 +1400,28 @@ describe("thin Pi runner", () => {
       measuredUsage: zero,
     });
     const { estimatedCostUsd: _cost, ...partial } = zero;
-    expect(() => derivePiSpend(spendEntries(partial))).toThrow();
-    expect(() => derivePiSpend(spendEntries({ reasoning: 1 }))).toThrow();
+    expect(() => derivePiSpend(spendEntries(partial))).toThrow(
+      /estimatedCostUsd/,
+    );
+    expect(() => derivePiSpend(spendEntries({ reasoning: 1 }))).toThrow(
+      /"input"/,
+    );
+  });
+
+  test("rejects a request completion that disagrees with its checkpoint", () => {
+    const entries = spendEntries(null).map((entry) =>
+      entry.kind === "call-result" &&
+      entry.state === "returned" &&
+      entry.parent === 3
+        ? {
+            ...entry,
+            output: { ...(entry.output as { parent: number }), parent: 99 },
+          }
+        : entry,
+    );
+    expect(() => derivePiSpend(entries)).toThrow(
+      "invalid Pi request completion 3",
+    );
   });
 
   test("does not mistake an ordinary model-shaped request for a Pi call", () => {
