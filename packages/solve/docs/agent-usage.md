@@ -19,7 +19,7 @@ bun packages/solve/solve.ts inspect campaign.db
 bun packages/solve/solve.ts inspect --include-requests campaign.db
 ```
 
-Use the journal-derived `result` when it is present: `accepted` and `turn-limit` are terminal, and `paused`, `call-failure`, and `interrupted` leave unfinished work resumable. Each inspected role call separates its kernel `state` from the provider `outcome` and saved `error`. The [inspection section](role-runner.md#inspection-and-export) lists every field.
+Use the journal-derived `result` when it is present; the [coordinator loop](role-runner.md#coordinator-loop) states which results are terminal and which leave the campaign resumable. Each inspected role call separates its kernel `state` from the provider `outcome` and saved `error`. The [inspection section](role-runner.md#inspection-and-export) lists every field.
 
 ## Supply mathematical notes
 
@@ -61,7 +61,7 @@ Each note has nonblank `text` and distinct `support` IDs. Mark an externally ver
 }
 ```
 
-String support IDs name existing notes in this campaign; obtain them from `inspect`. A positive integer names an earlier note in the same submission, counted from 1, so a theorem and its application enter together:
+Obtain existing note IDs from `inspect`. A theorem and its application enter together through a local reference:
 
 ```json
 {
@@ -78,7 +78,7 @@ String support IDs name existing notes in this campaign; obtain them from `inspe
 }
 ```
 
-When transferring work, submit each theorem and proof separately in dependency order and convert the selected graph's edges to local positions. The [inbox rules](role-runner.md#submitted-notes) state validation, external verification, delivery, and numbering.
+When transferring work, submit each theorem and proof separately in dependency order and convert the selected graph's edges to local positions. The [inbox rules](role-runner.md#submitted-notes) state validation, support references, external verification, delivery, and numbering.
 
 Use `-` for standard input, or call the exported function from TypeScript:
 
@@ -157,7 +157,7 @@ The added `guidance` array contains each external receipt, `calls` listing the E
 
 ## Pause and resume
 
-Send one `SIGINT` or `SIGTERM` to pause after the active role call settles. A second signal interrupts the active call. Resume with the same task, campaign, and settings:
+Send one `SIGINT` or `SIGTERM` to pause, then resume with the same task, campaign, and settings:
 
 ```sh
 bun packages/solve/solve.ts run task.json campaign.db settings.json
@@ -169,9 +169,9 @@ After `turn-limit`, grant twenty more turns and continue:
 bun packages/solve/solve.ts run --turns 20 --id more-1 task.json campaign.db settings.json
 ```
 
-Reuse the same id and count for retries. The [coordinator loop](role-runner.md#coordinator-loop) states the allowance rules, and the [replay section](role-runner.md#replay-and-resume) states what a resumed `run` reuses.
+Reuse the same id and count for retries. The [coordinator loop](role-runner.md#coordinator-loop) states the allowance rules, and the [replay section](role-runner.md#replay-and-resume) states how signals pause or interrupt a run and what a resumed `run` reuses.
 
-All notes, guidance, and delivery boundaries live in `campaign.db`. The `.runner.lock` and `.inbox.lock` files only coordinate processes and hold no campaign state. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot; the kernel [durability contract](../../../SPEC.md#campaign-artifact) states the recovery and copy rules.
+All notes, guidance, and delivery boundaries live in `campaign.db`; the [inbox section](role-runner.md#inbox) describes the `.runner.lock` and `.inbox.lock` files. Copy a campaign after its handles close, or use SQLite's backup facilities for a live snapshot; the kernel [durability contract](../../../SPEC.md#campaign-artifact) states the recovery and copy rules.
 
 ## Export and review
 

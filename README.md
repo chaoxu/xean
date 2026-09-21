@@ -74,7 +74,7 @@ bun packages/solve/solve.ts guide --id next-route campaign.db guidance.txt
 bun packages/solve/solve.ts inspect --include-guidance campaign.db
 ```
 
-Notes and guidance are journaled immediately and reach the next role input that is not yet frozen. The [inbox rules](packages/solve/docs/role-runner.md#inbox) state delivery.
+The [inbox rules](packages/solve/docs/role-runner.md#inbox) state when notes and guidance reach a role.
 
 ## Build an application
 

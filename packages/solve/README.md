@@ -78,7 +78,7 @@ bun packages/solve/solve.ts run task.json campaign.db settings.json
 }
 ```
 
-Add `verification: {"source": "reviewer identity", "report": "what was checked and the evidence"}` to a note to supply an externally verified result. String support IDs name existing campaign notes, and positive integers name earlier notes in the same submission, counted from 1. `submit` makes no model call and works while the runner holds its lock; `submit` and `guide` also carry selected work from an earlier campaign into a new one. The [inbox rules](docs/role-runner.md#inbox) state validation, delivery, numbering, and external verification, and the [agent guide](docs/agent-usage.md#supply-mathematical-notes) shows the receipts.
+Add `verification: {"source": "reviewer identity", "report": "what was checked and the evidence"}` to a note to supply an externally verified result. `submit` makes no model call and works while the runner holds its lock; `submit` and `guide` also carry selected work from an earlier campaign into a new one. The [inbox rules](docs/role-runner.md#submitted-notes) state validation, support references, delivery, numbering, and external verification, and the [agent guide](docs/agent-usage.md#supply-mathematical-notes) shows the receipts.
 
 ## Guide an active or paused campaign
 
@@ -87,7 +87,7 @@ bun packages/solve/solve.ts guide --id try-direct-proof campaign.db packages/sol
 bun packages/solve/solve.ts inspect --include-guidance campaign.db
 ```
 
-`guide` reads a UTF-8 file, or standard input when the filename is `-`, saves the text in the campaign, and returns a receipt. Advice reaches the next Explorer turn whose input is not yet frozen and applies to that turn only. The [guidance rules](docs/role-runner.md#guidance) state delivery.
+`guide` reads a UTF-8 file, or standard input when the filename is `-`, saves the text in the campaign, and returns a receipt. The [guidance rules](docs/role-runner.md#guidance) state delivery.
 
 ## Independent review
 

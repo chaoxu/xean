@@ -8,7 +8,7 @@ Xean Lab derives a worker result from `inspect.result`, never from solver stdout
 
 Send changing task directions, coordinator guidance, continuation prompts, and correction requests as user messages. Keep stable role definitions and contracts in system or developer instructions, and factual results or validation errors in tool receipts. Inspect the constructed provider payload when checking this boundary; a field or helper name alone does not establish the message role.
 
-The solver's versioned contracts are the workflow declaration in `workflow.ts`, the execution contract and its report in `execution-contract.ts`, and the local request schemas of allowances, receipts, and boundaries. The root [`AGENTS.md`](../../AGENTS.md) rule on schema versions applies to each. Bump the execution contract only when its report shape or meaning changes, and keep the `run` command and the execution report unchanged when only role schemas change. No document states a schema number; the code is the authority.
+The solver's versioned contracts are the workflow declaration in `workflow.ts`, the execution contract and its report in `execution-contract.ts`, and the local request schemas of allowances, receipts, and boundaries. The root [`AGENTS.md`](../../AGENTS.md) rule on schema versions applies to each. Bump the execution contract only when its report shape or meaning changes, and keep the `run` command and the execution report unchanged when only role schemas change. No document states the workflow declaration or execution contract schema number; the code is the authority.
 
 Use one bounded completion loop for implementation work:
 
