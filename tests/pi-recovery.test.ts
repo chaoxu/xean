@@ -345,7 +345,6 @@ describe.each([platformModel, codexModel])(
             ? {
                 submissionGate: {
                   completeArgument: "solution",
-                  reserveTokens: 2000,
                   continuationPrompt: "Keep trying, you can do it.",
                 },
               }
@@ -413,7 +412,7 @@ describe.each([platformModel, codexModel])(
                 stopAfterToolResult: true,
                 submissionGate: {
                   completeArgument: "solution",
-                  reserveTokens: 2000,
+                  continuationPrompt: "Keep trying, you can do it.",
                 },
               }
             : {}),
@@ -456,8 +455,8 @@ describe.each([platformModel, codexModel])(
         maxLengthContinuations: 1,
         submissionGate: {
           completeArgument: "solution",
-          reserveTokens: 2000,
           contextBudgetTokens: 20_000,
+          continuationPrompt: "Keep trying, you can do it.",
         },
       });
       expect(result.state).toBe("failed");

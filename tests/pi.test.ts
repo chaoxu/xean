@@ -218,7 +218,7 @@ const model: Model<"openai-responses"> = {
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 10_000,
-  maxTokens: 1_000,
+  maxTokens: 2_000,
 };
 const submitVerdict = defineTool({
   name: "submit_verdict",
@@ -413,7 +413,7 @@ const gatedTool = defineTool({
 });
 const submissionGate = {
   completeArgument: "solution",
-  reserveTokens: 2000,
+  continuationPrompt: "Keep trying, you can do it.",
 };
 
 function gateReply(
@@ -503,7 +503,7 @@ test("submission gate saves every partial in the same context before the near-li
     { role: "toolResult", isError: false },
     {
       role: "user",
-      content: expect.stringContaining("Continue substantive work"),
+      content: submissionGate.continuationPrompt,
     },
   ]);
   const first = requests[1]!.context.messages.find(
@@ -871,13 +871,11 @@ test("the application continuation prompt reaches native steering but yields to 
 });
 
 test.each([
-  [378_000, "toolUse", 1_520, 16_384, 379_520],
-  [379_600, "stop", 16_304, 16_384, 379_700],
-  [266_000, "toolUse", 1_904, undefined, 267_904],
-  [268_000, "stop", 127_904, undefined, 268_100],
+  [266_000, "toolUse", 1_904, 267_904],
+  [268_000, "stop", 127_904, 268_100],
 ] as const)(
   "a 400k context budget preserves finalization space after %i tokens and %s",
-  async (tokens, stop, nextMaxTokens, reserveTokens, settledTokens) => {
+  async (tokens, stop, nextMaxTokens, settledTokens) => {
     const requests: (number | undefined)[] = [];
     const replies = [
       gateReply(1, tokens, false, stop),
@@ -901,8 +899,7 @@ test.each([
         tools: [gatedTool],
         stopAfterToolResult: true,
         submissionGate: {
-          completeArgument: "solution",
-          ...(reserveTokens === undefined ? {} : { reserveTokens }),
+          ...submissionGate,
           contextBudgetTokens: 400_000,
         },
       });
@@ -1234,12 +1231,12 @@ test("a submission gate requires one tool before creating a call", async () => {
       runPi(c, {
         models: models([]),
         model,
-        label: "bad-reserve",
+        label: "bad-budget",
         prompt: "test",
         tools: [gatedTool],
         submissionGate: {
           ...submissionGate,
-          reserveTokens: model.contextWindow,
+          contextBudgetTokens: model.maxTokens,
         },
       }),
     ).rejects.toThrow("leave no usable context");

@@ -180,7 +180,7 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
     ).toBe(false);
     altered.submissionGate = {
       ...drive.calls[0]!.submissionGate,
-      reserveTokens: 1024,
+      contextBudgetTokens: 80_000,
     };
     expect(
       sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
