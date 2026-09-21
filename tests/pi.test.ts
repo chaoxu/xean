@@ -2496,7 +2496,7 @@ describe("thin Pi runner", () => {
     );
   });
 
-  test("classifies a codex transport-failure diagnostic as retryable", async () => {
+  test("classifies a codex transport-failure diagnostic as retryable unless the error text is deterministic", async () => {
     const failed = assistant([], "error");
     failed.errorMessage = "opaque provider failure";
     failed.diagnostics = [{ type: "provider_transport_failure", timestamp: 1 }];
@@ -2507,6 +2507,16 @@ describe("thin Pi runner", () => {
       prompt: "Classify",
     });
     expect(result).toMatchObject({ state: "failed", providerRetryable: true });
+    const rejected = assistant([], "error");
+    rejected.errorMessage = "403 permission denied";
+    rejected.diagnostics = failed.diagnostics;
+    const denied = await runPi(campaign(), {
+      models: models([rejected]),
+      model,
+      label: "transport-diagnostic/v1",
+      prompt: "Classify",
+    });
+    expect(denied).toMatchObject({ state: "failed", providerRetryable: false });
   });
 
   test.each([
