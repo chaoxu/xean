@@ -472,6 +472,168 @@ test("a coordinator verifier action drains its list in window batches before the
   }
 });
 
+test("a verifier action is unavailable until a note is added after a verification", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+  };
+  const request = { task, settings, campaignPath: path, turns: 4 };
+  await init(request);
+  const partial = (id: string) => ({
+    note: id,
+    verdict: "PASS",
+    report: "Correct.",
+    externalResults: [],
+  });
+  const checks: Verification["verifiers"] = ["correctness", "source"];
+  const unavailable =
+    "No note has been added since the last completed verification";
+  const drive = dependencies([
+    { submission: coordination({ role: "explorer" }) },
+    {
+      submission: {
+        solution: false,
+        notes: [
+          { text: "Lemma A.", support: [] },
+          { text: "Lemma B.", support: [] },
+        ],
+      },
+    },
+    {
+      submission: coordination(
+        { role: "verifier" },
+        [{ note: "n1", verifiers: checks }],
+        [
+          { note: "n1", summary: "Lemma A." },
+          { note: "n2", summary: "Lemma B." },
+        ],
+      ),
+    },
+    { submission: { verdicts: [partial("n1")] } },
+    // No note was added since that verification: this coordinator's schema
+    // has no verifier action, and n2 waits.
+    { submission: coordination({ role: "explorer" }) },
+    { submission: { solution: false, notes: [] } },
+    // An explorer turn that adds no note keeps the verifier unavailable.
+    { submission: coordination({ role: "explorer" }) },
+    { submission: { solution: false, notes: [] } },
+  ]);
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 4,
+  });
+  expect(drive.allCalls.map(({ label }) => label)).toEqual([
+    "xean-solve/coordinator",
+    "xean-solve/explorer",
+    "xean-solve/coordinator",
+    "xean-solve/verifier/correctness",
+    "xean-solve/coordinator",
+    "xean-solve/explorer",
+    "xean-solve/coordinator",
+    "xean-solve/explorer",
+  ]);
+  expect(drive.allCalls[2]?.prompt).not.toContain(unavailable);
+  expect(drive.allCalls[4]?.prompt).toContain(unavailable);
+  expect(drive.allCalls[6]?.prompt).toContain(unavailable);
+  // A caller submission adds a note and restores the verifier action.
+  await submitNotes(
+    path,
+    { notes: [{ text: "A supplied lemma.", support: [] }] },
+    "later",
+  );
+  const more = dependencies([
+    {
+      submission: coordination(
+        { role: "verifier" },
+        [{ note: "n3", verifiers: checks }],
+        [{ note: "n3", summary: "A supplied lemma." }],
+      ),
+    },
+    { submission: { verdicts: [partial("n3")] } },
+  ]);
+  expect(await run({ ...request, turns: 1, id: "more" }, more)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 5,
+  });
+  expect(more.allCalls.map(({ label }) => label)).toEqual([
+    "xean-solve/coordinator",
+    "xean-solve/verifier/correctness",
+  ]);
+  expect(more.allCalls[0]?.prompt).not.toContain(unavailable);
+  expect(await inspectCampaign(path)).toMatchObject({
+    phase: "turn-limit",
+    notes: [
+      { id: "n1", verified: true },
+      { id: "n2", verified: false },
+      { id: "n3", verified: true },
+    ],
+  });
+});
+
+test("after a verification without new notes the coordinator schema omits the verifier action even under always", () => {
+  const live = {
+    id: "n1",
+    summary: "A live result.",
+    text: "A live result.",
+    support: [],
+    verdicts: [],
+    verified: false,
+    dead: false,
+  };
+  const base = {
+    filings: [],
+    explorerGuidance: "Continue.",
+    support: [],
+    verify: [],
+  };
+  const listed = [{ note: "n1", verifiers: ["correctness", "source"] }];
+  const input = {
+    task,
+    notes: [live],
+    literatureStatus: "completed" as const,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "always" as const,
+    },
+  };
+  const open = coordinatorCall(input, "coordinator");
+  expect(open.prompt).not.toContain("No note has been added since");
+  expect(
+    open.schema.safeParse({ ...base, action: { role: "explorer" } }).success,
+  ).toBe(false);
+  expect(
+    open.schema.safeParse({
+      ...base,
+      verify: listed,
+      action: { role: "verifier" },
+    }).success,
+  ).toBe(true);
+  const guarded = coordinatorCall(
+    { ...input, afterVerification: true },
+    "coordinator",
+  );
+  expect(guarded.prompt).toContain(
+    "No note has been added since the last completed verification",
+  );
+  expect(
+    guarded.schema.safeParse({
+      ...base,
+      verify: listed,
+      action: { role: "verifier" },
+    }).success,
+  ).toBe(false);
+  expect(
+    guarded.schema.safeParse({ ...base, action: { role: "explorer" } }).success,
+  ).toBe(true);
+  expect(
+    guarded.schema.safeParse({
+      ...base,
+      action: { role: "literature", request: "Search." },
+    }).success,
+  ).toBe(true);
+});
+
 test("an unusable literature response is replaced by a fresh call on resume", async () => {
   const path = campaignPath();
   const settings = {
@@ -716,25 +878,38 @@ test("structured coordinator policies constrain optional literature and verifica
     }).success,
   ).toBe(true);
 
+  const ready = (id: string, summary: string) => ({
+    id,
+    summary,
+    text: summary,
+    support: [],
+    verdicts: [],
+    verified: false,
+    dead: false,
+  });
   const alwaysVerify = coordinatorCall(
     {
       task,
       notes: [
+        ready("n1", "A live result."),
         {
-          id: "n1",
-          summary: "A live result.",
-          text: "A live result.",
-          support: [],
+          // Over unverified support: not required until n1 is verified.
+          id: "n2",
+          summary: "A consequence of n1.",
+          text: "A consequence of n1.",
+          support: ["n1"],
           verdicts: [],
           verified: false,
           dead: false,
         },
+        ready("n3", "Another live result."),
       ],
       literatureStatus: "completed",
       coordinatorBehavior: { literature: "never", verification: "always" },
     },
     "coordinator",
   );
+  const checks: Verification["verifiers"] = ["correctness", "source"];
   expect(
     alwaysVerify.schema.safeParse({
       ...base,
@@ -742,11 +917,64 @@ test("structured coordinator policies constrain optional literature and verifica
       action: { role: "explorer" },
     }).success,
   ).toBe(false);
+  // Every live note without a verdict over verified support must be listed.
   expect(
     alwaysVerify.schema.safeParse({
       ...base,
       verify: [{ note: "n1", verifiers: all }],
       action: { role: "verifier" },
+    }).success,
+  ).toBe(false);
+  expect(
+    alwaysVerify.schema.safeParse({
+      ...base,
+      verify: [
+        { note: "n1", verifiers: checks },
+        { note: "n3", verifiers: checks },
+      ],
+      action: { role: "verifier" },
+    }).success,
+  ).toBe(true);
+  expect(
+    alwaysVerify.schema.safeParse({
+      ...base,
+      verify: [
+        { note: "n1", verifiers: checks },
+        { note: "n2", verifiers: checks },
+        { note: "n3", verifiers: checks },
+      ],
+      action: { role: "verifier" },
+    }).success,
+  ).toBe(true);
+  // n1 was checked and stayed inconclusive, so it is not forced again; n2
+  // waits for its unverified support; nothing is forced.
+  const inconclusiveSupport = coordinatorCall(
+    {
+      task,
+      notes: [
+        {
+          ...ready("n1", "A live result."),
+          verdicts: [
+            {
+              verifier: "correctness",
+              note: "n1",
+              verdict: "INCONCLUSIVE",
+              report: "Unclear.",
+            },
+          ],
+        },
+        { ...ready("n2", "A consequence of n1."), support: ["n1"] },
+      ],
+      literatureStatus: "completed",
+      coordinatorBehavior: { literature: "never", verification: "always" },
+    },
+    "coordinator",
+  );
+  expect(
+    inconclusiveSupport.schema.safeParse({
+      ...base,
+      verify: [],
+      action: { role: "explorer" },
     }).success,
   ).toBe(true);
 });

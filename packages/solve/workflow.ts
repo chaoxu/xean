@@ -55,7 +55,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 21;
+export const workflowSchemaVersion = 22;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -611,8 +611,11 @@ function settledLiteratureCall(
  * fresh coordinator decision; literature notes enter the ordinary note graph,
  * never a verifier result. A turn is one coordinator call and the role it
  * dispatches, so the journaled allowance bounds the whole loop and no role
- * has a separate cap. The fixed Explorer -> coordinator -> verifier loop
- * above remains the default mode for comparison.
+ * has a separate cap. A verifier dispatch checks the whole list, and the
+ * verifier action stays unavailable until a note has been added, so two
+ * verifications never run back to back over the same notes. The fixed
+ * Explorer -> coordinator -> verifier loop above remains the default mode
+ * for comparison.
  */
 async function deriveCoordinatorWorkflow(
   fold: Fold,
@@ -622,17 +625,24 @@ async function deriveCoordinatorWorkflow(
   let guidance = "";
   let support: readonly string[] = [];
   let emptySubmission = false;
+  // The note count when the last verification completed, derived like every
+  // other coordinator input from the records before the coordinator call.
+  let notesAtLastVerification: number | undefined;
   for (;;) {
     const included = includeSubmitted(fold, fold.cursor);
     if (fold.turns >= base.maxTurns) return turnLimit(fold);
+    const notes = fold.projection.at(fold.cursor);
     const coordinated = replayCoordinator(
       fold,
       coordinatorInput.parse({
         task: base.config.task,
-        notes: fold.projection.at(fold.cursor),
+        notes,
         literatureStatus: literatureSearchStatus(records, fold.cursor),
         coordinatorBehavior: settings.coordinatorBehavior,
         ...(emptySubmission ? { emptySubmission: true } : {}),
+        ...(notes.length === notesAtLastVerification
+          ? { afterVerification: true }
+          : {}),
       }),
       "coordinator",
       included,
@@ -672,6 +682,7 @@ async function deriveCoordinatorWorkflow(
     } else {
       const verification = await replayVerification(fold, coordinated.verify);
       if (verification !== undefined) return verification;
+      notesAtLastVerification = fold.projection.at(fold.cursor).length;
     }
   }
 }

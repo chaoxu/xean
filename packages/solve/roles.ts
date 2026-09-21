@@ -313,6 +313,11 @@ export const coordinatorInput = z.strictObject({
   literatureStatus: literatureStatus.optional(),
   coordinatorBehavior: coordinatorBehavior.optional(),
   emptySubmission: z.literal(true).optional(),
+  /**
+   * Coordinator workflow mode: no note has been added since the last
+   * completed verification, so the verifier action is unavailable.
+   */
+  afterVerification: z.literal(true).optional(),
 });
 export type CoordinatorInput = z.output<typeof coordinatorInput>;
 
@@ -352,7 +357,9 @@ export type CoordinatorResult = z.output<typeof coordinatorResult>;
 /**
  * The coordinator submission schema over these notes. In coordinator workflow
  * mode `allowedActions` lists the roles the frozen coordinator behavior
- * permits next, and the submission must choose one of them.
+ * permits next, the submission must choose one of them, and
+ * `requiredVerification` lists the notes that behavior requires in the
+ * verify list.
  */
 export function coordinatorResultFor(
   notes: readonly Pick<
@@ -360,6 +367,7 @@ export function coordinatorResultFor(
     "id" | "summary" | "support" | "verified" | "dead"
   >[],
   allowedActions?: readonly CoordinatorAction["role"][],
+  requiredVerification: readonly string[] = [],
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -396,6 +404,15 @@ export function coordinatorResultFor(
         code: "custom",
         message:
           "an explorer or literature action cannot carry a verification list",
+        path: ["verify"],
+      });
+    }
+    const listed = new Set(value.verify.map(({ note }) => note));
+    const missing = requiredVerification.filter((id) => !listed.has(id));
+    if (missing.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: `the coordinator behavior requires verifying every unverified live note without a verdict over verified support; missing: ${missing.join(", ")}`,
         path: ["verify"],
       });
     }
