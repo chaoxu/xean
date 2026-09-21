@@ -29,6 +29,9 @@ import {
   coordinatorResultFor,
   correctnessVerdictsFor,
   externalResultId,
+  sourceVerdictBinds,
+  sourceVerdictsOver,
+  type AssignedExternalResults,
   explorerInput,
   explorerResultFor,
   journalVerdicts,
@@ -1062,61 +1065,64 @@ export function sameRequest(
   return isDeepStrictEqual(journaled, request);
 }
 
-type AssignedExternalResults = readonly {
-  readonly note: string;
-  readonly externalResults: readonly string[];
-}[];
-
-function canonicalSourceVerdicts(
-  value: z.output<ReturnType<typeof sourceVerdictsFor>>,
-  assigned: AssignedExternalResults,
-): z.output<ReturnType<typeof sourceVerdictsFor>> {
+/** A note's INCONCLUSIVE source verdict when a response cannot be used: its assigned premises stand unchecked. */
+function unusableSourceVerdict(
+  note: string,
+  externalResults: readonly string[],
+  reason: string,
+): z.output<ReturnType<typeof sourceVerdictsFor>>["verdicts"][number] {
   return {
-    verdicts: value.verdicts.map((verdict) => {
-      // The schema already bound every verdict to an assigned note and
-      // every passage to an assigned premise ID.
-      const expected = assigned.find(({ note }) => note === verdict.note)!;
-      const resultById = new Map(
-        expected.externalResults.map((result) => [
-          externalResultId(result),
-          result,
-        ]),
-      );
-      return {
-        ...verdict,
-        externalResults: [...expected.externalResults],
-        sources: verdict.sources.map((source) => ({
-          ...source,
-          result: resultById.get(source.resultId)!,
-        })),
-      };
-    }),
+    note,
+    verdict: "INCONCLUSIVE",
+    report: `The source verifier response was not usable: ${reason} No source conclusion was drawn, and its evidence was discarded.`,
+    externalResults: [...externalResults],
+    sources: [],
   };
 }
 
-/** Accept source verdicts only with valid claims and inspected or supplied passages. */
-function sourceVerdictsOf(
-  schema: ReturnType<typeof sourceVerdictsFor>,
+/**
+ * Accept each note's source verdict only with valid claims and inspected or
+ * supplied passages, restoring the exact assigned premise text behind each
+ * passage ID. One note's unusable evidence discards only that note's verdict.
+ * Returns undefined when the submission is not one verdict per judged note.
+ */
+export function sourceVerdictsOf(
   submission: ReturnType<typeof codexSubmission>,
   passages: readonly SourcePassage[],
   assigned: AssignedExternalResults,
 ): z.output<ReturnType<typeof sourceVerdictsFor>> | undefined {
-  const parsed = schema.safeParse(submission?.input);
+  const judged = assigned.map(({ note }) => note);
+  const parsed = sourceVerdictsOver(judged).safeParse(submission?.input);
   if (submission === undefined || !parsed.success) return undefined;
-  const value = canonicalSourceVerdicts(parsed.data, assigned);
-  if (
-    submission.searches === 0 &&
-    value.verdicts.some(({ sources }) =>
-      sources.some(
-        (source) =>
-          !passages.some(({ call: _, note: __, ...passage }) =>
-            isDeepStrictEqual(source, passage),
-          ),
-      ),
-    )
-  )
-    return undefined;
-  return value;
+  return {
+    verdicts: parsed.data.verdicts.map((verdict) => {
+      const { externalResults } = assigned.find(
+        ({ note }) => note === verdict.note,
+      )!;
+      const unusable = (reason: string) =>
+        unusableSourceVerdict(verdict.note, externalResults, reason);
+      if (!sourceVerdictBinds(verdict, assigned))
+        return unusable(
+          "its evidence for this note does not bind to the assigned premises.",
+        );
+      const resultById = new Map(
+        externalResults.map((result) => [externalResultId(result), result]),
+      );
+      const sources = verdict.sources.map((source) => ({
+        ...source,
+        result: resultById.get(source.resultId)!,
+      }));
+      const supplied = (source: (typeof sources)[number]) =>
+        passages.some(({ call: _, note: __, ...passage }) =>
+          isDeepStrictEqual(source, passage),
+        );
+      if (submission.searches === 0 && !sources.every(supplied))
+        return unusable(
+          "it cites a passage for this note that was not supplied, without a search.",
+        );
+      return { ...verdict, externalResults: [...externalResults], sources };
+    }),
+  };
 }
 
 /** Reuse only recorded PASS evidence from completed earlier source calls in this campaign. */
@@ -1154,15 +1160,7 @@ function inspectedPassages(
       note,
       externalResults: externalResults.map(({ text }) => text),
     }));
-    const value = sourceVerdictsOf(
-      sourceVerdictsFor(
-        assigned.map(({ note }) => note),
-        assigned,
-      ),
-      submission,
-      supplied,
-      assigned,
-    );
+    const value = sourceVerdictsOf(submission, supplied, assigned);
     for (const verdict of value?.verdicts ?? []) {
       if (
         verdict.verdict !== "PASS" ||
@@ -1362,24 +1360,13 @@ async function runSource(
   }));
   const read = (call: EntryId) => {
     const records = roleCallRecords(campaign, call);
-    return sourceVerdictsOf(
-      schema,
-      codexSubmission(records, call),
-      passages,
-      assigned,
-    );
+    return sourceVerdictsOf(codexSubmission(records, call), passages, assigned);
   };
-  const inconclusive = (report: string) =>
+  const unusable = (reason: string) =>
     schema.parse({
-      verdicts: judged.map((note) => ({
-        note,
-        verdict: "INCONCLUSIVE",
-        report,
-        externalResults: correctness.verdicts.find(
-          (assessment) => assessment.note === note,
-        )!.externalResults,
-        sources: [],
-      })),
+      verdicts: assigned.map(({ note, externalResults }) =>
+        unusableSourceVerdict(note, externalResults, reason),
+      ),
     });
   const successful = (call: EntryId): boolean => {
     const returned = returnedOutput(roleCallRecords(campaign, call), call);
@@ -1393,15 +1380,11 @@ async function runSource(
   // mathematics: keep the call, record INCONCLUSIVE with the assigned
   // premises unchanged, and admit no returned evidence for reuse.
   const conclude = (call: EntryId) => {
-    const unusable = (reason: string) =>
-      inconclusive(
-        `The source verifier response was not usable: ${reason} No source conclusion was drawn, and its evidence was discarded.`,
-      );
     try {
       return (
         read(call) ??
         unusable(
-          "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search.",
+          "the source verdicts do not match the judged notes or the evidence schema.",
         )
       );
     } catch (error) {
