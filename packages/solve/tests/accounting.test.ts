@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign } from "xean";
+import { createCampaign, type Campaign } from "xean";
 import { derivePiSpend, storePiResult, type PiRunOptions } from "xean/pi";
 
 import { campaignAccounting } from "../accounting";
 import { inspectCampaign } from "../role-cli";
-import { fakePiRequest, fakePiTelemetry } from "./fake-pi";
+import { fakePiRequest, fakePiRequestCheckpoint } from "./fake-pi";
 import { campaignPath, cleanupCampaigns } from "./harness";
 
 afterEach(cleanupCampaigns);
@@ -31,18 +31,31 @@ const options: PiRunOptions = {
   prompt: "Test accounting",
 };
 
-function resultBody(measured: boolean) {
-  const telemetry = structuredClone(fakePiTelemetry(options, "succeeded"));
-  if (measured)
-    Object.assign(telemetry.spans[1]!.attributes, {
-      "pi.ai.usage.input_tokens": 10,
-      "pi.ai.usage.output_tokens": 2,
-      "pi.ai.usage.cache_read_tokens": 0,
-      "pi.ai.usage.cache_write_tokens": 0,
-      "pi.ai.usage.total_tokens": 12,
-      "pi.ai.usage.cost": 0,
-    });
-  return { state: "succeeded", text: "", transcript: [], telemetry } as const;
+const body = { state: "succeeded", text: "", transcript: [] } as const;
+
+async function measuredCall(campaign: Campaign, measured: boolean) {
+  return campaign.call(
+    { label: options.label, request: fakePiRequest(options), tools: [] },
+    async ({ call }) => {
+      await fakePiRequestCheckpoint(
+        campaign,
+        call,
+        options,
+        "succeeded",
+        measured
+          ? {
+              input: 10,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 12,
+              estimatedCostUsd: 0,
+            }
+          : null,
+      );
+      return storePiResult(campaign, { call, ...body });
+    },
+  );
 }
 
 async function records(measured: boolean) {
@@ -50,11 +63,7 @@ async function records(measured: boolean) {
     kind: "calls",
   });
   try {
-    await campaign.call(
-      { label: options.label, request: fakePiRequest(options), tools: [] },
-      async ({ call }) =>
-        storePiResult(campaign, { call, ...resultBody(measured) }),
-    );
+    await measuredCall(campaign, measured);
     return campaign.records();
   } finally {
     campaign.close();
@@ -89,10 +98,7 @@ test("an unsettled call prevents complete accounting even before a usage result"
 test("inspection exposes completeness without modifying the journal", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "xean-solve", { kind: "calls" });
-  await campaign.call(
-    { label: options.label, request: fakePiRequest(options), tools: [] },
-    async ({ call }) => storePiResult(campaign, { call, ...resultBody(false) }),
-  );
+  await measuredCall(campaign, false);
   const spend = derivePiSpend(campaign.records()).summary;
   campaign.close();
   const before = await Bun.file(path).arrayBuffer();

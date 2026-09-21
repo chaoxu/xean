@@ -68,7 +68,7 @@ function turn(index: number, onStarted?: () => Promise<void>): Reply[] {
 function records(path: string) {
   const reader = openReader(path);
   try {
-    return [...reader.records()];
+    return [...reader.records({ excludeLabels: ["xean/pi-request"] })];
   } finally {
     reader.close();
   }

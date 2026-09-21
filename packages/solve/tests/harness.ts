@@ -23,7 +23,7 @@ import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 import type { SolveSettings } from "../pi-roles";
 import type { SolveModels } from "../runtime";
 import type { CodexRequest, CodexResult } from "../source";
-import { fakePiRequest, fakePiTelemetry } from "./fake-pi";
+import { fakePiRequest, fakePiRequestCheckpoint } from "./fake-pi";
 import { codexStdout } from "./fixtures/codex-stdout";
 
 const model = {
@@ -148,7 +148,6 @@ export function dependencies(replies: readonly Reply[]) {
       if (reply.codex !== undefined) {
         throw new Error(`expected a Codex call, got ${options.label}`);
       }
-      expect(options.stopAfterToolResult).toBe(true);
       expect(options.transport).toBe(
         options.model.api === "openai-codex-responses" ? "auto" : "sse",
       );
@@ -196,26 +195,22 @@ async function respond(
   reply: Reply,
 ): Promise<PiResult> {
   const state = reply.state ?? "succeeded";
-  const telemetry = fakePiTelemetry(options, state);
   const body =
     state === "succeeded"
-      ? ({ state, transcript: [], text: "", telemetry } as const)
+      ? ({ state, transcript: [], text: "" } as const)
       : state === "failed"
         ? ({
             state,
             error: reply.error ?? "failed",
             providerRetryable: false,
-            truncated: false,
             transcript: reply.transcript ?? [],
             text: "",
-            telemetry,
           } as const)
         : ({
             state,
             error: reply.error ?? "cancelled",
             transcript: reply.transcript ?? [],
             text: "",
-            telemetry,
           } as const);
   const receipt = await campaign.call(
     {
@@ -228,6 +223,7 @@ async function respond(
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     },
     async ({ call, tools }) => {
+      await fakePiRequestCheckpoint(campaign, call, options, state);
       if (reply.onStarted !== undefined) await reply.onStarted(tools);
       if (reply.submission !== undefined) {
         await tools[0]!.execute(reply.submission);

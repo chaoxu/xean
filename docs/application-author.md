@@ -64,7 +64,6 @@ try {
       "Audit the candidate adversarially. Call submit_verdict exactly once with the reason in evidence, then stop.",
     prompt: stored,
     tools: [submitVerdict],
-    stopAfterToolResult: true,
   });
   if (audit.state !== "succeeded") throw new Error(audit.error);
   const submitted = returnedToolSubmission(
@@ -91,9 +90,7 @@ Put the current task, changing guidance, and correction requests in `prompt`, wh
 
 Use that structured path for an LLM verifier. An application-owned deterministic verifier adapter instead runs through `campaign.call`, validates its typed receipt, and applies one fixed mapping from that receipt to the verdict passed to `recordVerdict`. xean preserves the mapping's input and output; it does not establish that the verifier is sound. Never translate free-form model text into an application-selected verdict.
 
-Use `stopAfterToolResult` when the verdict-submission tool is the call's only tool. Gather source inspections or other observations in earlier calls so finalization has one unambiguous submission.
-
-For a call with `submissionGate`, `runPi` infers `stopAfterToolResult: true` when omitted. The gate decides which valid submission ends the call, and the normalized journal request still records `stopAfterToolResult: true`.
+A successful tool batch ends the call, so keep the verdict-submission tool as the call's only tool. Gather source inspections or other observations in earlier calls so finalization has one unambiguous submission. With `submissionGate`, the gate decides which valid submission ends the call.
 
 The candidate envelope is application-owned. Include every fact that must be audited together: statement revision, answer or proof, cited sources, imported assumptions, and dependency versions. `deriveCandidateStatus(records, candidate).verified` is derived from the supplied log snapshot; xean stores no promotion event. Publishing or adopting a verified candidate belongs to the application.
 
@@ -131,7 +128,6 @@ const inspection = await runPi(campaign, {
     "Inspect one attached source. Call inspect_source exactly once, then stop.",
   prompt: stored,
   tools: [inspectSource],
-  stopAfterToolResult: true,
 });
 if (inspection.state !== "succeeded") throw new Error(inspection.error);
 const sourceInspection = inspectedSource.parse(
@@ -151,7 +147,6 @@ const audit = await runPi(campaign, {
     "Audit the candidate and source-inspection result. Call submit_verdict exactly once, then stop.",
   prompt: JSON.stringify({ stored, sourceInspection }),
   tools: [submitVerdict],
-  stopAfterToolResult: true,
 });
 ```
 
@@ -161,7 +156,7 @@ Tools should express one bounded application action. Suitable proof-search tools
 
 `piRequestAttempts(campaign.records(), call)` returns compact request identities and completion states. Pass the campaign or a reader as the third argument to expand the JSON-semantic full request payloads, which may contain complete prompts and attached sources. Pi may send a cached WebSocket continuation as a response ID plus new items. Each completed checkpoint has a durable terminal measurement even when the outer call never settled; missing provider usage remains unknown. Built-in adapters omit credentials and HTTP headers; custom adapters must do the same and invoke the hook exactly once before dispatch. See [`../SPEC.md`](../SPEC.md#pi-runner) for the checkpoint contract.
 
-`runPi` returns the full result with text and transcript. Its journal output is a compact `piResultRecord` with `textRef` and `transcriptRef` payload digests, outcome, telemetry, and assistant usage. Use `readPiResult(output, reader)` to reconstruct and validate the full saved result. Applications can use `storePiResult(campaign, result)` to create the same compact representation. Summaries and accounting validate metadata without loading attachment bytes. Full result reads and full core inspection reject missing or corrupt attachments.
+`runPi` returns the full result with text and transcript. Its journal output is a compact `piResultRecord` with `textRef` and `transcriptRef` payload digests, outcome, and assistant usage. Use `readPiResult(output, reader)` to reconstruct and validate the full saved result. Applications can use `storePiResult(campaign, result)` to create the same compact representation. Summaries and accounting validate metadata without loading attachment bytes. Full result reads and full core inspection reject missing or corrupt attachments.
 
 The campaign artifact stores candidate bytes, requests, prompts, transcripts, tool inputs and results, verdict evidence, and pre-send payloads as plaintext. Treat it as sensitive application data. Built-in Pi adapters exclude authentication credentials; a custom adapter must preserve that boundary.
 
@@ -169,7 +164,7 @@ The campaign artifact stores candidate bytes, requests, prompts, transcripts, to
 
 `derivePiSpend(records)` returns settled provider operations, per-call and campaign totals, unaccounted Pi calls, and redacted unsettled request checkpoints that may represent unknown spend. Completed request measurements remain available after a later interruption or failure of their outer call. Provider-reported token buckets and estimated cost remain separate; missing usage is `null`, not zero. It reads one record snapshot and writes nothing.
 
-`inspectCoreCampaign` separates `spend.requests.first` from `spend.requests.continuation`, with `cachedInputShare` when measured input is available. `spend.recoveredRequestErrors` counts provider errors inside Pi calls that ultimately succeeded. Full call observations include `pi.accounting.recoveredErrors`, with the one-based request position and available saved error name and message. A healthy final call can contain recovered errors. Missing request usage remains unknown in both partitions.
+`inspectCoreCampaign` separates `spend.requests.first` from `spend.requests.continuation`, with `cachedInputShare` when measured input is available. `spend.recoveredRequestErrors` counts provider errors inside Pi calls that ultimately succeeded. Full call observations include `pi.accounting.recoveredErrors`, with the one-based request position, stop reason, and available error message. A healthy final call can contain recovered errors. Missing request usage remains unknown in both partitions.
 
 For per-call analysis, use `inspectCoreCallSummaries(records)` from `xean/observe`. It returns timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from the same captured entry array, without loading response or transcript attachments or candidate material. Use `inspectCoreCampaignRecords(reader, records)` for full content and attachment integrity checks. These generic facts support `xean-solve`'s mathematical workflow, `xean-lab`'s experiments and provenance, and `xean-observe`'s HTTP, caching, and rendering.
 
@@ -179,7 +174,7 @@ Use `openCampaign(path)` only after the prior writer has terminated or closed, t
 
 A `runPi` result that is still length-truncated after its bounded in-call recoveries is a dead end. Preserve it and start a fresh `runPi` call from explicit application state; a fresh model, profile, prompt, or context policy likewise starts another root call.
 
-Set `maxRecoveries` to allow bounded retries of transient provider failures. `maxLengthContinuations` separately bounds ordinary response-length continuations. Each allowance defaults to zero when omitted. The failure count resets after a successful response. Every retryable provider failure, including `incomplete.max_messages` with new completed reasoning, consumes the error allowance. Valid completed reasoning is preserved for an admitted retry; remaining context is also required. Successful empty submissions are not provider errors. For the OpenAI Responses and Codex Responses adapters, xean carries completed encrypted reasoning items into the retry through Pi's serializer. Completion means Pi emitted `thinking_end` for a validated signed reasoning item, not merely a text delta or a finished summary. Failed attempts remain errors in the transcript and telemetry. Their text and tool calls stay out of model input and tool execution. Check `piRequestAttempts(records, call, reader)` to inspect the IDs and encrypted content supplied on each retry. This works within one live call, with compatible authentication, routing, and an endpoint that accepts reasoning-only replay. It does not recover unfinished items or survive a process restart. Treat encrypted reasoning and request checkpoints as sensitive campaign data, and treat missing usage on failed attempts as unknown spend. The [Pi runner contract](../SPEC.md#pi-runner) defines recovery admission and retry limits. Pass `replayReasoning: false` to keep completed reasoning out of every later model input in the call, including recoveries; the transcript and request checkpoints still record it, and the stored request carries the setting.
+Set `maxRecoveries` to allow bounded retries of transient provider failures. `maxLengthContinuations` separately bounds ordinary response-length continuations. Each allowance defaults to zero when omitted. The failure count resets after a successful response. Every retryable provider failure, including `incomplete.max_messages` with new completed reasoning, consumes the error allowance. Valid completed reasoning is preserved for an admitted retry; remaining context is also required. Successful empty submissions are not provider errors. For the OpenAI Responses and Codex Responses adapters, xean carries completed encrypted reasoning items into the retry through Pi's serializer. Completion means Pi emitted `thinking_end` for a validated signed reasoning item, not merely a text delta or a finished summary. Failed attempts remain errors in the transcript and request completions. Their text and tool calls stay out of model input and tool execution. Check `piRequestAttempts(records, call, reader)` to inspect the IDs and encrypted content supplied on each retry. This works within one live call, with compatible authentication, routing, and an endpoint that accepts reasoning-only replay. It does not recover unfinished items or survive a process restart. Treat encrypted reasoning and request checkpoints as sensitive campaign data, and treat missing usage on failed attempts as unknown spend. The [Pi runner contract](../SPEC.md#pi-runner) defines recovery admission and retry limits. Pass `replayReasoning: false` to keep completed reasoning out of every later model input in the call, including recoveries; the transcript and request checkpoints still record it, and the stored request carries the setting.
 
 `runPi` writes through the supplied `Campaign.call` interface. A decorator around that interface is trusted application code and may observe or alter execution; the kernel does not claim an intra-process security boundary against its caller.
 

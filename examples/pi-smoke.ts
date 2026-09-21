@@ -51,7 +51,6 @@ try {
     prompt: stored,
     candidate,
     tools: [submitVerdict],
-    stopAfterToolResult: true,
   });
   if (audit.state !== "succeeded") throw new Error(audit.error);
   const submitted = returnedToolSubmission(

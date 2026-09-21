@@ -3,6 +3,7 @@ import {
   derivePiCallOperations,
   piRequest,
   piRequestAttempts,
+  piRequestCompletion,
   piResultRecord,
   readPiResult,
   summarizePiSpend,
@@ -47,8 +48,8 @@ export type PiRequestPhaseSpendV1 = PiSpendSummary & {
 export interface PiRecoveredErrorObservationV1 {
   /** One-based provider request position within the logical Pi call. */
   readonly request: number;
-  readonly name?: string;
-  readonly message?: string;
+  readonly stopReason?: PiSpendOperation["stopReason"];
+  readonly errorMessage?: string;
 }
 
 export interface CoreCampaignObservationV1 {
@@ -287,21 +288,26 @@ function requestPhaseSpend(
 }
 
 function recoveredErrors(
-  stored: z.output<typeof piResultRecord>,
+  attempts: readonly PiRequestAttempt[],
+  results: ReadonlyMap<EntryId, CallResultEntry>,
 ): readonly PiRecoveredErrorObservationV1[] {
-  if (stored.state !== "succeeded") return [];
-  const root = stored.telemetry.spans.find(
-    ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
-  );
-  return stored.telemetry.spans
-    .filter(
-      ({ name, parentId }) => name === "pi.ai.request" && parentId === root?.id,
-    )
-    .flatMap(({ status }, index) =>
-      status.status === "error"
-        ? [{ request: index + 1, ...status.error }]
-        : [],
+  return attempts.flatMap((attempt, index) => {
+    const completion = results.get(attempt.call);
+    if (completion?.state !== "returned") return [];
+    const { operation, errorMessage } = piRequestCompletion.parse(
+      completion.output,
     );
+    if (!operation.error) return [];
+    return [
+      {
+        request: index + 1,
+        ...(operation.stopReason === undefined
+          ? {}
+          : { stopReason: operation.stopReason }),
+        ...(errorMessage === undefined ? {} : { errorMessage }),
+      },
+    ];
+  });
 }
 
 export function inspectCoreCampaign(path: string): CoreCampaignObservationV1 {
@@ -479,10 +485,10 @@ function indexAccounting(index: RecordIndex): AccountingIndex {
           ? piResultRecord.parse(result.output)
           : undefined;
       if (stored !== undefined) storedResults.set(call.seq, stored);
+      const attempts = index.attemptsByParent.get(call.seq) ?? [];
       const operations = derivePiCallOperations(
         call.seq,
-        stored,
-        index.attemptsByParent.get(call.seq) ?? [],
+        attempts,
         index.results,
       );
       if (operations.length === 0 && stored === undefined) {
@@ -490,7 +496,10 @@ function indexAccounting(index: RecordIndex): AccountingIndex {
         continue;
       }
       const spend = summarizePiSpend(operations);
-      const recovered = stored === undefined ? [] : recoveredErrors(stored);
+      const recovered =
+        stored?.state === "succeeded"
+          ? recoveredErrors(attempts, index.results)
+          : [];
       const assistantUsage = stored?.assistantUsage ?? [];
       const first = operations.slice(0, 1);
       const continuation = operations.slice(1);

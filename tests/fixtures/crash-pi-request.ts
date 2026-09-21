@@ -83,7 +83,7 @@ await runPi(campaign, {
             input: z.strictObject({}),
             replay: "safe",
             async run() {
-              return null;
+              throw new Error("ping failed");
             },
           }),
         ],

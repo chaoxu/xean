@@ -16,11 +16,7 @@ import {
   inspectCoreCampaignSummaryRecords,
   inspectCoreCallSummaries,
 } from "../src/observe";
-import {
-  PI_TELEMETRY_SCHEMA_VERSIONS,
-  piStoredResult,
-  storePiResult,
-} from "../src/pi";
+import { piStoredResult, storePiResult } from "../src/pi";
 
 const directories: string[] = [];
 
@@ -38,60 +34,65 @@ function campaignPath(): string {
 
 function piRequest() {
   return {
-    protocol: "xean/pi-run/v1" as const,
+    protocol: "xean/pi-run/v2" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",
   };
 }
 
-function piResult(
+interface Operation {
+  readonly usage?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly reasoning?: number;
+    readonly totalTokens: number;
+    readonly estimatedCostUsd: number;
+  };
+  readonly error?: string;
+}
+
+/** Append one completed request checkpoint per operation, then the compact result. */
+async function piResult(
   campaign: Campaign,
   call: EntryId,
-  attributes: Record<string, string | number | boolean>,
+  operations: readonly Operation[],
   transcript: readonly unknown[] = [],
-  additionalOperations: readonly Record<
-    string,
-    string | number | boolean
-  >[] = [],
-  errors: readonly (string | undefined)[] = [],
 ) {
+  const model = piRequest().model;
+  for (const operation of operations) {
+    await campaign.call(
+      {
+        label: "xean/pi-request",
+        request: {
+          protocol: "xean/pi-request/v1",
+          parent: call,
+          model,
+          payloadRef: campaign.storePayload({ input: [] }),
+        },
+      },
+      async () => ({
+        protocol: "xean/pi-request-completion/v1",
+        parent: call,
+        operation: {
+          provider: model.provider,
+          requestedModel: model.id,
+          api: model.api,
+          stopReason: operation.error === undefined ? "stop" : "error",
+          error: operation.error !== undefined,
+          usage: operation.usage ?? null,
+        },
+        ...(operation.error === undefined
+          ? {}
+          : { errorMessage: operation.error }),
+      }),
+    );
+  }
   return storePiResult(campaign, {
     call,
-    ...piStoredResult.parse({
-      state: "succeeded" as const,
-      text: "done",
-      transcript,
-      telemetry: {
-        schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
-        spans: [
-          {
-            id: 1,
-            parentId: null,
-            name: "xean.pi.run",
-            attributes: {},
-            events: [],
-            status: { status: "ok" as const },
-            settled: true,
-          },
-          ...[attributes, ...additionalOperations].map((operation, at) => ({
-            id: at + 2,
-            parentId: 1,
-            name: "pi.ai.request",
-            attributes: operation,
-            events: [],
-            status:
-              errors[at] === undefined
-                ? { status: "ok" as const }
-                : {
-                    status: "error" as const,
-                    error: { name: "ProviderError", message: errors[at] },
-                  },
-            settled: true,
-          })),
-        ],
-      },
-    }),
+    ...piStoredResult.parse({ state: "succeeded", text: "done", transcript }),
   });
 }
 
@@ -112,7 +113,7 @@ test("call summaries preserve full metadata at the captured boundary", async () 
     await campaign.call(
       { label: "measured", role: "explorer", request: piRequest() },
       async ({ call }) =>
-        piResult(campaign, call, attributes(firstUsage), [message(firstUsage)]),
+        piResult(campaign, call, [measured(firstUsage)], [message(firstUsage)]),
     );
     await expect(
       campaign.call({ label: "failed-local", request: null }, async () => {
@@ -144,17 +145,16 @@ const secondUsage = {
   totalTokens: 5,
   cost: { input: 0, output: 10, cacheRead: 0, cacheWrite: 0, total: 10 },
 };
-const attributes = (usage: typeof firstUsage) => ({
-  "pi.ai.provider": "provider",
-  "pi.ai.model": "model",
-  "pi.ai.api": "responses",
-  "pi.ai.usage.input_tokens": usage.input,
-  "pi.ai.usage.output_tokens": usage.output,
-  "pi.ai.usage.cache_read_tokens": usage.cacheRead,
-  "pi.ai.usage.cache_write_tokens": usage.cacheWrite,
-  "pi.ai.usage.reasoning_tokens": usage.reasoning,
-  "pi.ai.usage.total_tokens": usage.totalTokens,
-  "pi.ai.usage.cost": usage.cost.total,
+const measured = (usage: typeof firstUsage) => ({
+  usage: {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    reasoning: usage.reasoning,
+    totalTokens: usage.totalTokens,
+    estimatedCostUsd: usage.cost.total,
+  },
 });
 const message = (usage: typeof firstUsage) => ({ role: "assistant", usage });
 
@@ -168,9 +168,8 @@ test("derives token buckets and prices reasoning per response", async () => {
         piResult(
           campaign,
           call,
-          attributes(firstUsage),
+          [measured(firstUsage), measured(secondUsage)],
           [message(firstUsage), message(secondUsage)],
-          [attributes(secondUsage)],
         ),
     );
   } finally {
@@ -204,9 +203,8 @@ test("omits reasoning cost when measured retry usage is absent from transcript",
         piResult(
           campaign,
           call,
-          attributes(firstUsage),
+          [measured(firstUsage), measured(secondUsage)],
           [message(firstUsage)],
-          [attributes(secondUsage)],
         ),
     );
   } finally {
@@ -439,73 +437,55 @@ test("summarizes without response, evidence, operation, or material payloads", a
   expect(summary).not.toHaveProperty("applicationConfig");
 });
 
-test.each(["schema", "checkpoint"] as const)(
-  "keeps understood spend when another Pi %s is unsupported",
-  async (unsupported) => {
-    const path = campaignPath();
-    const campaign = createCampaign(path, "changing-workflow", null);
-    try {
-      await campaign.call(
-        { label: "workflow/measured", request: piRequest() },
-        async ({ call }) =>
-          piResult(campaign, call, {
-            "pi.ai.provider": "provider",
-            "pi.ai.model": "model",
-            "pi.ai.api": "responses",
-            "pi.ai.usage.input_tokens": 8,
-            "pi.ai.usage.output_tokens": 5,
-            "pi.ai.usage.cache_read_tokens": 2,
-            "pi.ai.usage.cache_write_tokens": 0,
-            "pi.ai.usage.total_tokens": 13,
-            "pi.ai.usage.cost": 0.25,
-          }),
-      );
-      await campaign.call(
-        { label: "workflow/future", request: piRequest() },
-        async ({ call }) =>
-          unsupported === "schema"
-            ? {
-                state: "succeeded",
-                text: "done",
-                transcript: [],
-                telemetry: { schemaVersions: { future: 1 }, spans: [] },
-              }
-            : piResult(campaign, call, {
-                ...attributes(firstUsage),
-                "xean.pi.request.checkpoint": 999,
-              }),
-      );
-    } finally {
-      campaign.close();
-    }
+test("keeps understood spend when another Pi result is unsupported", async () => {
+  const path = campaignPath();
+  const campaign = createCampaign(path, "changing-workflow", null);
+  try {
+    await campaign.call(
+      { label: "workflow/measured", request: piRequest() },
+      async ({ call }) =>
+        piResult(campaign, call, [
+          {
+            usage: {
+              input: 8,
+              output: 5,
+              cacheRead: 2,
+              cacheWrite: 0,
+              totalTokens: 13,
+              estimatedCostUsd: 0.25,
+            },
+          },
+        ]),
+    );
+    await campaign.call(
+      { label: "workflow/future", request: piRequest() },
+      async () => ({ state: "succeeded", text: "done", transcript: [] }),
+    );
+  } finally {
+    campaign.close();
+  }
 
-    const observation = inspectCoreCampaign(path);
-    expect(observation.calls.map((call) => call.pi?.accounting.state)).toEqual([
-      "available",
-      "unsupported",
-    ]);
-    if (unsupported === "checkpoint")
-      expect(observation.calls[1]?.pi).toMatchObject({
-        outcome: "succeeded",
-        responseText: "done",
-      });
-    expect(observation.spend).toMatchObject({
-      logicalProviderRequests: 1,
-      requestErrors: 0,
-      unmeasuredRequests: 0,
-      measuredUsage: {
-        input: 8,
-        output: 5,
-        cacheRead: 2,
-        cacheWrite: 0,
-        totalTokens: 13,
-        estimatedCostUsd: 0.25,
-      },
-      unsupportedCalls: [4],
-      unaccountedCalls: [],
-    });
-  },
-);
+  const observation = inspectCoreCampaign(path);
+  expect(observation.calls.map((call) => call.pi?.accounting.state)).toEqual([
+    "available",
+    "unsupported",
+  ]);
+  expect(observation.spend).toMatchObject({
+    logicalProviderRequests: 1,
+    requestErrors: 0,
+    unmeasuredRequests: 0,
+    measuredUsage: {
+      input: 8,
+      output: 5,
+      cacheRead: 2,
+      cacheWrite: 0,
+      totalTokens: 13,
+      estimatedCostUsd: 0.25,
+    },
+    unsupportedCalls: [6],
+    unaccountedCalls: [],
+  });
+});
 
 test("reports missing usage as unmeasured instead of zero", async () => {
   const path = campaignPath();
@@ -513,12 +493,7 @@ test("reports missing usage as unmeasured instead of zero", async () => {
   try {
     await campaign.call(
       { label: "workflow/unmeasured", request: piRequest() },
-      async ({ call }) =>
-        piResult(campaign, call, {
-          "pi.ai.provider": "provider",
-          "pi.ai.model": "model",
-          "pi.ai.api": "responses",
-        }),
+      async ({ call }) => piResult(campaign, call, [{}]),
     );
   } finally {
     campaign.close();
@@ -533,7 +508,7 @@ test("reports missing usage as unmeasured instead of zero", async () => {
   });
 });
 
-test("distinguishes an unsettled Pi call from unsupported telemetry", async () => {
+test("reports an unsettled Pi call as unaccounted", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "changing-workflow", null);
   let finish!: () => void;
@@ -565,12 +540,6 @@ test.each([
 ])("separates fresh-call cache coverage from recovered %s", async (failure) => {
   const path = campaignPath();
   const campaign = createCampaign(path, "recovered-workflow", null);
-  const unmeasured = {
-    "pi.ai.provider": "provider",
-    "pi.ai.model": "model",
-    "pi.ai.api": "responses",
-    "pi.ai.response.stop_reason": "error",
-  };
   const cached = {
     input: 1,
     output: 5,
@@ -599,18 +568,11 @@ test.each([
     await campaign.call(
       { label: "workflow/recovered", request: piRequest() },
       async ({ call }) =>
-        piResult(
-          campaign,
-          call,
-          unmeasured,
-          [],
-          [attributes(cached)],
-          [failure],
-        ),
+        piResult(campaign, call, [{ error: failure }, measured(cached)]),
     );
     await campaign.call(
       { label: "workflow/fresh", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, attributes(fresh)),
+      async ({ call }) => piResult(campaign, call, [measured(fresh)]),
     );
   } finally {
     campaign.close();
@@ -621,7 +583,9 @@ test.each([
   expect(recovered?.outcome).toBe("succeeded");
   expect(recovered?.accounting).toMatchObject({
     state: "available",
-    recoveredErrors: [{ request: 1, name: "ProviderError", message: failure }],
+    recoveredErrors: [
+      { request: 1, stopReason: "error", errorMessage: failure },
+    ],
     spend: {
       recoveredRequestErrors: 1,
       requests: {
@@ -671,31 +635,18 @@ test.each([
 test("keeps terminal provider failures separate from recovered errors", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "failed-workflow", null);
-  const unmeasured = {
-    "pi.ai.provider": "provider",
-    "pi.ai.model": "model",
-    "pi.ai.api": "responses",
-    "pi.ai.response.stop_reason": "error",
-  };
+  const failure = "Response incomplete: max_messages";
   try {
     await campaign.call(
       { label: "workflow/failed", request: piRequest() },
       async ({ call }) => ({
-        ...piResult(
-          campaign,
-          call,
-          unmeasured,
-          [],
-          [unmeasured],
-          [
-            "Response incomplete: max_messages",
-            "Response incomplete: max_messages",
-          ],
-        ),
+        ...(await piResult(campaign, call, [
+          { error: failure },
+          { error: failure },
+        ])),
         state: "failed" as const,
-        error: "Response incomplete: max_messages",
+        error: failure,
         providerRetryable: true,
-        truncated: false,
       }),
     );
   } finally {
@@ -739,7 +690,7 @@ test("keeps measured zero usage distinct from missing usage in each request phas
   try {
     await campaign.call(
       { label: "workflow/zero", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, attributes(zero)),
+      async ({ call }) => piResult(campaign, call, [measured(zero)]),
     );
   } finally {
     campaign.close();
@@ -780,7 +731,7 @@ test("cache-read share counts fresh tokens and cache writes in the prompt denomi
   try {
     await campaign.call(
       { label: "workflow/cache-write", request: piRequest() },
-      async ({ call }) => piResult(campaign, call, attributes(usage)),
+      async ({ call }) => piResult(campaign, call, [measured(usage)]),
     );
   } finally {
     campaign.close();
@@ -807,9 +758,12 @@ test.each([
       const receipt = await campaign.call(
         { label: "measured", request: piRequest() },
         async ({ call }) =>
-          piResult(campaign, call, attributes(firstUsage), [
-            message(firstUsage),
-          ]),
+          piResult(
+            campaign,
+            call,
+            [measured(firstUsage)],
+            [message(firstUsage)],
+          ),
       );
       const records = campaign.records();
       const summary = inspectCoreCampaignSummaryRecords(records);
@@ -864,10 +818,12 @@ test.each([
       await campaign.call(
         { label: "measured", request: piRequest() },
         async ({ call }) =>
-          piResult(campaign, call, attributes(firstUsage), [
-            message(firstUsage),
-            invalid,
-          ]),
+          piResult(
+            campaign,
+            call,
+            [measured(firstUsage)],
+            [message(firstUsage), invalid],
+          ),
       );
       const records = campaign.records();
       const full = inspectCoreCampaignRecords(campaign, records);

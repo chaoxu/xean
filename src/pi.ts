@@ -1,10 +1,5 @@
 import {
-  AI_TELEMETRY_SCHEMA,
   convertToLlm,
-  createTypedSpanStarter,
-  defineTelemetrySchema,
-  InMemoryTelemetryContext,
-  NOOP_TELEMETRY_CONTEXT,
   runAgentLoop,
   type AgentMessage,
   type AgentContext,
@@ -80,7 +75,6 @@ export interface PiRunOptions {
   readonly reasoning?: ThinkingLevel;
   readonly candidate?: EntryId;
   readonly tools?: readonly Tool[];
-  readonly stopAfterToolResult?: true;
   /** Retryable provider errors; independent of output-length continuations. */
   readonly maxRecoveries?: number;
   /** Ordinary output-length continuations; omitted means no continuations. */
@@ -105,129 +99,11 @@ type PiOutcome = PiOutcomeBase &
         readonly state: "failed";
         readonly error: string;
         readonly providerRetryable: boolean;
-        readonly truncated: boolean;
       }
     | { readonly state: "cancelled"; readonly error: string }
   );
 
-type PiResultBody = PiOutcome & { readonly telemetry: PiTelemetry };
-
-export type PiResult = PiResultBody & { readonly call: EntryId };
-
-export const XEAN_PI_TELEMETRY_SCHEMA = defineTelemetrySchema({
-  version: 1,
-  spans: {
-    "xean.pi.run": {
-      description: "One Pi agent loop inside a Xean logical call.",
-      parents: { kind: "root_or_external" },
-      startAttributes: {
-        "xean.call.label": {
-          type: "string",
-          required: true,
-          cardinality: "high",
-          description: "Application-defined reason for the call.",
-        },
-        "xean.candidate": {
-          type: "number",
-          required: false,
-          cardinality: "high",
-          description: "Candidate sequence when the call evaluates one.",
-        },
-        "xean.pi.reasoning.requested": {
-          type: "string",
-          required: false,
-          values: reasoningLevels,
-          cardinality: "low",
-          description:
-            "Pi reasoning level requested for every turn in the loop.",
-        },
-      },
-      endAttributes: {
-        "xean.pi.outcome": {
-          type: "string",
-          values: ["succeeded", "failed", "cancelled"],
-          cardinality: "low",
-          description: "Normalized result of the complete Pi loop.",
-        },
-      },
-      events: {},
-      status: {
-        default: "ok",
-        errorWhen: "The loop fails, is cancelled, or throws.",
-      },
-    },
-  },
-} as const);
-
-export const PI_TELEMETRY_SCHEMA_VERSIONS = {
-  "xean.pi": XEAN_PI_TELEMETRY_SCHEMA.version,
-  "pi.ai": AI_TELEMETRY_SCHEMA.version,
-} as const;
-
-const PI_REQUEST_TELEMETRY_SCHEMA = defineTelemetrySchema({
-  ...AI_TELEMETRY_SCHEMA,
-  spans: {
-    "pi.ai.request": {
-      ...AI_TELEMETRY_SCHEMA.spans["pi.ai.request"],
-      endAttributes: {
-        ...AI_TELEMETRY_SCHEMA.spans["pi.ai.request"].endAttributes,
-        "xean.pi.request.checkpoint": {
-          type: "number",
-          description:
-            "Durable request call whose result owns this measurement.",
-        },
-      },
-    },
-  },
-} as const);
-
-const telemetryAttribute = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.array(z.string()).readonly(),
-  z.array(z.number()).readonly(),
-  z.array(z.boolean()).readonly(),
-  z.undefined(),
-]);
-const telemetryAttributes = z.record(z.string(), telemetryAttribute).readonly();
-const telemetryStatus = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("ok") }),
-  z.strictObject({
-    status: z.literal("error"),
-    error: z.strictObject({ name: z.string(), message: z.string() }).optional(),
-  }),
-]);
-const telemetrySpan = z
-  .strictObject({
-    id: z.number().int().positive(),
-    parentId: z.number().int().positive().nullable(),
-    name: z.string(),
-    attributes: telemetryAttributes,
-    events: z
-      .array(
-        z.strictObject({ name: z.string(), attributes: telemetryAttributes }),
-      )
-      .readonly(),
-    status: telemetryStatus,
-    settled: z.boolean(),
-    endSequence: z.number().int().positive().optional(),
-  })
-  .readonly();
-
-export const piTelemetry = z
-  .strictObject({
-    schemaVersions: z
-      .strictObject({
-        "xean.pi": z.literal(PI_TELEMETRY_SCHEMA_VERSIONS["xean.pi"]),
-        "pi.ai": z.literal(PI_TELEMETRY_SCHEMA_VERSIONS["pi.ai"]),
-      })
-      .readonly(),
-    spans: z.array(telemetrySpan).readonly(),
-  })
-  .readonly();
-
-export type PiTelemetry = z.output<typeof piTelemetry>;
+export type PiResult = PiOutcome & { readonly call: EntryId };
 
 const piModel = z.strictObject({
   provider: z.string().min(1),
@@ -257,13 +133,12 @@ function modelProfile(model: Model<Api>): Json {
 }
 
 export const piRequest = z.strictObject({
-  protocol: z.literal("xean/pi-run/v1"),
+  protocol: z.literal("xean/pi-run/v2"),
   model: piModel,
   modelProfile: json,
   system: z.string().optional(),
   prompt: z.string(),
   reasoning: piReasoning.optional(),
-  stopAfterToolResult: z.literal(true).optional(),
   maxRecoveries: z.number().int().min(1).max(31).optional(),
   maxLengthContinuations: z.number().int().min(1).max(31).optional(),
   submissionGate: piSubmissionGate.optional(),
@@ -413,7 +288,6 @@ function resultSchema<T extends z.ZodRawShape>(fields: T) {
       state: z.literal("failed"),
       error: z.string(),
       providerRetryable: z.boolean(),
-      truncated: z.boolean(),
     }),
     z.strictObject({
       ...fields,
@@ -426,14 +300,12 @@ function resultSchema<T extends z.ZodRawShape>(fields: T) {
 export const piStoredResult = resultSchema({
   transcript: z.array(json).readonly(),
   text: z.string(),
-  telemetry: piTelemetry,
 });
 
 export const piResultRecord = resultSchema({
   call: entryId,
   textRef: z.string().regex(/^[a-f0-9]{64}$/),
   transcriptRef: z.string().regex(/^[a-f0-9]{64}$/),
-  telemetry: piTelemetry,
   assistantUsage: z.array(assistantUsageRecord.nullable()).readonly(),
 });
 
@@ -493,45 +365,6 @@ const stopReason = z.enum([
   "aborted",
   "deferred",
 ]);
-const requestAttributes = z.object({
-  "pi.ai.provider": z.string().min(1),
-  "pi.ai.model": z.string().min(1),
-  "pi.ai.api": z.string().min(1),
-  "pi.ai.response.model": z.string().min(1).optional(),
-  "pi.ai.response.stop_reason": stopReason.optional(),
-});
-const usageAttributes = z
-  .object({
-    "pi.ai.usage.input_tokens": nonnegative,
-    "pi.ai.usage.output_tokens": nonnegative,
-    "pi.ai.usage.cache_read_tokens": nonnegative,
-    "pi.ai.usage.cache_write_tokens": nonnegative,
-    "pi.ai.usage.total_tokens": nonnegative,
-    "pi.ai.usage.cost": nonnegative,
-    "pi.ai.usage.reasoning_tokens": nonnegative.optional(),
-  })
-  .transform((usage) => ({
-    input: usage["pi.ai.usage.input_tokens"],
-    output: usage["pi.ai.usage.output_tokens"],
-    cacheRead: usage["pi.ai.usage.cache_read_tokens"],
-    cacheWrite: usage["pi.ai.usage.cache_write_tokens"],
-    totalTokens: usage["pi.ai.usage.total_tokens"],
-    estimatedCostUsd: usage["pi.ai.usage.cost"],
-    ...(usage["pi.ai.usage.reasoning_tokens"] === undefined
-      ? {}
-      : { reasoning: usage["pi.ai.usage.reasoning_tokens"] }),
-  }));
-const usageKeys = [
-  "pi.ai.usage.input_tokens",
-  "pi.ai.usage.output_tokens",
-  "pi.ai.usage.cache_read_tokens",
-  "pi.ai.usage.cache_write_tokens",
-  "pi.ai.usage.total_tokens",
-  "pi.ai.usage.cost",
-] as const;
-
-export type PiMeasuredUsage = z.output<typeof usageAttributes>;
-
 export type PiSpendOperation = Readonly<
   z.output<typeof piRequestCompletion>["operation"]
 >;
@@ -550,6 +383,8 @@ const measuredUsageValue = z
     ...usage,
     ...(reasoning === undefined ? {} : { reasoning }),
   }));
+
+export type PiMeasuredUsage = z.output<typeof measuredUsageValue>;
 
 /** The durable terminal measurement for one provider request. */
 export const piRequestCompletion = z.strictObject({
@@ -616,7 +451,7 @@ function requestCompletion(
         ? {}
         : { servedModel: final.responseModel }),
       api: model.api,
-      stopReason: telemetryStopReason(final.stopReason),
+      stopReason: completionStopReason(final.stopReason),
       error: final.stopReason === "error" || final.stopReason === "aborted",
       usage: assistantUsage(final),
     },
@@ -628,18 +463,6 @@ function requestCompletion(
       ? {}
       : { errorMessage: final.errorMessage }),
   });
-}
-
-function measuredUsage(
-  attributes: Record<string, unknown>,
-): PiMeasuredUsage | null {
-  const present = usageKeys.filter((key) => attributes[key] !== undefined);
-  const reasoning = attributes["pi.ai.usage.reasoning_tokens"] !== undefined;
-  if (present.length === 0 && !reasoning) return null;
-  if (present.length !== usageKeys.length) {
-    throw new Error("partial Pi usage measurement");
-  }
-  return usageAttributes.parse(attributes);
 }
 
 export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
@@ -680,17 +503,15 @@ export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
 
 export type PiSpendSummary = ReturnType<typeof summarizePiSpend>;
 
-/** @internal Reconcile one call against the caller's captured journal indexes. */
+/** @internal One completed request checkpoint is one operation. */
 export function derivePiCallOperations(
   call: EntryId,
-  stored: z.output<typeof piResultRecord> | undefined,
   attempts: readonly PiRequestAttempt[],
   results: ReadonlyMap<EntryId, Extract<Entry, { kind: "call-result" }>>,
 ): PiSpendOperation[] {
-  const durable = new Map<EntryId, PiSpendOperation>();
-  for (const attempt of attempts) {
+  return attempts.flatMap((attempt) => {
     const completion = results.get(attempt.call);
-    if (completion?.state !== "returned") continue;
+    if (completion?.state !== "returned") return [];
     const value = piRequestCompletion.parse(completion.output);
     if (
       value.parent !== call ||
@@ -699,54 +520,8 @@ export function derivePiCallOperations(
       value.operation.api !== attempt.model.api
     )
       throw new Error("invalid Pi request completion " + attempt.call);
-    durable.set(attempt.call, value.operation);
-  }
-  if (stored === undefined) return [...durable.values()];
-  if (stored.call !== call) throw new Error("invalid Pi result owner " + call);
-  const { spans } = stored.telemetry;
-  if (new Set(spans.map(({ id }) => id)).size !== spans.length)
-    throw new Error("duplicate Pi telemetry span in call " + call);
-  const roots = spans.filter(
-    ({ name, parentId }) => name === "xean.pi.run" && parentId === null,
-  );
-  if (roots.length !== 1 || !roots[0]!.settled)
-    throw new Error("invalid Pi telemetry root in call " + call);
-  const operations = spans.flatMap((span): PiSpendOperation[] => {
-    if (span.name !== "pi.ai.request" || span.parentId !== roots[0]!.id)
-      return [];
-    if (!span.settled)
-      throw new Error("unsettled Pi request span in call " + call);
-    const checkpoint = span.attributes["xean.pi.request.checkpoint"];
-    if (checkpoint !== undefined) {
-      const id = entryId.parse(checkpoint);
-      const operation = durable.get(id);
-      if (operation === undefined)
-        throw new Error("missing or duplicate Pi request completion " + id);
-      durable.delete(id);
-      return [operation];
-    }
-    // Failures before payload construction have only a logical-call span.
-    // A checkpointed request is counted through its completion once.
-    const attributes = requestAttributes.parse(span.attributes);
-    return [
-      {
-        provider: attributes["pi.ai.provider"],
-        requestedModel: attributes["pi.ai.model"],
-        ...(attributes["pi.ai.response.model"] === undefined
-          ? {}
-          : { servedModel: attributes["pi.ai.response.model"] }),
-        api: attributes["pi.ai.api"],
-        ...(attributes["pi.ai.response.stop_reason"] === undefined
-          ? {}
-          : { stopReason: attributes["pi.ai.response.stop_reason"] }),
-        error: span.status.status === "error",
-        usage: measuredUsage(span.attributes),
-      },
-    ];
+    return [value.operation];
   });
-  if (durable.size !== 0)
-    throw new Error("unmatched Pi request completion in call " + call);
-  return operations;
 }
 
 export function derivePiSpend(entries: readonly Entry[]) {
@@ -778,7 +553,6 @@ export function derivePiSpend(entries: readonly Entry[]) {
         : undefined;
     const operations = derivePiCallOperations(
       call.seq,
-      stored,
       attemptsByParent.get(call.seq) ?? [],
       results,
     );
@@ -792,10 +566,16 @@ export function derivePiSpend(entries: readonly Entry[]) {
       ...summarizePiSpend(operations),
     });
   }
-  const potentialRequests = unaccountedCalls.flatMap((call) =>
-    (attemptsByParent.get(call) ?? []).flatMap((attempt) =>
+  const potentialRequests = [...attemptsByParent.values()].flatMap((attempts) =>
+    attempts.flatMap((attempt) =>
       attempt.state === "unsettled"
-        ? [{ call, checkpoint: attempt.call, model: attempt.model }]
+        ? [
+            {
+              call: attempt.parent,
+              checkpoint: attempt.call,
+              model: attempt.model,
+            },
+          ]
         : [],
     ),
   );
@@ -813,7 +593,7 @@ export type PiSpend = ReturnType<typeof derivePiSpend>;
 
 function piTool(
   tool: AuditedTool,
-  stopAfterToolResult: boolean,
+  terminate: boolean,
 ): AgentTool<TSchema, Json> {
   return {
     name: tool.name,
@@ -826,7 +606,7 @@ function piTool(
       return {
         content: [{ type: "text", text: JSON.stringify(output) }],
         details: output,
-        ...(stopAfterToolResult ? { terminate: true } : {}),
+        ...(terminate ? { terminate } : {}),
       };
     },
   };
@@ -892,10 +672,9 @@ function jsonSnapshot(value: unknown): Json {
 
 function result(
   messages: readonly AgentMessage[],
-  stopAfterToolResult: boolean,
   signal: AbortSignal | undefined,
   contextWindow: number,
-  requireSubmission = false,
+  requireSubmission: boolean,
 ): PiOutcome {
   const stored = jsonSnapshot(messages) as readonly Json[];
   let final: AssistantMessage | undefined;
@@ -930,9 +709,7 @@ function result(
   }
   const afterFinal = messages.slice(finalAt + 1);
   const stoppedAfterTool =
-    stopAfterToolResult &&
-    (final?.stopReason === "toolUse" ||
-      (requireSubmission && final?.stopReason === "stop")) &&
+    (final?.stopReason === "toolUse" || final?.stopReason === "stop") &&
     afterFinal.length > 0 &&
     afterFinal.every(
       (message) => message.role === "toolResult" && !message.isError,
@@ -951,11 +728,6 @@ function result(
       transcript: stored,
       providerRetryable:
         final !== undefined && !overflow && isRetryableProviderError(final),
-      truncated:
-        final !== undefined &&
-        final.stopReason === "length" &&
-        !overflow &&
-        final.usage.output > 0,
       error:
         final?.errorMessage ??
         (final === undefined
@@ -970,9 +742,9 @@ function result(
   return { state: "succeeded", text, transcript: stored };
 }
 
-function telemetryStopReason(
+function completionStopReason(
   value: AssistantMessage["stopReason"],
-): "stop" | "length" | "tool_use" | "error" | "aborted" | "deferred" {
+): z.output<typeof stopReason> {
   if (value === "toolUse") return "tool_use";
   return value === "pending" ? "error" : value;
 }
@@ -1034,149 +806,90 @@ function measuredStream(
             maxTokens: submissionContext(submissionGate, model, context)
               .maxTokens,
           };
-    const producer = createTypedSpanStarter(
-      options?.telemetryContext ?? NOOP_TELEMETRY_CONTEXT,
-      [PI_REQUEST_TELEMETRY_SCHEMA],
-    )(
-      "pi.ai.request",
-      {
-        "pi.ai.operation": "stream",
-        "pi.ai.provider": model.provider,
-        "pi.ai.model": model.id,
-        "pi.ai.api": model.api,
-        "pi.ai.streaming": true,
-      },
-      async (span) => {
-        let httpStatus: number | undefined;
-        let hookCalls = 0;
-        let checkpointed = false;
-        let checkpoint: ReturnType<Campaign["call"]> | undefined;
-        const completion =
-          Promise.withResolvers<z.output<typeof piRequestCompletion>>();
-        // Own a rejection even when the writer fails before entering its handler.
-        void completion.promise.catch(() => {});
-        try {
-          const stream = models.streamSimple(model, context, {
-            ...requestOptions,
-            telemetryContext: span,
-            onPayload: async (payload, requestModel) => {
-              hookCalls += 1;
-              if (hookCalls !== 1)
-                throw new Error(
-                  "Pi adapter must invoke onPayload exactly once per request",
-                );
-              const replacement = await options?.onPayload?.(
-                payload,
-                requestModel,
+    const producer = (async () => {
+      let hookCalls = 0;
+      let checkpointed = false;
+      let checkpoint: ReturnType<Campaign["call"]> | undefined;
+      const completion =
+        Promise.withResolvers<z.output<typeof piRequestCompletion>>();
+      // Own a rejection even when the writer fails before entering its handler.
+      void completion.promise.catch(() => {});
+      try {
+        const stream = models.streamSimple(model, context, {
+          ...requestOptions,
+          onPayload: async (payload, requestModel) => {
+            hookCalls += 1;
+            if (hookCalls !== 1)
+              throw new Error(
+                "Pi adapter must invoke onPayload exactly once per request",
               );
-              const effective = withPromptCacheKey(
-                hoistResponsesInstructions(
-                  replacement === undefined ? payload : replacement,
-                  requestModel,
-                ),
-                cacheKey,
-              );
-              const encoded = JSON.stringify(effective);
-              if (encoded === undefined)
-                throw new TypeError("Pi value is not JSON");
-              const payloadRef = campaign.storePayloadJson(encoded);
-              const started = Promise.withResolvers<void>();
-              checkpoint = campaign.call(
-                {
-                  label: piRequestLabel,
-                  request: jsonSnapshot({
-                    protocol: "xean/pi-request/v1",
-                    parent,
-                    model: modelRecord(requestModel),
-                    payloadRef,
-                  }),
-                },
-                async ({ call }) => {
-                  span.setAttributes({ "xean.pi.request.checkpoint": call });
-                  started.resolve();
-                  return completion.promise;
-                },
-              );
-              void checkpoint.catch(started.reject);
-              await started.promise;
-              checkpointed = true;
-              return effective;
-            },
-            onResponse: async (response, responseModel) => {
-              httpStatus = response.status;
-              await options?.onResponse?.(response, responseModel);
-            },
-          });
-          const observed = recovery.observe(model);
-          let terminal:
-            | Extract<AssistantMessageEvent, { type: "done" | "error" }>
-            | undefined;
-          for await (const event of stream) {
-            observed.event(event);
-            if (event.type === "done" || event.type === "error")
-              terminal = event;
-            else forwarded.push(event);
-          }
-          const final = await stream.result();
-          observed.settle(final);
-          const failedBeforeCheckpoint =
-            hookCalls <= 1 &&
-            !checkpointed &&
-            (final.stopReason === "error" || final.stopReason === "aborted");
-          if ((hookCalls !== 1 || !checkpointed) && !failedBeforeCheckpoint)
-            throw new Error(
-              "Pi adapter must invoke onPayload exactly once per request",
+            const replacement = await options?.onPayload?.(
+              payload,
+              requestModel,
             );
-          const measurement = requestCompletion(parent, model, final);
-          const { usage } = measurement.operation;
-          span.setAttributes({
-            ...(final.responseModel === undefined
-              ? {}
-              : { "pi.ai.response.model": final.responseModel }),
-            ...(final.responseId === undefined
-              ? {}
-              : { "pi.ai.response.id": final.responseId }),
-            "pi.ai.response.stop_reason": telemetryStopReason(final.stopReason),
-            ...(httpStatus === undefined
-              ? {}
-              : { "pi.ai.http.status_code": httpStatus }),
-            ...(usage === null
-              ? {}
-              : {
-                  "pi.ai.usage.input_tokens": usage.input,
-                  "pi.ai.usage.output_tokens": usage.output,
-                  "pi.ai.usage.cache_read_tokens": usage.cacheRead,
-                  "pi.ai.usage.cache_write_tokens": usage.cacheWrite,
-                  ...(usage.reasoning === undefined
-                    ? {}
-                    : { "pi.ai.usage.reasoning_tokens": usage.reasoning }),
-                  "pi.ai.usage.total_tokens": usage.totalTokens,
-                  "pi.ai.usage.cost": usage.estimatedCostUsd,
+            const effective = withPromptCacheKey(
+              hoistResponsesInstructions(
+                replacement === undefined ? payload : replacement,
+                requestModel,
+              ),
+              cacheKey,
+            );
+            const encoded = JSON.stringify(effective);
+            if (encoded === undefined)
+              throw new TypeError("Pi value is not JSON");
+            const payloadRef = campaign.storePayloadJson(encoded);
+            const started = Promise.withResolvers<void>();
+            checkpoint = campaign.call(
+              {
+                label: piRequestLabel,
+                request: jsonSnapshot({
+                  protocol: "xean/pi-request/v1",
+                  parent,
+                  model: modelRecord(requestModel),
+                  payloadRef,
                 }),
-          });
-          if (final.stopReason === "error" || final.stopReason === "aborted")
-            span.setStatus({
-              status: "error",
-              error: {
-                name:
-                  final.stopReason === "aborted"
-                    ? "AbortError"
-                    : "ProviderError",
-                message: final.errorMessage ?? "Pi request " + final.stopReason,
               },
-            });
-          completion.resolve(measurement);
-          await checkpoint;
-          return { final, terminal };
-        } catch (error) {
-          completion.reject(error);
-          await checkpoint?.catch(() => {});
-          throw error;
+              async () => {
+                started.resolve();
+                return completion.promise;
+              },
+            );
+            void checkpoint.catch(started.reject);
+            await started.promise;
+            checkpointed = true;
+            return effective;
+          },
+        });
+        const observed = recovery.observe(model);
+        let terminal:
+          | Extract<AssistantMessageEvent, { type: "done" | "error" }>
+          | undefined;
+        for await (const event of stream) {
+          observed.event(event);
+          if (event.type === "done" || event.type === "error") terminal = event;
+          else forwarded.push(event);
         }
-      },
-    );
+        const final = await stream.result();
+        observed.settle(final);
+        const failedBeforeCheckpoint =
+          hookCalls <= 1 &&
+          !checkpointed &&
+          (final.stopReason === "error" || final.stopReason === "aborted");
+        if ((hookCalls !== 1 || !checkpointed) && !failedBeforeCheckpoint)
+          throw new Error(
+            "Pi adapter must invoke onPayload exactly once per request",
+          );
+        completion.resolve(requestCompletion(parent, model, final));
+        await checkpoint;
+        return { final, terminal };
+      } catch (error) {
+        completion.reject(error);
+        await checkpoint?.catch(() => {});
+        throw error;
+      }
+    })();
     // The agent can consume deltas immediately. Its terminal event/result are
-    // released only after the producer, durable completion, and span settle.
+    // released only after the producer and durable completion settle.
     const finished = producer.then(
       ({ final, terminal }) => {
         if (terminal !== undefined) forwarded.push(terminal);
@@ -1203,63 +916,14 @@ function withPromptCacheKey(payload: unknown, cacheKey: string | undefined) {
     : payload;
 }
 
-interface PiCallExecutionOptions {
-  readonly request: z.output<typeof piRequest>;
-  readonly label: string;
-  readonly role?: string;
-  readonly candidate?: EntryId;
-  readonly tools?: readonly Tool[];
-  readonly models: PiModels;
-  readonly model: Model<Api>;
-  readonly signal?: AbortSignal;
-  readonly transport?: Transport;
-}
-
-async function runPiCall(
-  campaign: Campaign,
-  options: PiCallExecutionOptions,
-): Promise<PiResult> {
-  if (typeof options.models?.streamSimple !== "function") {
-    throw new TypeError("Pi models must provide streamSimple");
-  }
-  let full: PiResult | undefined;
-  await campaign.call(
-    {
-      label: options.label,
-      ...(options.role === undefined ? {} : { role: options.role }),
-      ...(options.candidate === undefined
-        ? {}
-        : { candidate: options.candidate }),
-      request: jsonSnapshot(options.request),
-      ...(options.tools === undefined ? {} : { tools: options.tools }),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    },
-    async ({ call, request, tools, signal }) => {
-      const exact = parsePiRequest(request);
-      if (exact === undefined) throw new Error("invalid stored Pi request");
-      full = {
-        call,
-        ...(await runPiBody(campaign, call, exact, tools, signal, options)),
-      };
-      return storePiResult(campaign, full);
-    },
-  );
-  if (full === undefined) throw new Error("Pi call returned without a result");
-  return full;
-}
-
 async function runPiBody(
   campaign: Campaign,
   call: EntryId,
   exact: z.output<typeof piRequest>,
   tools: readonly AuditedTool[],
   signal: AbortSignal,
-  options: Pick<
-    PiCallExecutionOptions,
-    "models" | "model" | "label" | "candidate" | "transport"
-  >,
-): Promise<PiResultBody> {
-  const telemetry = new InMemoryTelemetryContext();
+  options: Pick<PiRunOptions, "models" | "model" | "transport">,
+): Promise<PiOutcome> {
   // One transport session per logical call. Pi adapters key provider-side
   // prompt caching, session affinity, and the WebSocket-to-SSE failure
   // fallback on this ID; without it a WebSocket failure repeats on every
@@ -1272,265 +936,210 @@ async function runPiBody(
     exact.replayReasoning === false
       ? withoutReasoning(recovery.forModel(messages))
       : recovery.forModel(messages);
-  const startSpan = createTypedSpanStarter(telemetry, [
-    XEAN_PI_TELEMETRY_SCHEMA,
-  ]);
   try {
-    const body = await startSpan(
-      "xean.pi.run",
-      {
-        "xean.call.label": options.label,
-        ...(options.candidate === undefined
-          ? {}
-          : { "xean.candidate": options.candidate }),
-        ...(exact.reasoning === undefined
-          ? {}
-          : { "xean.pi.reasoning.requested": exact.reasoning }),
-      },
-      async (span) => {
-        let turns = 0;
-        let responses = 0;
-        let errorRecoveries = 0;
-        const gate = exact.submissionGate;
-        const responseLimitReached = () =>
-          gate?.maxResponses !== undefined && responses >= gate.maxResponses;
-        let steering: AgentMessage[] = [];
-        const contextState = (context: AgentContext) =>
-          submissionContext(gate!, options.model, {
-            ...context,
-            messages: convertToLlm(modelInput(context.messages)),
-          });
-        const agentContext = (
-          messages: readonly AgentMessage[],
-        ): AgentContext => ({
-          systemPrompt: exact.system ?? "",
-          messages: [...messages],
-          ...(tools.length === 0
+    let turns = 0;
+    let responses = 0;
+    let errorRecoveries = 0;
+    const gate = exact.submissionGate;
+    const responseLimitReached = () =>
+      gate?.maxResponses !== undefined && responses >= gate.maxResponses;
+    let steering: AgentMessage[] = [];
+    const contextState = (context: AgentContext) =>
+      submissionContext(gate!, options.model, {
+        ...context,
+        messages: convertToLlm(modelInput(context.messages)),
+      });
+    const agentContext = (messages: readonly AgentMessage[]): AgentContext => ({
+      systemPrompt: exact.system ?? "",
+      messages: [...messages],
+      ...(tools.length === 0
+        ? {}
+        : { tools: tools.map((tool) => piTool(tool, gate === undefined)) }),
+    });
+    const loop = (
+      content: string | undefined,
+      prior: readonly AgentMessage[],
+    ): Promise<AgentMessage[]> =>
+      runAgentLoop(
+        content === undefined
+          ? []
+          : [{ role: "user", content, timestamp: Date.now() }],
+        agentContext(prior),
+        {
+          model: options.model,
+          convertToLlm: (messages) => convertToLlm(modelInput(messages)),
+          toolExecution: "sequential",
+          sessionId,
+          ...(options.transport === undefined
+            ? {}
+            : { transport: options.transport }),
+          shouldStopAfterTurn: async ({ message, context, toolResults }) => {
+            if (
+              message.stopReason === "stop" ||
+              message.stopReason === "toolUse"
+            )
+              errorRecoveries = 0;
+            turns += 1;
+            if (!["error", "aborted"].includes(message.stopReason))
+              responses += 1;
+            if (gate === undefined)
+              return turns >= 32 || message.stopReason === "length";
+            if (responseLimitReached()) return true;
+            const state = contextState(context);
+            if (
+              message.stopReason === "length" ||
+              (message.stopReason === "stop" && toolResults.length === 0)
+            )
+              steering = [
+                {
+                  role: "user",
+                  content: submissionFeedback(gate, state),
+                  timestamp: Date.now(),
+                },
+              ];
+            return (
+              state.exhausted ||
+              (message.stopReason !== "length" &&
+                message.content.filter((block) => block.type === "toolCall")
+                  .length > 1)
+            );
+          },
+          ...(gate === undefined
             ? {}
             : {
-                tools: tools.map((tool) =>
-                  piTool(
-                    tool,
-                    exact.stopAfterToolResult === true && gate === undefined,
-                  ),
-                ),
+                beforeToolCall: async (entry: BeforeToolCallContext) => {
+                  if (
+                    entry.assistantMessage.content.filter(
+                      (block) => block.type === "toolCall",
+                    ).length !== 1
+                  ) {
+                    return {
+                      block: true,
+                      terminate: true,
+                      reason:
+                        "A gated response permits exactly one submission tool call.",
+                    };
+                  }
+                  return undefined;
+                },
+                // Schema rejection before the tool-call record is safe to correct.
+                afterToolCall: async ({ toolCall, args, context, isError }) => {
+                  if (isError) {
+                    const recorded = campaign
+                      .records({ kinds: ["tool-call"], call })
+                      .some(
+                        (entry) =>
+                          entry.kind === "tool-call" &&
+                          entry.source === toolCall.id,
+                      );
+                    return { terminate: recorded };
+                  }
+                  const state = contextState(context);
+                  const submitted =
+                    typeof args === "object" && args !== null
+                      ? (args as Record<string, unknown>)
+                      : {};
+                  const empty =
+                    gate.emptyArgument === undefined
+                      ? undefined
+                      : submitted[gate.emptyArgument];
+                  const terminate =
+                    submitted[gate.completeArgument] === true ||
+                    (Array.isArray(empty) && empty.length === 0) ||
+                    // This response is counted after its tool call finishes.
+                    (gate.maxResponses !== undefined &&
+                      responses + 1 >= gate.maxResponses) ||
+                    state.tokens >= state.threshold;
+                  if (!terminate)
+                    steering = [
+                      {
+                        role: "user",
+                        content: submissionFeedback(gate, state),
+                        timestamp: Date.now(),
+                      },
+                    ];
+                  return { terminate };
+                },
+                getSteeringMessages: async () => {
+                  const messages = steering;
+                  steering = [];
+                  return signal.aborted ? [] : messages;
+                },
               }),
-        });
-        const loop = (
-          content: string | undefined,
-          prior: readonly AgentMessage[],
-        ): Promise<AgentMessage[]> =>
-          runAgentLoop(
-            content === undefined
-              ? []
-              : [{ role: "user", content, timestamp: Date.now() }],
-            agentContext(prior),
-            {
-              model: options.model,
-              convertToLlm: (messages) => convertToLlm(modelInput(messages)),
-              toolExecution: "sequential",
-              sessionId,
-              ...(options.transport === undefined
-                ? {}
-                : { transport: options.transport }),
-              telemetryContext: span,
-              shouldStopAfterTurn: async ({
-                message,
-                context,
-                toolResults,
-              }) => {
-                if (
-                  message.stopReason === "stop" ||
-                  message.stopReason === "toolUse"
-                )
-                  errorRecoveries = 0;
-                turns += 1;
-                if (!["error", "aborted"].includes(message.stopReason))
-                  responses += 1;
-                if (gate === undefined)
-                  return turns >= 32 || message.stopReason === "length";
-                if (responseLimitReached()) return true;
-                const state = contextState(context);
-                if (
-                  message.stopReason === "length" ||
-                  (message.stopReason === "stop" && toolResults.length === 0)
-                )
-                  steering = [
-                    {
-                      role: "user",
-                      content: submissionFeedback(gate, state),
-                      timestamp: Date.now(),
-                    },
-                  ];
-                return (
-                  state.exhausted ||
-                  (message.stopReason !== "length" &&
-                    message.content.filter((block) => block.type === "toolCall")
-                      .length > 1)
-                );
-              },
-              ...(gate === undefined
-                ? {}
-                : {
-                    beforeToolCall: async (entry: BeforeToolCallContext) => {
-                      if (
-                        entry.assistantMessage.content.filter(
-                          (block) => block.type === "toolCall",
-                        ).length !== 1
-                      ) {
-                        return {
-                          block: true,
-                          terminate: true,
-                          reason:
-                            "A gated response permits exactly one submission tool call.",
-                        };
-                      }
-                      return undefined;
-                    },
-                    // Schema rejection before the tool-call record is safe to correct.
-                    afterToolCall: async ({
-                      toolCall,
-                      args,
-                      context,
-                      isError,
-                    }) => {
-                      if (isError) {
-                        const recorded = campaign
-                          .records({ kinds: ["tool-call"], call })
-                          .some(
-                            (entry) =>
-                              entry.kind === "tool-call" &&
-                              entry.source === toolCall.id,
-                          );
-                        return { terminate: recorded };
-                      }
-                      const state = contextState(context);
-                      const submitted =
-                        typeof args === "object" && args !== null
-                          ? (args as Record<string, unknown>)
-                          : {};
-                      const empty =
-                        gate.emptyArgument === undefined
-                          ? undefined
-                          : submitted[gate.emptyArgument];
-                      const terminate =
-                        submitted[gate.completeArgument] === true ||
-                        (Array.isArray(empty) && empty.length === 0) ||
-                        // This response is counted after its tool call finishes.
-                        (gate.maxResponses !== undefined &&
-                          responses + 1 >= gate.maxResponses) ||
-                        state.tokens >= state.threshold;
-                      if (!terminate)
-                        steering = [
-                          {
-                            role: "user",
-                            content: submissionFeedback(gate, state),
-                            timestamp: Date.now(),
-                          },
-                        ];
-                      return { terminate };
-                    },
-                    getSteeringMessages: async () => {
-                      const messages = steering;
-                      steering = [];
-                      return signal.aborted ? [] : messages;
-                    },
-                  }),
-              ...(exact.reasoning === undefined
-                ? {}
-                : { reasoning: exact.reasoning }),
-            },
-            () => {},
-            signal,
-            measuredStream(
-              campaign,
-              call,
-              options.models,
-              exact.cacheKey,
-              recovery,
-              gate,
-            ),
-          );
-        let messages = await loop(exact.prompt, []);
-        let lengthContinuations = 0;
-        for (;;) {
-          if (gate === undefined && turns >= 32) break;
-          if (responseLimitReached()) break;
-          const final = messages.findLast(
-            (message): message is AssistantMessage =>
-              message.role === "assistant",
-          );
-          const retry =
-            final?.stopReason === "error" && isRetryableProviderError(final);
-          const interrupted =
-            final !== undefined &&
-            !signal?.aborted &&
-            !isContextOverflow(final, options.model.contextWindow) &&
-            (retry || (gate === undefined && final.stopReason === "length"));
-          if (!interrupted) break;
-          const projected =
-            retry && final.rawStopReason === "incomplete.max_messages"
-              ? modelInput(messages)
-              : undefined;
-          if (projected !== undefined) {
-            // Preserve completed reasoning, while charging every provider error
-            // against the same recovery allowance.
-            if (
-              gate !== undefined
-                ? contextState(agentContext(messages)).exhausted
-                : clampMaxTokensToContext(
-                    options.model,
-                    {
-                      ...agentContext(messages),
-                      messages: convertToLlm(projected),
-                    },
-                    options.model.maxTokens,
-                  ) === 1
-            )
-              break;
-          }
-          if (retry) {
-            if (errorRecoveries >= (exact.maxRecoveries ?? 0)) break;
-            errorRecoveries += 1;
-          } else {
-            if (lengthContinuations >= (exact.maxLengthContinuations ?? 0))
-              break;
-            lengthContinuations += 1;
-          }
-          const prior = messages;
-          const direction =
-            gate !== undefined &&
-            final.rawStopReason === "incomplete.max_messages"
-              ? submissionFeedback(gate, contextState(agentContext(prior)))
-              : retry
-                ? undefined
-                : lengthContinuation;
-          messages = [...prior, ...(await loop(direction, prior))];
-        }
-        const outcome = result(
-          messages,
-          exact.stopAfterToolResult === true,
-          signal,
-          options.model.contextWindow,
-          gate !== undefined,
-        );
-        span.setAttributes({ "xean.pi.outcome": outcome.state });
-        if (outcome.state !== "succeeded") {
-          span.setStatus({
-            status: "error",
-            error: { name: "PiRunError", message: outcome.error },
-          });
-        }
-        return outcome;
-      },
+          ...(exact.reasoning === undefined
+            ? {}
+            : { reasoning: exact.reasoning }),
+        },
+        () => {},
+        signal,
+        measuredStream(
+          campaign,
+          call,
+          options.models,
+          exact.cacheKey,
+          recovery,
+          gate,
+        ),
+      );
+    let messages = await loop(exact.prompt, []);
+    let lengthContinuations = 0;
+    for (;;) {
+      if (gate === undefined && turns >= 32) break;
+      if (responseLimitReached()) break;
+      const final = messages.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      const retry =
+        final?.stopReason === "error" && isRetryableProviderError(final);
+      const interrupted =
+        final !== undefined &&
+        !signal?.aborted &&
+        !isContextOverflow(final, options.model.contextWindow) &&
+        (retry || (gate === undefined && final.stopReason === "length"));
+      if (!interrupted) break;
+      const projected =
+        retry && final.rawStopReason === "incomplete.max_messages"
+          ? modelInput(messages)
+          : undefined;
+      if (projected !== undefined) {
+        // Preserve completed reasoning, while charging every provider error
+        // against the same recovery allowance.
+        if (
+          gate !== undefined
+            ? contextState(agentContext(messages)).exhausted
+            : clampMaxTokensToContext(
+                options.model,
+                {
+                  ...agentContext(messages),
+                  messages: convertToLlm(projected),
+                },
+                options.model.maxTokens,
+              ) === 1
+        )
+          break;
+      }
+      if (retry) {
+        if (errorRecoveries >= (exact.maxRecoveries ?? 0)) break;
+        errorRecoveries += 1;
+      } else {
+        if (lengthContinuations >= (exact.maxLengthContinuations ?? 0)) break;
+        lengthContinuations += 1;
+      }
+      const prior = messages;
+      const direction =
+        gate !== undefined && final.rawStopReason === "incomplete.max_messages"
+          ? submissionFeedback(gate, contextState(agentContext(prior)))
+          : retry
+            ? undefined
+            : lengthContinuation;
+      messages = [...prior, ...(await loop(direction, prior))];
+    }
+    return result(
+      messages,
+      signal,
+      options.model.contextWindow,
+      gate !== undefined,
     );
-    return {
-      ...body,
-      telemetry: {
-        schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
-        spans: telemetry.getSpans(),
-      },
-    } satisfies PiResultBody;
   } finally {
     cleanupSessionResources(sessionId);
   }
@@ -1540,8 +1149,11 @@ export async function runPi(
   campaign: Campaign,
   options: PiRunOptions,
 ): Promise<PiResult> {
-  const parsed = piRequest.parse({
-    protocol: "xean/pi-run/v1",
+  if (typeof options.models?.streamSimple !== "function") {
+    throw new TypeError("Pi models must provide streamSimple");
+  }
+  const request = piRequest.parse({
+    protocol: "xean/pi-run/v2",
     model: modelRecord(options.model),
     modelProfile: modelProfile(options.model),
     ...(options.system === undefined ? {} : { system: options.system }),
@@ -1549,10 +1161,6 @@ export async function runPi(
     ...(options.reasoning === undefined
       ? {}
       : { reasoning: options.reasoning }),
-    ...(options.stopAfterToolResult === true ||
-    options.submissionGate !== undefined
-      ? { stopAfterToolResult: true as const }
-      : {}),
     ...(options.maxRecoveries === undefined
       ? {}
       : { maxRecoveries: options.maxRecoveries }),
@@ -1567,24 +1175,31 @@ export async function runPi(
       ? { replayReasoning: false as const }
       : {}),
   });
-  if (parsed.submissionGate !== undefined) {
+  if (request.submissionGate !== undefined) {
     if (options.tools?.length !== 1)
       throw new TypeError("Pi submission gate requires one terminal tool");
-    submissionContext(parsed.submissionGate, options.model, { messages: [] });
+    submissionContext(request.submissionGate, options.model, { messages: [] });
   }
-  return runPiCall(campaign, {
-    request: parsed,
-    label: options.label,
-    ...(options.role === undefined ? {} : { role: options.role }),
-    ...(options.candidate === undefined
-      ? {}
-      : { candidate: options.candidate }),
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-    models: options.models,
-    model: options.model,
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.transport === undefined
-      ? {}
-      : { transport: options.transport }),
-  });
+  let full: PiResult | undefined;
+  await campaign.call(
+    {
+      label: options.label,
+      ...(options.role === undefined ? {} : { role: options.role }),
+      ...(options.candidate === undefined
+        ? {}
+        : { candidate: options.candidate }),
+      request: jsonSnapshot(request),
+      ...(options.tools === undefined ? {} : { tools: options.tools }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+    async ({ call, tools, signal }) => {
+      full = {
+        call,
+        ...(await runPiBody(campaign, call, request, tools, signal, options)),
+      };
+      return storePiResult(campaign, full);
+    },
+  );
+  if (full === undefined) throw new Error("Pi call returned without a result");
+  return full;
 }

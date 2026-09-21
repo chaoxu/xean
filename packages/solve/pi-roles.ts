@@ -710,7 +710,6 @@ async function runCall<S extends z.ZodType>(
     reasoning: profile.reasoning,
     ...(profile.replayReasoning === false ? { replayReasoning: false } : {}),
     tools: [submitTool],
-    stopAfterToolResult: true,
     submissionGate: roleCall.submissionGate,
     // Recover transient long-stream failures within this call. Missing usage
     // on an interrupted attempt is unknown spend, not evidence of no billing.

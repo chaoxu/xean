@@ -79,10 +79,10 @@ import {
   type Verdict,
 } from "xean";
 import {
-  builtinPi, derivePiSpend, XEAN_PI_TELEMETRY_SCHEMA,
+  builtinPi, derivePiSpend,
   InMemoryCredentialStore, piReasoning, piRequest,
   piRequestAttempts, piStoredResult, piResultRecord, readPiResult, storePiResult,
-  PI_TELEMETRY_SCHEMA_VERSIONS, piTelemetry, runPi,
+  runPi,
   type PiResult, type PiSpend,
 } from "xean/pi";
 import {
@@ -97,9 +97,8 @@ try {
   const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), ["v1"]);
   deriveCandidateStatus(campaign.records(), candidate);
   derivePiSpend(campaign.records());
-  piRequest.parse({ protocol: "xean/pi-run/v1", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
-  piStoredResult.parse({ state: "succeeded", text: "x", transcript: [],
-    telemetry: { schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS, spans: [] } });
+  piRequest.parse({ protocol: "xean/pi-run/v2", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
+  piStoredResult.parse({ state: "succeeded", text: "x", transcript: [] });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), replay: "safe", async run() { return null; } });
   const native = await import(Bun.resolveSync(
@@ -153,8 +152,7 @@ try {
     throw new Error("Packed consumer did not receive the patched native Pi provider");
 } finally { campaign.close(); }
 void [verdictSchema, openCampaign, openReader,
-  returnedToolSubmission, XEAN_PI_TELEMETRY_SCHEMA, PI_TELEMETRY_SCHEMA_VERSIONS,
-  piReasoning, piRequestAttempts, piTelemetry, runPi];
+  returnedToolSubmission, piReasoning, piRequestAttempts, runPi];
 void (undefined as unknown as CallReceipt | Campaign | Entry | Json | RecordQuery |
   Verdict | PiResult | PiSpend | CoreCallSummaryV1 | CoreCampaignObservationV1 |
   CoreCampaignSummaryV1);

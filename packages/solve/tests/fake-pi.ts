@@ -1,15 +1,11 @@
-import type { Json } from "xean";
-import {
-  PI_TELEMETRY_SCHEMA_VERSIONS,
-  type PiRunOptions,
-  type PiTelemetry,
-} from "xean/pi";
+import type { Campaign, EntryId, Json } from "xean";
+import type { PiMeasuredUsage, PiRunOptions } from "xean/pi";
 
 type Outcome = "succeeded" | "failed" | "cancelled";
 
 export function fakePiRequest(options: PiRunOptions): Json {
   const request = {
-    protocol: "xean/pi-run/v1",
+    protocol: "xean/pi-run/v2",
     model: {
       provider: options.model.provider,
       id: options.model.id,
@@ -27,7 +23,6 @@ export function fakePiRequest(options: PiRunOptions): Json {
     system: options.system,
     prompt: options.prompt,
     reasoning: options.reasoning,
-    stopAfterToolResult: options.stopAfterToolResult,
     submissionGate: options.submissionGate,
     maxRecoveries: options.maxRecoveries,
     maxLengthContinuations: options.maxLengthContinuations,
@@ -35,55 +30,50 @@ export function fakePiRequest(options: PiRunOptions): Json {
     replayReasoning: options.replayReasoning === false ? false : undefined,
   };
   // The round-trip drops undefined-valued fields, matching the
-  // omit-when-absent shape of real journaled requests; stopAfterToolResult is
-  // typed `?: true`, so the passthrough can never leak a false.
+  // omit-when-absent shape of real journaled requests.
   return JSON.parse(JSON.stringify(request)) as Json;
 }
 
-export function fakePiTelemetry(
+/** Append one request checkpoint and its completion under a Pi call. */
+export async function fakePiRequestCheckpoint(
+  campaign: Campaign,
+  call: EntryId,
   options: PiRunOptions,
   outcome: Outcome,
-): PiTelemetry {
-  const stopped =
-    outcome === "succeeded"
-      ? ("stop" as const)
-      : outcome === "cancelled"
-        ? ("aborted" as const)
-        : ("error" as const);
-  return {
-    schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
-    spans: [
-      {
-        id: 1,
-        parentId: null,
-        name: "xean.pi.run",
-        attributes: {
-          "xean.call.label": options.label,
-          "xean.pi.outcome": outcome,
-          ...(options.reasoning === undefined
-            ? {}
-            : { "xean.pi.reasoning.requested": options.reasoning }),
+  usage: PiMeasuredUsage | null = null,
+): Promise<void> {
+  const { provider, id, api, baseUrl } = options.model;
+  await campaign.call(
+    {
+      label: "xean/pi-request",
+      request: {
+        protocol: "xean/pi-request/v1",
+        parent: call,
+        model: {
+          provider,
+          id,
+          api,
+          ...(baseUrl === undefined ? {} : { baseUrl }),
         },
-        events: [],
-        status: { status: outcome === "succeeded" ? "ok" : "error" },
-        settled: true,
-        endSequence: 2,
+        payloadRef: campaign.storePayload({ input: options.prompt }),
       },
-      {
-        id: 2,
-        parentId: 1,
-        name: "pi.ai.request",
-        attributes: {
-          "pi.ai.provider": options.model.provider,
-          "pi.ai.model": options.model.id,
-          "pi.ai.api": options.model.api,
-          "pi.ai.response.stop_reason": stopped,
-        },
-        events: [],
-        status: { status: outcome === "succeeded" ? "ok" : "error" },
-        settled: true,
-        endSequence: 1,
+    },
+    async () => ({
+      protocol: "xean/pi-request-completion/v1",
+      parent: call,
+      operation: {
+        provider,
+        requestedModel: id,
+        api,
+        stopReason:
+          outcome === "succeeded"
+            ? "stop"
+            : outcome === "cancelled"
+              ? "aborted"
+              : "error",
+        error: outcome !== "succeeded",
+        usage,
       },
-    ],
-  };
+    }),
+  );
 }

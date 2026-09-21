@@ -24,7 +24,6 @@ import {
   type Entry,
 } from "../src";
 import {
-  PI_TELEMETRY_SCHEMA_VERSIONS,
   derivePiSpend,
   piRequest,
   piRequestAttempts,
@@ -32,7 +31,6 @@ import {
   piResultRecord,
   readPiResult,
   storePiResult,
-  piTelemetry,
   runPi,
   type PiSubmissionGate,
 } from "../src/pi";
@@ -120,7 +118,7 @@ test("request accounting is durable before tool execution and counted once after
       });
       expect(piRequestAttempts(store.records())[0]?.state).toBe("completed");
       checked = true;
-      return null;
+      throw new Error("continue after recording");
     },
   });
   try {
@@ -248,9 +246,10 @@ function campaign() {
 }
 
 function spendEntries(
-  attributes: Record<string, string | number | boolean>,
+  usage: Record<string, number> | null,
   error = false,
 ): Entry[] {
+  const model = { provider: "fake", id: "test-v1", api: "openai-responses" };
   return [
     {
       seq: 1,
@@ -265,8 +264,8 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "xean/pi-run/v1",
-        model: { provider: "fake", id: "test-v1", api: "openai-responses" },
+        protocol: "xean/pi-run/v2",
+        model,
         modelProfile: null,
         prompt: "test",
       },
@@ -275,6 +274,38 @@ function spendEntries(
     {
       seq: 3,
       atMs: 3,
+      kind: "call",
+      label: "xean/pi-request",
+      request: {
+        protocol: "xean/pi-request/v1",
+        parent: 2,
+        model,
+        payloadRef: "c".repeat(64),
+      },
+      tools: [],
+    },
+    {
+      seq: 4,
+      atMs: 4,
+      kind: "call-result",
+      parent: 3,
+      state: "returned",
+      output: {
+        protocol: "xean/pi-request-completion/v1",
+        parent: 2,
+        operation: {
+          provider: model.provider,
+          requestedModel: model.id,
+          api: model.api,
+          stopReason: error ? "error" : "stop",
+          error,
+          usage,
+        },
+      },
+    },
+    {
+      seq: 5,
+      atMs: 5,
       kind: "call-result",
       parent: 2,
       state: "returned",
@@ -284,31 +315,6 @@ function spendEntries(
         textRef: "a".repeat(64),
         transcriptRef: "b".repeat(64),
         assistantUsage: [],
-        telemetry: {
-          schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS,
-          spans: [
-            {
-              id: 1,
-              parentId: null,
-              name: "xean.pi.run",
-              attributes: {},
-              events: [],
-              status: { status: "ok" },
-              settled: true,
-            },
-            {
-              id: 2,
-              parentId: 1,
-              name: "pi.ai.request",
-              attributes,
-              events: [],
-              status: error
-                ? { status: "error", error: { name: "Error", message: "x" } }
-                : { status: "ok" },
-              settled: true,
-            },
-          ],
-        },
       },
     },
   ];
@@ -481,7 +487,7 @@ async function gatedRun(
       ...(cancelOnRequest === undefined
         ? {}
         : { signal: cancelOnRequest.signal }),
-      ...(enabled ? { submissionGate: gate } : { stopAfterToolResult: true }),
+      ...(enabled ? { submissionGate: gate } : {}),
       ...extra,
     });
     return { result, requests, records: [...c.records()] };
@@ -530,7 +536,7 @@ test("submission gate saves every partial in the same context before the near-li
     records.find(
       (entry) => entry.kind === "call" && entry.label === "submission-gate",
     ),
-  ).toMatchObject({ request: { submissionGate, stopAfterToolResult: true } });
+  ).toMatchObject({ request: { submissionGate } });
   expect(
     requests.every((request) => request.maxTokens! <= model.maxTokens),
   ).toBe(true);
@@ -897,7 +903,6 @@ test.each([
         label: "budgeted-explorer",
         prompt: "Do useful work, then submit partial notes.",
         tools: [gatedTool],
-        stopAfterToolResult: true,
         submissionGate: {
           ...submissionGate,
           contextBudgetTokens: 400_000,
@@ -944,7 +949,6 @@ test("a submission budget above model capacity still respects the model window",
       label: "small-model-budget",
       prompt: "Work.",
       tools: [gatedTool],
-      stopAfterToolResult: true,
       submissionGate: { ...submissionGate, contextBudgetTokens: 400_000 },
     });
     expect(result.state).toBe("succeeded");
@@ -1387,67 +1391,43 @@ describe("thin Pi runner", () => {
   });
 
   test("treats complete zero usage as measured and rejects partial usage", () => {
-    const attributes = {
-      "pi.ai.provider": "fake",
-      "pi.ai.model": "test-v1",
-      "pi.ai.api": "openai-responses",
-      "pi.ai.response.stop_reason": "error",
-      "pi.ai.usage.input_tokens": 0,
-      "pi.ai.usage.output_tokens": 0,
-      "pi.ai.usage.cache_read_tokens": 0,
-      "pi.ai.usage.cache_write_tokens": 0,
-      "pi.ai.usage.total_tokens": 0,
-      "pi.ai.usage.cost": 0,
+    const zero = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      estimatedCostUsd: 0,
     };
-    expect(derivePiSpend(spendEntries(attributes, true)).summary).toEqual({
+    expect(derivePiSpend(spendEntries(zero, true)).summary).toEqual({
       logicalProviderRequests: 1,
       requestErrors: 1,
       unmeasuredRequests: 0,
-      measuredUsage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        estimatedCostUsd: 0,
-      },
+      measuredUsage: zero,
     });
-    const { "pi.ai.usage.cost": _cost, ...partial } = attributes;
-    expect(() => derivePiSpend(spendEntries(partial))).toThrow(
-      "partial Pi usage measurement",
-    );
-    expect(() =>
-      derivePiSpend(
-        spendEntries({
-          "pi.ai.provider": "fake",
-          "pi.ai.model": "test-v1",
-          "pi.ai.api": "openai-responses",
-          "pi.ai.usage.reasoning_tokens": 1,
-        }),
-      ),
-    ).toThrow("partial Pi usage measurement");
+    const { estimatedCostUsd: _cost, ...partial } = zero;
+    expect(() => derivePiSpend(spendEntries(partial))).toThrow();
+    expect(() => derivePiSpend(spendEntries({ reasoning: 1 }))).toThrow();
   });
 
   test("does not mistake an ordinary model-shaped request for a Pi call", () => {
-    const entries = spendEntries({
-      "pi.ai.provider": "fake",
-      "pi.ai.model": "test-v1",
-      "pi.ai.api": "openai-responses",
-    }).map((entry) =>
-      entry.kind === "call"
-        ? {
-            ...entry,
-            request: {
-              model: {
-                provider: "fake",
-                id: "test-v1",
-                api: "openai-responses",
+    const entries = spendEntries(null)
+      .filter((entry) => entry.seq !== 3 && entry.seq !== 4)
+      .map((entry) =>
+        entry.kind === "call"
+          ? {
+              ...entry,
+              request: {
+                model: {
+                  provider: "fake",
+                  id: "test-v1",
+                  api: "openai-responses",
+                },
+                prompt: "ordinary application request",
               },
-              prompt: "ordinary application request",
-            },
-          }
-        : entry,
-    );
+            }
+          : entry,
+      );
 
     expect(derivePiSpend(entries)).toEqual({
       calls: [],
@@ -1483,38 +1463,6 @@ describe("thin Pi runner", () => {
 
     expect(result).toMatchObject({ state: "succeeded", text: "answer" });
     expect(requests.map((options) => options?.reasoning)).toEqual(["max"]);
-    const [runSpan, requestSpan] = result.telemetry.spans;
-    expect(runSpan).toMatchObject({
-      name: "xean.pi.run",
-      parentId: null,
-      settled: true,
-      status: { status: "ok" },
-      attributes: {
-        "xean.call.label": "answer/v1",
-        "xean.candidate": candidate,
-        "xean.pi.reasoning.requested": "max",
-        "xean.pi.outcome": "succeeded",
-      },
-    });
-    expect(requestSpan).toMatchObject({
-      name: "pi.ai.request",
-      parentId: runSpan?.id,
-      settled: true,
-      status: { status: "ok" },
-      attributes: {
-        "pi.ai.operation": "stream",
-        "pi.ai.provider": model.provider,
-        "pi.ai.model": model.id,
-        "pi.ai.response.model": "served-test-v1",
-        "pi.ai.response.stop_reason": "stop",
-        "pi.ai.usage.input_tokens": 11,
-        "pi.ai.usage.output_tokens": 7,
-        "pi.ai.usage.cache_read_tokens": 5,
-        "pi.ai.usage.reasoning_tokens": 3,
-        "pi.ai.usage.total_tokens": 23,
-        "pi.ai.usage.cost": 0.026,
-      },
-    });
     const records = store.records();
     expect(records.map((entry) => entry.kind)).toEqual([
       "campaign",
@@ -1540,7 +1488,6 @@ describe("thin Pi runner", () => {
     expect(terminal.output).toMatchObject({
       state: "succeeded",
       call: result.call,
-      telemetry: result.telemetry,
     });
     expect(readPiResult(terminal.output, store)).toEqual(result);
     expect(piResultRecord.parse(terminal.output)).not.toHaveProperty(
@@ -1551,7 +1498,6 @@ describe("thin Pi runner", () => {
       state: "succeeded",
       text: "answer",
       transcript: [{ role: "user" }, { role: "assistant" }],
-      telemetry: result.telemetry,
     });
     expect(
       piStoredResult.safeParse({
@@ -1561,7 +1507,6 @@ describe("thin Pi runner", () => {
         unknown: true,
       }).success,
     ).toBe(false);
-    expect(piTelemetry.safeParse(result.telemetry).success).toBe(true);
     const spend = derivePiSpend(records);
     expect(spend).toMatchObject({
       calls: [
@@ -1600,13 +1545,6 @@ describe("thin Pi runner", () => {
         measuredUsage: { totalTokens: 23, reasoning: 3 },
       },
     });
-    expect(
-      piStoredResult.safeParse({
-        state: "succeeded",
-        text: "answer",
-        telemetry: {},
-      }).success,
-    ).toBe(false);
   });
 
   test("gives Pi only the selected audited Zod tools", async () => {
@@ -1639,7 +1577,6 @@ describe("thin Pi runner", () => {
             ],
             "toolUse",
           ),
-          assistant([{ type: "text", text: "7" }], "stop"),
         ],
         (context, options) => {
           contexts.push(context);
@@ -1653,22 +1590,8 @@ describe("thin Pi runner", () => {
       tools: [add],
     });
 
-    expect(result).toMatchObject({ state: "succeeded", text: "7" });
-    const requests = result.telemetry.spans.filter(
-      ({ name }) => name === "pi.ai.request",
-    );
-    expect(requests).toHaveLength(2);
-    expect(reasoning).toEqual(["max", "max"]);
-    expect(
-      requests.every(
-        ({ attributes }) => !("pi.ai.usage.reasoning_tokens" in attributes),
-      ),
-    ).toBe(true);
-    expect(
-      requests.every(
-        ({ parentId }) => parentId === result.telemetry.spans[0]?.id,
-      ),
-    ).toBe(true);
+    expect(result).toMatchObject({ state: "succeeded", text: "" });
+    expect(reasoning).toEqual(["max"]);
     expect(contexts[0]?.tools).toMatchObject([
       {
         name: "add",
@@ -1682,24 +1605,22 @@ describe("thin Pi runner", () => {
       "call-result",
       "tool-call",
       "tool-result",
-      "call",
-      "call-result",
       "call-result",
     ]);
     expect(
       store.records().find((entry) => entry.kind === "tool-call"),
     ).toMatchObject({ source: "add-1", input: { left: 2, right: 5 } });
     expect(derivePiSpend(store.records()).summary).toEqual({
-      logicalProviderRequests: 2,
+      logicalProviderRequests: 1,
       requestErrors: 0,
       unmeasuredRequests: 0,
       measuredUsage: {
-        input: 22,
-        output: 14,
-        cacheRead: 10,
+        input: 11,
+        output: 7,
+        cacheRead: 5,
         cacheWrite: 0,
-        totalTokens: 46,
-        estimatedCostUsd: 0.052,
+        totalTokens: 23,
+        estimatedCostUsd: 0.026,
       },
     });
   });
@@ -1723,7 +1644,7 @@ describe("thin Pi runner", () => {
         input: [
           { role: "user", content: "Add 2 and 5" },
           { type: "function_call", call_id: "add-1" },
-          { type: "function_call_output", output: '{"sum":7}' },
+          { type: "function_call_output", output: "adder offline" },
         ],
         tools: [{ name: "add", strict: true }],
         reasoning: { effort: "high" },
@@ -1738,8 +1659,8 @@ describe("thin Pi runner", () => {
         right: z.number().int(),
       }),
       replay: "safe",
-      async run({ left, right }) {
-        return { sum: left + right };
+      async run() {
+        throw new Error("adder offline");
       },
     });
 
@@ -1954,7 +1875,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "xean/pi-run/v1",
+          protocol: "xean/pi-run/v2",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",
@@ -2117,7 +2038,6 @@ describe("thin Pi runner", () => {
       label: "structured/v1",
       prompt: "Submit 7",
       tools: [submit],
-      stopAfterToolResult: true,
     });
 
     expect(result).toMatchObject({ state: "succeeded", text: "" });
@@ -2129,7 +2049,7 @@ describe("thin Pi runner", () => {
     ]);
     expect(
       store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { stopAfterToolResult: true } });
+    ).toMatchObject({ request: { protocol: "xean/pi-run/v2" } });
   });
 
   test("does not accept a terminal tool result after cancellation", async () => {
@@ -2162,7 +2082,6 @@ describe("thin Pi runner", () => {
       label: "structured/v1",
       prompt: "Submit 7",
       tools: [submit],
-      stopAfterToolResult: true,
       signal: controller.signal,
     });
 
@@ -2268,7 +2187,6 @@ describe("thin Pi runner", () => {
     expect(requests).toBe(1);
     expect(result).toMatchObject({
       state: "failed",
-      truncated: true,
       error: "Pi stopped with length",
     });
   });
@@ -2315,7 +2233,6 @@ describe("thin Pi runner", () => {
     expect(result).toMatchObject({
       state: "failed",
       providerRetryable: false,
-      truncated: false,
       error: "Pi exceeded its context window",
     });
   });
@@ -2466,7 +2383,6 @@ describe("thin Pi runner", () => {
       expect(result).toMatchObject({
         state: "failed",
         providerRetryable: false,
-        truncated: false,
       });
     },
   );
@@ -2568,7 +2484,7 @@ describe("thin Pi runner", () => {
       input: z.strictObject({ value: z.string() }),
       replay: "safe",
       async run({ value }) {
-        return { value };
+        throw new Error(`echo ${value} rejected`);
       },
     });
     const replies = Array.from({ length: 40 }, (_, index) =>
@@ -2605,7 +2521,7 @@ describe("thin Pi runner", () => {
       input: z.strictObject({ value: z.string() }),
       replay: "safe",
       async run({ value }) {
-        return { value };
+        throw new Error(`echo ${value} rejected`);
       },
     });
     const replies = [
@@ -2648,7 +2564,7 @@ describe("thin Pi runner", () => {
       input: z.strictObject({ value: z.string() }),
       replay: "safe",
       async run({ value }) {
-        return { value };
+        throw new Error(`echo ${value} rejected`);
       },
     });
     const replies = [
@@ -2680,7 +2596,10 @@ describe("thin Pi runner", () => {
       maxLengthContinuations: 1,
     });
 
-    expect(result).toMatchObject({ state: "failed", truncated: true });
+    expect(result).toMatchObject({
+      state: "failed",
+      error: "Pi stopped with length",
+    });
     expect(providerCalls).toBe(32);
     expect(
       (result.transcript as readonly { role?: string }[]).filter(
@@ -2724,7 +2643,6 @@ describe("thin Pi runner", () => {
       candidate,
       prompt: "Audit",
       tools: [submitVerdict],
-      stopAfterToolResult: true,
     });
     expect(result.state).toBe("failed");
     expect(() => store.recordVerdict(result.call, "PASS", null)).toThrow(
@@ -2742,7 +2660,7 @@ describe("thin Pi runner", () => {
       input: z.strictObject({ value: z.string() }),
       replay: "safe",
       async run({ value }) {
-        return { value };
+        throw new Error(`echo ${value} rejected`);
       },
     });
     const result = await runPi(campaign(), {
@@ -2784,7 +2702,6 @@ describe("thin Pi runner", () => {
     });
     expect(result).toMatchObject({
       state: "failed",
-      truncated: true,
       error: "Pi stopped with length",
     });
   });
@@ -2824,19 +2741,14 @@ describe("thin Pi runner", () => {
       state: "failed",
       providerRetryable: true,
     });
-    expect(
-      failed.telemetry.spans.every(({ status }) => status.status === "error"),
-    ).toBe(true);
-    const failedRequest = failed.telemetry.spans.find(
-      ({ name }) => name === "pi.ai.request",
-    );
-    expect(
-      failedRequest === undefined
-        ? undefined
-        : Object.hasOwn(failedRequest.attributes, "pi.ai.usage.total_tokens"),
-    ).toBe(false);
+    expect(derivePiSpend(failedCampaign.records()).summary).toEqual({
+      logicalProviderRequests: 1,
+      requestErrors: 1,
+      unmeasuredRequests: 1,
+    });
 
-    const cancelled = await runPi(campaign(), {
+    const cancelledCampaign = campaign();
+    const cancelled = await runPi(cancelledCampaign, {
       models: models([assistant([], "aborted", undefined, false)]),
       model,
       label: "cancel/v1",
@@ -2844,22 +2756,11 @@ describe("thin Pi runner", () => {
     });
     expect(cancelled.state).toBe("cancelled");
     expect(cancelled).not.toHaveProperty("providerRetryable");
-    expect(
-      cancelled.telemetry.spans.every(
-        ({ status }) => status.status === "error",
-      ),
-    ).toBe(true);
-    const cancelledRequest = cancelled.telemetry.spans.find(
-      ({ name }) => name === "pi.ai.request",
-    );
-    expect(
-      cancelledRequest === undefined
-        ? undefined
-        : Object.hasOwn(
-            cancelledRequest.attributes,
-            "pi.ai.usage.total_tokens",
-          ),
-    ).toBe(false);
+    expect(derivePiSpend(cancelledCampaign.records()).summary).toEqual({
+      logicalProviderRequests: 1,
+      requestErrors: 1,
+      unmeasuredRequests: 1,
+    });
   });
 
   test("does not classify context overflow or malformed failure records as retryable", async () => {
@@ -2915,11 +2816,8 @@ test.each(["succeeded", "failed", "cancelled"] as const)(
       state,
       text,
       transcript: [{ role: "assistant", content: text, usage: null }],
-      telemetry: { schemaVersions: PI_TELEMETRY_SCHEMA_VERSIONS, spans: [] },
       ...(state === "succeeded" ? {} : { error: "terminal error" }),
-      ...(state === "failed"
-        ? { providerRetryable: false, truncated: true }
-        : {}),
+      ...(state === "failed" ? { providerRetryable: false } : {}),
     });
     try {
       const receipt = await store.call(

@@ -59,7 +59,6 @@ test("inspection does not interpret a Pi submission as source verification", asy
       role: "verifier",
       prompt: "Unsupported Pi source request.",
       transport: "sse",
-      stopAfterToolResult: true,
       tools: [
         defineTool({
           name: roleTools.verifier,

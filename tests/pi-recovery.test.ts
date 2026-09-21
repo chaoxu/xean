@@ -248,7 +248,6 @@ describe.each([platformModel, codexModel])(
           label: "recovery/signed",
           prompt: "Record 7 after reasoning",
           tools: [record],
-          stopAfterToolResult: true,
           maxRecoveries: 1,
         });
 
@@ -283,19 +282,13 @@ describe.each([platformModel, codexModel])(
           { role: "toolResult", isError: false },
         ]);
         expect(
-          result.telemetry.spans
-            .filter(({ name }) => name === "pi.ai.request")
-            .map(({ status, attributes }) => ({
-              status: status.status,
-              stop: attributes["pi.ai.response.stop_reason"],
-            })),
+          derivePiSpend(store.records()).calls[0]?.operations.map(
+            ({ error, stopReason }) => ({ error, stopReason }),
+          ),
         ).toEqual([
-          { status: "error", stop: "error" },
-          { status: "ok", stop: "tool_use" },
+          { error: true, stopReason: "error" },
+          { error: false, stopReason: "tool_use" },
         ]);
-        expect(
-          derivePiSpend(store.records()).summary.logicalProviderRequests,
-        ).toBe(2);
       },
     );
 
@@ -338,7 +331,6 @@ describe.each([platformModel, codexModel])(
               },
             }),
           ],
-          stopAfterToolResult: true,
           maxRecoveries: 1,
           maxLengthContinuations: 1,
           ...(gated
@@ -409,7 +401,6 @@ describe.each([platformModel, codexModel])(
                     },
                   }),
                 ],
-                stopAfterToolResult: true,
                 submissionGate: {
                   completeArgument: "solution",
                   continuationPrompt: "Keep trying, you can do it.",
@@ -450,7 +441,6 @@ describe.each([platformModel, codexModel])(
             },
           }),
         ],
-        stopAfterToolResult: true,
         maxRecoveries: 1,
         maxLengthContinuations: 1,
         submissionGate: {
@@ -482,7 +472,6 @@ describe.each([platformModel, codexModel])(
       expect(result).toMatchObject({
         state: "failed",
         providerRetryable: true,
-        truncated: false,
         error: "Response incomplete: max_messages",
         text: "",
       });
@@ -514,7 +503,6 @@ describe.each([platformModel, codexModel])(
         expect(result).toMatchObject({
           state: "failed",
           providerRetryable: false,
-          truncated: false,
         });
         expect(adapter.sent).toHaveLength(1);
       },
@@ -540,7 +528,7 @@ describe.each([platformModel, codexModel])(
         replay: "safe",
         async run({ value }) {
           executed.push(value);
-          return { recorded: value };
+          throw new Error("record rejected");
         },
       });
       const recovered = await runPi(store, {
