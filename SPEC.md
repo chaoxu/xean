@@ -1,6 +1,6 @@
-# xean core specification 1.1.1
+# xean core specification
 
-This file is the normative contract for xean 1.1.1.
+This file is the normative contract for xean.
 
 ## Purpose and boundary
 
@@ -21,7 +21,7 @@ Runtime and dependency versions are pinned in `package.json` and `bun.lock`. xea
 
 A campaign is one SQLite database. The database uses SQLite's `journal_mode=DELETE` rollback journal, `synchronous=FULL`, a five-second busy timeout, strict tables, and append-only triggers. Each journal entry is one atomic row insertion. A payload and its input items commit in one transaction. `createCampaign` creates a new artifact, `openCampaign` reopens an existing artifact for appends and performs any required rollback-journal recovery, and `openReader` opens an existing artifact without write access. WAL-format headers and `-wal` or `-shm` sidecars are outside the artifact contract and are rejected before SQLite opens the file. SQLite serializes writes. Applications remain responsible for ensuring that only one writer attempts a logical phase at a time.
 
-xean 1.1.1 campaigns use SQLite schema 1. The declaration records the schema and application identity, and a reader rejects an artifact whose schema is not the current one.
+xean campaigns use SQLite schema 1. The declaration records the schema and application identity, and a reader rejects an artifact whose schema is not the current one.
 
 Creation uses an exclusive private file create and never overwrites an existing path. The schema and campaign identity commit together. A crash before that commit may leave an invalid file, which readers reject and an operator must remove before retry. The artifact is not tamper-resistant against an operator with raw filesystem or SQL access.
 
@@ -95,6 +95,8 @@ xean supplies Pi only the audited wrappers selected for that run and asks suppor
 
 `runPi` returns a full `PiResult` with `call`, `text`, `transcript`, outcome, and telemetry. Its durable call-result stores a compact `piResultRecord`: outcome, call identity, telemetry, per-assistant usage, and `textRef` and `transcriptRef` payload digests. `storePiResult(campaign, result)` writes these attachments and returns the compact record. `readPiResult(output, reader)` validates that record and resolves its attachments into the full result, rejecting missing or corrupt attachment data. Summaries and accounting validate compact metadata without reading attachment bytes. Full core inspection resolves and validates attachments.
 
+`piResultRecord` validates the compact journal output. `piStoredResult` validates the expanded result body without its `call` field, including text, transcript, and telemetry. Both reject unknown top-level fields. The current package validates the current xean campaign and report contracts.
+
 `runPi` creates one typed `xean.pi.run` span and one standard Pi `pi.ai.request` child for every logical provider operation, including continuations after tool results. `maxLengthContinuations` bounds ordinary response-length continuations; `maxRecoveries` bounds consecutive retryable provider failures. Each allowance defaults to zero when omitted. A successful provider response resets that failure count, including a response that saves a partial submission. Every retryable provider failure, including `incomplete.max_messages` with new completed reasoning, consumes the error-recovery allowance. Completed reasoning remains available on an admitted retry. Gated recovery receives fresh user feedback and also requires remaining context headroom. Successful empty submissions are not provider errors and do not consume this allowance. Raw incomplete outcomes and their usage remain in the transcript and telemetry. A length continuation carries the full transcript. Ordinary calls use a fixed continuation prompt, and gated calls use their context-threshold feedback. An error recovery retains the failed assistant message in the transcript and derives its next model input as described below. A request with `replayReasoning: false` removes thinking blocks from every model input after the first response, including continuations and recoveries, while the transcript retains them; the default replays them. Overflow-shaped length stops, non-retryable errors, and aborts always terminate. Each recovery is an ordinary logical provider operation with its own span and request checkpoint. Provider adapters may retry an operation without exposing each wire attempt. Each `runPi` call generates one random transport session ID shared by its initial loop and recoveries, which adapters use for provider-side prompt caching, session affinity, and transport-failure fallback. The optional `transport` option pins the adapter transport (for example `"sse"`) for every operation in the call. Both are transport configuration outside the durable contract. xean releases Pi's session resources in `finally` after the logical call settles, including failure and cancellation. Pi owns WebSocket caching, incremental input, and transport fallback. Explicit custom proxies may opt into Pi's `compat.codexProxyAuth` for opaque API keys; that setting is rejected on the direct ChatGPT endpoint. Without a submission gate, the initial loop and continuations share a thirty-two-turn limit for responses that reach Pi's post-turn hook. Pi returns error and aborted responses before that hook. Message-limit recoveries are bounded by the error allowance and remaining context headroom. The settled span tree is stored inside that call's returned JSON, so its label, optional candidate, and optional requested reasoning level supply the reason and configuration for each operation without adding a telemetry table or stored roll-up. Request leaves carry the Pi schema's provider, requested and served models, API, response, stop reason, usage, cache, Pi model-price cost estimate, HTTP-status, and error fields when available.
 
 For `openai-responses` and `openai-codex-responses`, xean observes Pi's `thinking_end` events and snapshots validated reasoning signatures containing an item ID and encrypted content. Pi emits these after `response.output_item.done`, including when the enclosing response later fails. Within that live `runPi` call, the model-input projection replays these completed reasoning items in order through Pi's existing serializer, preserving their IDs and encrypted bytes. Repeated item IDs in failed attempts are omitted. The failed response must match the requested provider, API, and model, including the served model when Pi reports it. The projection contains no text or tool calls from failed attempts. Previously successful messages and tool results remain available, and tools from failed attempts are never executed. Pi's original error stop reason and request telemetry remain in the durable result.
@@ -126,48 +128,6 @@ The parent call contains the optional candidate sequence, provider, model ID, AP
 A candidate is verified when each required verifier has at least one PASS and no required verifier has any FAIL. INCONCLUSIVE neither passes nor fails. A later PASS does not erase a FAIL for that candidate ID. Failures are submission-scoped: submitting even identical bytes again creates an independent candidate, and applications decide whether to permit that retry.
 
 `deriveCandidateStatus(records, candidate)` derives `verified`, missing verifier names, failed verifier names, and the first PASS verdict sequence for each satisfied verifier from one explicit record snapshot. It stores no status row. Publishing, adopting, or otherwise promoting a verified candidate is an application action.
-
-## Primary API
-
-```ts
-createCampaign(path, application, config): Campaign
-openCampaign(path): Campaign
-openReader(path): Reader
-deriveCandidateStatus(records, candidate): CandidateStatus
-returnedToolSubmission(records, call, tool): ReturnedToolSubmission
-entryIdSchema // Zod schema for a positive integer EntryId
-verdictSchema // Zod schema for PASS, FAIL, or INCONCLUSIVE
-
-campaign.submitCandidate(material, requiredVerifiers): EntryId
-campaign.call(options, runner): Promise<CallReceipt>
-campaign.recordVerdict(call, verdict, evidence): EntryId
-campaign.records(query?: RecordQuery): readonly Entry[]
-campaign.record(seq): Entry | undefined
-campaign.lastSequence(): number
-campaign.storePayload(value: Json): string
-campaign.storePayloadJson(encoded: string): string
-campaign.payload(digest: string): Json
-campaign.material(candidate): Uint8Array
-campaign.close(): void
-
-reader.records(query?: RecordQuery): readonly Entry[]
-reader.record(seq): Entry | undefined
-reader.lastSequence(): number
-reader.payload(digest: string): Json
-reader.material(candidate): Uint8Array
-reader.close(): void
-
-defineTool(definition): Tool
-runPi(campaign, options): Promise<PiResult> // from xean/pi
-storePiResult(campaign, result): z.output<typeof piResultRecord> // from xean/pi
-readPiResult(output, reader): PiResult // from xean/pi
-piRequestAttempts(records, parent?, reader?): readonly PiRequestAttempt[] // from xean/pi
-derivePiSpend(records): PiSpend // from xean/pi
-piReasoning, piRequest, piTelemetry, piStoredResult, piResultRecord // Zod schemas from xean/pi
-inspectCoreCallSummaries(records): readonly CoreCallSummaryV1[] // from xean/observe
-```
-
-`piResultRecord` validates the compact journal output. `piStoredResult` validates the expanded result body without its `call` field, including text, transcript, and telemetry. Both reject unknown top-level fields. The current package validates the current xean campaign and report contracts.
 
 `inspectCoreCallSummaries(records)` derives call timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting from one captured entry array. It validates metadata without reading response or transcript attachments or candidate material, and omits `pi.responseText`. Full `inspectCoreCampaignRecords(reader, records)` retains response text, candidate material, and attachment integrity checks.
 

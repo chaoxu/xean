@@ -1,5 +1,5 @@
 export { createCampaign, openCampaign, openReader } from "./campaign";
-export { entryId as entryIdSchema, verdict as verdictSchema } from "./schemas";
+export { verdict as verdictSchema } from "./schemas";
 export { defineTool } from "./types";
 export { deriveCandidateStatus, returnedToolSubmission } from "./verification";
 export type {

@@ -73,9 +73,10 @@ try {
     join(consumer, "index.ts"),
     `import { isDeepStrictEqual } from "node:util";
 import {
-  createCampaign, defineTool, deriveCandidateStatus, entryIdSchema,
+  createCampaign, defineTool, deriveCandidateStatus,
   openCampaign, openReader, returnedToolSubmission, verdictSchema,
-  type CallReceipt, type Campaign, type Entry, type Json, type Verdict,
+  type CallReceipt, type Campaign, type Entry, type Json, type RecordQuery,
+  type Verdict,
 } from "xean";
 import {
   builtinPi, derivePiSpend, XEAN_PI_TELEMETRY_SCHEMA,
@@ -87,7 +88,7 @@ import {
 import {
   inspectCoreCampaign, inspectCoreCampaignSummary,
   inspectCoreCallSummaries,
-  type CoreCampaignObservationV1, type CoreCampaignSummaryV1,
+  type CoreCallSummaryV1, type CoreCampaignObservationV1, type CoreCampaignSummaryV1,
 } from "xean/observe";
 import { z } from "zod";
 
@@ -151,11 +152,12 @@ try {
     !("measuredUsage" in spend) || spend.measuredUsage.reasoning !== 3)
     throw new Error("Packed consumer did not receive the patched native Pi provider");
 } finally { campaign.close(); }
-void [entryIdSchema, verdictSchema, openCampaign, openReader,
+void [verdictSchema, openCampaign, openReader,
   returnedToolSubmission, XEAN_PI_TELEMETRY_SCHEMA, PI_TELEMETRY_SCHEMA_VERSIONS,
   piReasoning, piRequestAttempts, piTelemetry, runPi];
-void (undefined as unknown as CallReceipt | Campaign | Entry | Json | Verdict |
-  PiResult | PiSpend | CoreCampaignObservationV1 | CoreCampaignSummaryV1);
+void (undefined as unknown as CallReceipt | Campaign | Entry | Json | RecordQuery |
+  Verdict | PiResult | PiSpend | CoreCallSummaryV1 | CoreCampaignObservationV1 |
+  CoreCampaignSummaryV1);
 void [inspectCoreCampaign, inspectCoreCampaignSummary];
 `,
   );
