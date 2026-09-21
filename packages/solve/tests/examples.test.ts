@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { piProfileNames } from "../pi-roles";
 import { settings } from "../runner";
 import { task } from "../roles";
+import { workflowConfiguration } from "../workflow";
 import { builtinPi } from "xean/pi";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
@@ -45,6 +46,26 @@ test.each(["openai", "openai-codex"])(
     }
   },
 );
+
+test("a frozen example declaration carries no coordinator instructions", () => {
+  // Prose in the declaration would make every campaign unresumable after a
+  // wording edit, contrary to the rule that prompt edits need no bump.
+  const config = workflowConfiguration({
+    task: task.parse(
+      JSON.parse(
+        readFileSync(new URL("task-even-sum.json", directory), "utf8"),
+      ),
+    ),
+    settings: JSON.parse(
+      readFileSync(new URL("settings-openai-codex.json", directory), "utf8"),
+    ),
+  });
+  expect(config.settings.coordinatorBehavior).toEqual({
+    literature: "never",
+    verification: "decide",
+  });
+  expect(JSON.stringify(config)).not.toContain("instructions");
+});
 
 test("the all-max example uses one profile per Pi call", () => {
   const value = settings.parse(

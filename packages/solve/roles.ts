@@ -250,12 +250,14 @@ export const coordinatorBehavior = z.strictObject({
 });
 export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
 
-/** The campaign policy new campaigns freeze unless their settings supply one. */
+/**
+ * The campaign policy new campaigns freeze unless their settings supply one.
+ * It carries no prose: instructions are caller-only, so the frozen
+ * declaration never changes with prompt wording.
+ */
 export const defaultCoordinatorBehavior: CoordinatorBehavior = {
   literature: "never",
   verification: "decide",
-  instructions:
-    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now, and list every ready note in the same verifier dispatch. If a live note claims to meet the completion criteria, list it with all four verifiers and choose verifier before another Explorer call when the verifier action is available. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After the one literature search, choose explorer and let its notes decide which citations need checking; do not list literature notes on their own. Keep the original problem and completion criteria as the objective.",
 };
 
 export const literatureInput = z.strictObject({
