@@ -10,7 +10,6 @@ import {
   deriveCandidateStatus,
   openReader,
   returnedToolSubmission,
-  type Tool,
   type ToolExecutionContext,
 } from "../src";
 
@@ -153,7 +152,6 @@ describe("small kernel", () => {
         verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
         evidence: z.json(),
       }),
-      replay: "safe",
       async run() {
         return null;
       },
@@ -205,7 +203,6 @@ describe("small kernel", () => {
       name: "submit_verdict",
       description: "Submit a verdict",
       input: z.strictObject({ verdict: z.literal("PASS") }),
-      replay: "safe",
       async run() {
         return null;
       },
@@ -362,7 +359,6 @@ describe("small kernel", () => {
         left: z.number().int(),
         right: z.number().int(),
       }),
-      replay: "safe",
       async run({ left, right }, context) {
         executionContext = context;
         return { sum: left + right };
@@ -444,7 +440,6 @@ describe("small kernel", () => {
       name: "restricted",
       description: "Accept only the declared input",
       input: z.strictObject({ safe: z.literal(true) }),
-      replay: "safe",
       async run() {
         ran = true;
         return null;
@@ -478,7 +473,6 @@ describe("small kernel", () => {
       input: z.strictObject({
         value: z.string().refine((value) => value.trim().length > 0),
       }),
-      replay: "safe",
       async run({ value }) {
         return { value };
       },
@@ -494,7 +488,6 @@ describe("small kernel", () => {
       name: "transformed",
       description: "Trim text",
       input: z.string().transform((value) => value.trim()),
-      replay: "safe",
       async run(value) {
         return value;
       },
@@ -520,7 +513,6 @@ describe("small kernel", () => {
       name: "effect",
       description: "Finish one effect",
       input: z.strictObject({}),
-      replay: "safe",
       async run() {
         await blocked;
         return { done: true };
@@ -570,7 +562,6 @@ describe("small kernel", () => {
       name: "fail",
       description: "Fail",
       input: z.strictObject({}),
-      replay: "safe",
       async run() {
         throw new Error("tool failed");
       },
@@ -597,23 +588,23 @@ describe("small kernel", () => {
     ]);
   });
 
-  test("rejects tools without an explicit replay-safe contract", async () => {
+  test("rejects duplicate tool names before writing a call row", async () => {
     const campaign = createCampaign(database(), "test", null);
-    const unsafe = {
+    const effect = defineTool({
       name: "effect",
-      description: "Unclassified effect",
+      description: "Effect",
       input: z.strictObject({}),
       async run() {
         return null;
       },
-    } as unknown as Tool;
+    });
 
     await expect(
       campaign.call(
-        { label: "unsafe", request: null, tools: [unsafe] },
+        { label: "duplicate", request: null, tools: [effect, effect] },
         async () => null,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow("duplicate tool name: effect");
     expect(campaign.records().map((entry) => entry.kind)).toEqual(["campaign"]);
   });
 });

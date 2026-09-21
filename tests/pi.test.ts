@@ -108,7 +108,6 @@ test("request accounting is durable before tool execution and counted once after
     name: "record",
     description: "Record",
     input: z.strictObject({}),
-    replay: "safe",
     async run() {
       const spend = derivePiSpend(store.records());
       expect(spend.unaccountedCalls).toHaveLength(1);
@@ -225,7 +224,6 @@ const submitVerdict = defineTool({
     verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
     evidence: z.json(),
   }),
-  replay: "safe",
   async run() {
     return null;
   },
@@ -412,7 +410,6 @@ const gatedTool = defineTool({
   name: "submit_result",
   description: "Return the result when complete or near the context limit",
   input: z.strictObject({ solution: z.boolean(), text: z.string() }),
-  replay: "safe",
   async run() {
     return null;
   },
@@ -702,7 +699,6 @@ test.each([false, true])(
         solution: z.boolean(),
         notes: z.array(z.string()),
       }),
-      replay: "safe",
       async run({ notes }) {
         const noteIds = notes.map((_, index) => `n${saved.length + index + 1}`);
         saved.push(...notes);
@@ -786,7 +782,6 @@ test("the first submission may hand off empty without a solution claim", async (
       solution: z.boolean(),
       notes: z.array(z.string()),
     }),
-    replay: "safe",
     async run() {
       return { noteIds: [] };
     },
@@ -818,7 +813,6 @@ test("empty submissions receive user continuation until the context threshold", 
       solution: z.boolean(),
       notes: z.array(z.string()),
     }),
-    replay: "safe",
     async run() {
       return { noteIds: [] };
     },
@@ -1558,7 +1552,6 @@ describe("thin Pi runner", () => {
         left: z.number().int(),
         right: z.number().int(),
       }),
-      replay: "safe",
       async run({ left, right }) {
         return { sum: left + right };
       },
@@ -1658,7 +1651,6 @@ describe("thin Pi runner", () => {
         left: z.number().int(),
         right: z.number().int(),
       }),
-      replay: "safe",
       async run() {
         throw new Error("adder offline");
       },
@@ -2009,7 +2001,6 @@ describe("thin Pi runner", () => {
       name: "submit",
       description: "Submit one answer",
       input: z.strictObject({ answer: z.number().int() }),
-      replay: "safe",
       async run(input) {
         return input;
       },
@@ -2058,7 +2049,6 @@ describe("thin Pi runner", () => {
       name: "submit",
       description: "Submit one answer",
       input: z.strictObject({ answer: z.number().int() }),
-      replay: "safe",
       async run(input) {
         controller.abort();
         return input;
@@ -2482,7 +2472,6 @@ describe("thin Pi runner", () => {
       name: "echo",
       description: "Echo",
       input: z.strictObject({ value: z.string() }),
-      replay: "safe",
       async run({ value }) {
         throw new Error(`echo ${value} rejected`);
       },
@@ -2519,7 +2508,6 @@ describe("thin Pi runner", () => {
       name: "echo",
       description: "Echo",
       input: z.strictObject({ value: z.string() }),
-      replay: "safe",
       async run({ value }) {
         throw new Error(`echo ${value} rejected`);
       },
@@ -2562,7 +2550,6 @@ describe("thin Pi runner", () => {
       name: "echo",
       description: "Echo",
       input: z.strictObject({ value: z.string() }),
-      replay: "safe",
       async run({ value }) {
         throw new Error(`echo ${value} rejected`);
       },
@@ -2658,7 +2645,6 @@ describe("thin Pi runner", () => {
       name: "echo",
       description: "Echo",
       input: z.strictObject({ value: z.string() }),
-      replay: "safe",
       async run({ value }) {
         throw new Error(`echo ${value} rejected`);
       },

@@ -22,7 +22,7 @@ export interface Tool {
   readonly name: string;
   readonly description: string;
   readonly input: z.ZodType;
-  readonly replay: "safe";
+  /** Every valid repetition after an interrupted phase must be harmless. */
   run(input: unknown, context: ToolExecutionContext): Promise<unknown>;
 }
 
@@ -42,7 +42,6 @@ export function toolDeclarations(
     if (seen.has(name)) throw new Error(`duplicate tool name: ${name}`);
     seen.add(name);
     const description = z.string().min(1).parse(tool.description);
-    z.literal("safe").parse(tool.replay);
     return {
       name,
       description,
@@ -121,7 +120,6 @@ export interface ToolDefinition<S extends z.ZodType> {
   readonly name: string;
   readonly description: string;
   readonly input: S;
-  readonly replay: "safe";
   run(input: z.output<S>, context: ToolExecutionContext): Promise<unknown>;
 }
 
@@ -132,7 +130,6 @@ export function defineTool<S extends z.ZodType>(
     name: definition.name,
     description: definition.description,
     input: definition.input,
-    replay: definition.replay,
     run(input, context) {
       return definition.run(input as z.output<S>, context);
     },

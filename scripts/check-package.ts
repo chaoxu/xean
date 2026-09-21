@@ -100,7 +100,7 @@ try {
   piRequest.parse({ protocol: "xean/pi-run/v2", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
   piStoredResult.parse({ state: "succeeded", text: "x", transcript: [] });
   builtinPi({ credentials: new InMemoryCredentialStore() });
-  defineTool({ name: "read", description: "Read", input: z.strictObject({}), replay: "safe", async run() { return null; } });
+  defineTool({ name: "read", description: "Read", input: z.strictObject({}), async run() { return null; } });
   const native = await import(Bun.resolveSync(
     "@earendil-works/pi-ai/api/openai-codex-responses",
     Bun.resolveSync("xean/pi", import.meta.dir),

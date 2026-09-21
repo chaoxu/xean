@@ -64,7 +64,6 @@ test("inspection does not interpret a Pi submission as source verification", asy
           name: roleTools.verifier,
           description: "Submit a verifier result",
           input: verdicts,
-          replay: "safe",
           async run() {
             return null;
           },

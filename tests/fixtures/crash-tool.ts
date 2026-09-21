@@ -13,7 +13,6 @@ const effect = defineTool({
   name: "effect",
   description: "Exit during a replay-safe effect",
   input: z.strictObject({ value: z.string() }),
-  replay: "safe",
   async run(_input, context) {
     writeFileSync(
       marker,

@@ -81,7 +81,6 @@ await runPi(campaign, {
             name: "ping",
             description: "Ping",
             input: z.strictObject({}),
-            replay: "safe",
             async run() {
               throw new Error("ping failed");
             },

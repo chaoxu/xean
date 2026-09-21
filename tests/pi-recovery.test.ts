@@ -236,7 +236,6 @@ describe.each([platformModel, codexModel])(
           name: "record",
           description: "Record one value",
           input: z.strictObject({ value: z.number() }),
-          replay: "safe",
           async run({ value }) {
             executed.push(value);
             return { recorded: value };
@@ -324,7 +323,6 @@ describe.each([platformModel, codexModel])(
                 value: z.number(),
                 solution: z.boolean(),
               }),
-              replay: "safe",
               async run({ value }) {
                 executed.push(value);
                 return null;
@@ -395,7 +393,6 @@ describe.each([platformModel, codexModel])(
                     name: "record",
                     description: "Record",
                     input: z.strictObject({ solution: z.boolean() }),
-                    replay: "safe",
                     async run() {
                       return null;
                     },
@@ -435,7 +432,6 @@ describe.each([platformModel, codexModel])(
             name: "record",
             description: "Record the result",
             input: z.strictObject({ solution: z.boolean() }),
-            replay: "safe",
             async run() {
               return null;
             },
@@ -525,7 +521,6 @@ describe.each([platformModel, codexModel])(
         name: "record",
         description: "Record one value",
         input: z.strictObject({ value: z.number() }),
-        replay: "safe",
         async run({ value }) {
           executed.push(value);
           throw new Error("record rejected");

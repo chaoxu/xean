@@ -16,7 +16,6 @@ const submitVerdict = defineTool({
   name: "submit_verdict",
   description: "Submit the final verdict and its evidence",
   input: verdictSubmission,
-  replay: "safe",
   async run() {
     return null;
   },

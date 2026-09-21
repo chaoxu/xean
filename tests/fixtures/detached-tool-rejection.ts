@@ -9,7 +9,6 @@ const fail = defineTool({
   name: "fail",
   description: "Reject after the runner returns",
   input: z.strictObject({}),
-  replay: "safe",
   async run() {
     await Promise.resolve();
     throw new Error("detached failure");

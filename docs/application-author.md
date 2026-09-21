@@ -35,7 +35,6 @@ const submitVerdict = defineTool({
   name: "submit_verdict",
   description: "Submit the final verdict and its evidence",
   input: verdictSubmission,
-  replay: "safe",
   async run() {
     return null;
   },
@@ -112,7 +111,6 @@ const inspectSource = defineTool({
   input: z.strictObject({
     source: z.enum(allowedSourceNames),
   }),
-  replay: "safe",
   async run({ source }, { signal }) {
     signal.throwIfAborted();
     return { source, text: await sourceStore.read(source) };
@@ -150,7 +148,7 @@ const audit = await runPi(campaign, {
 });
 ```
 
-Zod validates the model's input before `run` executes and generates the JSON Schema Pi receives. Pure refinements are supported; transforms are unsupported because JSON Schema cannot represent them. `replay: "safe"` is the application's assertion that every valid repetition is harmless; a write needs an application-stable semantic key or reconciliation rule. A recorded tool call without a result has an unknown outcome and is never retried by the kernel. Use the campaign namespace and tool-call sequence to reconcile the original external record. The exact recording and replay contract is in [`../SPEC.md`](../SPEC.md#calls-and-tools).
+Zod validates the model's input before `run` executes and generates the JSON Schema Pi receives. Pure refinements are supported; transforms are unsupported because JSON Schema cannot represent them. Every valid repetition of `run` must be harmless; a write needs an application-stable semantic key or reconciliation rule. A recorded tool call without a result has an unknown outcome and is never retried by the kernel. Use the campaign namespace and tool-call sequence to reconcile the original external record. The exact recording and replay contract is in [`../SPEC.md`](../SPEC.md#calls-and-tools).
 
 Tools should express one bounded application action. Suitable proof-search tools read a named attached source, inspect a bounded frontier view, launch one application-approved computation, or submit one structured observation. Do not expose SQL, the campaign path, a database client, arbitrary record append, unrestricted candidate access, the whole `Campaign`, or a general filesystem shell.
 

@@ -695,7 +695,6 @@ async function runCall<S extends z.ZodType>(
       name: roleCall.tool,
       description: roleCall.description,
       input: roleCall.schema,
-      replay: "safe",
       async run() {
         return null;
       },
@@ -791,7 +790,6 @@ export function createPiRoles(
         name: roleCall.tool,
         description: roleCall.description,
         input: explorerResultFor(known),
-        replay: "safe",
         async run(_value, { call, toolCall }) {
           // The audited tool-call is the saved write. Reconcile its receipt
           // from that durable identity, including a repeated run() after it.
