@@ -63,6 +63,22 @@ test("the precise compaction warning preserves a completed final submission", ()
   }
 });
 
+test("a reconnect notice does not discard the completed source result", () => {
+  const reconnect = {
+    type: "error",
+    message:
+      "Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)",
+  };
+  expect(
+    codexTranscript(
+      jsonl([...start, reconnect, search("s1"), final, completed]),
+    ),
+  ).toMatchObject({
+    message: JSON.stringify({ verdict: "PASS" }),
+    searches: 1,
+  });
+});
+
 test("the warning exception does not accept real errors or forbidden tools", () => {
   for (const event of [
     { ...warning, item: { ...warning.item, message: "API request failed" } },

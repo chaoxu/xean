@@ -79,6 +79,7 @@ export type CodexUsage = z.output<typeof codexUsage>;
 
 const compactionWarning =
   "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+const reconnectNotice = /^Reconnecting(?:\.\.\.|…)\s+\d+\/\d+\s+\(/u;
 
 function eventObject(value: Json): Record<string, Json> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -112,6 +113,12 @@ class CodexJsonlParser {
 
   private accept(event: Record<string, Json>): void {
     const type = z.string().parse(event["type"]);
+    if (
+      type === "error" &&
+      typeof event["message"] === "string" &&
+      reconnectNotice.test(event["message"])
+    )
+      return;
     if (type === "thread.started") {
       if (this.#stage !== "start")
         throw new Error("thread.started out of order");
