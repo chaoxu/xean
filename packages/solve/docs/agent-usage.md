@@ -93,7 +93,7 @@ bun packages/solve/solve.ts submit --id initial-results campaign.db - < notes.js
 ```
 
 ```ts
-import { submitNotes } from "xean-solve";
+import { submitNotes } from "./packages/solve/solve.ts";
 
 const receipt = await submitNotes(
   "campaign.db",
@@ -156,7 +156,7 @@ The receipt acknowledges durable storage. Repeating the same id and exact text r
 In TypeScript, the installed solver also exports the same operation:
 
 ```ts
-import { guideCampaign } from "xean-solve";
+import { guideCampaign } from "./packages/solve/solve.ts";
 
 const receipt = await guideCampaign(
   "campaign.db",

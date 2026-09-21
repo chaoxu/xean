@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 async function run(command: string[], cwd: string): Promise<void> {
   const child = Bun.spawn(command, {
@@ -45,7 +45,6 @@ try {
         zod: manifest.dependencies.zod,
       },
       devDependencies: {
-        "@earendil-works/pi-coding-agent": "0.85.1",
         "@types/bun": manifest.devDependencies["@types/bun"],
         typescript: manifest.devDependencies.typescript,
       },
@@ -177,6 +176,29 @@ void [inspectCoreCampaign, inspectCoreCampaignSummary];
   );
   await run([process.execPath, "x", "tsc", "--noEmit"], consumer);
   await run([process.execPath, "run", "index.ts"], consumer);
+  // The packed kernel bundles its Pi copy and the coding-agent brings its own.
+  // The solver runtime must bind requests to the bundled copy without loading
+  // the coding-agent entrypoint.
+  await cp(join(root, "packages/solve"), join(consumer, "solve"), {
+    recursive: true,
+    filter: (source) => basename(source) !== "node_modules",
+  });
+  await Bun.write(
+    join(consumer, "check-runtime.ts"),
+    `${await Bun.file(join(root, "packages/solve/tests/fixtures/no-coding-agent-entrypoint.ts")).text()}
+import { createModelRuntime } from "./solve/runtime.ts";
+const bundledPi = Bun.resolveSync("@earendil-works/pi-ai", Bun.resolveSync("xean/pi", import.meta.dir));
+const codingAgent = Bun.resolveSync("@earendil-works/pi-coding-agent", import.meta.dir);
+if (bundledPi === Bun.resolveSync("@earendil-works/pi-ai", codingAgent))
+  throw new Error("consumer fixture requires separate bundled and transitive Pi copies");
+await createModelRuntime({ modelsPath: null, authPath: "./auth.json", refreshOnCreate: false });
+`,
+  );
+  await run([process.execPath, "run", "check-runtime.ts"], consumer);
+  await run(
+    [process.execPath, "test", "./solve/tests/model-runtime.test.ts"],
+    consumer,
+  );
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }

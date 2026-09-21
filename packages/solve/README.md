@@ -164,7 +164,7 @@ After `accepted`, give an external reviewer the frozen task and the complete arg
 ## Development
 
 ```sh
-bun run --cwd packages/solve check
+bun run check
 bun run e2e:roles
 ```
 
