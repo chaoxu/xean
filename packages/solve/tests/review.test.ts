@@ -48,7 +48,10 @@ test.each([{ provider: "codex" }, { search: true }, { search: false }])(
 );
 
 test("the source gate rejects an unsupported PASS and retains explicit uncertainty", () => {
-  const schema = sourceVerdictsFor(["n24"]);
+  const schema = sourceVerdictsFor(
+    ["n24"],
+    [{ note: "n24", externalResults: [claim] }],
+  );
   const value = {
     note: "n24",
     verdict: "PASS",
@@ -61,15 +64,9 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
     schema.safeParse({ verdicts: [{ ...value, verdict: "INCONCLUSIVE" }] })
       .success,
   ).toBe(true);
+  // A runtime passage binds by resultId; one without it is rejected.
   expect(
-    schema.safeParse({
-      verdicts: [
-        {
-          ...value,
-          sources: [{ ...evidence, result: "Fixed-terminal BiCut is hard." }],
-        },
-      ],
-    }).success,
+    schema.safeParse({ verdicts: [{ ...value, sources: [evidence] }] }).success,
   ).toBe(false);
   expect(
     schema.safeParse({
@@ -92,15 +89,28 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
 test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
   "source evidence cannot name an undeclared result for %s",
   (verdict) => {
-    const schema = sourceVerdictsFor(["n24"]);
+    const schema = sourceVerdictsFor(
+      ["n24"],
+      [{ note: "n24", externalResults: [claim] }],
+    );
     const value = {
       note: "n24",
       verdict,
       report: "Source assessment.",
-      externalResults: [],
-      sources: [evidence],
+      externalResults: [claim],
+      sources: [{ ...evidence, resultId: "external-arbitrary" }],
     };
     expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
+    expect(
+      schema.safeParse({
+        verdicts: [
+          {
+            ...value,
+            sources: [{ ...evidence, resultId: externalResultId(claim) }],
+          },
+        ],
+      }).success,
+    ).toBe(true);
     expect(
       reviewVerdict.safeParse({
         verdict,
@@ -113,13 +123,17 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
       reviewVerdict.safeParse({
         verdict,
         report: value.report,
-        externalResults: [],
+        externalResults: [claim],
         sources: [{ ...evidence, resultId: "external-arbitrary" }],
       }).success,
     ).toBe(false);
     expect(
-      schema.safeParse({ verdicts: [{ ...value, externalResults: [claim] }] })
-        .success,
+      reviewVerdict.safeParse({
+        verdict,
+        report: value.report,
+        externalResults: [claim],
+        sources: [evidence],
+      }).success,
     ).toBe(true);
   },
 );

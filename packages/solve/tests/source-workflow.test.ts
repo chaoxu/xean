@@ -338,7 +338,7 @@ test("a failed source assessment never supplies reusable evidence", async () => 
             verdict: "FAIL",
             report: "The theorem's hypotheses do not match.",
             externalResults: [result],
-            sources: [source],
+            sources: [{ ...source, resultId: externalResultId(result) }],
           },
         ],
       },

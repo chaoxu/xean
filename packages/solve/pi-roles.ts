@@ -45,7 +45,7 @@ import {
   roleCallRecords,
   roleTools,
   sourceVerdictsFor,
-  sourceVerdicts,
+  sourceSubmission,
   sources,
   statement as statementSchema,
   succeededSubmission,
@@ -57,12 +57,11 @@ import {
   verifierNames,
   literatureInput,
   literatureReport,
-  literatureResult,
-  literatureStatus,
+  type CoordinatorAction,
   type CoordinatorInput,
   type ExplorerInput,
   type LiteratureInput,
-  type LiteratureResult,
+  type LiteratureReport,
   type Note,
   type RoleName,
   type Roles,
@@ -100,12 +99,12 @@ export const codexProfile = z.strictObject({
   reasoning: codexReasoning,
 });
 
-/** Default campaign-level policy supplied to every coordinator boundary. */
+/** Default campaign-level policy supplied at each coordinator workflow mode boundary. */
 export const defaultCoordinatorBehavior = {
   literature: "never" as const,
   verification: "decide" as const,
   instructions:
-    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator workflow mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After an explicitly enabled literature search, use its candidate notes to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
+    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After an explicitly enabled literature search, use its candidate notes to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
 };
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
@@ -247,27 +246,25 @@ export function coordinatorCall(
   input: CoordinatorInput,
   mode: "fixed" | "coordinator" = "fixed",
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
-  const behavior = coordinatorBehaviorSchema.parse(
-    input.coordinatorBehavior ?? defaultCoordinatorBehavior,
-  );
-  const status = literatureStatus.parse(
-    input.literatureStatus ?? "not-started",
-  );
+  const behavior = input.coordinatorBehavior ?? defaultCoordinatorBehavior;
+  const status = input.literatureStatus ?? "not-started";
   // A live note that no verification has judged yet. A checked note whose
   // evidence stayed inconclusive is not forced back into verification.
   const uncheckedLive = input.notes.some(
     ({ verified, dead, verdicts }) =>
       !verified && !dead && verdicts.length === 0,
   );
-  const requireLiteratureAction =
-    mode === "coordinator" &&
-    behavior.literature === "required-if-not-started" &&
-    status === "not-started";
-  const requireVerifierAction =
-    mode === "coordinator" &&
-    behavior.verification === "always" &&
-    uncheckedLive &&
-    !requireLiteratureAction;
+  const allowedActions: readonly CoordinatorAction["role"][] | undefined =
+    mode !== "coordinator"
+      ? undefined
+      : behavior.literature === "required-if-not-started" &&
+          status === "not-started"
+        ? ["literature"]
+        : behavior.verification === "always" && uncheckedLive
+          ? ["verifier"]
+          : behavior.literature === "never"
+            ? ["explorer", "verifier"]
+            : ["explorer", "literature", "verifier"];
   return {
     role: "coordinator",
     label: roleLabels.coordinator,
@@ -282,19 +279,23 @@ export function coordinatorCall(
       "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
-      "After an Explorer handoff, inspect each newly submitted live note before choosing another role. When its text claims the completion criteria, list that note with all four verifiers and choose verifier immediately; do not ask Explorer to rewrite or polish a complete-looking note.",
+      "After an Explorer handoff, inspect each newly submitted live note. When its text claims the completion criteria, list that note with all four verifiers; do not ask Explorer to rewrite or polish a complete-looking note.",
       ...(mode === "coordinator"
         ? [
-            "This run uses coordinator workflow mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
+            "This run uses coordinator workflow mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. Choose verifier immediately for a note that claims the completion criteria. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
+            "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
           ]
         : []),
-      "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Literature status: ${status}`,
-      `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
+      ...(mode === "coordinator"
+        ? [
+            `Literature status: ${status}`,
+            `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
+          ]
+        : []),
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
@@ -305,13 +306,7 @@ export function coordinatorCall(
     tool: roleTools.coordinator,
     description:
       "File every note without a summary, give explorer guidance and support for the next turn, and list the notes to verify with their verifiers",
-    schema: coordinatorResultFor(input.notes, {
-      requireAction: mode === "coordinator",
-      requireLiteratureAction,
-      requireVerifierAction,
-      forbidLiteratureAction:
-        mode === "coordinator" && behavior.literature === "never",
-    }),
+    schema: coordinatorResultFor(input.notes, allowedActions),
   };
 }
 
@@ -319,11 +314,7 @@ export function coordinatorCall(
 export function literatureCall(
   input: LiteratureInput,
   profile: z.output<typeof codexProfile>,
-): {
-  readonly label: string;
-  readonly request: Json;
-  readonly schema: typeof literatureReport;
-} {
+): { readonly label: string; readonly request: Json } {
   const parsed = literatureInput.parse(input);
   const outputSchema = z.toJSONSchema(literatureReport);
   return {
@@ -353,31 +344,53 @@ export function literatureCall(
         outputSchema,
       }),
     ),
-    schema: literatureReport,
   };
 }
-
-/** Local durable handoff used when Codex cannot return note candidates. */
-export const localLiteratureRequest = z.strictObject({
-  protocol: z.literal("xean/literature-local/v1"),
-  literatureCall: z.number().int().positive(),
-  request: z.json(),
-});
 
 /** The submitted-notes id that delivers one settled literature call's notes. */
 export function literatureNotesId(call: EntryId): string {
   return `literature:${call}`;
 }
 
+/**
+ * How the fold and the runner read one journaled literature call: its usable
+ * report, a failed discovery that settled without candidates (`report`
+ * undefined), or undefined for an unsettled, cancelled, or unusable call,
+ * which a fresh call replaces.
+ */
+export function literatureOutcome(
+  records: readonly Entry[],
+  call: EntryId,
+):
+  | { readonly settled: EntryId; readonly report: LiteratureReport | undefined }
+  | undefined {
+  const returned = returnedOutput(records, call);
+  if (returned === undefined) return undefined;
+  const state = codexResult.parse(returned.output).state;
+  if (state === "failed")
+    return { settled: returned.settled, report: undefined };
+  if (state !== "succeeded") return undefined;
+  try {
+    const parsed = literatureReport.safeParse(
+      codexSubmission(records, call)?.input,
+    );
+    return parsed.success
+      ? { settled: returned.settled, report: parsed.data }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const correctionAssessment =
   "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. Notes remain unchanged: a PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
 
 export const sourceAssessment =
-  "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected with its assigned result ID, source identifying the paper and theorem or section, url for the page you opened, and quote giving the relevant passage. The result description may be restated in ordinary language, but the assigned ID must be preserved. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
+  "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected: result names the checked result, source identifies the paper and theorem or section, url identifies the page you opened, and quote gives the relevant passage. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
 
 const verifierObligations = {
   correctness: `Judge whether each note establishes its stated result under the correction policy below. A correct partial result passes even when it explicitly leaves the task unfinished. Check every load-bearing inference, and search for counterexamples, missing cases, invalid bounds, and reasons the stated conclusions do not follow. Fail a note when an essential inference remains unsupported, its stated conclusion remains unproved, or a blocking defect remains after permitted local corrections. Check that every substantive result the text uses is proved there or supplied by that note's declared support and its transitive closure. An application of a nonroutine external theorem must name a support note stating that theorem with its exact hypotheses and conclusion; fail an undeclared substantive dependency or an application that does not meet those hypotheses. An isolated theorem note may cite its external source directly without proving that theorem: assess its precise statement conditionally, pending source validation, rather than failing solely because its primary-source premise is not yet verified. For every verdict, list all nonroutine external premises that this note directly requires in externalResults. Each entry is self-contained: include exact hypotheses, conclusion, source identification when present, and the claimed application. Include hidden external premises even when the citation is vague or absent. Use [] only when the note relies entirely on its own proof, its declared established support, and immediate routine facts. Do not repeat external premises already supplied by declared support; their theorem notes receive their own source check. A correctness PASS is conditional on all listed premises, and establishes no source evidence. Other notes in the verification batch are not additional premises. A note ID mentioned only for provenance or a mathematical expression resembling an ID is not a dependency. ${correctionAssessment}`,
-  source: `Check every external result assigned by the completed correctness check. Each assigned result has a stable ID in the source packet. Preserve every ID exactly; do not omit, merge, or weaken an assigned result. A returned result description may use ordinary wording or harmless punctuation changes, but its source passage must name the assigned ID. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result ID: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
+  source: `Check every external result assigned by the completed correctness check. Each assigned result has a stable ID in the source packet. Preserve every ID exactly; do not omit, merge, or weaken an assigned result. Each source entry carries the resultId of the premise it establishes; its result description may use ordinary wording or harmless punctuation changes, but the assigned ID must be preserved. ${sourceAssessment} Previously inspected passages supplied with journal provenance may be reused for an identical result ID: check their exact hypotheses, conclusion, and applicability to the current note, and return the exact supplied passage unchanged when no new source was opened. Use these passages before browsing. Reopen a source only when the supplied evidence is insufficient for the exact current application. The correctness verifier already checked the complete proof and declared support. Do not reprove established supporting results. If you discover an additional undeclared substantive premise or a blocking defect that remains after permitted local corrections, return FAIL with the concrete defect. ${correctionAssessment} State the basis of the assessment in the report.`,
   requirements: `Decide whether each note meets every completion criterion of the exact task. A sound partial result that does not meet them fails, and the report says so plainly. ${correctionAssessment}`,
   reconstruction: `Compare the note's text with a proof written from the statement and the support notes alone. First check that the supplied statement faithfully states what the note establishes, with its hypotheses and conclusion and without its proof method or steps. If the statement misstates the note or gives away its method, return a corrected statement in the statement field and an empty verdicts list. This repairs the verification input and makes no verdict on the note. Otherwise set statement to null and return one verdict: PASS when both establish the statement and the note's text uses no result beyond its support and the statement's hypotheses; FAIL when the statement remains unproved after permitted local corrections or the note relies on an undeclared substantive result; INCONCLUSIVE when the independent proof left something unproved and no concrete defect in the note was found. ${correctionAssessment}`,
 } as const satisfies Readonly<Record<VerifierName, string>>;
@@ -539,7 +552,6 @@ export async function reconstructionCall(
 }
 
 const sourcePassage = sources.element.extend({
-  resultId: nonblank,
   call: z.number().int().positive(),
   note: nonblank,
 });
@@ -576,7 +588,7 @@ export const localSourceRequest = z.strictObject({
 });
 export const localSourceResult = z.strictObject({
   state: z.literal("succeeded"),
-  ...sourceVerdicts.shape,
+  ...sourceSubmission.shape,
 });
 
 // Correctness reads the complete proof once. Source reads only notes with
@@ -1031,8 +1043,9 @@ function canonicalSourceVerdicts(
 ): z.output<ReturnType<typeof sourceVerdictsFor>> {
   return {
     verdicts: value.verdicts.map((verdict) => {
-      const expected = assigned.find(({ note }) => note === verdict.note);
-      if (expected === undefined) return verdict;
+      // The schema already bound every verdict to an assigned note and
+      // every passage to an assigned premise ID.
+      const expected = assigned.find(({ note }) => note === verdict.note)!;
       const resultById = new Map(
         expected.externalResults.map((result) => [
           externalResultId(result),
@@ -1044,29 +1057,23 @@ function canonicalSourceVerdicts(
         externalResults: [...expected.externalResults],
         sources: verdict.sources.map((source) => ({
           ...source,
-          result:
-            source.resultId === undefined
-              ? source.result
-              : (resultById.get(source.resultId) ?? source.result),
+          result: resultById.get(source.resultId)!,
         })),
       };
     }),
-  } as z.output<ReturnType<typeof sourceVerdictsFor>>;
+  };
 }
 
 /** Accept source verdicts only with valid claims and inspected or supplied passages. */
 function sourceVerdictsOf(
   schema: ReturnType<typeof sourceVerdictsFor>,
   submission: ReturnType<typeof codexSubmission>,
-  passages: readonly SourcePassage[] = [],
-  assigned?: AssignedExternalResults,
+  passages: readonly SourcePassage[],
+  assigned: AssignedExternalResults,
 ): z.output<ReturnType<typeof sourceVerdictsFor>> | undefined {
   const parsed = schema.safeParse(submission?.input);
   if (submission === undefined || !parsed.success) return undefined;
-  const value =
-    assigned === undefined
-      ? parsed.data
-      : canonicalSourceVerdicts(parsed.data, assigned);
+  const value = canonicalSourceVerdicts(parsed.data, assigned);
   if (
     submission.searches === 0 &&
     value.verdicts.some(({ sources }) =>
@@ -1133,20 +1140,12 @@ function inspectedPassages(
       )
         continue;
       for (const source of verdict.sources) {
-        const { resultId } = source;
-        if (resultId === undefined) continue;
         if (
           !passages.some(({ call: _, note: __, ...known }) =>
             isDeepStrictEqual(known, source),
           )
-        ) {
-          passages.push({
-            call: entry.seq,
-            note: verdict.note,
-            ...source,
-            resultId,
-          });
-        }
+        )
+          passages.push({ call: entry.seq, note: verdict.note, ...source });
       }
     }
   }
@@ -1340,9 +1339,8 @@ async function runSource(
       assigned,
     );
   };
-  const inconclusive = (call: EntryId, report: string) => ({
-    call,
-    value: schema.parse({
+  const inconclusive = (report: string) =>
+    schema.parse({
       verdicts: judged.map((note) => ({
         note,
         verdict: "INCONCLUSIVE",
@@ -1352,8 +1350,7 @@ async function runSource(
         )!.externalResults,
         sources: [],
       })),
-    }),
-  });
+    });
   const successful = (call: EntryId): boolean => {
     const returned = returnedOutput(roleCallRecords(campaign, call), call);
     const output =
@@ -1362,36 +1359,35 @@ async function runSource(
         : codexResult.safeParse(returned.output);
     return output?.success === true && output.data.state === "succeeded";
   };
-  for (const entry of campaign.records({
-    kinds: ["call"],
-    labels: [verifierLabels.source],
-  })) {
-    if (
-      entry.kind !== "call" ||
-      entry.candidate !== candidate ||
-      entry.label !== label ||
-      !sameRequest(entry.request, request)
-    )
-      continue;
+  // A successful call whose response is unusable says nothing about the
+  // mathematics: keep the call, record INCONCLUSIVE with the assigned
+  // premises unchanged, and admit no returned evidence for reuse.
+  const conclude = (call: EntryId) => {
+    const unusable = (reason: string) =>
+      inconclusive(
+        `The source verifier response was not usable: ${reason} No source conclusion was drawn, and its evidence was discarded.`,
+      );
     try {
-      const value = read(entry.seq);
-      if (value !== undefined) return { call: entry.seq, value };
-      if (successful(entry.seq)) {
-        return inconclusive(
-          entry.seq,
-          "The source verifier response was not usable. No source conclusion was drawn, and its evidence was discarded.",
-        );
-      }
+      return (
+        read(call) ??
+        unusable(
+          "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search.",
+        )
+      );
     } catch (error) {
-      if (successful(entry.seq)) {
-        return inconclusive(
-          entry.seq,
-          `The source verifier response was not usable: ${error instanceof Error ? error.message : String(error)} No source conclusion was drawn, and its evidence was discarded.`,
-        );
-      }
-      throw error;
+      return unusable(
+        `malformed source transcript: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-  }
+  };
+  const prior = settled(
+    campaign.records({ kinds: ["call"], labels: [label] }),
+    candidate,
+    label,
+    request,
+    (call) => (successful(call) ? conclude(call) : undefined),
+  );
+  if (prior !== undefined) return prior;
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
   const receipt = await campaign.call(
@@ -1408,30 +1404,9 @@ async function runSource(
       exec(codexRequest.parse(exact), signal),
   );
   const output = codexResult.parse(receipt.output);
-  if (output.state !== "succeeded") {
+  if (output.state !== "succeeded")
     throw new RoleCallError(`verifier failed: ${output.error}`);
-  }
-  let value: z.output<ReturnType<typeof sourceVerdictsFor>> | undefined;
-  let failure: string | undefined;
-  try {
-    value = read(receipt.call);
-  } catch (error) {
-    failure = `malformed source transcript: ${error instanceof Error ? error.message : String(error)}`;
-  }
-  if (value === undefined) {
-    failure ??=
-      "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search";
-    // A source response can be unusable without saying anything about the
-    // mathematics. Preserve the successful Codex call, but record an
-    // inconclusive verdict so the workflow can continue and decide what to
-    // do next. The assigned premises remain exact; no returned evidence is
-    // admitted for reuse.
-    value = inconclusive(
-      receipt.call,
-      `The source verifier response was not usable: ${failure} No source conclusion was drawn, and its evidence was discarded.`,
-    ).value;
-  }
-  return { call: receipt.call, value };
+  return { call: receipt.call, value: conclude(receipt.call) };
 }
 
 /**
@@ -1445,21 +1420,12 @@ async function runLiterature(
   input: LiteratureInput,
   dependencies: PiRoleDependencies,
   after: EntryId,
-): Promise<{ readonly call: EntryId; readonly value: LiteratureResult }> {
-  const { label, request, schema } = literatureCall(input, profile);
-  const read = (call: EntryId): LiteratureResult | undefined => {
-    try {
-      const submission = codexSubmission(roleCallRecords(campaign, call), call);
-      if (submission === undefined) return undefined;
-      const parsed = schema.safeParse(submission.input);
-      return parsed.success
-        ? { request: input.request, notes: parsed.data.notes }
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  const deliver = async (call: EntryId, value: LiteratureResult) => {
+): Promise<{ readonly call: EntryId; readonly value: LiteratureReport }> {
+  const { label, request } = literatureCall(input, profile);
+  const conclude = async (call: EntryId) => {
+    const outcome = literatureOutcome(roleCallRecords(campaign, call), call);
+    if (outcome === undefined) return undefined;
+    const value = outcome.report ?? { notes: [] };
     if (value.notes.length > 0) {
       await appendSubmittedNotesLocked(
         campaign,
@@ -1467,38 +1433,17 @@ async function runLiterature(
         literatureNotesId(call),
       );
     }
-    return value;
+    return { call, value };
   };
-  for (const entry of campaign.records({ kinds: ["call"] })) {
+  for (const entry of campaign.records({ kinds: ["call"], labels: [label] })) {
     if (
       entry.kind !== "call" ||
       entry.seq <= after ||
-      entry.role !== "literature" ||
-      entry.label !== label ||
-      (!sameRequest(entry.request, request) &&
-        !localLiteratureRequest.safeParse(entry.request).success)
+      !sameRequest(entry.request, request)
     )
       continue;
-    const local = localLiteratureRequest.safeParse(entry.request);
-    const value =
-      local.success && isDeepStrictEqual(local.data.request, request)
-        ? (() => {
-            const output = returnedOutput(
-              roleCallRecords(campaign, entry.seq),
-              entry.seq,
-            );
-            return output === undefined
-              ? undefined
-              : (() => {
-                  const parsed = literatureResult.safeParse(output.output);
-                  return parsed.success && parsed.data.request === input.request
-                    ? parsed.data
-                    : undefined;
-                })();
-          })()
-        : read(entry.seq);
-    if (value !== undefined)
-      return { call: entry.seq, value: await deliver(entry.seq, value) };
+    const prior = await conclude(entry.seq);
+    if (prior !== undefined) return prior;
   }
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
@@ -1515,30 +1460,10 @@ async function runLiterature(
       exec(codexRequest.parse(exact), signal),
   );
   const output = codexResult.parse(receipt.output);
-  if (output.state === "cancelled") {
+  if (output.state === "cancelled")
     throw new RoleCallError(`literature cancelled: ${output.error}`);
-  }
-  if (output.state !== "succeeded") {
-    const value = literatureResult.parse({
-      request: input.request,
-      notes: [],
-    });
-    const local = await campaign.call(
-      {
-        label,
-        role: "literature",
-        request: jsonSnapshot({
-          protocol: "xean/literature-local/v1",
-          literatureCall: receipt.call,
-          request,
-        }),
-      },
-      async () => value,
-    );
-    return { call: local.call, value: await deliver(local.call, value) };
-  }
-  const value = read(receipt.call);
-  if (value === undefined)
+  const fresh = await conclude(receipt.call);
+  if (fresh === undefined)
     throw new RoleCallError("literature returned no valid note candidates");
-  return { call: receipt.call, value: await deliver(receipt.call, value) };
+  return fresh;
 }

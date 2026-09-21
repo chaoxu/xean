@@ -234,13 +234,6 @@ const literatureNotes = z
 export const literatureReport = z.strictObject({ notes: literatureNotes });
 export type LiteratureReport = z.output<typeof literatureReport>;
 
-/** A durable literature result. The request binds the note candidates for replay. */
-export const literatureResult = z.strictObject({
-  request: nonblank,
-  notes: literatureNotes,
-});
-export type LiteratureResult = z.output<typeof literatureResult>;
-
 /** Whether the coordinator has attempted or completed literature discovery. */
 export const literatureStatus = z.enum([
   "not-started",
@@ -356,17 +349,17 @@ export const coordinatorResult = z.strictObject({
 });
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
+/**
+ * The coordinator submission schema over these notes. In coordinator workflow
+ * mode `allowedActions` lists the roles the frozen coordinator behavior
+ * permits next, and the submission must choose one of them.
+ */
 export function coordinatorResultFor(
   notes: readonly Pick<
     Note,
     "id" | "summary" | "support" | "verified" | "dead"
   >[],
-  options: {
-    readonly requireAction?: boolean;
-    readonly requireLiteratureAction?: boolean;
-    readonly requireVerifierAction?: boolean;
-    readonly forbidLiteratureAction?: boolean;
-  } = {},
+  allowedActions?: readonly CoordinatorAction["role"][],
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -376,36 +369,14 @@ export function coordinatorResultFor(
     notes.filter(({ verified }) => verified).map(({ id }) => id),
   );
   return coordinatorResult.superRefine((value, ctx) => {
-    if (options.requireAction && value.action === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        message: "coordinator workflow mode requires a next role action",
-        path: ["action"],
-      });
-    }
     if (
-      options.requireLiteratureAction &&
-      value.action?.role !== "literature"
+      allowedActions !== undefined &&
+      (value.action === undefined ||
+        !allowedActions.includes(value.action.role))
     ) {
       ctx.addIssue({
         code: "custom",
-        message:
-          "coordinator behavior requires a literature action before another role",
-        path: ["action"],
-      });
-    }
-    if (options.requireVerifierAction && value.action?.role !== "verifier") {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "coordinator behavior requires a verifier action for an unchecked live note",
-        path: ["action"],
-      });
-    }
-    if (options.forbidLiteratureAction && value.action?.role === "literature") {
-      ctx.addIssue({
-        code: "custom",
-        message: "coordinator behavior forbids literature discovery",
+        message: `coordinator workflow mode requires an action among: ${allowedActions.join(", ")}`,
         path: ["action"],
       });
     }
@@ -740,79 +711,41 @@ export type Statement = z.output<typeof statement>;
 /** The proof the reconstruction verifier writes from the statement and the support notes alone. */
 export const proof = z.strictObject({ proof: nonblank });
 
-/** Passages inspected by the source verifier, including evidence of a mismatch. */
+/** A source page and the passage read there. */
 // A plain string in the schema because the provider's structured output
 // rejects the JSON Schema "uri" format; the shape is checked after parsing.
+export const sourceLocation = {
+  source: nonblank,
+  url: z.string().refine((value) => URL.canParse(value), "must be a URL"),
+  quote: nonblank,
+};
+/** Passages inspected by the source verifier, each bound to an assigned external result, including evidence of a mismatch. */
 export const sources = z.array(
-  z.strictObject({
-    resultId: nonblank.optional(),
-    result: nonblank,
-    source: nonblank,
-    url: z.string().refine((value) => URL.canParse(value), "must be a URL"),
-    quote: nonblank,
-  }),
+  z.strictObject({ resultId: nonblank, result: nonblank, ...sourceLocation }),
 );
-export const sourceEvidence = z.strictObject({
-  externalResults: z.array(nonblank),
-  sources,
-});
-export function hasSourcePassages(
-  value: z.output<typeof sourceEvidence> & { verdict: string },
-): boolean {
-  const resultIds = new Set(value.externalResults.map(externalResultId));
-  return (
-    value.sources.every((source) =>
-      source.resultId === undefined
-        ? value.externalResults.includes(source.result)
-        : resultIds.has(source.resultId),
-    ) &&
-    (value.verdict !== "PASS" ||
-      value.externalResults.every((result) =>
-        value.sources.some(
-          (source) =>
-            source.result === result ||
-            source.resultId === externalResultId(result),
-        ),
-      ))
-  );
-}
-/** The journaled shape of one source submission, before its evidence is judged. */
+/** The journaled shape of one source submission, before its evidence is judged against the assigned premises. */
 export const sourceSubmission = z.strictObject({
   verdicts: z.array(
-    verdict.omit({ verifier: true }).extend(sourceEvidence.shape),
+    verdict
+      .omit({ verifier: true })
+      .extend({ externalResults: z.array(nonblank), sources }),
   ),
 });
-const sourceVerdict = sourceSubmission.shape.verdicts.element.refine(
-  hasSourcePassages,
-  "PASS requires a source passage for every nonroutine external result",
-);
-/** The verdicts of one source call. */
-export const sourceVerdicts = z.strictObject({
-  verdicts: z.array(sourceVerdict),
-});
-const sourceWithResultId = sources.element.extend({ resultId: nonblank });
-const sourceEvidenceWithResultIds = z.strictObject({
-  externalResults: z.array(nonblank),
-  sources: z.array(sourceWithResultId),
-});
-const sourceVerdictWithResultIds = verdict
-  .omit({ verifier: true })
-  .extend(sourceEvidenceWithResultIds.shape);
 
 /** Stable identity for one correctness-assigned external premise. */
 export function externalResultId(result: string): string {
   return `external-${createHash("sha256").update(result).digest("hex")}`;
 }
 
+/** Source verdicts over the judged notes whose passages bind to the assigned premise IDs, with a passage for every ID on PASS. */
 export function sourceVerdictsFor(
   judged: readonly string[],
-  assigned?: readonly {
+  assigned: readonly {
     readonly note: string;
     readonly externalResults: readonly string[];
   }[],
 ) {
-  if (assigned === undefined) return verdictsOver(sourceVerdict, judged);
-  return verdictsOver(sourceVerdictWithResultIds, judged).refine(
+  return verdictsOver(sourceSubmission.shape.verdicts.element, judged).refine(
     (value) =>
       value.verdicts.every((verdict) => {
         const expected = assigned.find(({ note }) => note === verdict.note);
@@ -985,7 +918,7 @@ export interface Roles {
   readonly literature: (
     input: LiteratureInput,
     after?: EntryId,
-  ) => Promise<LiteratureResult>;
+  ) => Promise<LiteratureReport>;
   readonly verifier: (
     input: VerifierInput,
     candidate?: EntryId,

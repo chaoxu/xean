@@ -236,7 +236,12 @@ test("changing guidance follows all selected mathematics", () => {
 });
 
 test("verifier schemas stay stable while runtime rejects missing, duplicate, and wrong note IDs", () => {
-  for (const factory of [verdictsFor, sourceVerdictsFor]) {
+  const sourceFactory = (judged: readonly string[]) =>
+    sourceVerdictsFor(
+      judged,
+      judged.map((note) => ({ note, externalResults: [] })),
+    );
+  for (const factory of [verdictsFor, sourceFactory]) {
     expect(z.toJSONSchema(factory(["n1"]))).toEqual(
       z.toJSONSchema(factory(["n2", "n3"])),
     );
@@ -244,7 +249,7 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
       note,
       verdict: "PASS",
       report: "Checked.",
-      ...(factory === sourceVerdictsFor
+      ...(factory === sourceFactory
         ? { externalResults: [], sources: [] }
         : {}),
     });

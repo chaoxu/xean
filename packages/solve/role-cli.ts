@@ -18,7 +18,6 @@ import { appendSubmittedNotes, inspectSubmittedNotes } from "./notes";
 import { executionReport } from "./execution-contract";
 import {
   createPiRoles,
-  localLiteratureRequest,
   piProviders,
   solveSettings,
   localSourceRequest,
@@ -34,7 +33,6 @@ import {
   explorerResult,
   literatureInput,
   literatureReport,
-  literatureResult,
   jsonSnapshot,
   roleFromLabel,
   returnedOutput,
@@ -128,28 +126,14 @@ function visibleSubmission(
 ): Json | undefined {
   const verifier = verifierFromLabel(call.label);
   try {
-    if (
-      role === "literature" &&
-      localLiteratureRequest.safeParse(call.request).success
-    ) {
-      const output = returnedOutput(records, call.seq);
-      return output === undefined
-        ? undefined
-        : jsonSnapshot(literatureResult.parse(output.output));
-    }
-    if (role === "literature" && codexRequest.safeParse(call.request).success) {
+    if (role === "literature") {
       const submission = codexSubmission(records, call.seq);
-      if (submission === undefined) return undefined;
-      const request = codexRequest.parse(call.request);
-      const prompt = JSON.parse(request.prompt) as {
-        readonly request?: unknown;
-      };
-      if (typeof prompt.request !== "string") return undefined;
-      return jsonSnapshot({
-        request: prompt.request,
-        ...literatureReport.parse(submission.input),
-        usage: submission.usage,
-      });
+      return submission === undefined
+        ? undefined
+        : jsonSnapshot({
+            ...literatureReport.parse(submission.input),
+            usage: submission.usage,
+          });
     }
     if (verifier === "source") {
       if (localSourceRequest.safeParse(call.request).success) {
@@ -185,7 +169,6 @@ function visibleSubmission(
         ? undefined
         : schema.parse(submission.input);
     }
-    if (role === "literature") return undefined;
     const submission =
       role === "explorer"
         ? savedExplorerSubmission(records, call.seq)
@@ -217,8 +200,6 @@ function callDiagnostic(
 ) {
   if (result === undefined) return {};
   if (result.state === "threw") return { error: result.error };
-  if (localLiteratureRequest.safeParse(call.request).success)
-    return result.state === "returned" ? { outcome: "succeeded" } : {};
   const parsed = piRequest.safeParse(call.request).success
     ? piResultRecord.safeParse(result.output)
     : localSourceRequest.safeParse(call.request).success

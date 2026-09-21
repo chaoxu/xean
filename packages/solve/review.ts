@@ -10,11 +10,10 @@ import {
   sourceAssessment,
 } from "./pi-roles";
 import {
-  hasSourcePassages,
   jsonSnapshot,
   nonblank,
   roleCallRecords,
-  sourceEvidence,
+  sourceLocation,
   task,
 } from "./roles";
 import { codexCommand, withCampaignLock } from "./runtime";
@@ -26,14 +25,23 @@ import {
   type CodexExec,
 } from "./source";
 
+/** The audit identifies its own premises, so each passage names its result by text. */
 export const reviewVerdict = z
   .strictObject({
     verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
     report: nonblank,
-    ...sourceEvidence.shape,
+    externalResults: z.array(nonblank),
+    sources: z.array(z.strictObject({ result: nonblank, ...sourceLocation })),
   })
   .refine(
-    hasSourcePassages,
+    (value) =>
+      value.sources.every(({ result }) =>
+        value.externalResults.includes(result),
+      ) &&
+      (value.verdict !== "PASS" ||
+        value.externalResults.every((result) =>
+          value.sources.some((source) => source.result === result),
+        )),
     "PASS requires a source passage for every nonroutine external result",
   );
 

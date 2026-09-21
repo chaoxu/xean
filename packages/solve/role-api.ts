@@ -7,7 +7,6 @@ export type {
   ExplorerResult,
   LiteratureInput,
   LiteratureReport,
-  LiteratureResult,
   LiteratureStatus,
   Note,
   Roles,

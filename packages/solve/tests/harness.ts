@@ -2,6 +2,8 @@ import { expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 
 import {
   createCampaign,
@@ -10,7 +12,7 @@ import {
   type Json,
 } from "xean";
 import { initializeAllowance } from "../allowance";
-import { applicationId } from "../roles";
+import { applicationId, literatureReport } from "../roles";
 import type { WorkflowConfig } from "../workflow";
 import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 
@@ -137,8 +139,9 @@ export function dependencies(replies: readonly Reply[]) {
     },
     async codex(request: CodexRequest): Promise<CodexResult> {
       codexCalls.push(request);
-      const literature = request.developerInstructions.includes(
-        "literature-note writer",
+      const literature = isDeepStrictEqual(
+        request.outputSchema,
+        z.toJSONSchema(literatureReport),
       );
       allCalls.push({
         label: literature

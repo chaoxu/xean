@@ -164,7 +164,7 @@ async function expectReaped(directory: string) {
   expect(() => process.kill(pid, 0)).toThrow();
 }
 
-test("Codex execution lets source search finish without an action cutoff", async () => {
+test("Codex execution returns the complete transcript with its search count", async () => {
   const transcript = jsonl([
     ...start,
     search("s1"),

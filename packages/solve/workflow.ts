@@ -17,14 +17,13 @@ import {
   explorerCall,
   literatureCall,
   literatureNotesId,
-  localLiteratureRequest,
+  literatureOutcome,
   RoleCallError,
   sameRequest,
   solveSettings,
   verifierCall,
   type RoleCall,
 } from "./pi-roles";
-import { codexSubmission } from "./source";
 import {
   applicationId,
   coordinatorInput,
@@ -41,15 +40,12 @@ import {
   verifierInput,
   verifierLabels,
   roleLabels,
-  returnedOutput,
   literatureInput,
-  literatureReport,
-  literatureResult,
   workflowRecords,
   type CoordinatorInput,
+  type CoordinatorResult,
   type ExplorerInput,
   type LiteratureInput,
-  type LiteratureResult,
   type LiteratureStatus,
   type Note,
   type RoleName,
@@ -59,7 +55,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 19;
+export const workflowSchemaVersion = 20;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -223,678 +219,462 @@ export async function verificationPrefix(
   return verify.slice(0, taken);
 }
 
-export async function deriveWorkflow(
-  records: readonly Entry[],
-): Promise<WorkflowSnapshot> {
+/** The replay state of one derivation; the cursor is historical, never the journal's latest entry. */
+interface Fold {
+  readonly records: readonly Entry[];
+  readonly base: Pick<
+    WorkflowSnapshot,
+    "config" | "allowances" | "maxExplorerTurns"
+  >;
+  readonly verdicts: ReturnType<typeof journalVerdicts>;
+  readonly projection: Projection;
+  readonly noteSubmissions: { call: EntryId; noteIds: string[] }[];
+  cursor: EntryId;
+  turns: number;
+}
+
+function openFold(records: readonly Entry[]): Fold {
   const config = parseConfig(records[0]);
-  if (config.settings.workflowMode === "coordinator")
-    return deriveCoordinatorWorkflow(records);
   const allowances = turnAllowances(records);
   const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
   if (maxExplorerTurns === undefined)
     throw new Error("campaign has no initial turn allowance; run init first");
-  const base = { config, allowances, maxExplorerTurns };
   const verdicts = journalVerdicts(records);
-  const projection = new Projection(verdicts);
-  // Replay projections use this historical cursor, not the journal's latest state.
-  let cursor = records[0]!.seq;
-  let guidance = "";
-  let support: readonly string[] = [];
-  let turns = 0;
-  const noteSubmissions: { call: EntryId; noteIds: string[] }[] = [];
-  const includeSubmitted = (after: EntryId) => {
-    const boundary = submittedNotesBoundary(records, after);
-    if (boundary === undefined) return false;
-    let count = projection.at(after).length;
-    for (const submission of boundary.submissions) {
-      const entries = submission.notes.map((entry, index) => ({
-        id: noteIdAfter(count, index),
-        ...entry,
-        support: entry.support.map((reference) =>
-          typeof reference === "number"
-            ? noteIdAfter(count, reference - 1)
-            : reference,
-        ),
-      }));
-      projection.add(entries, boundary.call);
-      noteSubmissions.push({
-        call: submission.call,
-        noteIds: entries.map(({ id }) => id),
-      });
-      count += entries.length;
-    }
-    cursor = boundary.call;
-    return true;
-  };
-  while (turns < maxExplorerTurns) {
-    let emptySubmission = false;
-    // A submitted note goes directly to the coordinator. Otherwise the
-    // next explorer writes notes, which may be joined by pending submissions.
-    let included = includeSubmitted(cursor);
-    if (!included) {
-      let after = cursor;
-      let known = projection.at(cursor);
-      const selected = [...support];
-      // Advice stays frozen for the turn. A fresh call after interruption
-      // also receives every note already saved by this turn, in full.
-      const advice = explorerGuidance(records, cursor, guidance);
-      for (;;) {
-        const explorerRequest = explorerInput.parse({
-          task: config.task,
-          explorerGuidance: advice,
-          notes: known.map(({ text, ...rest }) => rest),
-          support: [
-            ...new Set([
-              ...selected,
-              ...(await supportClosure(
-                selected.map((id) => pick(known, id)),
-                known,
-              )),
-            ]),
-          ]
-            .sort(byId)
-            .map((id) => pick(known, id)),
-        });
-        const roleCall = explorerCall(
-          explorerRequest,
-          config.settings.explorerContextBudgetTokens,
-          config.settings.maxExplorerResponses,
-        );
-        const call = firstCall(
-          records,
-          after,
-          roleCall.role,
-          roleCall.label,
-          roleCall,
-        );
-        if (call === undefined) {
-          return {
-            ...base,
-            noteSubmissions,
-            notes: known,
-            phase: { kind: "explorer", input: explorerRequest },
-            explorerAfter: cursor,
-            notesAfter: cursor,
-          };
-        }
-        const saved = savedExplorerSubmission(records, call.seq);
-        const completed = succeededSubmission(
-          records,
-          call.seq,
-          roleCall.tool,
-          saved,
-        );
-        // Saved notes become visible at the last tool call; the next phase
-        // starts only at the outer call-result, which can occur later.
-        if (saved !== undefined) {
-          const value = roleCall.schema.parse(saved.input);
-          const notes = value.notes.map((entry, position) => ({
-            id: noteIdAfter(known.length, position),
-            ...entry,
-          }));
-          if (notes.length > 0) projection.add(notes, saved.settled);
-          selected.push(...notes.map(({ id }) => id));
-          known = projection.at(saved.settled);
-        }
-        if (completed !== undefined) {
-          emptySubmission = saved?.emptySubmission === true;
-          cursor = completed.settled;
-          turns += 1;
-          break;
-        }
-        after = call.seq;
-      }
-      included = includeSubmitted(cursor);
-    }
-    const coordinatorRequest = coordinatorInput.parse({
-      task: config.task,
-      notes: projection.at(cursor),
-      coordinatorBehavior: config.settings.coordinatorBehavior,
-      ...(emptySubmission ? { emptySubmission: true } : {}),
-    });
-    const coordinated = settledCall(
-      records,
-      cursor,
-      coordinatorCall(coordinatorRequest),
-    );
-    if (coordinated === undefined) {
-      return {
-        ...base,
-        noteSubmissions,
-        notes: coordinatorRequest.notes,
-        phase: { kind: "coordinator", input: coordinatorRequest },
-        ...(included ? {} : { notesAfter: cursor }),
-      };
-    }
-    cursor = coordinated.settled;
-    projection.file(coordinated.value.filings, cursor);
-    guidance = coordinated.value.explorerGuidance;
-    support = coordinated.value.support;
-    let remaining = coordinated.value.verify;
-    while (remaining.length > 0) {
-      const filed = projection.at(cursor);
-      const available = new Set(
-        filed.filter(({ verified }) => verified).map(({ id }) => id),
-      );
-      // Earlier batches may have refuted or left support inconclusive.
-      // Retain independent work, and dependencies scheduled before their use.
-      remaining = remaining.filter(({ note, verifiers }) => {
-        const target = pick(filed, note);
-        if (target.dead || target.support.some((id) => !available.has(id)))
-          return false;
-        if (verifiers.includes("source")) available.add(note);
-        return true;
-      });
-      if (remaining.length === 0) break;
-      const verify = await verificationPrefix(
-        remaining,
-        filed,
-        config.settings.window,
-      );
-      const listed = verify.map(({ note }) => pick(filed, note));
-      const verifierRequest = await verifierInput.parseAsync({
-        task: config.task,
-        verify,
-        notes: listed,
-        support: (await supportClosure(listed, filed)).map((id) =>
-          pick(filed, id),
-        ),
-      });
-      // Correctness opens every verification and freezes its complete proof input.
-      const judged = judgedBy(verifierRequest, [], "correctness");
-      const first = firstCall(
-        records,
-        cursor,
-        "verifier",
-        verifierLabels.correctness,
-        await verifierCall("correctness", verifierRequest, judged),
-      );
-      if (first === undefined) {
-        return {
-          ...base,
-          noteSubmissions,
-          notes: filed,
-          phase: { kind: "verifier", input: verifierRequest },
-        };
-      }
-      const candidate = first.candidate;
-      if (candidate === undefined) {
-        throw new Error(
-          `verifier call ${first.seq} is not bound to a candidate`,
-        );
-      }
-      const recorded = verdicts.filter(
-        (entry) => entry.candidate === candidate,
-      );
-      cursor = Math.max(cursor, ...recorded.map(({ seq }) => seq));
-      const accepted = projection.accepted(cursor);
-      const acceptedId = verify
-        .map(({ note }) => note)
-        .find((id) => accepted.includes(id));
-      if (acceptedId !== undefined) {
-        const notes = projection.at(cursor);
-        return {
-          ...base,
-          noteSubmissions,
-          notes,
-          phase: {
-            kind: "accepted",
-            turns,
-            note: pick(notes, acceptedId),
-            notes,
-            candidate,
-            closure: await supportClosure([pick(notes, acceptedId)], notes),
-          },
-        };
-      }
-      if (
-        !verificationComplete(
-          verifierRequest,
-          recorded.map(({ verdict }) => verdict),
-        )
-      ) {
-        return {
-          ...base,
-          noteSubmissions,
-          notes: projection.at(cursor),
-          phase: { kind: "verifier", input: verifierRequest, candidate },
-        };
-      }
-      // Completed entries leave the queue even when their verdict was not PASS.
-      remaining = remaining.slice(verify.length);
-    }
-  }
-  const ended = projection.at(cursor);
   return {
-    ...base,
-    noteSubmissions,
-    notes: ended,
-    phase: {
-      kind: "turn-limit",
-      turns,
-      notes: ended,
-    },
+    records,
+    base: { config, allowances, maxExplorerTurns },
+    verdicts,
+    projection: new Projection(verdicts),
+    noteSubmissions: [],
+    cursor: records[0]!.seq,
+    turns: 0,
   };
 }
 
-function literatureSearchStatus(
-  records: readonly Entry[],
-  through: EntryId,
-): LiteratureStatus {
-  const attempted = records.some(
-    (entry) =>
-      entry.kind === "call" &&
-      entry.seq <= through &&
-      entry.role === "literature" &&
-      entry.label === roleLabels.literature,
-  );
-  if (!attempted) return "not-started";
-  for (const entry of records) {
-    if (
-      entry.kind !== "call" ||
-      entry.seq > through ||
-      entry.role !== "literature" ||
-      entry.label !== roleLabels.literature ||
-      localLiteratureRequest.safeParse(entry.request).success
-    )
-      continue;
-    try {
-      const submission = codexSubmission(records, entry.seq);
-      if (
-        submission !== undefined &&
-        literatureReport.safeParse(submission.input).success
-      )
-        return "completed";
-    } catch {
-      // A failed or malformed provider call is inconclusive, even when its
-      // local fallback report remains visible to the coordinator.
-    }
-  }
-  return "inconclusive";
-}
-
-function firstLiteratureCall(
-  records: readonly Entry[],
-  after: EntryId,
-  request: Json,
-): CallEntry | undefined {
-  for (const entry of records) {
-    if (
-      entry.kind === "call" &&
-      entry.seq > after &&
-      entry.role === "literature" &&
-      entry.label === roleLabels.literature &&
-      (isDeepStrictEqual(entry.request, request) ||
-        (() => {
-          const local = localLiteratureRequest.safeParse(entry.request);
-          return (
-            local.success && isDeepStrictEqual(local.data.request, request)
-          );
-        })())
-    ) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
-function settledLiteratureCall(
-  records: readonly Entry[],
-  after: EntryId,
-  request: Json,
-  expectedRequest: string,
-): { readonly settled: EntryId; readonly value: LiteratureResult } | undefined {
-  for (
-    let call = firstLiteratureCall(records, after, request);
-    call !== undefined;
-    call = firstLiteratureCall(records, call.seq, request)
-  ) {
-    try {
-      const local = localLiteratureRequest.safeParse(call.request);
-      const output = returnedOutput(records, call.seq);
-      const submission = codexSubmission(records, call.seq);
-      const value =
-        local.success && output !== undefined
-          ? (() => {
-              const parsed = literatureResult.safeParse(output.output);
-              return parsed.success && parsed.data.request === expectedRequest
-                ? parsed.data
-                : undefined;
-            })()
-          : submission === undefined
-            ? undefined
-            : (() => {
-                const parsed = literatureReport.safeParse(submission.input);
-                return parsed.success
-                  ? { request: expectedRequest, notes: parsed.data.notes }
-                  : undefined;
-              })();
-      if (value !== undefined) {
-        if (
-          value.notes.length > 0 &&
-          !hasSubmittedNotes(records, literatureNotesId(call.seq))
-        )
-          continue;
-        return {
-          settled: output !== undefined ? output.settled : submission!.settled,
-          value,
-        };
-      }
-    } catch {
-      // Retry from the next journal boundary; the malformed call is retained.
-    }
-  }
-  return undefined;
-}
-
-function acceptedPhase(
-  records: readonly Entry[],
-  projection: Projection,
-  cursor: EntryId,
-  base: Omit<WorkflowSnapshot, "phase" | "notes" | "noteSubmissions">,
-  turns: number,
-  noteSubmissions: readonly {
-    readonly call: EntryId;
-    readonly noteIds: readonly string[];
-  }[],
-): Promise<WorkflowSnapshot | undefined> {
-  const accepted = projection.accepted(cursor);
-  if (accepted.length === 0) return Promise.resolve(undefined);
-  const notes = projection.at(cursor);
-  const noteId = accepted.at(-1)!;
-  const candidate = journalVerdicts(
-    records.filter((entry) => entry.seq <= cursor),
-  ).findLast(({ verdict }) => verdict.note === noteId)?.candidate;
-  if (candidate === undefined)
-    throw new Error(`accepted note ${noteId} has no candidate`);
-  return supportClosure([pick(notes, noteId)], notes).then((closure) => ({
-    ...base,
-    noteSubmissions,
+function snapshot(
+  fold: Fold,
+  phase: WorkflowPhase,
+  notes: readonly Note[] = fold.projection.at(fold.cursor),
+  boundaries: Pick<WorkflowSnapshot, "explorerAfter" | "notesAfter"> = {},
+): WorkflowSnapshot {
+  return {
+    ...fold.base,
+    noteSubmissions: fold.noteSubmissions,
     notes,
-    phase: {
-      kind: "accepted" as const,
-      turns,
-      note: pick(notes, noteId),
-      notes,
-      candidate,
-      closure,
-    },
-  }));
+    phase,
+    ...boundaries,
+  };
+}
+
+function turnLimit(fold: Fold): WorkflowSnapshot {
+  const notes = fold.projection.at(fold.cursor);
+  return snapshot(
+    fold,
+    { kind: "turn-limit", turns: fold.turns, notes },
+    notes,
+  );
+}
+
+/** Frozen caller submissions at this boundary enter the note graph before the next coordinator. */
+function includeSubmitted(fold: Fold, after: EntryId): boolean {
+  const boundary = submittedNotesBoundary(fold.records, after);
+  if (boundary === undefined) return false;
+  let count = fold.projection.at(after).length;
+  for (const submission of boundary.submissions) {
+    const entries = submission.notes.map((entry, index) => ({
+      id: noteIdAfter(count, index),
+      ...entry,
+      support: entry.support.map((reference) =>
+        typeof reference === "number"
+          ? noteIdAfter(count, reference - 1)
+          : reference,
+      ),
+    }));
+    fold.projection.add(entries, boundary.call);
+    fold.noteSubmissions.push({
+      call: submission.call,
+      noteIds: entries.map(({ id }) => id),
+    });
+    count += entries.length;
+  }
+  fold.cursor = boundary.call;
+  return true;
 }
 
 /**
- * Experimental coordinator workflow mode. Every completed role returns to a fresh
- * coordinator decision; literature notes enter the ordinary note graph, never
- * a verifier result. The fixed Explorer -> coordinator -> verifier loop above
- * remains the default mode for comparison.
+ * Replay one Explorer turn from the cursor. Returns the pending explorer
+ * snapshot, or advances past the settled turn and reports whether it ended
+ * with an empty submission.
  */
-async function deriveCoordinatorWorkflow(
-  records: readonly Entry[],
-): Promise<WorkflowSnapshot> {
-  const config = parseConfig(records[0]);
-  const allowances = turnAllowances(records);
-  const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
-  if (maxExplorerTurns === undefined)
-    throw new Error("campaign has no initial turn allowance; run init first");
-  const base = { config, allowances, maxExplorerTurns };
-  const verdicts = journalVerdicts(records);
-  const projection = new Projection(verdicts);
-  let cursor = records[0]!.seq;
-  let guidance = "";
-  let support: readonly string[] = [];
-  let turns = 0;
-  let dispatches = 0;
-  let pendingEmptySubmission = false;
-  const noteSubmissions: { call: EntryId; noteIds: string[] }[] = [];
-  const includeSubmitted = (after: EntryId): boolean => {
-    const boundary = submittedNotesBoundary(records, after);
-    if (boundary === undefined) return false;
-    let count = projection.at(after).length;
-    for (const submission of boundary.submissions) {
-      const entries = submission.notes.map((entry, index) => ({
-        id: noteIdAfter(count, index),
-        ...entry,
-        support: entry.support.map((reference) =>
-          typeof reference === "number"
-            ? noteIdAfter(count, reference - 1)
-            : reference,
-        ),
-      }));
-      projection.add(entries, boundary.call);
-      noteSubmissions.push({
-        call: submission.call,
-        noteIds: entries.map(({ id }) => id),
-      });
-      count += entries.length;
-    }
-    cursor = boundary.call;
-    return true;
-  };
-
+async function replayExplorerTurn(
+  fold: Fold,
+  guidance: string,
+  support: readonly string[],
+): Promise<WorkflowSnapshot | { readonly emptySubmission: boolean }> {
+  const { records, base } = fold;
+  let after = fold.cursor;
+  let known = fold.projection.at(fold.cursor);
+  const selected = [...support];
+  // Advice stays frozen for the turn. A fresh call after interruption
+  // also receives every note already saved by this turn, in full.
+  const advice = explorerGuidance(records, fold.cursor, guidance);
   for (;;) {
-    const accepted = await acceptedPhase(
-      records,
-      projection,
-      cursor,
-      { ...base },
-      turns,
-      noteSubmissions,
-    );
-    if (accepted !== undefined) return accepted;
-    if (dispatches >= config.settings.maxCoordinatorSteps) {
-      const notes = projection.at(cursor);
-      return {
-        ...base,
-        noteSubmissions,
-        notes,
-        phase: { kind: "turn-limit", turns, notes },
-      };
-    }
-
-    const included = includeSubmitted(cursor);
-    const literatureStatusAtCoordinator = literatureSearchStatus(
-      records,
-      cursor,
-    );
-    const coordinatorRequest = coordinatorInput.parse({
-      task: config.task,
-      notes: projection.at(cursor),
-      literatureStatus: literatureStatusAtCoordinator,
-      coordinatorBehavior: config.settings.coordinatorBehavior,
-      ...(pendingEmptySubmission ? { emptySubmission: true } : {}),
+    const explorerRequest = explorerInput.parse({
+      task: base.config.task,
+      explorerGuidance: advice,
+      notes: known.map(({ text, ...rest }) => rest),
+      support: [
+        ...new Set([
+          ...selected,
+          ...(await supportClosure(
+            selected.map((id) => pick(known, id)),
+            known,
+          )),
+        ]),
+      ]
+        .sort(byId)
+        .map((id) => pick(known, id)),
     });
-    const coordinated = settledCall(
+    const roleCall = explorerCall(
+      explorerRequest,
+      base.config.settings.explorerContextBudgetTokens,
+      base.config.settings.maxExplorerResponses,
+    );
+    const call = firstCall(
       records,
-      cursor,
-      coordinatorCall(coordinatorRequest, "coordinator"),
+      after,
+      roleCall.role,
+      roleCall.label,
+      roleCall,
     );
-    if (coordinated === undefined) {
-      return {
-        ...base,
-        noteSubmissions,
-        notes: coordinatorRequest.notes,
-        phase: { kind: "coordinator", input: coordinatorRequest },
-        ...(included ? {} : { notesAfter: cursor }),
-      };
-    }
-    cursor = coordinated.settled;
-    projection.file(coordinated.value.filings, cursor);
-    guidance = coordinated.value.explorerGuidance;
-    support = coordinated.value.support;
-    pendingEmptySubmission = false;
-    const action = coordinated.value.action;
-    if (action === undefined)
-      throw new Error("coordinator workflow mode requires a role action");
-    dispatches += 1;
-
-    if (action.role === "literature") {
-      const input = literatureInput.parse({
-        task: config.task,
-        request: action.request,
-      });
-      const call = literatureCall(input, config.settings.source);
-      const settled = settledLiteratureCall(
-        records,
-        cursor,
-        call.request,
-        input.request,
+    if (call === undefined) {
+      return snapshot(
+        fold,
+        { kind: "explorer", input: explorerRequest },
+        known,
+        { explorerAfter: fold.cursor, notesAfter: fold.cursor },
       );
-      if (settled === undefined) {
-        return {
-          ...base,
-          noteSubmissions,
-          notes: projection.at(cursor),
-          phase: { kind: "literature", input, after: cursor },
-        };
-      }
-      cursor = settled.settled;
-      continue;
     }
-
-    if (action.role === "explorer") {
-      // A caller's submission while this phase waited returns to the
-      // coordinator with the new notes, as in the fixed loop.
-      if (includeSubmitted(cursor)) continue;
-      if (turns >= maxExplorerTurns) {
-        const notes = projection.at(cursor);
-        return {
-          ...base,
-          noteSubmissions,
-          notes,
-          phase: { kind: "turn-limit", turns, notes },
-        };
-      }
-      let after = cursor;
-      let known = projection.at(cursor);
-      const selected = [...support];
-      const advice = explorerGuidance(records, cursor, guidance);
-      for (;;) {
-        const explorerRequest = explorerInput.parse({
-          task: config.task,
-          explorerGuidance: advice,
-          notes: known.map(({ text, ...rest }) => rest),
-          support: [
-            ...new Set([
-              ...selected,
-              ...(await supportClosure(
-                selected.map((id) => pick(known, id)),
-                known,
-              )),
-            ]),
-          ]
-            .sort(byId)
-            .map((id) => pick(known, id)),
-        });
-        const roleCall = explorerCall(
-          explorerRequest,
-          config.settings.explorerContextBudgetTokens,
-          config.settings.maxExplorerResponses,
-        );
-        const call = firstCall(
-          records,
-          after,
-          roleCall.role,
-          roleCall.label,
-          roleCall,
-        );
-        if (call === undefined) {
-          return {
-            ...base,
-            noteSubmissions,
-            notes: known,
-            phase: { kind: "explorer", input: explorerRequest },
-            explorerAfter: cursor,
-            notesAfter: cursor,
-          };
-        }
-        const saved = savedExplorerSubmission(records, call.seq);
-        const completed = succeededSubmission(
-          records,
-          call.seq,
-          roleCall.tool,
-          saved,
-        );
-        if (saved !== undefined) {
-          const value = roleCall.schema.parse(saved.input);
-          const notes = value.notes.map((entry, position) => ({
-            id: noteIdAfter(known.length, position),
-            ...entry,
-          }));
-          if (notes.length > 0) projection.add(notes, saved.settled);
-          selected.push(...notes.map(({ id }) => id));
-          known = projection.at(saved.settled);
-        }
-        if (completed !== undefined) {
-          pendingEmptySubmission = saved?.emptySubmission === true;
-          cursor = completed.settled;
-          turns += 1;
-          break;
-        }
-        after = call.seq;
-      }
-      continue;
-    }
-
-    const filed = projection.at(cursor);
-    const verify = await verificationPrefix(
-      coordinated.value.verify,
-      filed,
-      config.settings.window,
+    const saved = savedExplorerSubmission(records, call.seq);
+    const completed = succeededSubmission(
+      records,
+      call.seq,
+      roleCall.tool,
+      saved,
     );
-    if (verify.length === 0)
-      throw new Error("verifier action selected no fitting note");
-    const listed = verify.map(({ note }) => pick(filed, note));
+    // Saved notes become visible at the last tool call; the next phase
+    // starts only at the outer call-result, which can occur later.
+    if (saved !== undefined) {
+      const value = roleCall.schema.parse(saved.input);
+      const notes = value.notes.map((entry, position) => ({
+        id: noteIdAfter(known.length, position),
+        ...entry,
+      }));
+      if (notes.length > 0) fold.projection.add(notes, saved.settled);
+      selected.push(...notes.map(({ id }) => id));
+      known = fold.projection.at(saved.settled);
+    }
+    if (completed !== undefined) {
+      fold.cursor = completed.settled;
+      fold.turns += 1;
+      return { emptySubmission: saved?.emptySubmission === true };
+    }
+    after = call.seq;
+  }
+}
+
+/**
+ * Replay the coordinator's verification list in window-fitting batches.
+ * Returns the pending verifier or accepted snapshot, or undefined once every
+ * batch is complete.
+ */
+async function replayVerification(
+  fold: Fold,
+  listed: readonly Verification[],
+): Promise<WorkflowSnapshot | undefined> {
+  const { records, base } = fold;
+  let remaining = listed;
+  while (remaining.length > 0) {
+    const filed = fold.projection.at(fold.cursor);
+    const available = new Set(
+      filed.filter(({ verified }) => verified).map(({ id }) => id),
+    );
+    // Earlier batches may have refuted or left support inconclusive.
+    // Retain independent work, and dependencies scheduled before their use.
+    remaining = remaining.filter(({ note, verifiers }) => {
+      const target = pick(filed, note);
+      if (target.dead || target.support.some((id) => !available.has(id)))
+        return false;
+      if (verifiers.includes("source")) available.add(note);
+      return true;
+    });
+    if (remaining.length === 0) break;
+    const verify = await verificationPrefix(
+      remaining,
+      filed,
+      base.config.settings.window,
+    );
+    const listedNotes = verify.map(({ note }) => pick(filed, note));
     const verifierRequest = await verifierInput.parseAsync({
-      task: config.task,
+      task: base.config.task,
       verify,
-      notes: listed,
-      support: (await supportClosure(listed, filed)).map((id) =>
+      notes: listedNotes,
+      support: (await supportClosure(listedNotes, filed)).map((id) =>
         pick(filed, id),
       ),
     });
+    // Correctness opens every verification and freezes its complete proof input.
     const judged = judgedBy(verifierRequest, [], "correctness");
     const first = firstCall(
       records,
-      cursor,
+      fold.cursor,
       "verifier",
       verifierLabels.correctness,
       await verifierCall("correctness", verifierRequest, judged),
     );
-    if (first === undefined) {
-      return {
-        ...base,
-        noteSubmissions,
-        notes: filed,
-        phase: { kind: "verifier", input: verifierRequest },
-      };
-    }
+    if (first === undefined)
+      return snapshot(
+        fold,
+        { kind: "verifier", input: verifierRequest },
+        filed,
+      );
     const candidate = first.candidate;
     if (candidate === undefined)
       throw new Error(`verifier call ${first.seq} is not bound to a candidate`);
-    const recorded = verdicts.filter(({ candidate: id }) => id === candidate);
-    cursor = Math.max(cursor, ...recorded.map(({ seq }) => seq));
-    const acceptedAfterVerification = await acceptedPhase(
-      records,
-      projection,
-      cursor,
-      { ...base },
-      turns,
-      noteSubmissions,
+    const recorded = fold.verdicts.filter(
+      (entry) => entry.candidate === candidate,
     );
-    if (acceptedAfterVerification !== undefined)
-      return acceptedAfterVerification;
+    fold.cursor = Math.max(fold.cursor, ...recorded.map(({ seq }) => seq));
+    const accepted = fold.projection.accepted(fold.cursor);
+    const acceptedId = verify
+      .map(({ note }) => note)
+      .find((id) => accepted.includes(id));
+    if (acceptedId !== undefined) {
+      const notes = fold.projection.at(fold.cursor);
+      return snapshot(
+        fold,
+        {
+          kind: "accepted",
+          turns: fold.turns,
+          note: pick(notes, acceptedId),
+          notes,
+          candidate,
+          closure: await supportClosure([pick(notes, acceptedId)], notes),
+        },
+        notes,
+      );
+    }
     if (
       !verificationComplete(
         verifierRequest,
         recorded.map(({ verdict }) => verdict),
       )
-    ) {
-      return {
-        ...base,
-        noteSubmissions,
-        notes: projection.at(cursor),
-        phase: { kind: "verifier", input: verifierRequest, candidate },
-      };
+    )
+      return snapshot(fold, {
+        kind: "verifier",
+        input: verifierRequest,
+        candidate,
+      });
+    // Completed entries leave the queue even when their verdict was not PASS.
+    remaining = remaining.slice(verify.length);
+  }
+  return undefined;
+}
+
+/**
+ * Replay one coordinator call from the cursor. Returns the pending
+ * coordinator snapshot, with the unfrozen submission boundary unless a
+ * frozen one was just included, or the settled coordination after filing.
+ */
+function replayCoordinator(
+  fold: Fold,
+  input: CoordinatorInput,
+  mode: "fixed" | "coordinator",
+  included: boolean,
+): WorkflowSnapshot | CoordinatorResult {
+  const coordinated = settledCall(
+    fold.records,
+    fold.cursor,
+    coordinatorCall(input, mode),
+  );
+  if (coordinated === undefined) {
+    return snapshot(
+      fold,
+      { kind: "coordinator", input },
+      input.notes,
+      included ? {} : { notesAfter: fold.cursor },
+    );
+  }
+  fold.cursor = coordinated.settled;
+  fold.projection.file(coordinated.value.filings, fold.cursor);
+  return coordinated.value;
+}
+
+export async function deriveWorkflow(
+  records: readonly Entry[],
+): Promise<WorkflowSnapshot> {
+  const fold = openFold(records);
+  if (fold.base.config.settings.workflowMode === "coordinator")
+    return deriveCoordinatorWorkflow(fold);
+  let guidance = "";
+  let support: readonly string[] = [];
+  while (fold.turns < fold.base.maxExplorerTurns) {
+    let emptySubmission = false;
+    // A submitted note goes directly to the coordinator. Otherwise the
+    // next explorer writes notes, which may be joined by pending submissions.
+    let included = includeSubmitted(fold, fold.cursor);
+    if (!included) {
+      const turn = await replayExplorerTurn(fold, guidance, support);
+      if ("phase" in turn) return turn;
+      emptySubmission = turn.emptySubmission;
+      included = includeSubmitted(fold, fold.cursor);
+    }
+    const coordinated = replayCoordinator(
+      fold,
+      coordinatorInput.parse({
+        task: fold.base.config.task,
+        notes: fold.projection.at(fold.cursor),
+        ...(emptySubmission ? { emptySubmission: true } : {}),
+      }),
+      "fixed",
+      included,
+    );
+    if ("phase" in coordinated) return coordinated;
+    guidance = coordinated.explorerGuidance;
+    support = coordinated.support;
+    const verification = await replayVerification(fold, coordinated.verify);
+    if (verification !== undefined) return verification;
+  }
+  return turnLimit(fold);
+}
+
+/** Whether discovery has run at or before this cursor, and whether any run returned a usable report. */
+function literatureSearchStatus(
+  records: readonly Entry[],
+  through: EntryId,
+): LiteratureStatus {
+  let status: LiteratureStatus = "not-started";
+  for (const entry of records) {
+    if (
+      entry.kind !== "call" ||
+      entry.seq > through ||
+      entry.label !== roleLabels.literature
+    )
+      continue;
+    status = "inconclusive";
+    if (literatureOutcome(records, entry.seq)?.report !== undefined)
+      return "completed";
+  }
+  return status;
+}
+
+/**
+ * The settled literature call after the dispatching coordinator: a usable
+ * report whose candidates are delivered, or a failed call, which ends
+ * discovery without candidates. A cancelled or unusable call is replaced by
+ * a fresh one, and an undelivered response waits for the runner.
+ */
+function settledLiteratureCall(
+  records: readonly Entry[],
+  after: EntryId,
+  call: ReturnType<typeof literatureCall>,
+): EntryId | undefined {
+  for (
+    let entry = firstCall(
+      records,
+      after,
+      "literature",
+      call.label,
+      call.request,
+    );
+    entry !== undefined;
+    entry = firstCall(
+      records,
+      entry.seq,
+      "literature",
+      call.label,
+      call.request,
+    )
+  ) {
+    const outcome = literatureOutcome(records, entry.seq);
+    if (outcome === undefined) continue;
+    if (
+      outcome.report !== undefined &&
+      outcome.report.notes.length > 0 &&
+      !hasSubmittedNotes(records, literatureNotesId(entry.seq))
+    )
+      return undefined;
+    return outcome.settled;
+  }
+  return undefined;
+}
+
+/**
+ * Experimental coordinator workflow mode. Every completed role returns to a
+ * fresh coordinator decision; literature notes enter the ordinary note graph,
+ * never a verifier result. The fixed Explorer -> coordinator -> verifier loop
+ * above remains the default mode for comparison.
+ */
+async function deriveCoordinatorWorkflow(
+  fold: Fold,
+): Promise<WorkflowSnapshot> {
+  const { records, base } = fold;
+  const settings = base.config.settings;
+  let guidance = "";
+  let support: readonly string[] = [];
+  let dispatches = 0;
+  let emptySubmission = false;
+  for (;;) {
+    const included = includeSubmitted(fold, fold.cursor);
+    if (dispatches >= settings.maxCoordinatorSteps) return turnLimit(fold);
+    const coordinated = replayCoordinator(
+      fold,
+      coordinatorInput.parse({
+        task: base.config.task,
+        notes: fold.projection.at(fold.cursor),
+        literatureStatus: literatureSearchStatus(records, fold.cursor),
+        coordinatorBehavior: settings.coordinatorBehavior,
+        ...(emptySubmission ? { emptySubmission: true } : {}),
+      }),
+      "coordinator",
+      included,
+    );
+    if ("phase" in coordinated) return coordinated;
+    guidance = coordinated.explorerGuidance;
+    support = coordinated.support;
+    emptySubmission = false;
+    const action = coordinated.action;
+    if (action === undefined)
+      throw new Error("coordinator workflow mode requires a role action");
+    dispatches += 1;
+    if (action.role === "literature") {
+      const input = literatureInput.parse({
+        task: base.config.task,
+        request: action.request,
+      });
+      const settled = settledLiteratureCall(
+        records,
+        fold.cursor,
+        literatureCall(input, settings.source),
+      );
+      if (settled === undefined)
+        return snapshot(fold, {
+          kind: "literature",
+          input,
+          after: fold.cursor,
+        });
+      fold.cursor = settled;
+    } else if (action.role === "explorer") {
+      // A caller's submission while this phase waited returns to the
+      // coordinator with the new notes, as in the fixed loop.
+      if (includeSubmitted(fold, fold.cursor)) continue;
+      if (fold.turns >= base.maxExplorerTurns) return turnLimit(fold);
+      const turn = await replayExplorerTurn(fold, guidance, support);
+      if ("phase" in turn) return turn;
+      emptySubmission = turn.emptySubmission;
+    } else {
+      const verification = await replayVerification(fold, coordinated.verify);
+      if (verification !== undefined) return verification;
     }
   }
 }

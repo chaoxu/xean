@@ -66,6 +66,27 @@ function boundaries(records: readonly Entry[]) {
   });
 }
 
+function submissionRequest(input: z.input<typeof submittedNotes>, id: string) {
+  return requestSchema.parse({
+    schemaVersion: 1,
+    id,
+    notes: submittedNotes.parse(input).notes,
+  });
+}
+
+/** The receipt already journaled for this id; a different submission under the same id is an error. */
+function existingReceipt(
+  records: readonly Entry[],
+  request: ReturnType<typeof submissionRequest>,
+) {
+  const receipt = receipts(records).find((entry) => entry.id === request.id);
+  if (receipt && !isDeepStrictEqual(receipt.notes, request.notes))
+    throw new Error(
+      `notes id already has a different submission: ${request.id}`,
+    );
+  return receipt;
+}
+
 /** A local call request is the durable receipt even without its call-result. */
 export async function appendSubmittedNotes(
   path: string,
@@ -74,26 +95,14 @@ export async function appendSubmittedNotes(
   id: string,
   validate: (records: readonly Entry[]) => Promise<void>,
 ) {
-  const request = requestSchema.parse({
-    schemaVersion: 1,
-    id,
-    notes: submittedNotes.parse(input).notes,
-  });
-  const existing = (records: readonly Entry[]) => {
-    const receipt = receipts(records).find((entry) => entry.id === request.id);
-    if (receipt && !isDeepStrictEqual(receipt.notes, request.notes))
-      throw new Error(
-        `notes id already has a different submission: ${request.id}`,
-      );
-    return receipt;
-  };
+  const request = submissionRequest(input, id);
   for (let attempt = 0; attempt < 3; attempt++) {
     const through = campaign.lastSequence();
     const records = campaign.records({
         excludeLabels: ["xean/pi-request"],
         through,
       }),
-      prior = existing(records);
+      prior = existingReceipt(records, request);
     if (prior) return prior;
     await validate(records);
     let pending: ReturnType<Campaign["call"]>;
@@ -107,7 +116,7 @@ export async function appendSubmittedNotes(
           kinds: ["call"],
           labels: [notesLabel],
         }),
-        duplicate = existing(current);
+        duplicate = existingReceipt(current, request);
       if (duplicate) return duplicate;
       if (campaign.lastSequence() !== through) continue;
       // Append synchronously while locked, then settle the local call outside it.
@@ -134,18 +143,12 @@ export async function appendSubmittedNotesLocked(
   input: z.input<typeof submittedNotes>,
   id: string,
 ) {
-  const request = requestSchema.parse({
-    schemaVersion: 1,
-    id,
-    notes: submittedNotes.parse(input).notes,
-  });
-  const records = campaign.records({ kinds: ["call"], labels: [notesLabel] });
-  const prior = receipts(records).find((entry) => entry.id === request.id);
-  if (prior !== undefined) {
-    if (!isDeepStrictEqual(prior.notes, request.notes))
-      throw new Error(`notes id already has a different submission: ${id}`);
-    return prior;
-  }
+  const request = submissionRequest(input, id);
+  const prior = existingReceipt(
+    campaign.records({ kinds: ["call"], labels: [notesLabel] }),
+    request,
+  );
+  if (prior !== undefined) return prior;
   const result = await campaign.call(
     { label: notesLabel, request: jsonSnapshot(request) },
     async () => null,

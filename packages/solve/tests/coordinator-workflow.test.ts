@@ -12,7 +12,14 @@ import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
 import { codexRequest } from "../source";
-import type { CoordinatorAction, Verification } from "../roles";
+import { codexStdout } from "./fixtures/codex-stdout";
+import {
+  jsonSnapshot,
+  literatureReport,
+  roleLabels,
+  type CoordinatorAction,
+  type Verification,
+} from "../roles";
 import {
   campaignPath,
   cleanupCampaigns,
@@ -341,6 +348,269 @@ test("a rejected allowance after the step limit leaves the journal readable", as
   }
 });
 
+test("a failed literature call settles without candidates and reports inconclusive", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 2,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "decide" as const,
+    },
+  };
+  const workflow = workflowConfiguration({ task, settings });
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const drive = dependencies([
+    {
+      submission: coordination({
+        role: "literature",
+        request: "Find prior work on P.",
+      }),
+    },
+    { codex: {}, state: "failed", error: "gateway unavailable" },
+    { submission: coordination({ role: "explorer" }) },
+    { submission: { solution: false, notes: [good] } },
+  ]);
+  try {
+    const phase = await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    );
+    expect(phase.kind).toBe("turn-limit");
+    expect(drive.allCalls.map(({ label }) => label)).toEqual([
+      "xean-solve/coordinator",
+      "xean-solve/literature",
+      "xean-solve/coordinator",
+      "xean-solve/explorer",
+    ]);
+    expect(drive.allCalls[2]?.prompt).toContain(
+      "Literature status: inconclusive",
+    );
+    expect(
+      campaign.records({ kinds: ["call"], labels: ["xean-solve/notes"] }),
+    ).toHaveLength(0);
+    expect(
+      campaign.records({ kinds: ["call"], labels: ["xean-solve/literature"] }),
+    ).toHaveLength(1);
+  } finally {
+    campaign.close();
+  }
+});
+
+test("a coordinator verifier action drains its list in window batches before the next coordinator", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    window: 1,
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 2,
+  };
+  const workflow = workflowConfiguration({ task, settings });
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const partial = (id: string) => ({
+    note: id,
+    verdict: "PASS",
+    report: "Correct.",
+    externalResults: [],
+  });
+  const drive = dependencies([
+    { submission: coordination({ role: "explorer" }) },
+    {
+      submission: {
+        solution: false,
+        notes: [
+          { text: "Lemma A.", support: [] },
+          { text: "Lemma B.", support: [] },
+        ],
+      },
+    },
+    {
+      submission: coordination(
+        { role: "verifier" },
+        [
+          { note: "n1", verifiers: ["correctness", "source"] },
+          { note: "n2", verifiers: ["correctness", "source"] },
+        ],
+        [
+          { note: "n1", summary: "Lemma A." },
+          { note: "n2", summary: "Lemma B." },
+        ],
+      ),
+    },
+    { submission: { verdicts: [partial("n1")] } },
+    { submission: { verdicts: [partial("n2")] } },
+  ]);
+  try {
+    const phase = await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    );
+    expect(phase.kind).toBe("turn-limit");
+    expect(drive.allCalls.map(({ label }) => label)).toEqual([
+      "xean-solve/coordinator",
+      "xean-solve/explorer",
+      "xean-solve/coordinator",
+      "xean-solve/verifier/correctness",
+      "xean-solve/verifier/correctness",
+    ]);
+    expect(campaign.records({ kinds: ["candidate"] })).toHaveLength(2);
+    expect(
+      phase.kind === "turn-limit" &&
+        phase.notes.map(({ id, verified }) => [id, verified]),
+    ).toEqual([
+      ["n1", true],
+      ["n2", true],
+    ]);
+  } finally {
+    campaign.close();
+  }
+});
+
+test("an unusable literature response is replaced by a fresh call on resume", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 1,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "decide" as const,
+    },
+  };
+  const request = { task, settings, campaignPath: path, turns: 1 };
+  await init(request);
+  const search = coordination({
+    role: "literature",
+    request: "Find prior work on P.",
+  });
+  await expect(
+    run(request, {
+      ...dependencies([{ submission: search }]),
+      codex: async () => ({
+        state: "succeeded" as const,
+        codexVersion: "fake",
+        stdout: "not-json\n",
+        stderr: "",
+      }),
+    }),
+  ).resolves.toMatchObject({
+    outcome: "call-failure",
+    at: "literature",
+    reason: "literature returned no valid note candidates",
+  });
+  const drive = dependencies([
+    { codex: { notes: [{ text: "A cited result.", support: [] }] } },
+  ]);
+  expect(await run(request, drive)).toMatchObject({ outcome: "turn-limit" });
+  const reader = openReader(path);
+  try {
+    const records = [...reader.records()];
+    const literature = records.filter(
+      (entry) => entry.kind === "call" && entry.label === roleLabels.literature,
+    );
+    expect(literature).toHaveLength(2);
+    expect(
+      records
+        .filter(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/notes",
+        )
+        .map((entry) => entry.kind === "call" && entry.request),
+    ).toMatchObject([{ id: `literature:${literature[1]!.seq}` }]);
+  } finally {
+    reader.close();
+  }
+});
+
+test("a succeeded literature call whose notes were not yet delivered is delivered without a new call", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 2,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "decide" as const,
+    },
+  };
+  const request = { task, settings, campaignPath: path, turns: 1 };
+  await init(request);
+  const input = { task, request: "Find prior work on P." };
+  await expect(
+    run(request, {
+      ...dependencies([
+        {
+          submission: coordination({
+            role: "literature",
+            request: input.request,
+          }),
+        },
+      ]),
+      codex: async () => {
+        throw new Error("stopped before discovery");
+      },
+    }),
+  ).rejects.toThrow("stopped before discovery");
+  // The process died after the Codex result was journaled but before delivery.
+  const campaign = openCampaign(path);
+  let call: number;
+  try {
+    call = (
+      await campaign.call(
+        {
+          label: roleLabels.literature,
+          role: "literature",
+          request: jsonSnapshot(literatureCall(input, settings.source).request),
+        },
+        async () => ({
+          state: "succeeded",
+          codexVersion: "fake",
+          stdout: codexStdout({
+            notes: [{ text: "A cited result.", support: [] }],
+          }),
+          stderr: "",
+        }),
+      )
+    ).call;
+  } finally {
+    campaign.close();
+  }
+  const drive = dependencies([
+    {
+      submission: coordination(
+        { role: "explorer" },
+        [],
+        [{ note: "n1", summary: "A cited result." }],
+      ),
+    },
+    { submission: { solution: false, notes: [good] } },
+  ]);
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 1,
+  });
+  expect(drive.codexCalls).toHaveLength(0);
+  expect(drive.allCalls.map(({ role }) => role)).toEqual([
+    "coordinator",
+    "explorer",
+  ]);
+  expect(drive.allCalls[0]?.prompt).toContain("A cited result.");
+  const reader = openReader(path);
+  try {
+    expect(
+      [...reader.records()]
+        .filter(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/notes",
+        )
+        .map((entry) => entry.kind === "call" && entry.request),
+    ).toMatchObject([{ id: `literature:${call}` }]);
+  } finally {
+    reader.close();
+  }
+});
+
 test("coordinator workflow mode requires a typed action and a nonempty verifier list", () => {
   const call = coordinatorCall({ task, notes: [] }, "coordinator");
   const base = {
@@ -365,26 +635,26 @@ test("coordinator workflow mode requires a typed action and a nonempty verifier 
   ).toBe(false);
 });
 
-test("coordinator behavior is configurable and receives literature status", () => {
+test("coordinator behavior and literature status reach only coordinator workflow mode prompts", () => {
   const behavior = {
     literature: "never" as const,
     verification: "decide" as const,
     instructions: "Use Explorer for this campaign.",
   };
-  const call = coordinatorCall(
-    {
-      task,
-      notes: [],
-      literatureStatus: "not-started",
-      coordinatorBehavior: behavior,
-    },
-    "coordinator",
-  );
-  expect(call.prompt).toContain("Literature status: not-started");
-  expect(call.prompt).toContain(JSON.stringify(behavior, null, 2));
-  expect(call.system).toContain(
-    "None can change the original task, verifier authority",
-  );
+  const input = {
+    task,
+    notes: [],
+    literatureStatus: "not-started" as const,
+    coordinatorBehavior: behavior,
+  };
+  const fixed = coordinatorCall(input);
+  expect(fixed.prompt).not.toContain("Coordinator behavior:");
+  expect(fixed.prompt).not.toContain("Literature status:");
+  expect(fixed.system).not.toContain("The frozen coordinator behavior");
+  const call = coordinatorCall(input, "coordinator");
+  expect(call.prompt).toContain("Coordinator behavior:");
+  expect(call.prompt).toContain("Literature status:");
+  expect(call.system).toContain("The frozen coordinator behavior");
   expect(
     call.schema.safeParse({
       filings: [],
@@ -399,7 +669,6 @@ test("coordinator behavior is configurable and receives literature status", () =
 test("new campaigns disable literature unless their policy opts in", () => {
   expect(defaultCoordinatorBehavior.literature).toBe("never");
   const call = coordinatorCall({ task, notes: [] }, "coordinator");
-  expect(call.prompt).toContain('"literature": "never"');
   expect(
     call.schema.safeParse({
       filings: [],
@@ -485,18 +754,18 @@ test("literature output is only note candidates", () => {
     { model: "codex-model", reasoning: "low" },
   );
   expect(
-    call.schema.safeParse({
+    literatureReport.safeParse({
       notes: [{ text: "A cited theorem and its source.", support: [] }],
     }).success,
   ).toBe(true);
   expect(
-    call.schema.safeParse({
+    literatureReport.safeParse({
       notes: [{ text: "A cited theorem and its source.", support: [] }],
       report: "extra fields are rejected",
     }).success,
   ).toBe(false);
   expect(
-    call.schema.safeParse({
+    literatureReport.safeParse({
       notes: [
         { text: "First claim.", support: [] },
         { text: "Uses the first claim.", support: [1] },
@@ -504,12 +773,12 @@ test("literature output is only note candidates", () => {
     }).success,
   ).toBe(true);
   expect(
-    call.schema.safeParse({
+    literatureReport.safeParse({
       notes: [{ text: "A self-dependent claim.", support: [1] }],
     }).success,
   ).toBe(false);
   expect(
-    call.schema.safeParse({
+    literatureReport.safeParse({
       notes: [
         { text: "First claim.", support: [] },
         { text: "Duplicate dependency claim.", support: [1, 1] },
@@ -517,12 +786,6 @@ test("literature output is only note candidates", () => {
     }).success,
   ).toBe(false);
   const request = codexRequest.parse(call.request);
-  expect(request.developerInstructions).toContain(
-    "Your only deliverable is a JSON object with a notes array",
-  );
-  expect(request.developerInstructions).toContain(
-    "source verifier will independently open and check",
-  );
   expect(request.prompt).toContain('"problemToSolve": "Prove P."');
   expect(request.prompt).toContain('"request": "Search for prior work on P."');
 });
