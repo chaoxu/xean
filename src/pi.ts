@@ -283,89 +283,9 @@ const transientGatewayErrorPattern =
 const incompleteStreamErrorPattern =
   /^(?:(?:stream_incomplete:\s*)?Upstream closed stream without completion|upstream_eof_before_terminal_event)$/i;
 const deterministicProviderErrorPattern =
-  /\b(?:401|403)\b|invalid_api_key|permission denied|insufficient_quota|out of budget|quota exceeded|billing|invalid_request(?:_error)?|context_length_exceeded|tool submission|schema validation/i;
-const deterministicProviderDiagnosticCodes = new Set([
-  "invalid_api_key",
-  "permission_denied",
-  "insufficient_quota",
-  "invalid_request_error",
-  "context_length_exceeded",
-  "tool_submission_error",
-  "schema_validation_error",
-]);
-const deterministicProviderStatuses = new Set([400, 401, 403, 404, 422]);
-const transientGatewayDiagnosticCodes = new Set([
-  "stream_incomplete",
-  "upstream_eof_before_terminal_event",
-  "upstream_unavailable",
-  "upstream_error",
-  "proxy_unavailable",
-  "clientpayloaderror",
-]);
-const transientProviderStatuses = new Set([
-  408, 425, 429, 500, 502, 503, 504, 524,
-]);
-
-function diagnosticStatuses(
-  diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number],
-): readonly number[] {
-  const values: unknown[] = [diagnostic.error?.code];
-  for (const key of [
-    "status",
-    "statusCode",
-    "httpStatusCode",
-    "http_status",
-  ] as const)
-    values.push(diagnostic.details?.[key]);
-  return values.flatMap((value) => {
-    if (typeof value === "number" && Number.isInteger(value)) return [value];
-    if (typeof value === "string" && /^\d+$/u.test(value))
-      return [Number(value)];
-    return [];
-  });
-}
-
-function diagnosticCodes(
-  diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number],
-): readonly string[] {
-  const values: unknown[] = [diagnostic.error?.code];
-  for (const key of ["failure_detail", "failureDetail", "code"] as const) {
-    values.push(diagnostic.details?.[key]);
-  }
-  return values.flatMap((value) =>
-    typeof value === "string" ? [value.toLowerCase()] : [],
-  );
-}
-
-function providerDiagnosticClass(
-  message: AssistantMessage,
-): "deterministic" | "transient" | undefined {
-  let transient = false;
-  for (const diagnostic of message.diagnostics ?? []) {
-    const type = diagnostic.type.toLowerCase();
-    const codes = diagnosticCodes(diagnostic);
-    const statuses = diagnosticStatuses(diagnostic);
-    if (
-      codes.some((code) => deterministicProviderDiagnosticCodes.has(code)) ||
-      statuses.some((status) => deterministicProviderStatuses.has(status))
-    ) {
-      return "deterministic";
-    }
-    if (
-      type === "provider_transport_failure" ||
-      codes.some((code) => transientGatewayDiagnosticCodes.has(code)) ||
-      statuses.some((status) => transientProviderStatuses.has(status))
-    ) {
-      transient = true;
-    }
-  }
-  return transient ? "transient" : undefined;
-}
+  /\b(?:401|403)\b|invalid_api_key|permission denied|insufficient_quota|out of budget|quota exceeded|billing|invalid_request(?:_error)?|context_length_exceeded/i;
 
 function isRetryableProviderError(message: AssistantMessage): boolean {
-  const diagnosticClass = providerDiagnosticClass(message);
-  if (diagnosticClass === "deterministic") return false;
-  if (diagnosticClass === "transient") return true;
   if (
     message.stopReason === "error" &&
     message.errorMessage !== undefined &&
@@ -380,6 +300,14 @@ function isRetryableProviderError(message: AssistantMessage): boolean {
   if (
     ["openai-responses", "openai-codex-responses"].includes(message.api) &&
     message.rawStopReason === "incomplete.max_messages"
+  )
+    return true;
+  // Pi's codex adapter records a failed WebSocket transport as a diagnostic
+  // rather than in the error text.
+  if (
+    message.diagnostics?.some(
+      ({ type }) => type === "provider_transport_failure",
+    )
   )
     return true;
   return (

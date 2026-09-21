@@ -2496,118 +2496,27 @@ describe("thin Pi runner", () => {
     );
   });
 
-  test("prefers structured incomplete-stream diagnostics", async () => {
-    const byCode = assistant([], "error");
-    byCode.errorMessage = "opaque provider failure";
-    byCode.diagnostics = [
-      {
-        type: "provider_response_failure",
-        timestamp: 1,
-        error: {
-          message: "opaque provider failure",
-          code: "stream_incomplete",
-        },
-      },
-    ];
-    const codeResult = await runPi(campaign(), {
-      models: models([byCode]),
+  test("classifies a codex transport-failure diagnostic as retryable", async () => {
+    const failed = assistant([], "error");
+    failed.errorMessage = "opaque provider failure";
+    failed.diagnostics = [{ type: "provider_transport_failure", timestamp: 1 }];
+    const result = await runPi(campaign(), {
+      models: models([failed]),
       model,
-      label: "code/v1",
-      prompt: "Code",
+      label: "transport-diagnostic/v1",
+      prompt: "Classify",
     });
-    expect(codeResult).toMatchObject({
-      state: "failed",
-      providerRetryable: true,
-    });
-
-    const byDetail = assistant([], "error");
-    byDetail.errorMessage = "opaque provider failure";
-    byDetail.diagnostics = [
-      {
-        type: "provider_response_failure",
-        timestamp: 1,
-        details: { failure_detail: "upstream_eof_before_terminal_event" },
-      },
-    ];
-    const detailResult = await runPi(campaign(), {
-      models: models([byDetail]),
-      model,
-      label: "detail/v1",
-      prompt: "Detail",
-    });
-    expect(detailResult).toMatchObject({
-      state: "failed",
-      providerRetryable: true,
-    });
+    expect(result).toMatchObject({ state: "failed", providerRetryable: true });
   });
-
-  test.each([
-    {
-      name: "transport diagnostic",
-      diagnostic: { type: "provider_transport_failure", timestamp: 1 },
-      retryable: true,
-    },
-    {
-      name: "forbidden response status",
-      diagnostic: {
-        type: "provider_response_failure",
-        timestamp: 1,
-        details: { status: 403 },
-      },
-      retryable: false,
-    },
-    {
-      name: "quota response code",
-      diagnostic: {
-        type: "provider_response_failure",
-        timestamp: 1,
-        error: {
-          message: "opaque provider failure",
-          code: "insufficient_quota",
-        },
-      },
-      retryable: false,
-    },
-    {
-      name: "specific transient detail beats generic code and text",
-      diagnostic: {
-        type: "provider_response_failure",
-        timestamp: 1,
-        error: { message: "opaque provider failure", code: "provider_error" },
-        details: { failure_detail: "upstream_unavailable" },
-      },
-      errorMessage: "403 opaque provider failure",
-      retryable: true,
-    },
-  ])(
-    "classifies structured provider diagnostics before text: $name",
-    async ({ diagnostic, errorMessage, retryable }) => {
-      const failed = assistant([], "error");
-      failed.errorMessage = errorMessage ?? "opaque provider failure";
-      failed.diagnostics = [diagnostic];
-      const result = await runPi(campaign(), {
-        models: models([failed]),
-        model,
-        label: "structured-classification/v1",
-        prompt: "Classify",
-      });
-      expect(result).toMatchObject({
-        state: "failed",
-        providerRetryable: retryable,
-      });
-    },
-  );
 
   test.each([
     "401 invalid_api_key: authentication failed",
     "403 permission denied",
     "429 insufficient_quota: billing hard limit reached",
     "400 invalid_request_error",
-    "tool submission schema validation failed",
     "401 invalid_api_key: stream_incomplete: Upstream closed stream without completion",
     "429 insufficient_quota: stream_incomplete: Upstream closed stream without completion",
     "400 invalid_request_error: upstream_eof_before_terminal_event",
-    "tool submission failed: upstream_eof_before_terminal_event",
   ])(
     "keeps deterministic provider failure non-retryable: %s",
     async (error) => {
