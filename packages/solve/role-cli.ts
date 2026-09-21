@@ -43,7 +43,7 @@ import {
   reconstructionCalls,
   reconstructionResult,
   roleTools,
-  sourceVerdicts,
+  sourceSubmission,
   statement,
   succeededSubmission,
   savedExplorerSubmission,
@@ -165,7 +165,7 @@ function visibleSubmission(
         if (submission === undefined) return undefined;
         return jsonSnapshot({
           verifier,
-          ...sourceVerdicts.parse(submission.input),
+          ...sourceSubmission.parse(submission.input),
           usage: submission.usage,
         });
       }

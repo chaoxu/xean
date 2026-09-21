@@ -43,6 +43,15 @@ export async function appendAllowance(
     afterTurns,
   });
   positiveTurns.parse(afterTurns + turns);
+  // Validate before writing so a rejected grant never leaves an unreadable journal.
+  const granted = turnAllowances(
+    campaign.records({ kinds: ["call"], labels: [allowanceLabel] }),
+  );
+  if (
+    granted.some((entry) => entry.id === request.id) ||
+    (granted.at(-1)?.maxExplorerTurns ?? 0) !== afterTurns
+  )
+    throw new Error("invalid turn allowance sequence");
   await campaign.call({ label: allowanceLabel, request }, async () => null);
   return turnAllowances(
     campaign.records({ kinds: ["call"], labels: [allowanceLabel] }),

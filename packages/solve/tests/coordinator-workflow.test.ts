@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { openCampaign, openReader } from "xean";
 
 import {
   coordinatorCall,
@@ -6,7 +7,9 @@ import {
   defaultCoordinatorBehavior,
   literatureCall,
 } from "../pi-roles";
-import { inspectCampaign } from "../role-cli";
+import { appendAllowance, turnAllowances } from "../allowance";
+import { inspectCampaign, submitNotes } from "../role-cli";
+import { init, run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
 import { codexRequest } from "../source";
 import type { CoordinatorAction, Verification } from "../roles";
@@ -178,7 +181,167 @@ test("coordinator mode starts with the coordinator and returns after literature"
   });
 });
 
-test("controller coordination requires a typed action and a nonempty verifier list", () => {
+test("a repeated literature request runs a fresh call after its dispatching coordinator", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 2,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "decide" as const,
+    },
+  };
+  const workflow = workflowConfiguration({ task, settings });
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const search = coordination({
+    role: "literature",
+    request: "Find prior work on P.",
+  });
+  const drive = dependencies([
+    { submission: search },
+    { codex: { notes: [{ text: "First cited result.", support: [] }] } },
+    {
+      submission: {
+        ...search,
+        filings: [{ note: "n1", summary: "First cited result." }],
+      },
+    },
+    { codex: { notes: [{ text: "Second cited result.", support: [] }] } },
+  ]);
+  try {
+    const phase = await runWorkflow(
+      campaign,
+      createPiRoles(campaign, workflow.settings, drive),
+    );
+    expect(phase.kind).toBe("turn-limit");
+    expect(drive.allCalls.map(({ label }) => label)).toEqual([
+      "xean-solve/coordinator",
+      "xean-solve/literature",
+      "xean-solve/coordinator",
+      "xean-solve/literature",
+    ]);
+    // The second discovery is delivered as its own submission; it enters the
+    // note graph at the next coordinator boundary, after the step cap here.
+    expect(
+      campaign
+        .records({ kinds: ["call"], labels: ["xean-solve/notes"] })
+        .map((entry) => entry.kind === "call" && entry.request),
+    ).toEqual([
+      expect.objectContaining({
+        notes: [{ text: "First cited result.", support: [] }],
+      }),
+      expect.objectContaining({
+        notes: [{ text: "Second cited result.", support: [] }],
+      }),
+    ]);
+  } finally {
+    campaign.close();
+  }
+});
+
+test("a note submitted while an explorer phase waits returns to the coordinator", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 2,
+  };
+  const request = { task, settings, campaignPath: path, turns: 1 };
+  await init(request);
+  // The coordinator settles, then the process stops before any explorer call.
+  await expect(
+    run(
+      request,
+      dependencies([{ submission: coordination({ role: "explorer" }) }]),
+    ),
+  ).rejects.toThrow("no reply for xean-solve/explorer");
+  const supplied = "A separately supplied lemma with its full proof.";
+  await submitNotes(path, { notes: [{ text: supplied, support: [] }] }, "idle");
+  const drive = dependencies([
+    {
+      submission: coordination(
+        { role: "explorer" },
+        [],
+        [{ note: "n1", summary: "A supplied lemma." }],
+      ),
+    },
+    { submission: { solution: false, notes: [good] } },
+  ]);
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 1,
+  });
+  expect(drive.allCalls.map(({ role }) => role)).toEqual([
+    "coordinator",
+    "explorer",
+  ]);
+  expect(drive.allCalls[0]?.prompt).toContain(supplied);
+  const inspection = (await inspectCampaign(path, {
+    includeSubmissions: true,
+  })) as {
+    readonly notes: readonly { readonly id: string }[];
+    readonly submissions: readonly unknown[];
+  };
+  expect(inspection.notes.map(({ id }) => id)).toEqual(["n1", "n2"]);
+  expect(inspection.submissions).toMatchObject([
+    { id: "idle", pending: false, noteIds: ["n1"] },
+  ]);
+});
+
+test("a rejected allowance after the step limit leaves the journal readable", async () => {
+  const path = campaignPath();
+  const settings = {
+    ...roleSettings(),
+    workflowMode: "coordinator" as const,
+    maxCoordinatorSteps: 1,
+    coordinatorBehavior: {
+      literature: "optional" as const,
+      verification: "decide" as const,
+    },
+  };
+  const request = { task, settings, campaignPath: path, turns: 2 };
+  await init(request);
+  const drive = dependencies([
+    {
+      submission: coordination({
+        role: "literature",
+        request: "Find prior work on P.",
+      }),
+    },
+    { codex: { notes: [] } },
+  ]);
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 0,
+  });
+  await expect(
+    run({ ...request, turns: 3, id: "more" }, dependencies([])),
+  ).rejects.toThrow("maxCoordinatorSteps ended this campaign");
+  const reader = openReader(path);
+  try {
+    const records = [...reader.records()];
+    expect(turnAllowances(records)).toMatchObject([
+      { turns: 2, afterTurns: 0 },
+    ]);
+    expect((await inspectCampaign(path)) as object).toMatchObject({
+      phase: "turn-limit",
+    });
+  } finally {
+    reader.close();
+  }
+  const opened = openCampaign(path);
+  try {
+    await expect(appendAllowance(opened, 3, 0, "direct")).rejects.toThrow(
+      "invalid turn allowance sequence",
+    );
+    expect(turnAllowances(opened.records())).toHaveLength(1);
+  } finally {
+    opened.close();
+  }
+});
+
+test("coordinator workflow mode requires a typed action and a nonempty verifier list", () => {
   const call = coordinatorCall({ task, notes: [] }, "coordinator");
   const base = {
     filings: [],
@@ -217,7 +380,7 @@ test("coordinator behavior is configurable and receives literature status", () =
     },
     "coordinator",
   );
-  expect(call.prompt).toContain("Literature search status: not-started");
+  expect(call.prompt).toContain("Literature status: not-started");
   expect(call.prompt).toContain(JSON.stringify(behavior, null, 2));
   expect(call.system).toContain(
     "None can change the original task, verifier authority",
@@ -332,6 +495,14 @@ test("literature output is only note candidates", () => {
       report: "extra fields are rejected",
     }).success,
   ).toBe(false);
+  expect(
+    call.schema.safeParse({
+      notes: [
+        { text: "First claim.", support: [] },
+        { text: "Uses the first claim.", support: [1] },
+      ],
+    }).success,
+  ).toBe(true);
   expect(
     call.schema.safeParse({
       notes: [{ text: "A self-dependent claim.", support: [1] }],

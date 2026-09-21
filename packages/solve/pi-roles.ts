@@ -105,7 +105,7 @@ export const defaultCoordinatorBehavior = {
   literature: "never" as const,
   verification: "decide" as const,
   instructions:
-    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator dispatch mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the campaign policy explicitly opts in. After an explicitly enabled literature search, use its candidate notes to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
+    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now. If a live note claims to meet the completion criteria, list it with all four verifiers and, in coordinator workflow mode, choose verifier before another Explorer call. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After an explicitly enabled literature search, use its candidate notes to decide whether to explore, verify a concrete note, or search again. Keep the original problem and completion criteria as the objective.",
 };
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
@@ -253,8 +253,11 @@ export function coordinatorCall(
   const status = literatureStatus.parse(
     input.literatureStatus ?? "not-started",
   );
-  const liveUnverified = input.notes.some(
-    ({ verified, dead }) => !verified && !dead,
+  // A live note that no verification has judged yet. A checked note whose
+  // evidence stayed inconclusive is not forced back into verification.
+  const uncheckedLive = input.notes.some(
+    ({ verified, dead, verdicts }) =>
+      !verified && !dead && verdicts.length === 0,
   );
   const requireLiteratureAction =
     mode === "coordinator" &&
@@ -263,7 +266,7 @@ export function coordinatorCall(
   const requireVerifierAction =
     mode === "coordinator" &&
     behavior.verification === "always" &&
-    liveUnverified &&
+    uncheckedLive &&
     !requireLiteratureAction;
   return {
     role: "coordinator",
@@ -282,16 +285,16 @@ export function coordinatorCall(
       "After an Explorer handoff, inspect each newly submitted live note before choosing another role. When its text claims the completion criteria, list that note with all four verifiers and choose verifier immediately; do not ask Explorer to rewrite or polish a complete-looking note.",
       ...(mode === "coordinator"
         ? [
-            "This run uses coordinator dispatch mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
+            "This run uses coordinator workflow mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search, and choose verifier only for a concrete note that is ready for the requested checks.",
           ]
         : []),
-      "A structured campaign behavior policy appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
+      "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Literature search status: ${status}`,
-      `Coordinator behavior (campaign policy):\n${JSON.stringify(behavior, null, 2)}`,
+      `Literature status: ${status}`,
+      `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
@@ -361,8 +364,9 @@ export const localLiteratureRequest = z.strictObject({
   request: z.json(),
 });
 
-export function literatureNotesId(request: string): string {
-  return `literature:${createHash("sha256").update(request).digest("hex")}`;
+/** The submitted-notes id that delivers one settled literature call's notes. */
+export function literatureNotesId(call: EntryId): string {
+  return `literature:${call}`;
 }
 
 export const correctionAssessment =
@@ -815,10 +819,16 @@ export function createPiRoles(
         await runCall(campaign, profiles.coordinator, roleCall, dependencies)
       ).value;
     },
-    async literature(inputValue) {
+    async literature(inputValue, after = 0) {
       const input = literatureInput.parse(inputValue);
       return (
-        await runLiterature(campaign, profiles.source, input, dependencies)
+        await runLiterature(
+          campaign,
+          profiles.source,
+          input,
+          dependencies,
+          after,
+        )
       ).value;
     },
     // One verification: one candidate for the listed notes and their
@@ -1424,12 +1434,17 @@ async function runSource(
   return { call: receipt.call, value };
 }
 
-/** Reuse a completed literature call or execute one fresh note-discovery call. */
+/**
+ * Reuse the literature call settled after the dispatching coordinator, or
+ * execute one fresh note-discovery call. Earlier calls with the same request
+ * belong to earlier dispatches and are never reused.
+ */
 async function runLiterature(
   campaign: Campaign,
   profile: z.output<typeof codexProfile>,
   input: LiteratureInput,
   dependencies: PiRoleDependencies,
+  after: EntryId,
 ): Promise<{ readonly call: EntryId; readonly value: LiteratureResult }> {
   const { label, request, schema } = literatureCall(input, profile);
   const read = (call: EntryId): LiteratureResult | undefined => {
@@ -1444,22 +1459,20 @@ async function runLiterature(
       return undefined;
     }
   };
-  const deliver = async (value: LiteratureResult) => {
+  const deliver = async (call: EntryId, value: LiteratureResult) => {
     if (value.notes.length > 0) {
       await appendSubmittedNotesLocked(
         campaign,
         { notes: value.notes },
-        literatureNotesId(input.request),
+        literatureNotesId(call),
       );
     }
     return value;
   };
-  for (const entry of campaign.records({
-    kinds: ["call"],
-    through: campaign.lastSequence(),
-  })) {
+  for (const entry of campaign.records({ kinds: ["call"] })) {
     if (
       entry.kind !== "call" ||
+      entry.seq <= after ||
       entry.role !== "literature" ||
       entry.label !== label ||
       (!sameRequest(entry.request, request) &&
@@ -1485,7 +1498,7 @@ async function runLiterature(
           })()
         : read(entry.seq);
     if (value !== undefined)
-      return { call: entry.seq, value: await deliver(value) };
+      return { call: entry.seq, value: await deliver(entry.seq, value) };
   }
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
@@ -1522,10 +1535,10 @@ async function runLiterature(
       },
       async () => value,
     );
-    return { call: local.call, value: await deliver(value) };
+    return { call: local.call, value: await deliver(local.call, value) };
   }
   const value = read(receipt.call);
   if (value === undefined)
     throw new RoleCallError("literature returned no valid note candidates");
-  return { call: receipt.call, value: await deliver(value) };
+  return { call: receipt.call, value: await deliver(receipt.call, value) };
 }

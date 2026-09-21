@@ -59,7 +59,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 18;
+export const workflowSchemaVersion = 19;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -87,7 +87,12 @@ export type WorkflowTerminal = AcceptedPhase | TurnLimitPhase;
 export type WorkflowPhase =
   | { readonly kind: "explorer"; readonly input: ExplorerInput }
   | { readonly kind: "coordinator"; readonly input: CoordinatorInput }
-  | { readonly kind: "literature"; readonly input: LiteratureInput }
+  | {
+      readonly kind: "literature";
+      readonly input: LiteratureInput;
+      /** The dispatching coordinator's settled entry; earlier calls are not reused. */
+      readonly after: EntryId;
+    }
   | {
       readonly kind: "verifier";
       readonly input: VerifierInput;
@@ -567,7 +572,7 @@ function settledLiteratureCall(
       if (value !== undefined) {
         if (
           value.notes.length > 0 &&
-          !hasSubmittedNotes(records, literatureNotesId(expectedRequest))
+          !hasSubmittedNotes(records, literatureNotesId(call.seq))
         )
           continue;
         return {
@@ -582,7 +587,7 @@ function settledLiteratureCall(
   return undefined;
 }
 
-function acceptedControllerPhase(
+function acceptedPhase(
   records: readonly Entry[],
   projection: Projection,
   cursor: EntryId,
@@ -618,7 +623,7 @@ function acceptedControllerPhase(
 }
 
 /**
- * Experimental controller loop. Every completed role returns to a fresh
+ * Experimental coordinator workflow mode. Every completed role returns to a fresh
  * coordinator decision; literature notes enter the ordinary note graph, never
  * a verifier result. The fixed Explorer -> coordinator -> verifier loop above
  * remains the default mode for comparison.
@@ -667,7 +672,7 @@ async function deriveCoordinatorWorkflow(
   };
 
   for (;;) {
-    const accepted = await acceptedControllerPhase(
+    const accepted = await acceptedPhase(
       records,
       projection,
       cursor,
@@ -719,7 +724,7 @@ async function deriveCoordinatorWorkflow(
     pendingEmptySubmission = false;
     const action = coordinated.value.action;
     if (action === undefined)
-      throw new Error("controller coordinator returned no role action");
+      throw new Error("coordinator workflow mode requires a role action");
     dispatches += 1;
 
     if (action.role === "literature") {
@@ -739,7 +744,7 @@ async function deriveCoordinatorWorkflow(
           ...base,
           noteSubmissions,
           notes: projection.at(cursor),
-          phase: { kind: "literature", input },
+          phase: { kind: "literature", input, after: cursor },
         };
       }
       cursor = settled.settled;
@@ -747,6 +752,9 @@ async function deriveCoordinatorWorkflow(
     }
 
     if (action.role === "explorer") {
+      // A caller's submission while this phase waited returns to the
+      // coordinator with the new notes, as in the fixed loop.
+      if (includeSubmitted(cursor)) continue;
       if (turns >= maxExplorerTurns) {
         const notes = projection.at(cursor);
         return {
@@ -834,7 +842,7 @@ async function deriveCoordinatorWorkflow(
       config.settings.window,
     );
     if (verify.length === 0)
-      throw new Error("controller verifier action selected no fitting note");
+      throw new Error("verifier action selected no fitting note");
     const listed = verify.map(({ note }) => pick(filed, note));
     const verifierRequest = await verifierInput.parseAsync({
       task: config.task,
@@ -865,7 +873,7 @@ async function deriveCoordinatorWorkflow(
       throw new Error(`verifier call ${first.seq} is not bound to a candidate`);
     const recorded = verdicts.filter(({ candidate: id }) => id === candidate);
     cursor = Math.max(cursor, ...recorded.map(({ seq }) => seq));
-    const acceptedAfterVerification = await acceptedControllerPhase(
+    const acceptedAfterVerification = await acceptedPhase(
       records,
       projection,
       cursor,
@@ -946,7 +954,7 @@ export async function runWorkflow(
       } else if (phase.kind === "coordinator") {
         await roles.coordinator(phase.input);
       } else if (phase.kind === "literature") {
-        await roles.literature(phase.input);
+        await roles.literature(phase.input, phase.after);
       } else {
         await roles.verifier(phase.input, phase.candidate);
       }

@@ -206,36 +206,38 @@ function distinctKnown(
   }
 }
 
-/** Notes returned by literature discovery; local support uses one-based positions. */
-const literatureNote = z
-  .strictObject({
-    text: nonblank,
-    support: z.array(z.number().int().positive()),
-  })
-  .superRefine((value, context) => {
-    const seen = new Set<number>();
-    for (const [index, support] of value.support.entries()) {
-      if (support > index || seen.has(support)) {
-        context.addIssue({
-          code: "custom",
-          path: ["support", index],
-          message:
-            "literature support must name a distinct earlier note in this submission",
-        });
+/** Notes returned by literature discovery; support names earlier notes of the same response by one-based position. */
+const literatureNotes = z
+  .array(
+    z.strictObject({
+      text: nonblank,
+      support: z.array(z.number().int().positive()),
+    }),
+  )
+  .superRefine((notes, context) => {
+    for (const [position, note] of notes.entries()) {
+      const seen = new Set<number>();
+      for (const [index, support] of note.support.entries()) {
+        if (support > position || seen.has(support)) {
+          context.addIssue({
+            code: "custom",
+            path: [position, "support", index],
+            message:
+              "literature support must name a distinct earlier note in this submission",
+          });
+        }
+        seen.add(support);
       }
-      seen.add(support);
     }
   });
 
-export const literatureReport = z.strictObject({
-  notes: z.array(literatureNote),
-});
+export const literatureReport = z.strictObject({ notes: literatureNotes });
 export type LiteratureReport = z.output<typeof literatureReport>;
 
 /** A durable literature result. The request binds the note candidates for replay. */
 export const literatureResult = z.strictObject({
   request: nonblank,
-  notes: z.array(literatureNote),
+  notes: literatureNotes,
 });
 export type LiteratureResult = z.output<typeof literatureResult>;
 
@@ -337,7 +339,7 @@ const verification = z
   );
 export type Verification = z.output<typeof verification>;
 
-/** The coordinator's scheduling choice in the experimental controller loop. */
+/** The coordinator's scheduling choice in coordinator workflow mode. */
 export const coordinatorAction = z.discriminatedUnion("role", [
   z.strictObject({ role: z.literal("explorer") }),
   z.strictObject({ role: z.literal("literature"), request: nonblank }),
@@ -352,9 +354,7 @@ export const coordinatorResult = z.strictObject({
   verify: z.array(verification),
   action: coordinatorAction.optional(),
 });
-export type CoordinatorResult = z.output<typeof coordinatorResult> & {
-  readonly action?: CoordinatorAction | undefined;
-};
+export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
 export function coordinatorResultFor(
   notes: readonly Pick<
@@ -379,7 +379,7 @@ export function coordinatorResultFor(
     if (options.requireAction && value.action === undefined) {
       ctx.addIssue({
         code: "custom",
-        message: "controller coordination must choose a next role",
+        message: "coordinator workflow mode requires a next role action",
         path: ["action"],
       });
     }
@@ -390,28 +390,29 @@ export function coordinatorResultFor(
       ctx.addIssue({
         code: "custom",
         message:
-          "campaign behavior requires a literature action before another role",
+          "coordinator behavior requires a literature action before another role",
         path: ["action"],
       });
     }
     if (options.requireVerifierAction && value.action?.role !== "verifier") {
       ctx.addIssue({
         code: "custom",
-        message: "campaign behavior requires a verifier action for a live note",
+        message:
+          "coordinator behavior requires a verifier action for an unchecked live note",
         path: ["action"],
       });
     }
     if (options.forbidLiteratureAction && value.action?.role === "literature") {
       ctx.addIssue({
         code: "custom",
-        message: "campaign behavior forbids literature discovery",
+        message: "coordinator behavior forbids literature discovery",
         path: ["action"],
       });
     }
     if (value.action?.role === "verifier" && value.verify.length === 0) {
       ctx.addIssue({
         code: "custom",
-        message: "controller verifier action must list a note to verify",
+        message: "a verifier action must list a note to verify",
         path: ["verify"],
       });
     }
@@ -423,7 +424,7 @@ export function coordinatorResultFor(
       ctx.addIssue({
         code: "custom",
         message:
-          "controller explorer or literature action cannot carry a verification list",
+          "an explorer or literature action cannot carry a verification list",
         path: ["verify"],
       });
     }
@@ -775,13 +776,16 @@ export function hasSourcePassages(
       ))
   );
 }
-const sourceVerdict = verdict
-  .omit({ verifier: true })
-  .extend(sourceEvidence.shape)
-  .refine(
-    hasSourcePassages,
-    "PASS requires a source passage for every nonroutine external result",
-  );
+/** The journaled shape of one source submission, before its evidence is judged. */
+export const sourceSubmission = z.strictObject({
+  verdicts: z.array(
+    verdict.omit({ verifier: true }).extend(sourceEvidence.shape),
+  ),
+});
+const sourceVerdict = sourceSubmission.shape.verdicts.element.refine(
+  hasSourcePassages,
+  "PASS requires a source passage for every nonroutine external result",
+);
 /** The verdicts of one source call. */
 export const sourceVerdicts = z.strictObject({
   verdicts: z.array(sourceVerdict),
@@ -821,7 +825,6 @@ export function sourceVerdictsFor(
         const sourceIds = verdict.sources.map(({ resultId }) => resultId);
         return (
           sourceIds.every((id) => ids.includes(id)) &&
-          new Set(sourceIds).size === sourceIds.length &&
           (verdict.verdict !== "PASS" ||
             ids.every((id) => sourceIds.includes(id)))
         );
@@ -979,7 +982,10 @@ export function succeededSubmission(
 export interface Roles {
   readonly explorer: (input: ExplorerInput) => Promise<ExplorerResult>;
   readonly coordinator: (input: CoordinatorInput) => Promise<CoordinatorResult>;
-  readonly literature: (input: LiteratureInput) => Promise<LiteratureResult>;
+  readonly literature: (
+    input: LiteratureInput,
+    after?: EntryId,
+  ) => Promise<LiteratureResult>;
   readonly verifier: (
     input: VerifierInput,
     candidate?: EntryId,
