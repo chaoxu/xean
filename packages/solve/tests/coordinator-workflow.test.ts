@@ -187,7 +187,7 @@ test("coordinator mode starts with the coordinator and returns after literature"
   });
 });
 
-test("a repeated literature request runs a fresh call after its dispatching coordinator", async () => {
+test("a repeated literature request after a failed search runs a fresh call, and none after a completed one", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
@@ -198,21 +198,26 @@ test("a repeated literature request runs a fresh call after its dispatching coor
     },
   };
   const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const campaign = await createWorkflowCampaign(path, workflow, 3);
   const search = coordination({
     role: "literature",
     request: "Find prior work on P.",
   });
   const drive = dependencies([
     { submission: search },
-    { codex: { notes: [{ text: "First cited result.", support: [] }] } },
+    { codex: {}, state: "failed", error: "gateway unavailable" },
+    // The failed search leaves literature inconclusive, so the same request
+    // runs a fresh call instead of reusing the failed one.
+    { submission: search },
+    { codex: { notes: [{ text: "A cited result.", support: [] }] } },
     {
-      submission: {
-        ...search,
-        filings: [{ note: "n1", summary: "First cited result." }],
-      },
+      submission: coordination(
+        { role: "explorer" },
+        [],
+        [{ note: "n1", summary: "A cited result." }],
+      ),
     },
-    { codex: { notes: [{ text: "Second cited result.", support: [] }] } },
+    { submission: { solution: false, notes: [] } },
   ]);
   try {
     const phase = await runWorkflow(
@@ -225,24 +230,51 @@ test("a repeated literature request runs a fresh call after its dispatching coor
       "xean-solve/literature",
       "xean-solve/coordinator",
       "xean-solve/literature",
+      "xean-solve/coordinator",
+      "xean-solve/explorer",
     ]);
-    // The second discovery is delivered as its own submission; it enters the
-    // note graph at the next coordinator boundary, after the turn limit here.
+    expect(drive.allCalls[2]?.prompt).toContain(
+      "Literature status: inconclusive",
+    );
+    expect(drive.allCalls[4]?.prompt).toContain("Literature status: completed");
     expect(
       campaign
         .records({ kinds: ["call"], labels: ["xean-solve/notes"] })
         .map((entry) => entry.kind === "call" && entry.request),
     ).toEqual([
       expect.objectContaining({
-        notes: [{ text: "First cited result.", support: [] }],
-      }),
-      expect.objectContaining({
-        notes: [{ text: "Second cited result.", support: [] }],
+        notes: [{ text: "A cited result.", support: [] }],
       }),
     ]);
   } finally {
     campaign.close();
   }
+  // After a completed search the coordinator schema has no literature action.
+  const completed = coordinatorCall(
+    {
+      task,
+      notes: [],
+      literatureStatus: "completed",
+      coordinatorBehavior: settings.coordinatorBehavior,
+    },
+    "coordinator",
+  );
+  const base = {
+    filings: [],
+    explorerGuidance: "Explore.",
+    support: [],
+    verify: [],
+  };
+  expect(
+    completed.schema.safeParse({
+      ...base,
+      action: { role: "literature", request: "Again." },
+    }).success,
+  ).toBe(false);
+  expect(
+    completed.schema.safeParse({ ...base, action: { role: "explorer" } })
+      .success,
+  ).toBe(true);
 });
 
 test("a note submitted while an explorer phase waits returns to the coordinator", async () => {
@@ -591,7 +623,8 @@ test("after a verification without new notes the coordinator schema omits the ve
   const input = {
     task,
     notes: [live],
-    literatureStatus: "completed" as const,
+    // A failed search keeps literature available; a completed one would not.
+    literatureStatus: "inconclusive" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "always" as const,
