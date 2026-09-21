@@ -55,7 +55,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 20;
+export const workflowSchemaVersion = 21;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -103,7 +103,7 @@ export type WorkflowResult =
 export interface WorkflowSnapshot {
   readonly config: WorkflowConfig;
   readonly allowances: ReturnType<typeof turnAllowances>;
-  readonly maxExplorerTurns: number;
+  readonly maxTurns: number;
   readonly notes: readonly Note[];
   readonly phase: WorkflowPhase;
   /** Journal boundary before the next explorer turn, used only by the driver. */
@@ -222,10 +222,7 @@ export async function verificationPrefix(
 /** The replay state of one derivation; the cursor is historical, never the journal's latest entry. */
 interface Fold {
   readonly records: readonly Entry[];
-  readonly base: Pick<
-    WorkflowSnapshot,
-    "config" | "allowances" | "maxExplorerTurns"
-  >;
+  readonly base: Pick<WorkflowSnapshot, "config" | "allowances" | "maxTurns">;
   readonly verdicts: ReturnType<typeof journalVerdicts>;
   readonly projection: Projection;
   readonly noteSubmissions: { call: EntryId; noteIds: string[] }[];
@@ -236,13 +233,13 @@ interface Fold {
 function openFold(records: readonly Entry[]): Fold {
   const config = parseConfig(records[0]);
   const allowances = turnAllowances(records);
-  const maxExplorerTurns = allowances.at(-1)?.maxExplorerTurns;
-  if (maxExplorerTurns === undefined)
+  const maxTurns = allowances.at(-1)?.maxTurns;
+  if (maxTurns === undefined)
     throw new Error("campaign has no initial turn allowance; run init first");
   const verdicts = journalVerdicts(records);
   return {
     records,
-    base: { config, allowances, maxExplorerTurns },
+    base: { config, allowances, maxTurns },
     verdicts,
     projection: new Projection(verdicts),
     noteSubmissions: [],
@@ -302,9 +299,9 @@ function includeSubmitted(fold: Fold, after: EntryId): boolean {
 }
 
 /**
- * Replay one Explorer turn from the cursor. Returns the pending explorer
- * snapshot, or advances past the settled turn and reports whether it ended
- * with an empty submission.
+ * Replay one Explorer call from the cursor. Returns the pending explorer
+ * snapshot, or advances past the settled call and reports whether it ended
+ * with an empty submission. The caller counts the turn.
  */
 async function replayExplorerTurn(
   fold: Fold,
@@ -376,7 +373,6 @@ async function replayExplorerTurn(
     }
     if (completed !== undefined) {
       fold.cursor = completed.settled;
-      fold.turns += 1;
       return { emptySubmission: saved?.emptySubmission === true };
     }
     after = call.seq;
@@ -518,7 +514,7 @@ export async function deriveWorkflow(
     return deriveCoordinatorWorkflow(fold);
   let guidance = "";
   let support: readonly string[] = [];
-  while (fold.turns < fold.base.maxExplorerTurns) {
+  while (fold.turns < fold.base.maxTurns) {
     let emptySubmission = false;
     // A submitted note goes directly to the coordinator. Otherwise the
     // next explorer writes notes, which may be joined by pending submissions.
@@ -526,6 +522,7 @@ export async function deriveWorkflow(
     if (!included) {
       const turn = await replayExplorerTurn(fold, guidance, support);
       if ("phase" in turn) return turn;
+      fold.turns += 1;
       emptySubmission = turn.emptySubmission;
       included = includeSubmitted(fold, fold.cursor);
     }
@@ -612,7 +609,9 @@ function settledLiteratureCall(
 /**
  * Experimental coordinator workflow mode. Every completed role returns to a
  * fresh coordinator decision; literature notes enter the ordinary note graph,
- * never a verifier result. The fixed Explorer -> coordinator -> verifier loop
+ * never a verifier result. A turn is one coordinator call and the role it
+ * dispatches, so the journaled allowance bounds the whole loop and no role
+ * has a separate cap. The fixed Explorer -> coordinator -> verifier loop
  * above remains the default mode for comparison.
  */
 async function deriveCoordinatorWorkflow(
@@ -622,11 +621,10 @@ async function deriveCoordinatorWorkflow(
   const settings = base.config.settings;
   let guidance = "";
   let support: readonly string[] = [];
-  let dispatches = 0;
   let emptySubmission = false;
   for (;;) {
     const included = includeSubmitted(fold, fold.cursor);
-    if (dispatches >= settings.maxCoordinatorSteps) return turnLimit(fold);
+    if (fold.turns >= base.maxTurns) return turnLimit(fold);
     const coordinated = replayCoordinator(
       fold,
       coordinatorInput.parse({
@@ -646,7 +644,7 @@ async function deriveCoordinatorWorkflow(
     const action = coordinated.action;
     if (action === undefined)
       throw new Error("coordinator workflow mode requires a role action");
-    dispatches += 1;
+    fold.turns += 1;
     if (action.role === "literature") {
       const input = literatureInput.parse({
         task: base.config.task,
@@ -668,7 +666,6 @@ async function deriveCoordinatorWorkflow(
       // A caller's submission while this phase waited returns to the
       // coordinator with the new notes, as in the fixed loop.
       if (includeSubmitted(fold, fold.cursor)) continue;
-      if (fold.turns >= base.maxExplorerTurns) return turnLimit(fold);
       const turn = await replayExplorerTurn(fold, guidance, support);
       if ("phase" in turn) return turn;
       emptySubmission = turn.emptySubmission;

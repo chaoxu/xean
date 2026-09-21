@@ -116,7 +116,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
     turns: 1,
   });
   const before = records(path);
-  expect(before[0]).not.toHaveProperty("config.settings.maxExplorerTurns");
+  expect(before[0]).not.toHaveProperty("config.settings.maxTurns");
   const oldInspection = await inspectCampaign(path);
   await guideCampaign(
     path,
@@ -177,7 +177,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
   expect(records(path).slice(0, before.length)).toEqual(before);
   expect(await inspectCampaignRecords(before)).toEqual(oldInspection);
   expect(await inspectCampaign(path)).toMatchObject({
-    maxExplorerTurns: 2,
+    maxTurns: 2,
     allowances: [
       { turns: 1, afterTurns: 0 },
       { id: "more", turns: 1, afterTurns: 1 },
@@ -241,7 +241,7 @@ test("default allowance is outside config and invalid requests do not mutate it"
     run(
       {
         ...request,
-        settings: { ...request.settings, maxExplorerTurns: 1 },
+        settings: { ...request.settings, maxTurns: 1 },
       } as never,
       dependencies([]),
     ),

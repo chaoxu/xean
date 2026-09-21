@@ -87,14 +87,13 @@ test("coordinator mode starts with the coordinator and returns after literature"
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 12,
     coordinatorBehavior: {
       literature: "required-if-not-started" as const,
       verification: "decide" as const,
     },
   };
   const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const campaign = await createWorkflowCampaign(path, workflow, 12);
   const drive = dependencies([
     {
       submission: coordination({
@@ -193,7 +192,6 @@ test("a repeated literature request runs a fresh call after its dispatching coor
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -229,7 +227,7 @@ test("a repeated literature request runs a fresh call after its dispatching coor
       "xean-solve/literature",
     ]);
     // The second discovery is delivered as its own submission; it enters the
-    // note graph at the next coordinator boundary, after the step cap here.
+    // note graph at the next coordinator boundary, after the turn limit here.
     expect(
       campaign
         .records({ kinds: ["call"], labels: ["xean-solve/notes"] })
@@ -252,9 +250,8 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
   };
-  const request = { task, settings, campaignPath: path, turns: 1 };
+  const request = { task, settings, campaignPath: path, turns: 2 };
   await init(request);
   // The coordinator settles, then the process stops before any explorer call.
   await expect(
@@ -277,7 +274,7 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   ]);
   expect(await run(request, drive)).toMatchObject({
     outcome: "turn-limit",
-    turns: 1,
+    turns: 2,
   });
   expect(drive.allCalls.map(({ role }) => role)).toEqual([
     "coordinator",
@@ -296,20 +293,19 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   ]);
 });
 
-test("a rejected allowance after the step limit leaves the journal readable", async () => {
+test("an allowance extends a coordinator-mode campaign by whole turns", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 1,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
     },
   };
-  const request = { task, settings, campaignPath: path, turns: 2 };
+  const request = { task, settings, campaignPath: path, turns: 1 };
   await init(request);
-  const drive = dependencies([
+  const first = dependencies([
     {
       submission: coordination({
         role: "literature",
@@ -318,31 +314,42 @@ test("a rejected allowance after the step limit leaves the journal readable", as
     },
     { codex: { notes: [] } },
   ]);
-  expect(await run(request, drive)).toMatchObject({
+  expect(await run(request, first)).toMatchObject({
     outcome: "turn-limit",
-    turns: 0,
+    turns: 1,
   });
-  await expect(
-    run({ ...request, turns: 3, id: "more" }, dependencies([])),
-  ).rejects.toThrow("maxCoordinatorSteps ended this campaign");
-  const reader = openReader(path);
-  try {
-    const records = [...reader.records()];
-    expect(turnAllowances(records)).toMatchObject([
-      { turns: 2, afterTurns: 0 },
-    ]);
-    expect((await inspectCampaign(path)) as object).toMatchObject({
-      phase: "turn-limit",
-    });
-  } finally {
-    reader.close();
-  }
+  // Without a new allowance the campaign stays stopped and makes no call.
+  expect(await run(request, dependencies([]))).toMatchObject({
+    outcome: "turn-limit",
+    turns: 1,
+  });
+  const more = dependencies([
+    { submission: coordination({ role: "explorer" }) },
+    { submission: { solution: false, notes: [good] } },
+  ]);
+  expect(await run({ ...request, turns: 1, id: "more" }, more)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 2,
+  });
+  expect(more.allCalls.map(({ role }) => role)).toEqual([
+    "coordinator",
+    "explorer",
+  ]);
+  expect(more.allCalls[0]?.prompt).toContain("Literature status: completed");
+  expect(await inspectCampaign(path)).toMatchObject({
+    maxTurns: 2,
+    allowances: [
+      { turns: 1, afterTurns: 0 },
+      { id: "more", turns: 1, afterTurns: 1 },
+    ],
+    phase: "turn-limit",
+  });
   const opened = openCampaign(path);
   try {
     await expect(appendAllowance(opened, 3, 0, "direct")).rejects.toThrow(
       "invalid turn allowance sequence",
     );
-    expect(turnAllowances(opened.records())).toHaveLength(1);
+    expect(turnAllowances(opened.records())).toHaveLength(2);
   } finally {
     opened.close();
   }
@@ -353,7 +360,6 @@ test("a failed literature call settles without candidates and reports inconclusi
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -404,7 +410,6 @@ test("a coordinator verifier action drains its list in window batches before the
     ...roleSettings(),
     window: 1,
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 2);
@@ -472,7 +477,6 @@ test("an unusable literature response is replaced by a fresh call on resume", as
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 1,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -528,13 +532,12 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
   const settings = {
     ...roleSettings(),
     workflowMode: "coordinator" as const,
-    maxCoordinatorSteps: 2,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
     },
   };
-  const request = { task, settings, campaignPath: path, turns: 1 };
+  const request = { task, settings, campaignPath: path, turns: 2 };
   await init(request);
   const input = { task, request: "Find prior work on P." };
   await expect(
@@ -588,7 +591,7 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
   ]);
   expect(await run(request, drive)).toMatchObject({
     outcome: "turn-limit",
-    turns: 1,
+    turns: 2,
   });
   expect(drive.codexCalls).toHaveLength(0);
   expect(drive.allCalls.map(({ role }) => role)).toEqual([

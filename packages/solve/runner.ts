@@ -134,10 +134,6 @@ async function prepareAllowance(
     throw new Error(
       "only a campaign at its turn limit can receive another allowance",
     );
-  if (snapshot.phase.turns !== snapshot.maxExplorerTurns)
-    throw new Error(
-      "the frozen maxCoordinatorSteps ended this campaign; a turn allowance cannot extend it",
-    );
   await appendAllowance(campaign, turns, snapshot.phase.turns, id);
 }
 

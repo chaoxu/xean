@@ -120,7 +120,6 @@ export const solveSettings = z.strictObject({
   maxExplorerResponses: z.number().int().positive().default(4),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
   workflowMode: z.enum(["fixed", "coordinator"]).default("fixed"),
-  maxCoordinatorSteps: z.number().int().positive().default(32),
   coordinatorBehavior: coordinatorBehaviorSchema.default(
     defaultCoordinatorBehavior,
   ),

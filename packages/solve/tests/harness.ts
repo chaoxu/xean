@@ -71,7 +71,6 @@ export function roleSettings(): SolveSettings {
     window: 100_000,
     maxExplorerResponses: 1,
     workflowMode: "fixed",
-    maxCoordinatorSteps: 32,
     coordinatorBehavior: defaultCoordinatorBehavior,
     explorer: profile,
     coordinator: profile,
