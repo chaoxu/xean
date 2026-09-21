@@ -209,7 +209,7 @@ test("exact passages reuse recorded earlier source PASS evidence within the same
   }
 });
 
-test("a malformed matching source transcript is not retried as a paid call", async () => {
+test("a malformed matching source transcript becomes inconclusive", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
   });
@@ -224,9 +224,24 @@ test("a malformed matching source transcript is not retried as a paid call", asy
     }),
   };
   try {
+    const originalRecordVerdict = campaign.recordVerdict.bind(campaign);
+    let interrupted = false;
+    (campaign as any).recordVerdict = (...args: any[]) => {
+      const entry = campaign.record(args[0]);
+      if (
+        !interrupted &&
+        entry?.kind === "call" &&
+        entry.label.endsWith("/source")
+      ) {
+        interrupted = true;
+        throw new Error("simulated interruption before source verdict");
+      }
+      return originalRecordVerdict(...args);
+    };
     await expect(
       createPiRoles(campaign, roleSettings(), first).verifier(packet),
-    ).rejects.toThrow();
+    ).rejects.toThrow("simulated interruption");
+    (campaign as any).recordVerdict = originalRecordVerdict;
     const candidate = calls(campaign).find((call) =>
       call.label.endsWith("/correctness"),
     )?.candidate;
@@ -240,12 +255,18 @@ test("a malformed matching source transcript is not retried as a paid call", asy
         throw new Error("replacement paid call");
       },
     };
-    await expect(
-      createPiRoles(campaign, roleSettings(), second).verifier(
-        packet,
-        candidate,
-      ),
-    ).rejects.toThrow();
+    const verdicts = await createPiRoles(
+      campaign,
+      roleSettings(),
+      second,
+    ).verifier(packet, candidate);
+    expect(verdicts).toContainEqual(
+      expect.objectContaining({
+        note: "n1",
+        verifier: "source",
+        verdict: "INCONCLUSIVE",
+      }),
+    );
     expect(replacements).toBe(0);
   } finally {
     campaign.close();
@@ -276,9 +297,16 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
     try {
       const roles = createPiRoles(campaign, roleSettings(), drive);
       if (changed) await roles.verifier(input([makeNote("n1")]));
-      await expect(
-        roles.verifier(input([makeNote(changed ? "n2" : "n1")])),
-      ).rejects.toThrow("list new sources without a search");
+      const verdicts = await roles.verifier(
+        input([makeNote(changed ? "n2" : "n1")]),
+      );
+      expect(verdicts).toContainEqual(
+        expect.objectContaining({
+          note: changed ? "n2" : "n1",
+          verifier: "source",
+          verdict: "INCONCLUSIVE",
+        }),
+      );
     } finally {
       campaign.close();
     }
@@ -310,8 +338,13 @@ test("a failed source assessment never supplies reusable evidence", async () => 
   try {
     const roles = createPiRoles(campaign, roleSettings(), drive);
     await roles.verifier(input([makeNote("n1")]));
-    await expect(roles.verifier(input([makeNote("n2")]))).rejects.toThrow(
-      "list new sources without a search",
+    const verdicts = await roles.verifier(input([makeNote("n2")]));
+    expect(verdicts).toContainEqual(
+      expect.objectContaining({
+        note: "n2",
+        verifier: "source",
+        verdict: "INCONCLUSIVE",
+      }),
     );
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([]);
   } finally {

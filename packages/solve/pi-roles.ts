@@ -1263,14 +1263,58 @@ async function runSource(
     const records = roleCallRecords(campaign, call);
     return sourceVerdictsOf(schema, codexSubmission(records, call), passages);
   };
-  const prior = settled(
-    campaign.records({ kinds: ["call"], labels: [verifierLabels.source] }),
-    candidate,
-    label,
-    jsonSnapshot(request),
-    read,
-  );
-  if (prior !== undefined) return prior;
+  const inconclusive = (call: EntryId, report: string) => ({
+    call,
+    value: schema.parse({
+      verdicts: judged.map((note) => ({
+        note,
+        verdict: "INCONCLUSIVE",
+        report,
+        externalResults: correctness.verdicts.find(
+          (assessment) => assessment.note === note,
+        )!.externalResults,
+        sources: [],
+      })),
+    }),
+  });
+  const successful = (call: EntryId): boolean => {
+    const returned = returnedOutput(roleCallRecords(campaign, call), call);
+    const output =
+      returned === undefined
+        ? undefined
+        : codexResult.safeParse(returned.output);
+    return output?.success === true && output.data.state === "succeeded";
+  };
+  for (const entry of campaign.records({
+    kinds: ["call"],
+    labels: [verifierLabels.source],
+  })) {
+    if (
+      entry.kind !== "call" ||
+      entry.candidate !== candidate ||
+      entry.label !== label ||
+      !sameRequest(entry.request, request)
+    )
+      continue;
+    try {
+      const value = read(entry.seq);
+      if (value !== undefined) return { call: entry.seq, value };
+      if (successful(entry.seq)) {
+        return inconclusive(
+          entry.seq,
+          "The source verifier response was not usable. No source conclusion was drawn, and its evidence was discarded.",
+        );
+      }
+    } catch (error) {
+      if (successful(entry.seq)) {
+        return inconclusive(
+          entry.seq,
+          `The source verifier response was not usable: ${error instanceof Error ? error.message : String(error)} No source conclusion was drawn, and its evidence was discarded.`,
+        );
+      }
+      throw error;
+    }
+  }
   const exec =
     dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
   const receipt = await campaign.call(
@@ -1291,17 +1335,24 @@ async function runSource(
     throw new RoleCallError(`verifier failed: ${output.error}`);
   }
   let value: z.output<ReturnType<typeof sourceVerdictsFor>> | undefined;
+  let failure: string | undefined;
   try {
     value = read(receipt.call);
   } catch (error) {
-    throw new RoleCallError(
-      `malformed source transcript: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    failure = `malformed source transcript: ${error instanceof Error ? error.message : String(error)}`;
   }
   if (value === undefined) {
-    throw new RoleCallError(
-      "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search",
-    );
+    failure ??=
+      "the source verdicts fail their assigned premises or evidence schema, or list new sources without a search";
+    // A source response can be unusable without saying anything about the
+    // mathematics. Preserve the successful Codex call, but record an
+    // inconclusive verdict so the workflow can continue and decide what to
+    // do next. The assigned premises remain exact; no returned evidence is
+    // admitted for reuse.
+    value = inconclusive(
+      receipt.call,
+      `The source verifier response was not usable: ${failure} No source conclusion was drawn, and its evidence was discarded.`,
+    ).value;
   }
   return { call: receipt.call, value };
 }
