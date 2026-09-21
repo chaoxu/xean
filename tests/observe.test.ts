@@ -778,12 +778,12 @@ test.each([
       const database = new Database(path);
       try {
         database.run(
-          `DROP TRIGGER payload_items_no_${corruption === "missing" ? "delete" : "update"}`,
+          `DROP TRIGGER payloads_no_${corruption === "missing" ? "delete" : "update"}`,
         );
         database.run(
           corruption === "missing"
-            ? "DELETE FROM payload_items WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)"
-            : "UPDATE payload_items SET body='null' WHERE digest=(SELECT body_digest FROM payloads WHERE digest=?)",
+            ? "DELETE FROM payloads WHERE digest=?"
+            : "UPDATE payloads SET body='null' WHERE digest=?",
           [record[attachment]],
         );
       } finally {

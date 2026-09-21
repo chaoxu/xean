@@ -33,11 +33,11 @@ afterEach(() => {
 });
 
 describe("campaign database", () => {
-  test("creates schema one with an explicit Xean SQLite identity", () => {
+  test("creates schema two with an explicit Xean SQLite identity", () => {
     const path = temporaryPath();
     createCampaign(path, "test", null).close();
     const header = readFileSync(path);
-    expect(header.readUInt32BE(60)).toBe(1);
+    expect(header.readUInt32BE(60)).toBe(2);
     expect(header.readUInt32BE(68)).toBe(0x7865616e);
     const reader = openReader(path);
     expect(reader.records()).toHaveLength(1);
@@ -393,7 +393,7 @@ describe("campaign database", () => {
     expect(() => openReader(path)).toThrow("unsupported campaign schema: 3");
   });
 
-  test.each([0, 2, 8, 999])(
+  test.each([0, 1, 8, 999])(
     "refuses schema %i without changing its files",
     (version) => {
       const path = temporaryPath();
