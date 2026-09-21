@@ -45,6 +45,8 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   });
   const requests = await recordedRequests(directory);
   expect(requests).toHaveLength(12);
+  // The runner's model wrapper shapes every request: a required serial
+  // terminal tool and the hoisted instructions.
   expect(requests[1]).toMatchObject({
     tools: [
       {
@@ -52,6 +54,9 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
         parameters: { properties: { solution: { type: "boolean" } } },
       },
     ],
+    tool_choice: "required",
+    parallel_tool_calls: false,
+    instructions: expect.any(String),
   });
 
   // Completed journals need neither the model registry nor native credentials.

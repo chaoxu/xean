@@ -166,7 +166,7 @@ const usage = {
   reasoning: 0,
 };
 
-test("a PASS missing a passage for an assigned ID is inconclusive for that note alone", () => {
+test("unusable source evidence is inconclusive for that note alone", () => {
   const assigned = [
     { note: "n1", externalResults: [result] },
     { note: "n2", externalResults: ["Another theorem."] },
@@ -177,12 +177,19 @@ test("a PASS missing a passage for an assigned ID is inconclusive for that note 
     report: "Checked.",
     sources,
   });
-  const outcome = (verdicts: Json[]) =>
+  const outcome = (
+    verdicts: Json[],
+    searches = 1,
+    supplied: Parameters<typeof sourceVerdictsOf>[1] = [],
+  ) =>
     sourceVerdictsOf(
-      { settled: 1, input: { verdicts }, searches: 1, usage },
-      [],
+      { settled: 1, input: { verdicts }, searches, usage },
+      supplied,
       assigned,
     )?.verdicts;
+  const states = (value: ReturnType<typeof outcome>) =>
+    value?.map(({ note, verdict }) => [note, verdict]);
+  // A PASS missing a passage for an assigned ID.
   expect(
     outcome([
       verdict("n1", [{ ...source, result: "Restated.", resultId: "n1#1" }]),
@@ -196,6 +203,32 @@ test("a PASS missing a passage for an assigned ID is inconclusive for that note 
       report: expect.stringContaining("not usable"),
       sources: [],
     },
+  ]);
+  // Another note's valid ID does not bind.
+  expect(
+    outcome([
+      verdict("n1", [{ ...source, resultId: "n1#1" }]),
+      verdict("n2", [{ ...source, resultId: "n1#1" }]),
+    ]),
+  ).toMatchObject([
+    { note: "n1", verdict: "PASS" },
+    { note: "n2", verdict: "INCONCLUSIVE", sources: [] },
+  ]);
+  // Without any search, a passage not supplied is unusable for its note only.
+  expect(
+    states(
+      outcome(
+        [
+          verdict("n1", [{ ...source, resultId: "n1#1" }]),
+          verdict("n2", [{ ...source, resultId: "n2#1" }]),
+        ],
+        0,
+        [source],
+      ),
+    ),
+  ).toEqual([
+    ["n1", "PASS"],
+    ["n2", "INCONCLUSIVE"],
   ]);
   // Not one verdict per judged note: nothing is usable.
   expect(outcome([verdict("n1", [])])).toBeUndefined();
