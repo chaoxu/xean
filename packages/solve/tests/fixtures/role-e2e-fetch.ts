@@ -78,7 +78,13 @@ function submissionFor(tool: string, request: string): unknown {
       .filter((id) => !request.includes(`Summary of ${id}`));
     const note = withoutSummary.at(-1);
     if (note === undefined) {
-      throw new Error("request omitted a note without a summary");
+      return {
+        filings: [],
+        explorerGuidance: "Write a complete proof.",
+        support: [],
+        verify: [],
+        action: { role: "explorer" },
+      };
     }
     return {
       filings: withoutSummary.map((id) => ({
@@ -98,6 +104,7 @@ function submissionFor(tool: string, request: string): unknown {
           ],
         },
       ],
+      action: { role: "verifier" },
     };
   }
   if (tool === "submit_statement") {

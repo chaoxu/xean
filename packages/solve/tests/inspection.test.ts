@@ -5,12 +5,13 @@ import { createCampaign, defineTool, openReader } from "xean";
 import { createPiRoles } from "../pi-roles";
 import { inspectCampaign } from "../role-cli";
 import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
-import { workflowConfiguration } from "../workflow";
+import { runWorkflow, workflowConfiguration } from "../workflow";
 import {
   createWorkflowCampaign,
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
 } from "./harness";
 
@@ -90,22 +91,17 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
   const fixturePath = campaignPath();
   const fixture = await createWorkflowCampaign(fixturePath, config, 4);
   try {
-    await createPiRoles(
-      fixture,
-      config.settings,
-      dependencies([
-        {
-          submission: {
-            solution: false,
-            notes: [{ text: "A partial result.", support: [] }],
-          },
+    const drive = dependencies([
+      dispatchExplorer(),
+      {
+        submission: {
+          solution: false,
+          notes: [{ text: "A partial result.", support: [] }],
         },
-      ]),
-    ).explorer({
-      task: config.task,
-      explorerGuidance: "",
-      notes: [],
-      support: [],
+      },
+    ]);
+    await runWorkflow(fixture, createPiRoles(fixture, config.settings, drive), {
+      pauseRequested: () => drive.calls.length === 2,
     });
   } finally {
     fixture.close();
@@ -147,7 +143,7 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
   }
   expect(reads).toBe(1);
   expect(report).toMatchObject({
-    phase: "explorer",
+    phase: "coordinator",
     notes: [],
     calls: [],
     guidance: [],
@@ -158,8 +154,8 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
   expect(await inspectCampaign(path)).toMatchObject({
     phase: "coordinator",
     notes: [{ id: "n1" }],
-    calls: [{ role: "explorer" }],
-    spend: { logicalProviderRequests: 1 },
+    calls: [{ role: "coordinator" }, { role: "explorer" }],
+    spend: { logicalProviderRequests: 2 },
   });
 });
 
@@ -170,27 +166,22 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
   });
   const path = campaignPath(),
     campaign = await createWorkflowCampaign(path, config, 4);
-  const input = {
-    task: config.task,
-    explorerGuidance: "",
-    notes: [],
-    support: [],
-  };
+  const input = { task: config.task, notes: [] };
   try {
     await expect(
       createPiRoles(
         campaign,
         config.settings,
         dependencies([{ state: "failed", error: "incomplete.max_messages" }]),
-      ).explorer(input),
+      ).coordinator(input),
     ).rejects.toThrow("incomplete.max_messages");
     const before = campaign.records();
     const failed = await inspectCampaign(path);
     expect(failed).toMatchObject({
-      phase: "explorer",
+      phase: "coordinator",
       calls: [
         {
-          role: "explorer",
+          role: "coordinator",
           state: "returned",
           outcome: "failed",
           error: "incomplete.max_messages",
@@ -204,13 +195,10 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
       config.settings,
       dependencies([
         {
-          submission: {
-            solution: false,
-            notes: [{ text: "A partial proof.", support: [] }],
-          },
+          ...dispatchExplorer(),
           onStarted: async () => {
             const retry: any = await inspectCampaign(path);
-            expect(retry.phase).toBe("explorer");
+            expect(retry.phase).toBe("coordinator");
             expect(retry).not.toHaveProperty("result");
             expect(retry.calls[0].outcome).toBe("failed");
             expect(retry.calls[1]).not.toHaveProperty("outcome");
@@ -218,9 +206,9 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
           },
         },
       ]),
-    ).explorer(input);
+    ).coordinator(input);
     const succeeded: any = await inspectCampaign(path);
-    expect(succeeded.phase).toBe("coordinator");
+    expect(succeeded.phase).toBe("explorer");
     expect(succeeded.calls[1]).toMatchObject({
       state: "returned",
       outcome: "succeeded",

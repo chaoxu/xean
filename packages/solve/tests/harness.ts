@@ -12,11 +12,15 @@ import {
   type Json,
 } from "xean";
 import { initializeAllowance } from "../allowance";
-import { applicationId, literatureReport } from "../roles";
+import {
+  applicationId,
+  defaultCoordinatorBehavior,
+  literatureReport,
+} from "../roles";
 import type { WorkflowConfig } from "../workflow";
 import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
 
-import { defaultCoordinatorBehavior, type SolveSettings } from "../pi-roles";
+import type { SolveSettings } from "../pi-roles";
 import type { SolveModels } from "../runtime";
 import type { CodexRequest, CodexResult } from "../source";
 import { fakePiRequest, fakePiTelemetry } from "./fake-pi";
@@ -70,7 +74,6 @@ export function roleSettings(): SolveSettings {
   return {
     window: 100_000,
     maxExplorerResponses: 1,
-    workflowMode: "fixed",
     coordinatorBehavior: defaultCoordinatorBehavior,
     explorer: profile,
     coordinator: profile,
@@ -81,6 +84,21 @@ export function roleSettings(): SolveSettings {
     },
     requirements: profile,
     reconstruction: profile,
+  };
+}
+
+/** A coordinator reply that files no note and dispatches Explorer. */
+export function dispatchExplorer(
+  explorerGuidance = "Explore the task.",
+): Reply {
+  return {
+    submission: {
+      filings: [],
+      explorerGuidance,
+      support: [],
+      verify: [],
+      action: { role: "explorer" },
+    },
   };
 }
 

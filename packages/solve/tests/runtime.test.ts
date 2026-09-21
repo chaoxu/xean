@@ -9,6 +9,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
 } from "./harness";
 
@@ -94,18 +95,11 @@ test("a completed campaign is returned before initializing models or checking cr
     turns: 1,
   };
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
         notes: [{ text: "An unfinished idea.", support: [] }],
-      },
-    },
-    {
-      submission: {
-        filings: [{ note: "n1", summary: "An unfinished idea." }],
-        explorerGuidance: "Prove P",
-        support: [],
-        verify: [],
       },
     },
   ]);
@@ -128,6 +122,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
   process.env["XEAN_CODEX_COMMAND"] = join(dirname(path), "codex-must-not-run");
   try {
     const drive = dependencies([
+      dispatchExplorer(),
       {
         submission: {
           solution: false,
@@ -140,6 +135,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
           explorerGuidance: "Prove P.",
           support: [],
           verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+          action: { role: "verifier" },
         },
       },
       {
@@ -174,13 +170,13 @@ test("run honors an injected source executor instead of invoking the CLI", async
           task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
           campaignPath: path,
           settings: roleSettings(),
-          turns: 1,
+          turns: 2,
         },
         drive,
       ),
-    ).toMatchObject({ outcome: "turn-limit", turns: 1 });
+    ).toMatchObject({ outcome: "turn-limit", turns: 2 });
     expect(drive.codexCalls).toHaveLength(1);
-    expect(drive.calls).toHaveLength(3);
+    expect(drive.calls).toHaveLength(4);
     expect(await inspectCampaign(path)).toMatchObject({
       phase: "turn-limit",
       result: {
@@ -188,7 +184,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
         application: "xean-solve",
         protocol: "workflow",
         outcome: "turn-limit",
-        turns: 1,
+        turns: 2,
       },
     });
   } finally {

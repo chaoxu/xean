@@ -27,6 +27,7 @@ import {
   coordinatorInput,
   coordinatorBehavior as coordinatorBehaviorSchema,
   coordinatorResultFor,
+  defaultCoordinatorBehavior,
   correctnessVerdictsFor,
   externalResultId,
   sourceVerdictBinds,
@@ -61,7 +62,6 @@ import {
   literatureInput,
   literatureReport,
   type CoordinatorAction,
-  type CoordinatorInput,
   type ExplorerInput,
   type LiteratureInput,
   type LiteratureReport,
@@ -102,13 +102,6 @@ export const codexProfile = z.strictObject({
   reasoning: codexReasoning,
 });
 
-/** Default campaign-level policy supplied at each coordinator workflow mode boundary. */
-export const defaultCoordinatorBehavior = {
-  literature: "never" as const,
-  verification: "decide" as const,
-  instructions:
-    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now, and list every ready note in the same verifier dispatch. If a live note claims to meet the completion criteria, list it with all four verifiers and choose verifier before another Explorer call when the verifier action is available. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After the one literature search, choose explorer and let its notes decide which citations need checking; do not list literature notes on their own. Keep the original problem and completion criteria as the objective.",
-};
 // The window caps the characters of note and support texts one verification
 // reads; the fold drains the coordinator's list in fitting batches, always
 // taking at least the first entry of each batch.
@@ -122,7 +115,6 @@ export const solveSettings = z.strictObject({
   window: z.number().int().positive().default(100_000),
   maxExplorerResponses: z.number().int().positive().default(4),
   explorerContextBudgetTokens: z.number().int().positive().optional(),
-  workflowMode: z.enum(["fixed", "coordinator"]).default("fixed"),
   coordinatorBehavior: coordinatorBehaviorSchema.default(
     defaultCoordinatorBehavior,
   ),
@@ -245,11 +237,10 @@ export function explorerCall(
 }
 
 export function coordinatorCall(
-  input: CoordinatorInput,
-  mode: "fixed" | "coordinator" = "fixed",
+  inputValue: z.input<typeof coordinatorInput>,
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
-  const behavior = input.coordinatorBehavior ?? defaultCoordinatorBehavior;
-  const status = input.literatureStatus ?? "not-started";
+  const input = coordinatorInput.parse(inputValue);
+  const { coordinatorBehavior: behavior, literatureStatus: status } = input;
   // A live note that no verification has judged yet, over verified support.
   // A checked note whose evidence stayed inconclusive is not forced back into
   // verification, and a note over unverified support waits for its support.
@@ -271,25 +262,20 @@ export function coordinatorCall(
   // The verifier action is unavailable while no note has been added since
   // the last completed verification; a forced verification yields to that.
   const forcedVerification =
-    mode === "coordinator" &&
     behavior.verification === "always" &&
     !literatureFirst &&
     input.afterVerification !== true &&
     readyUnchecked.length > 0;
-  const allowedActions: readonly CoordinatorAction["role"][] | undefined =
-    mode !== "coordinator"
-      ? undefined
-      : literatureFirst
-        ? ["literature"]
-        : forcedVerification
-          ? ["verifier"]
-          : (["explorer", "literature", "verifier"] as const).filter(
-              (role) =>
-                (role !== "literature" ||
-                  (behavior.literature !== "never" &&
-                    status !== "completed")) &&
-                (role !== "verifier" || input.afterVerification !== true),
-            );
+  const allowedActions: readonly CoordinatorAction["role"][] = literatureFirst
+    ? ["literature"]
+    : forcedVerification
+      ? ["verifier"]
+      : (["explorer", "literature", "verifier"] as const).filter(
+          (role) =>
+            (role !== "literature" ||
+              (behavior.literature !== "never" && status !== "completed")) &&
+            (role !== "verifier" || input.afterVerification !== true),
+        );
   const requiredVerification = forcedVerification ? readyUnchecked : [];
   return {
     role: "coordinator",
@@ -306,23 +292,15 @@ export function coordinatorCall(
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
       "After an Explorer handoff, inspect each newly submitted live note. When its text claims the completion criteria, list that note with all four verifiers; do not ask Explorer to rewrite or polish a complete-looking note.",
-      ...(mode === "coordinator"
-        ? [
-            "This run uses coordinator workflow mode. Choose exactly one next role in action: explorer, literature, or verifier. Return control to the coordinator after that role settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you and is unavailable again until a note has been added, so list every note that is ready for its checks together. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.",
-            "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
-          ]
-        : []),
+      "Choose exactly one next role in action: explorer, literature, or verifier. Control returns to you after that role settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you and is unavailable again until a note has been added, so list every note that is ready for its checks together. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.",
+      "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
-      ...(mode === "coordinator"
-        ? [
-            `Literature status: ${status}`,
-            `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
-          ]
-        : []),
-      ...(mode === "coordinator" && input.afterVerification === true
+      `Literature status: ${status}`,
+      `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
+      ...(input.afterVerification === true
         ? [
             "No note has been added since the last completed verification, so the verifier action is unavailable at this boundary; choose another role.",
           ]
@@ -858,10 +836,7 @@ export function createPiRoles(
       ).value;
     },
     async coordinator(inputValue) {
-      const roleCall = coordinatorCall(
-        coordinatorInput.parse(inputValue),
-        profiles.workflowMode,
-      );
+      const roleCall = coordinatorCall(inputValue);
       return (
         await runCall(campaign, profiles.coordinator, roleCall, dependencies)
       ).value;

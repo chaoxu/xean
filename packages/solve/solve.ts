@@ -48,10 +48,10 @@ const usage = `Usage:
   xean-solve inspect [--include-requests] [--include-guidance] [--include-submissions] CAMPAIGN.db
   xean-solve export CAMPAIGN.db
 
-run starts or resumes the durable workflow. Set workflowMode to coordinator to
-let the coordinator choose explorer, literature, or verifier after each role.
+run starts or resumes the durable workflow: the coordinator chooses explorer,
+literature, or verifier, and control returns to it after each role.
 init creates or matches its declaration without provider setup or model calls.
---turns sets the initial allowance (default 10), outside the frozen settings.
+--turns sets the initial allowance (default 20), outside the frozen settings.
 run --turns N --id ID adds an allowance to an exhausted campaign, then resumes.
 Reuse the same ID and turns to retry without granting more turns.
 guide appends explorer guidance from a UTF-8 file (or - for stdin).

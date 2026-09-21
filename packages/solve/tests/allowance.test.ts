@@ -16,6 +16,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -32,15 +33,8 @@ function records(path: string) {
 }
 function emptyTurn(): Reply[] {
   return [
+    dispatchExplorer("Try another route."),
     { submission: { notes: [], solution: false } },
-    {
-      submission: {
-        filings: [],
-        support: [],
-        verify: [],
-        explorerGuidance: "Try another route.",
-      },
-    },
   ];
 }
 
@@ -48,6 +42,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
   const path = campaignPath();
   const request = { task, settings: roleSettings(), campaignPath: path };
   const first = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -69,6 +64,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
           { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: ["correctness", "source"] },
         ],
+        action: { role: "verifier" },
       },
     },
     {
@@ -111,9 +107,9 @@ test("additional allowances preserve source evidence, failures, support, guidanc
       },
     },
   ]);
-  expect(await run({ ...request, turns: 1 }, first)).toMatchObject({
+  expect(await run({ ...request, turns: 2 }, first)).toMatchObject({
     outcome: "turn-limit",
-    turns: 1,
+    turns: 2,
   });
   const before = records(path);
   expect(before[0]).not.toHaveProperty("config.settings.maxTurns");
@@ -135,6 +131,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
         support: ["n1", "n3"],
         verify: [],
         explorerGuidance: "Use these two notes.",
+        action: { role: "explorer" },
       },
     },
     {
@@ -143,18 +140,10 @@ test("additional allowances preserve source evidence, failures, support, guidanc
         notes: [{ text: "Further partial progress.", support: ["n1", "n3"] }],
       },
     },
-    {
-      submission: {
-        filings: [{ note: "n4", summary: "Partial progress." }],
-        support: ["n4"],
-        verify: [],
-        explorerGuidance: "Continue the proof.",
-      },
-    },
   ]);
   expect(await run({ ...request, turns: 1, id: "more" }, rest)).toMatchObject({
     outcome: "turn-limit",
-    turns: 2,
+    turns: 3,
     notes: [
       { id: "n1", verified: true },
       { id: "n2", dead: true },
@@ -165,7 +154,6 @@ test("additional allowances preserve source evidence, failures, support, guidanc
   expect(rest.calls.map(({ role }) => role)).toEqual([
     "coordinator",
     "explorer",
-    "coordinator",
   ]);
   expect(rest.calls[1]!.prompt).toContain(
     "Do not repeat the counterexample route.",
@@ -177,17 +165,17 @@ test("additional allowances preserve source evidence, failures, support, guidanc
   expect(records(path).slice(0, before.length)).toEqual(before);
   expect(await inspectCampaignRecords(before)).toEqual(oldInspection);
   expect(await inspectCampaign(path)).toMatchObject({
-    maxTurns: 2,
+    maxTurns: 3,
     allowances: [
-      { turns: 1, afterTurns: 0 },
-      { id: "more", turns: 1, afterTurns: 1 },
+      { turns: 2, afterTurns: 0 },
+      { id: "more", turns: 1, afterTurns: 2 },
     ],
   });
   const settled = records(path);
   expect(
     await run({ ...request, turns: 1, id: "more" }, dependencies([])),
-  ).toMatchObject({ outcome: "turn-limit", turns: 2 });
-  expect(await run(request, dependencies([]))).toMatchObject({ turns: 2 });
+  ).toMatchObject({ outcome: "turn-limit", turns: 3 });
+  expect(await run(request, dependencies([]))).toMatchObject({ turns: 3 });
   expect(records(path)).toEqual(settled);
   expect((await inspectCampaign(path)) as object).toHaveProperty("spend");
 });
@@ -228,7 +216,7 @@ test("default allowance is outside config and invalid requests do not mutate it"
   const request = { task, settings: roleSettings(), campaignPath: path };
   await init(request);
   const before = records(path);
-  expect(turnAllowances(before)).toMatchObject([{ turns: 10, afterTurns: 0 }]);
+  expect(turnAllowances(before)).toMatchObject([{ turns: 20, afterTurns: 0 }]);
   for (const turns of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
     await expect(
       run({ ...request, turns, id: "bad" }, dependencies([])),

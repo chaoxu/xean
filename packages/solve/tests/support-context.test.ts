@@ -26,6 +26,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -196,10 +197,23 @@ test("the verification window counts transitive shared texts once without droppi
 test("workflow construction and per-call selection both retain ancestors across explorer turns", async () => {
   const settings = roleSettings();
   const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(campaignPath(), workflow, 3);
+  const campaign = await createWorkflowCampaign(campaignPath(), workflow, 6);
   const replies: Reply[] = [];
+  let previous: string | undefined;
   for (const n of [first, inherited, target]) {
     replies.push(
+      // Each Explorer reads the previously verified note in full.
+      previous === undefined
+        ? dispatchExplorer()
+        : {
+            submission: {
+              filings: [],
+              explorerGuidance: "Complete coverage.",
+              support: [previous],
+              verify: [],
+              action: { role: "explorer" },
+            },
+          },
       {
         submission: {
           solution: false,
@@ -212,6 +226,7 @@ test("workflow construction and per-call selection both retain ancestors across 
           explorerGuidance: "Complete coverage.",
           support: [n.id],
           verify: [{ note: n.id, verifiers: ["correctness", "source"] }],
+          action: { role: "verifier" },
         },
       },
       {
@@ -227,6 +242,7 @@ test("workflow construction and per-call selection both retain ancestors across 
         },
       },
     );
+    previous = n.id;
   }
   const drive = dependencies(replies);
   try {

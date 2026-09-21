@@ -116,7 +116,7 @@ async function prepareAllowance(
   const records = workflowRecords(campaign);
   const allowances = turnAllowances(records);
   if (allowances.length === 0) {
-    await appendAllowance(campaign, turns ?? 10, 0, id ?? "initial");
+    await appendAllowance(campaign, turns ?? 20, 0, id ?? "initial");
     return;
   }
   if (turns === undefined) return;

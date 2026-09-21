@@ -40,12 +40,12 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
     application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
-    turns: 2,
+    turns: 4,
     note: { id: "n2" },
   });
   const requests = await recordedRequests(directory);
-  expect(requests).toHaveLength(10);
-  expect(requests[0]).toMatchObject({
+  expect(requests).toHaveLength(12);
+  expect(requests[1]).toMatchObject({
     tools: [
       {
         name: "submit_notes",
@@ -60,7 +60,7 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   const second = await cli(directory, "run", task, campaign, settings);
   expect(second.code).toBe(0);
   expect(JSON.parse(second.stdout).outcome).toBe("accepted");
-  expect(await recordedRequests(directory)).toHaveLength(10);
+  expect(await recordedRequests(directory)).toHaveLength(12);
 
   const inspection = JSON.parse(
     (await cli(directory, "inspect", campaign)).stdout,
@@ -71,7 +71,7 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
     },
     phase: "accepted",
     result: { outcome: "accepted", note: { id: "n2" } },
-    spend: { logicalProviderRequests: 10, requestErrors: 0 },
+    spend: { logicalProviderRequests: 12, requestErrors: 0 },
     accounting: {
       complete: true,
       unmeasuredRequests: 0,
@@ -84,9 +84,11 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   expect(
     inspection.calls.map(({ role }: { readonly role: string }) => role),
   ).toEqual([
+    "coordinator",
     "explorer",
     "coordinator",
     "verifier",
+    "coordinator",
     "explorer",
     "coordinator",
     "verifier",
@@ -103,7 +105,9 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   ).toEqual([
     null,
     null,
+    null,
     "correctness",
+    null,
     null,
     null,
     "correctness",
@@ -185,7 +189,7 @@ test("guided CLI workflow retains its verification, accounting, and execution re
     application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
-    turns: 2,
+    turns: 4,
     note: { id: "n2" },
   });
   const inspected = await cli(
@@ -199,7 +203,7 @@ test("guided CLI workflow retains its verification, accounting, and execution re
   const report = JSON.parse(inspected.stdout);
   expect(report).toMatchObject({
     phase: "accepted",
-    spend: { logicalProviderRequests: 10, requestErrors: 0 },
+    spend: { logicalProviderRequests: 12, requestErrors: 0 },
     guidance: [{ id: "e2e-1", pending: false }],
     accounting: { unaccountedCalls: [], potentialRequests: [] },
   });

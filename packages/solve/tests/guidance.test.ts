@@ -14,6 +14,7 @@ import {
   createWorkflowCampaign,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -34,24 +35,34 @@ async function setup(turns = 2) {
   return { path, request: { task, settings, campaignPath: path } };
 }
 
+/** The coordinator before Explorer turn `index`: it files the previous note. */
+function coordinate(index: number): Reply {
+  if (index === 1) return dispatchExplorer();
+  return {
+    submission: {
+      filings: [
+        { note: `n${index - 1}`, summary: `Partial result ${index - 1}.` },
+      ],
+      explorerGuidance: "Prove the remaining case.",
+      support: [],
+      verify: [],
+      action: { role: "explorer" },
+    },
+  };
+}
+
+function explore(index: number, onStarted?: () => Promise<void>): Reply {
+  return {
+    submission: {
+      solution: false,
+      notes: [{ text: `Partial result ${index}.`, support: [] }],
+    },
+    ...(onStarted === undefined ? {} : { onStarted }),
+  };
+}
+
 function turn(index: number, onStarted?: () => Promise<void>): Reply[] {
-  return [
-    {
-      submission: {
-        solution: false,
-        notes: [{ text: `Partial result ${index}.`, support: [] }],
-      },
-      ...(onStarted === undefined ? {} : { onStarted }),
-    },
-    {
-      submission: {
-        filings: [{ note: `n${index}`, summary: `Partial result ${index}.` }],
-        explorerGuidance: "Prove the remaining case.",
-        support: [],
-        verify: [],
-      },
-    },
-  ];
+  return [coordinate(index), explore(index, onStarted)];
 }
 
 function records(path: string) {
@@ -164,15 +175,16 @@ test("guidance submitted after a frozen boundary waits through its retries and r
   const { path, request } = await setup();
   await guideCampaign(path, first, "a");
   const initial = dependencies([
+    coordinate(1),
     { state: "failed", error: "provider unavailable" },
   ]);
   expect((await run(request, initial)).outcome).toBe("call-failure");
   const before = records(path);
   await guideCampaign(path, second, "b");
-  const rest = dependencies([...turn(1), ...turn(2)]);
+  const rest = dependencies([explore(1), ...turn(2)]);
   expect((await run(request, rest)).outcome).toBe("turn-limit");
   const explorers = rest.calls.filter((call) => call.role === "explorer");
-  expect(explorers[0]!.prompt).toBe(initial.calls[0]!.prompt);
+  expect(explorers[0]!.prompt).toBe(initial.calls[1]!.prompt);
   expect(explorers[0]!.prompt).not.toContain(second);
   expect(explorers[1]!.prompt).toContain(second);
   expect(explorers[1]!.prompt).not.toContain(first);
@@ -184,6 +196,13 @@ test("guidance submitted after a frozen boundary waits through its retries and r
 
 test("a crash after freezing guidance but before starting Explorer preserves the boundary", async () => {
   const { path, request } = await setup();
+  const initial = dependencies([coordinate(1)]);
+  expect(
+    await run(request, {
+      ...initial,
+      pauseRequested: () => initial.calls.length === 1,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
   await guideCampaign(path, first, "a");
   const campaign = openCampaign(path);
   const snapshot = await deriveWorkflow(campaign.records());
@@ -192,7 +211,7 @@ test("a crash after freezing guidance but before starting Explorer preserves the
   );
   campaign.close();
   await guideCampaign(path, second, "b");
-  const rest = dependencies([...turn(1), ...turn(2)]);
+  const rest = dependencies([explore(1), ...turn(2)]);
   expect((await run(request, rest)).outcome).toBe("turn-limit");
   const explorers = rest.calls.filter((call) => call.role === "explorer");
   expect(explorers[0]!.prompt).toContain(first);
@@ -227,11 +246,11 @@ test("concurrent CLI retries through a path alias append one guidance request", 
 
 test("coordinator guidance and external advice share the next Explorer input without duplicate records", async () => {
   const { path, request } = await setup();
-  const initial = dependencies(turn(1));
+  const initial = dependencies([...turn(1), coordinate(2)]);
   expect(
     await run(request, {
       ...initial,
-      pauseRequested: () => initial.calls.length === 2,
+      pauseRequested: () => initial.calls.length === 3,
     }),
   ).toMatchObject({ outcome: "paused", at: "explorer" });
   const before = records(path);
@@ -239,11 +258,12 @@ test("coordinator guidance and external advice share the next Explorer input wit
     before.filter((entry) => entry.kind === "call").map((entry) => entry.label),
   ).toEqual([
     "xean-solve/allowance",
+    roleLabels.coordinator,
     roleLabels.explorer,
     roleLabels.coordinator,
   ]);
   await guideCampaign(path, first, "outside-advice");
-  const rest = dependencies(turn(2));
+  const rest = dependencies([explore(2)]);
   expect((await run(request, rest)).outcome).toBe("turn-limit");
   expect(rest.calls[0]!.prompt).toContain(
     `Explorer guidance (fallible advice):\nProve the remaining case.\n\n${first}`,
@@ -263,6 +283,13 @@ test("coordinator guidance and external advice share the next Explorer input wit
 
 test("process death after guidance and boundary requests preserves receipt and replay", async () => {
   const { path, request } = await setup();
+  const initial = dependencies([coordinate(1)]);
+  expect(
+    await run(request, {
+      ...initial,
+      pauseRequested: () => initial.calls.length === 1,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
   for (const mode of ["submit", "freeze"]) {
     const child = Bun.spawn(
       [
@@ -280,12 +307,15 @@ test("process death after guidance and boundary requests preserves receipt and r
     expect(code, error).toBe(73);
   }
   const before = records(path);
+  const durable = before.find(
+    (entry) => entry.kind === "call" && entry.label === "xean-solve/guidance",
+  )!;
   expect(
     (await guideCampaign(path, "Use the direct construction.", "crash-1")).call,
-  ).toBe(4);
+  ).toBe(durable.seq);
   expect(records(path)).toEqual(before);
   await guideCampaign(path, second, "later");
-  const drive = dependencies([...turn(1), ...turn(2)]);
+  const drive = dependencies([explore(1), ...turn(2)]);
   expect((await run(request, drive)).outcome).toBe("turn-limit");
   const explorers = drive.calls.filter((call) => call.role === "explorer");
   expect(explorers[0]!.prompt).toContain("Use the direct construction.");
@@ -298,7 +328,7 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = await setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 24 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 25 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);
@@ -308,8 +338,8 @@ test("a run without external advice adds no guidance calls", async () => {
       .map((entry) => entry.label),
   ).toEqual([
     "xean-solve/allowance",
-    roleLabels.explorer,
     roleLabels.coordinator,
+    roleLabels.explorer,
   ]);
   expect(records(path)[0]).toEqual(start);
 });

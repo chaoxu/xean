@@ -1,12 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { openCampaign, openReader } from "xean";
 
-import {
-  coordinatorCall,
-  createPiRoles,
-  defaultCoordinatorBehavior,
-  literatureCall,
-} from "../pi-roles";
+import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
 import { appendAllowance, turnAllowances } from "../allowance";
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
@@ -14,6 +9,7 @@ import { runWorkflow, workflowConfiguration } from "../workflow";
 import { codexRequest } from "../source";
 import { codexStdout } from "./fixtures/codex-stdout";
 import {
+  defaultCoordinatorBehavior,
   jsonSnapshot,
   literatureReport,
   roleLabels,
@@ -82,11 +78,10 @@ const passes = [
   },
 ];
 
-test("coordinator mode starts with the coordinator and returns after literature", async () => {
+test("the workflow starts with the coordinator and returns to it after literature", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "required-if-not-started" as const,
       verification: "decide" as const,
@@ -191,7 +186,6 @@ test("a repeated literature request after a failed search runs a fresh call, and
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -250,15 +244,12 @@ test("a repeated literature request after a failed search runs a fresh call, and
     campaign.close();
   }
   // After a completed search the coordinator schema has no literature action.
-  const completed = coordinatorCall(
-    {
-      task,
-      notes: [],
-      literatureStatus: "completed",
-      coordinatorBehavior: settings.coordinatorBehavior,
-    },
-    "coordinator",
-  );
+  const completed = coordinatorCall({
+    task,
+    notes: [],
+    literatureStatus: "completed",
+    coordinatorBehavior: settings.coordinatorBehavior,
+  });
   const base = {
     filings: [],
     explorerGuidance: "Explore.",
@@ -279,10 +270,7 @@ test("a repeated literature request after a failed search runs a fresh call, and
 
 test("a note submitted while an explorer phase waits returns to the coordinator", async () => {
   const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    workflowMode: "coordinator" as const,
-  };
+  const settings = roleSettings();
   const request = { task, settings, campaignPath: path, turns: 2 };
   await init(request);
   // The coordinator settles, then the process stops before any explorer call.
@@ -325,11 +313,10 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   ]);
 });
 
-test("an allowance extends a coordinator-mode campaign by whole turns", async () => {
+test("an allowance extends a campaign by whole turns", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -391,7 +378,6 @@ test("a failed literature call settles without candidates and reports inconclusi
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -441,7 +427,6 @@ test("a coordinator verifier action drains its list in window batches before the
   const settings = {
     ...roleSettings(),
     window: 1,
-    workflowMode: "coordinator" as const,
   };
   const workflow = workflowConfiguration({ task, settings });
   const campaign = await createWorkflowCampaign(path, workflow, 2);
@@ -506,10 +491,7 @@ test("a coordinator verifier action drains its list in window batches before the
 
 test("a verifier action is unavailable until a note is added after a verification", async () => {
   const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    workflowMode: "coordinator" as const,
-  };
+  const settings = roleSettings();
   const request = { task, settings, campaignPath: path, turns: 4 };
   await init(request);
   const partial = (id: string) => ({
@@ -630,7 +612,7 @@ test("after a verification without new notes the coordinator schema omits the ve
       verification: "always" as const,
     },
   };
-  const open = coordinatorCall(input, "coordinator");
+  const open = coordinatorCall(input);
   expect(open.prompt).not.toContain("No note has been added since");
   expect(
     open.schema.safeParse({ ...base, action: { role: "explorer" } }).success,
@@ -642,10 +624,7 @@ test("after a verification without new notes the coordinator schema omits the ve
       action: { role: "verifier" },
     }).success,
   ).toBe(true);
-  const guarded = coordinatorCall(
-    { ...input, afterVerification: true },
-    "coordinator",
-  );
+  const guarded = coordinatorCall({ ...input, afterVerification: true });
   expect(guarded.prompt).toContain(
     "No note has been added since the last completed verification",
   );
@@ -671,7 +650,6 @@ test("an unusable literature response is replaced by a fresh call on resume", as
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -726,7 +704,6 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
-    workflowMode: "coordinator" as const,
     coordinatorBehavior: {
       literature: "optional" as const,
       verification: "decide" as const,
@@ -809,8 +786,8 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
   }
 });
 
-test("coordinator workflow mode requires a typed action and a nonempty verifier list", () => {
-  const call = coordinatorCall({ task, notes: [] }, "coordinator");
+test("a coordinator result requires a typed action and a nonempty verifier list", () => {
+  const call = coordinatorCall({ task, notes: [] });
   const base = {
     filings: [],
     explorerGuidance: "Choose the next useful mathematical step.",
@@ -833,40 +810,27 @@ test("coordinator workflow mode requires a typed action and a nonempty verifier 
   ).toBe(false);
 });
 
-test("coordinator behavior and literature status reach only coordinator workflow mode prompts", () => {
-  const behavior = {
-    literature: "never" as const,
-    verification: "decide" as const,
-    instructions: "Use Explorer for this campaign.",
-  };
-  const input = {
+test("the frozen coordinator behavior and literature status reach the coordinator prompt", () => {
+  const call = coordinatorCall({
     task,
     notes: [],
-    literatureStatus: "not-started" as const,
-    coordinatorBehavior: behavior,
-  };
-  const fixed = coordinatorCall(input);
-  expect(fixed.prompt).not.toContain("Coordinator behavior:");
-  expect(fixed.prompt).not.toContain("Literature status:");
-  expect(fixed.system).not.toContain("The frozen coordinator behavior");
-  const call = coordinatorCall(input, "coordinator");
-  expect(call.prompt).toContain("Coordinator behavior:");
-  expect(call.prompt).toContain("Literature status:");
+    literatureStatus: "inconclusive",
+    coordinatorBehavior: {
+      literature: "never",
+      verification: "decide",
+      instructions: "Use Explorer for this campaign.",
+    },
+  });
+  expect(call.prompt).toContain("Literature status: inconclusive");
+  expect(call.prompt).toContain(
+    'Coordinator behavior:\n{\n  "literature": "never",\n  "verification": "decide",\n  "instructions": "Use Explorer for this campaign."\n}',
+  );
   expect(call.system).toContain("The frozen coordinator behavior");
-  expect(
-    call.schema.safeParse({
-      filings: [],
-      explorerGuidance: "Explore the task.",
-      support: [],
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
-  ).toBe(true);
 });
 
 test("new campaigns disable literature unless their policy opts in", () => {
   expect(defaultCoordinatorBehavior.literature).toBe("never");
-  const call = coordinatorCall({ task, notes: [] }, "coordinator");
+  const call = coordinatorCall({ task, notes: [] });
   expect(
     call.schema.safeParse({
       filings: [],
@@ -884,18 +848,15 @@ test("structured coordinator policies constrain optional literature and verifica
     explorerGuidance: "Continue.",
     support: [],
   };
-  const literatureFirst = coordinatorCall(
-    {
-      task,
-      notes: [],
-      literatureStatus: "not-started",
-      coordinatorBehavior: {
-        literature: "required-if-not-started",
-        verification: "decide",
-      },
+  const literatureFirst = coordinatorCall({
+    task,
+    notes: [],
+    literatureStatus: "not-started",
+    coordinatorBehavior: {
+      literature: "required-if-not-started",
+      verification: "decide",
     },
-    "coordinator",
-  );
+  });
   expect(
     literatureFirst.schema.safeParse({
       ...base,
@@ -920,28 +881,25 @@ test("structured coordinator policies constrain optional literature and verifica
     verified: false,
     dead: false,
   });
-  const alwaysVerify = coordinatorCall(
-    {
-      task,
-      notes: [
-        ready("n1", "A live result."),
-        {
-          // Over unverified support: not required until n1 is verified.
-          id: "n2",
-          summary: "A consequence of n1.",
-          text: "A consequence of n1.",
-          support: ["n1"],
-          verdicts: [],
-          verified: false,
-          dead: false,
-        },
-        ready("n3", "Another live result."),
-      ],
-      literatureStatus: "completed",
-      coordinatorBehavior: { literature: "never", verification: "always" },
-    },
-    "coordinator",
-  );
+  const alwaysVerify = coordinatorCall({
+    task,
+    notes: [
+      ready("n1", "A live result."),
+      {
+        // Over unverified support: not required until n1 is verified.
+        id: "n2",
+        summary: "A consequence of n1.",
+        text: "A consequence of n1.",
+        support: ["n1"],
+        verdicts: [],
+        verified: false,
+        dead: false,
+      },
+      ready("n3", "Another live result."),
+    ],
+    literatureStatus: "completed",
+    coordinatorBehavior: { literature: "never", verification: "always" },
+  });
   const checks: Verification["verifiers"] = ["correctness", "source"];
   expect(
     alwaysVerify.schema.safeParse({
@@ -981,28 +939,25 @@ test("structured coordinator policies constrain optional literature and verifica
   ).toBe(true);
   // n1 was checked and stayed inconclusive, so it is not forced again; n2
   // waits for its unverified support; nothing is forced.
-  const inconclusiveSupport = coordinatorCall(
-    {
-      task,
-      notes: [
-        {
-          ...ready("n1", "A live result."),
-          verdicts: [
-            {
-              verifier: "correctness",
-              note: "n1",
-              verdict: "INCONCLUSIVE",
-              report: "Unclear.",
-            },
-          ],
-        },
-        { ...ready("n2", "A consequence of n1."), support: ["n1"] },
-      ],
-      literatureStatus: "completed",
-      coordinatorBehavior: { literature: "never", verification: "always" },
-    },
-    "coordinator",
-  );
+  const inconclusiveSupport = coordinatorCall({
+    task,
+    notes: [
+      {
+        ...ready("n1", "A live result."),
+        verdicts: [
+          {
+            verifier: "correctness",
+            note: "n1",
+            verdict: "INCONCLUSIVE",
+            report: "Unclear.",
+          },
+        ],
+      },
+      { ...ready("n2", "A consequence of n1."), support: ["n1"] },
+    ],
+    literatureStatus: "completed",
+    coordinatorBehavior: { literature: "never", verification: "always" },
+  });
   expect(
     inconclusiveSupport.schema.safeParse({
       ...base,

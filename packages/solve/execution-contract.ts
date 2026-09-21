@@ -16,7 +16,7 @@ export const executionContract = {
   run: {
     command: "run",
     arguments: ["task", "campaign", "settings"],
-    allowance: { turnsOption: "--turns", idOption: "--id", defaultTurns: 10 },
+    allowance: { turnsOption: "--turns", idOption: "--id", defaultTurns: 20 },
     report: {
       schemaVersion: 1,
       outcomes: workflowOutcomes,

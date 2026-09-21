@@ -55,7 +55,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 24;
+export const workflowSchemaVersion = 25;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -106,7 +106,7 @@ export interface WorkflowSnapshot {
   readonly maxTurns: number;
   readonly notes: readonly Note[];
   readonly phase: WorkflowPhase;
-  /** Journal boundary before the next explorer turn, used only by the driver. */
+  /** Journal boundary before the next Explorer call, used only by the driver. */
   readonly explorerAfter?: EntryId;
   /** An unfrozen boundary where submitted notes may enter the coordinator. */
   readonly notesAfter?: EntryId;
@@ -485,13 +485,12 @@ async function replayVerification(
 function replayCoordinator(
   fold: Fold,
   input: CoordinatorInput,
-  mode: "fixed" | "coordinator",
   included: boolean,
 ): WorkflowSnapshot | CoordinatorResult {
   const coordinated = settledCall(
     fold.records,
     fold.cursor,
-    coordinatorCall(input, mode),
+    coordinatorCall(input),
   );
   if (coordinated === undefined) {
     return snapshot(
@@ -504,45 +503,6 @@ function replayCoordinator(
   fold.cursor = coordinated.settled;
   fold.projection.file(coordinated.value.filings, fold.cursor);
   return coordinated.value;
-}
-
-export async function deriveWorkflow(
-  records: readonly Entry[],
-): Promise<WorkflowSnapshot> {
-  const fold = openFold(records);
-  if (fold.base.config.settings.workflowMode === "coordinator")
-    return deriveCoordinatorWorkflow(fold);
-  let guidance = "";
-  let support: readonly string[] = [];
-  while (fold.turns < fold.base.maxTurns) {
-    let emptySubmission = false;
-    // A submitted note goes directly to the coordinator. Otherwise the
-    // next explorer writes notes, which may be joined by pending submissions.
-    let included = includeSubmitted(fold, fold.cursor);
-    if (!included) {
-      const turn = await replayExplorerTurn(fold, guidance, support);
-      if ("phase" in turn) return turn;
-      fold.turns += 1;
-      emptySubmission = turn.emptySubmission;
-      included = includeSubmitted(fold, fold.cursor);
-    }
-    const coordinated = replayCoordinator(
-      fold,
-      coordinatorInput.parse({
-        task: fold.base.config.task,
-        notes: fold.projection.at(fold.cursor),
-        ...(emptySubmission ? { emptySubmission: true } : {}),
-      }),
-      "fixed",
-      included,
-    );
-    if ("phase" in coordinated) return coordinated;
-    guidance = coordinated.explorerGuidance;
-    support = coordinated.support;
-    const verification = await replayVerification(fold, coordinated.verify);
-    if (verification !== undefined) return verification;
-  }
-  return turnLimit(fold);
 }
 
 /** Whether discovery has run at or before this cursor, and whether any run returned a usable report. */
@@ -607,23 +567,20 @@ function settledLiteratureCall(
 }
 
 /**
- * Experimental coordinator workflow mode. Every completed role returns to a
- * fresh coordinator decision; literature notes enter the ordinary note graph,
- * never a verifier result. A turn is one coordinator call and the role it
- * dispatches, so the journaled allowance bounds the whole loop and no role
- * has a separate cap. A verifier dispatch checks the whole list, and the
- * verifier action stays unavailable until a note has been added, so two
- * verifications never run back to back over the same notes. The fixed
- * Explorer -> coordinator -> verifier loop above remains the default mode
- * for comparison.
+ * Every completed role returns to a fresh coordinator decision; literature
+ * notes enter the ordinary note graph, never a verifier result. A turn is one
+ * coordinator call and the role it dispatches, so the journaled allowance
+ * bounds the whole loop and no role has a separate cap. A verifier dispatch
+ * checks the whole list, and the verifier action stays unavailable until a
+ * note has been added, so two verifications never run back to back over the
+ * same notes.
  */
-async function deriveCoordinatorWorkflow(
-  fold: Fold,
+export async function deriveWorkflow(
+  records: readonly Entry[],
 ): Promise<WorkflowSnapshot> {
-  const { records, base } = fold;
+  const fold = openFold(records);
+  const { base } = fold;
   const settings = base.config.settings;
-  let guidance = "";
-  let support: readonly string[] = [];
   let emptySubmission = false;
   // The note count when the last verification completed, derived like every
   // other coordinator input from the records before the coordinator call.
@@ -644,16 +601,11 @@ async function deriveCoordinatorWorkflow(
           ? { afterVerification: true }
           : {}),
       }),
-      "coordinator",
       included,
     );
     if ("phase" in coordinated) return coordinated;
-    guidance = coordinated.explorerGuidance;
-    support = coordinated.support;
     emptySubmission = false;
-    const action = coordinated.action;
-    if (action === undefined)
-      throw new Error("coordinator workflow mode requires a role action");
+    const { action } = coordinated;
     fold.turns += 1;
     if (action.role === "literature") {
       const input = literatureInput.parse({
@@ -674,9 +626,13 @@ async function deriveCoordinatorWorkflow(
       fold.cursor = settled;
     } else if (action.role === "explorer") {
       // A caller's submission while this phase waited returns to the
-      // coordinator with the new notes, as in the fixed loop.
+      // coordinator with the new notes.
       if (includeSubmitted(fold, fold.cursor)) continue;
-      const turn = await replayExplorerTurn(fold, guidance, support);
+      const turn = await replayExplorerTurn(
+        fold,
+        coordinated.explorerGuidance,
+        coordinated.support,
+      );
       if ("phase" in turn) return turn;
       emptySubmission = turn.emptySubmission;
     } else {

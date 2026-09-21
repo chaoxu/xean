@@ -25,6 +25,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
 } from "./harness";
 
@@ -113,9 +114,10 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
       ...defaults,
     };
   const config = workflowConfiguration({ task, settings }),
-    campaign = await createWorkflowCampaign(path, config, 1);
+    campaign = await createWorkflowCampaign(path, config, 2);
   expect(config.settings.maxExplorerResponses).toBe(4);
   const drive = dependencies([
+    dispatchExplorer(input.explorerGuidance),
     { submission: { notes: [note], solution: true } },
     {
       submission: {
@@ -123,6 +125,7 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
         explorerGuidance: "Check it.",
         support: [],
         verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+        action: { role: "verifier" },
       },
     },
     {
@@ -144,7 +147,7 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
       createPiRoles(campaign, config.settings, drive),
     );
     expect(result.kind).toBe("turn-limit");
-    expect(drive.calls[0]?.submissionGate).toEqual({
+    expect(drive.calls[1]?.submissionGate).toEqual({
       completeArgument: "solution",
       emptyArgument: "notes",
       contextBudgetTokens: 400_000,
@@ -153,45 +156,37 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
         explorerCall(input).submissionGate!.continuationPrompt,
     });
     expect(
-      drive.calls.slice(1).every((call) => call.submissionGate === undefined),
+      drive.calls
+        .filter((call) => call.role !== "explorer")
+        .every((call) => call.submissionGate === undefined),
     ).toBe(true);
     expect(drive.calls.map((call) => call.role)).toEqual([
+      "coordinator",
       "explorer",
       "coordinator",
       "verifier",
     ]);
     const inspection: any = await inspectCampaign(path);
-    expect(inspection.calls[0].submission.solution).toBe(true);
+    expect(inspection.calls[1].submission.solution).toBe(true);
     expect(inspection.result.outcome).toBe("turn-limit");
     const explored = campaign
       .records()
       .find((entry) => entry.kind === "call" && entry.role === "explorer")!;
     if (explored.kind !== "call") throw new Error("fixture");
-    expect(
-      sameRequest(
-        explored.request,
-        explorerCall({ ...input, explorerGuidance: "" }),
-      ),
-    ).toBe(true);
+    expect(sameRequest(explored.request, explorerCall(input))).toBe(true);
     const altered: any = structuredClone(explored.request);
     delete altered.submissionGate;
-    expect(
-      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
-    ).toBe(false);
+    expect(sameRequest(altered, explorerCall(input))).toBe(false);
     altered.submissionGate = {
-      ...drive.calls[0]!.submissionGate,
+      ...drive.calls[1]!.submissionGate,
       contextBudgetTokens: 80_000,
     };
-    expect(
-      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
-    ).toBe(false);
+    expect(sameRequest(altered, explorerCall(input))).toBe(false);
     altered.submissionGate = {
-      ...drive.calls[0]!.submissionGate,
+      ...drive.calls[1]!.submissionGate,
       continuationPrompt: "Different research assignment.",
     };
-    expect(
-      sameRequest(altered, explorerCall({ ...input, explorerGuidance: "" })),
-    ).toBe(false);
+    expect(sameRequest(altered, explorerCall(input))).toBe(false);
     expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
       "turn-limit",
     );
@@ -369,11 +364,12 @@ test.each([false, true])(
         maxExplorerResponses: 4,
       },
     });
-    const campaign = await createWorkflowCampaign(campaignPath(), config, 2);
+    const campaign = await createWorkflowCampaign(campaignPath(), config, 3);
     const guidance =
       "Try a counting argument instead of the failed construction.";
     const nextId = saveFirst ? "n2" : "n1";
     const drive = dependencies([
+      dispatchExplorer(),
       {
         onStarted: async (tools) => {
           if (saveFirst)
@@ -389,6 +385,7 @@ test.each([false, true])(
           explorerGuidance: guidance,
           support: saveFirst ? ["n1"] : [],
           verify: [],
+          action: { role: "explorer" },
         },
       },
       {
@@ -410,8 +407,10 @@ test.each([false, true])(
           explorerGuidance: "Resolve the remaining gap.",
           support: [],
           verify: [],
+          action: { role: "explorer" },
         },
       },
+      { submission: { notes: [], solution: false } },
     ]);
     try {
       const result = await runWorkflow(
@@ -420,28 +419,30 @@ test.each([false, true])(
       );
       expect(result.kind).toBe("turn-limit");
       if (result.kind !== "turn-limit") throw new Error("expected turn limit");
-      expect(result.turns).toBe(2);
+      expect(result.turns).toBe(3);
       expect(drive.calls.map((call) => call.role)).toEqual([
-        "explorer",
         "coordinator",
         "explorer",
         "coordinator",
+        "explorer",
+        "coordinator",
+        "explorer",
       ]);
-      expect(drive.calls[1]!.prompt).toContain(
+      expect(drive.calls[2]!.prompt).toContain(
         "ended with an empty submission",
       );
-      expect(drive.calls[1]!.prompt).toContain(
+      expect(drive.calls[2]!.prompt).toContain(
         "Choose a different promising approach",
       );
-      expect(drive.calls[2]!.prompt).toContain(guidance);
-      expect(drive.calls[2]!.prompt).toContain(task.problem);
-      expect(drive.calls[2]!.prompt).toContain(task.completionCriteria);
-      expect(drive.calls[3]!.prompt).not.toContain(
+      expect(drive.calls[3]!.prompt).toContain(guidance);
+      expect(drive.calls[3]!.prompt).toContain(task.problem);
+      expect(drive.calls[3]!.prompt).toContain(task.completionCriteria);
+      expect(drive.calls[4]!.prompt).not.toContain(
         "ended with an empty submission",
       );
       if (saveFirst) {
-        expect(drive.calls[1]!.prompt).toContain(note.text);
         expect(drive.calls[2]!.prompt).toContain(note.text);
+        expect(drive.calls[3]!.prompt).toContain(note.text);
       }
       expect(result.notes.map((note) => note.id)).toEqual(
         saveFirst ? ["n1", "n2"] : ["n1"],
@@ -495,7 +496,7 @@ test("omitted response budget is saved explicitly and matches its explicit defau
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 24,
+        schemaVersion: 25,
         settings: { maxExplorerResponses: 4 },
       },
     });
@@ -552,12 +553,13 @@ test.each([1, 3])(
         maxExplorerResponses,
       },
     });
-    const campaign = await createWorkflowCampaign(campaignPath(), config, 1);
+    const campaign = await createWorkflowCampaign(campaignPath(), config, 2);
     const notes = Array.from({ length: maxExplorerResponses }, (_, index) => ({
       text: `Partial work ${index + 1}.`,
       support: [],
     }));
     const drive = dependencies([
+      dispatchExplorer(input.explorerGuidance),
       {
         onStarted: async (tools) => {
           for (const saved of notes.slice(0, -1))
@@ -574,29 +576,33 @@ test.each([1, 3])(
           explorerGuidance: "Continue.",
           support: [],
           verify: [],
+          action: { role: "explorer" },
         },
       },
+      { submission: { notes: [], solution: false } },
     ]);
     try {
       await runWorkflow(
         campaign,
         createPiRoles(campaign, config.settings, drive),
       );
-      expect(drive.calls[0]?.submissionGate?.contextBudgetTokens).toBe(80_000);
-      expect(drive.calls[0]?.submissionGate?.maxResponses).toBe(
+      expect(drive.calls[1]?.submissionGate?.contextBudgetTokens).toBe(80_000);
+      expect(drive.calls[1]?.submissionGate?.maxResponses).toBe(
         maxExplorerResponses,
       );
-      expect(drive.calls[0]?.prompt).toContain(
+      expect(drive.calls[1]?.prompt).toContain(
         `at most ${maxExplorerResponses} model responses`,
       );
       for (const note of notes)
-        expect(drive.calls[1]?.prompt).toContain(note.text);
-      expect(drive.calls[1]?.prompt).not.toContain(
+        expect(drive.calls[2]?.prompt).toContain(note.text);
+      expect(drive.calls[2]?.prompt).not.toContain(
         "ended with an empty submission",
       );
       expect(drive.calls.map((call) => call.role)).toEqual([
+        "coordinator",
         "explorer",
         "coordinator",
+        "explorer",
       ]);
       expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
         "turn-limit",
@@ -605,23 +611,22 @@ test.each([1, 3])(
         .records()
         .find((entry) => entry.kind === "call" && entry.role === "explorer");
       if (call?.kind !== "call") throw new Error("missing Explorer call");
-      const initial = { ...input, explorerGuidance: "" };
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, 80_000, maxExplorerResponses),
+          explorerCall(input, 80_000, maxExplorerResponses),
         ),
       ).toBe(true);
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, 90_000, maxExplorerResponses),
+          explorerCall(input, 90_000, maxExplorerResponses),
         ),
       ).toBe(false);
       expect(
         sameRequest(
           call.request,
-          explorerCall(initial, 80_000, maxExplorerResponses + 1),
+          explorerCall(input, 80_000, maxExplorerResponses + 1),
         ),
       ).toBe(false);
       const before = campaign.records();
@@ -645,7 +650,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
       maxExplorerResponses: 4,
     },
   });
-  const campaign = await createWorkflowCampaign(path, config, 1);
+  const campaign = await createWorkflowCampaign(path, config, 2);
   const first = {
     text: "An early detailed lemma, including its complete argument.",
     support: [],
@@ -660,6 +665,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
   };
   const external = { text: "An external application of n1.", support: ["n1"] };
   const drive = dependencies([
+    dispatchExplorer(),
     {
       onStarted: async (tools) => {
         expect(
@@ -676,7 +682,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
           ["n1", first.text, false],
           ["n2", second.text, false],
         ]);
-        expect(inspection.calls[0].submission.notes).toEqual([first, second]);
+        expect(inspection.calls[1].submission.notes).toEqual([first, second]);
         await submitNotes(path, { notes: [external] }, "during-explorer");
         await expect(
           tools[0]!.execute({
@@ -700,11 +706,16 @@ test("every saved submission reaches the coordinator, including early proofs bef
         // Reconcile an earlier interrupted receipt after another submission.
         // Repeating the tool body must neither allocate IDs nor lose n3.
         const before = campaign.records();
-        const firstCall = before.find((entry) => entry.kind === "tool-call");
+        const explorer = before.find(
+          (entry) => entry.kind === "call" && entry.role === "explorer",
+        )!;
+        const firstCall = before.find(
+          (entry) => entry.kind === "tool-call" && entry.call === explorer.seq,
+        );
         if (firstCall?.kind !== "tool-call")
           throw new Error("missing saved submission");
         expect(
-          await drive.calls[0]!.tools![0]!.run(firstCall.input, {
+          await drive.calls[1]!.tools![0]!.run(firstCall.input, {
             call: firstCall.call,
             toolCall: firstCall.seq,
             signal: new AbortController().signal,
@@ -712,7 +723,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
         ).toEqual({ noteIds: ["n1", "n2"] });
         expect(campaign.records()).toEqual(before);
         expect(
-          drive.calls[0]!.tools![0]!.input.safeParse({
+          drive.calls[1]!.tools![0]!.input.safeParse({
             notes: [{ text: "A later argument using n3.", support: ["n3"] }],
             solution: false,
           }).success,
@@ -729,8 +740,10 @@ test("every saved submission reaches the coordinator, including early proofs bef
         explorerGuidance: "Continue.",
         support: [],
         verify: [],
+        action: { role: "explorer" },
       },
     },
+    { submission: { notes: [], solution: false } },
   ]);
   try {
     const result = await runWorkflow(
@@ -741,7 +754,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
     const inspection: any = await inspectCampaign(path, {
       includeSubmissions: true,
     });
-    expect(inspection.calls[0].submission).toEqual({
+    expect(inspection.calls[1].submission).toEqual({
       notes: [first, second, improved],
       solution: false,
     });
@@ -757,9 +770,9 @@ test("every saved submission reaches the coordinator, including early proofs bef
       noteIds: ["n4"],
       pending: false,
     });
-    expect(drive.calls[1]!.prompt).toContain(first.text);
-    expect(drive.calls[1]!.prompt).toContain(improved.text);
-    expect(drive.calls[1]!.prompt).toContain("ended with an empty submission");
+    expect(drive.calls[2]!.prompt).toContain(first.text);
+    expect(drive.calls[2]!.prompt).toContain(improved.text);
+    expect(drive.calls[2]!.prompt).toContain("ended with an empty submission");
     const before = campaign.records();
     await runWorkflow(
       campaign,
@@ -790,6 +803,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
   };
   const campaign = await createWorkflowCampaign(path, config, 1);
   const initial = dependencies([
+    dispatchExplorer(),
     {
       state: "failed",
       error: "transport failed after saving notes",
@@ -798,7 +812,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
           await tools[0]!.execute({ notes: [first], solution: false }),
         ).toEqual({ noteIds: ["n1"] });
         const records = campaign.records();
-        const at = records.findIndex((entry) => entry.kind === "tool-call");
+        const at = records.findLastIndex((entry) => entry.kind === "tool-call");
         const savedBeforeReceipt = await deriveWorkflow(
           records.slice(0, at + 1),
         );
@@ -818,7 +832,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
       runWorkflow(campaign, createPiRoles(campaign, config.settings, initial)),
     ).rejects.toThrow("transport failed");
     const inspection: any = await inspectCampaign(path);
-    expect(inspection.calls[0]).toMatchObject({
+    expect(inspection.calls[1]).toMatchObject({
       outcome: "failed",
       submission: { notes: [first] },
     });
@@ -835,17 +849,6 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
         ).toEqual({ noteIds: ["n2"] });
       },
       submission: { notes: [], solution: true },
-    },
-    {
-      submission: {
-        filings: ["n1", "n2"].map((note) => ({
-          note,
-          summary: "A claimed result.",
-        })),
-        explorerGuidance: "Continue.",
-        support: [],
-        verify: [],
-      },
     },
   ]);
   try {

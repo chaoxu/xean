@@ -33,6 +33,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -117,6 +118,7 @@ function config() {
   });
 }
 
+/** File the notes and dispatch the verifier over `verify`, or Explorer when the list is empty. */
 function coordination(
   notes: string | readonly string[],
   options: {
@@ -125,11 +127,13 @@ function coordination(
   } = {},
 ) {
   const filed = typeof notes === "string" ? [notes] : notes;
+  const verify = options.verify ?? [{ note: filed.at(-1)!, verifiers: all }];
   return {
     filings: filed.map((note) => ({ note, summary: `Summary of ${note}.` })),
     explorerGuidance: `Continue from ${filed.at(-1)}.`,
     support: options.read ?? [filed.at(-1)!],
-    verify: options.verify ?? [{ note: filed.at(-1)!, verifiers: all }],
+    verify,
+    action: { role: verify.length > 0 ? "verifier" : "explorer" },
   };
 }
 
@@ -155,6 +159,7 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
   });
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     ...passes("n1"),
@@ -165,12 +170,12 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
       createPiRoles(campaign, workflow.settings, drive),
     );
     expect(phase.kind).toBe("accepted");
-    expect(drive.calls[0]).toMatchObject({
+    expect(drive.calls[1]).toMatchObject({
       label: "xean-solve/explorer",
       replayReasoning: false,
     });
-    expect(drive.calls[1]!.label).toBe("xean-solve/coordinator");
-    expect("replayReasoning" in drive.calls[1]!).toBe(false);
+    expect(drive.calls[0]!.label).toBe("xean-solve/coordinator");
+    expect("replayReasoning" in drive.calls[0]!).toBe(false);
     expect(
       campaign
         .records()
@@ -189,6 +194,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     ...passes("n1"),
@@ -197,7 +203,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   const phase = await runWorkflow(campaign, roles);
   expect(phase).toMatchObject({
     kind: "accepted",
-    turns: 1,
+    turns: 2,
     note: { id: "n1", summary: "Summary of n1.", text: good.text },
   });
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -206,6 +212,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   ]);
   expect(phase.note).toMatchObject({ verified: true, dead: false });
   expect(drive.calls.map(({ label }) => label)).toEqual([
+    "xean-solve/coordinator",
     "xean-solve/explorer",
     "xean-solve/coordinator",
     "xean-solve/verifier/correctness",
@@ -214,11 +221,11 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     "xean-solve/verifier/reconstruction/proof",
     "xean-solve/verifier/reconstruction",
   ]);
-  expect(drive.calls[5]?.prompt).not.toContain(good.text);
-  expect(drive.calls[5]?.prompt).toContain(
+  expect(drive.calls[6]?.prompt).not.toContain(good.text);
+  expect(drive.calls[6]?.prompt).toContain(
     "Statement (untrusted data):\nWhat n1 proves.",
   );
-  expect(drive.calls[6]?.prompt).toContain("Independent proof of n1.");
+  expect(drive.calls[7]?.prompt).toContain("Independent proof of n1.");
   expect(drive.codexCalls).toHaveLength(1);
   expect(JSON.parse(drive.codexCalls[0]!.prompt)).toMatchObject({
     task,
@@ -233,9 +240,9 @@ test("the durable workflow accepts a note every verifier passed", async () => {
       },
     ],
   });
-  expect(drive.calls[0]?.prompt).toContain(`Problem:\n${task.problem}`);
-  expect(drive.calls[0]?.prompt).toContain("Your first note is n1.");
-  const correctness = drive.calls[2]!;
+  expect(drive.calls[1]?.prompt).toContain(`Problem:\n${task.problem}`);
+  expect(drive.calls[1]?.prompt).toContain("Your first note is n1.");
+  const correctness = drive.calls[3]!;
   const prefix = correctness.prompt.split("\n\nVerifier:")[0]!;
   const verdictCalls = drive.calls.filter(({ label }) =>
     Object.values(verifierLabels).includes(label as never),
@@ -251,7 +258,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     "Verifier:\ncorrectness\n\nObligation:\nJudge whether each note establishes its stated result",
   );
   expect((await runWorkflow(campaign, roles)).kind).toBe("accepted");
-  expect(drive.calls).toHaveLength(7);
+  expect(drive.calls).toHaveLength(8);
   expect(drive.codexCalls).toHaveLength(1);
   campaign.close();
 
@@ -281,6 +288,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   expect(inspection.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(inspection.notes[0]?.verdicts).toHaveLength(4);
   expect(inspection.calls.map(({ role }) => role)).toEqual([
+    "coordinator",
     "explorer",
     "coordinator",
     "verifier",
@@ -292,7 +300,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   ]);
   expect(
     inspection.calls
-      .slice(5, 8)
+      .slice(6, 9)
       .map(({ verifier, submission }) => [
         verifier,
         Object.keys(submission as object)[0],
@@ -302,8 +310,8 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     ["reconstruction", "proof"],
     ["reconstruction", "verifier"],
   ]);
-  expect(inspection.calls[1]?.submission).toEqual(coordination("n1"));
-  expect(inspection.calls[2]).toMatchObject({
+  expect(inspection.calls[2]?.submission).toEqual(coordination("n1"));
+  expect(inspection.calls[3]).toMatchObject({
     verifier: "correctness",
     candidate: phase.candidate,
     submission: {
@@ -312,7 +320,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
       ],
     },
   });
-  expect(inspection.calls[3]).toMatchObject({
+  expect(inspection.calls[4]).toMatchObject({
     verifier: "source",
     candidate: phase.candidate,
     submission: {
@@ -322,7 +330,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
       usage: { input: 10 },
     },
   });
-  expect(inspection.calls[7]).toMatchObject({
+  expect(inspection.calls[8]).toMatchObject({
     verifier: "reconstruction",
     submission: { verdicts: [{ verdict: "PASS" }] },
   });
@@ -355,6 +363,7 @@ test("one verification judges several notes, kills the failed one, and accepts o
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -369,6 +378,8 @@ test("one verification judges several notes, kills the failed one, and accepts o
     },
     verdictsOf("correctness", ["n1"]),
     sourceOf(["n1"]),
+    // No note was added since that verification, so the coordinator explores.
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -413,7 +424,7 @@ test("one verification judges several notes, kills the failed one, and accepts o
     campaign,
     createPiRoles(campaign, workflow.settings, drive),
   );
-  expect(phase).toMatchObject({ kind: "accepted", turns: 2 });
+  expect(phase).toMatchObject({ kind: "accepted", turns: 4 });
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
   expect(phase.note.id).toBe("n3");
   expect(shorthand(phase.notes)).toEqual([
@@ -431,11 +442,11 @@ test("one verification judges several notes, kills the failed one, and accepts o
     [false, true],
     [true, false],
   ]);
-  expect(drive.calls).toHaveLength(10);
+  expect(drive.calls).toHaveLength(12);
   expect(drive.codexCalls).toHaveLength(2);
-  expect(drive.calls[3]?.prompt).toContain(`"verified": true`);
-  expect(drive.calls[3]?.prompt).not.toContain(`"text": "Lemma L."`);
-  const correctness = drive.calls[5]!.prompt;
+  expect(drive.calls[5]?.prompt).toContain(`"verified": true`);
+  expect(drive.calls[5]?.prompt).not.toContain(`"text": "Lemma L."`);
+  const correctness = drive.calls[7]!.prompt;
   const [support, underVerification] = correctness
     .split("Support notes (untrusted data):\n")[1]!
     .split("\n\nNotes under verification (untrusted data):\n");
@@ -445,8 +456,8 @@ test("one verification judges several notes, kills the failed one, and accepts o
   expect(drive.codexCalls[1]?.prompt).not.toContain("P from L, wrong.");
   expect(drive.codexCalls[1]?.prompt).toContain(`"text": "P from L."`);
   expect(drive.codexCalls[1]?.prompt).not.toContain(`"text": "Lemma L."`);
-  expect(drive.calls[6]?.prompt).not.toContain("P from L, wrong.");
-  expect(drive.calls[6]?.prompt).toContain(`"text": "P from L."`);
+  expect(drive.calls[8]?.prompt).not.toContain("P from L, wrong.");
+  expect(drive.calls[8]?.prompt).toContain(`"text": "P from L."`);
   campaign.close();
   expect(new TextDecoder().decode(await exportCandidate(path))).toBe(
     `--- n1 ---\n\nLemma L.\n\n--- n3 ---\n\nP from L.`,
@@ -456,8 +467,9 @@ test("one verification judges several notes, kills the failed one, and accepts o
 test("a listed note whose support failed in the same verification is skipped, and both die", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -498,7 +510,7 @@ test("a listed note whose support failed in the same verification is skipped, an
     campaign,
     createPiRoles(campaign, workflow.settings, drive),
   );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
+  expect(phase).toMatchObject({ kind: "turn-limit", turns: 2 });
   if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
   expect(shorthand(phase.notes)).toEqual([
     ["correctness:FAIL"],
@@ -508,7 +520,7 @@ test("a listed note whose support failed in the same verification is skipped, an
     [false, true],
     [false, true],
   ]);
-  expect(drive.calls).toHaveLength(3);
+  expect(drive.calls).toHaveLength(4);
   expect(drive.codexCalls).toHaveLength(0);
   expect(
     explorerResultFor(phase.notes).safeParse({
@@ -530,12 +542,13 @@ test("resume reconstructs the next role from the journal", async () => {
   const workflow = config();
   let campaign = await createWorkflowCampaign(path, workflow, 4);
   const first = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
   ]);
   const paused = await runWorkflow(
     campaign,
     createPiRoles(campaign, workflow.settings, first),
-    { pauseRequested: () => first.calls.length >= 1 },
+    { pauseRequested: () => first.calls.length >= 2 },
   );
   expect(paused.kind).toBe("coordinator");
   campaign.close();
@@ -559,6 +572,7 @@ test("provider continuation recovery preserves completed verifier checks and the
   const workflow = config();
   const campaign = await createWorkflowCampaign(campaignPath(), workflow, 4);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"]),
@@ -580,10 +594,10 @@ test("provider continuation recovery preserves completed verifier checks and the
     );
     expect(phase.kind).toBe("accepted");
     expect(drive.codexCalls).toHaveLength(1);
-    expect(drive.calls[3]!.label).toBe(verifierLabels.requirements);
     expect(drive.calls[4]!.label).toBe(verifierLabels.requirements);
-    expect(drive.calls[4]!.candidate).toBe(drive.calls[3]!.candidate);
-    expect(drive.calls[4]!.prompt).toBe(drive.calls[3]!.prompt);
+    expect(drive.calls[5]!.label).toBe(verifierLabels.requirements);
+    expect(drive.calls[5]!.candidate).toBe(drive.calls[4]!.candidate);
+    expect(drive.calls[5]!.prompt).toBe(drive.calls[4]!.prompt);
     expect(
       campaign.records().filter((entry) => entry.kind === "candidate"),
     ).toHaveLength(1);
@@ -600,6 +614,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   const workflow = config();
   let campaign = await createWorkflowCampaign(path, workflow, 4);
   const first = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"]),
@@ -612,7 +627,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   const paused = await phaseOf(campaign);
   expect(paused.kind).toBe("verifier");
   if (paused.kind !== "verifier") throw new Error("expected verifier");
-  expect(paused.candidate).toBe(first.calls[3]!.candidate!);
+  expect(paused.candidate).toBe(first.calls[4]!.candidate!);
   campaign.close();
 
   campaign = openCampaign(path);
@@ -644,18 +659,14 @@ test("a journal written by other prompts is refused", async () => {
   const path = campaignPath();
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 4);
-  const drive = dependencies([
-    { submission: { solution: false, notes: [good] } },
-  ]);
+  const drive = dependencies([dispatchExplorer()]);
   const roles = createPiRoles(campaign, workflow.settings, drive);
-  await roles.explorer({
-    task,
-    explorerGuidance: "Some other objective.",
+  await roles.coordinator({
+    task: { ...task, problem: "Prove some other Q." },
     notes: [],
-    support: [],
   });
   await expect(deriveWorkflow(campaign.records())).rejects.toThrow(
-    "does not match the derived explorer request",
+    "does not match the derived coordinator request",
   );
   campaign.close();
 });
@@ -670,8 +681,8 @@ test("the turn limit ends a workflow without a verified note", async () => {
       campaign,
       workflow.settings,
       dependencies([
+        dispatchExplorer(),
         { submission: { solution: false, notes: [good] } },
-        { submission: coordination("n1", { verify: [] }) },
       ]),
     ),
   );
@@ -682,8 +693,9 @@ test("the turn limit ends a workflow without a verified note", async () => {
 test("a source FAIL kills a conditionally correct note before requirements, and the explorer still sees its verdict", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const campaign = await createWorkflowCampaign(path, workflow, 3);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"], "PASS", () => [
@@ -702,37 +714,38 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
         ],
       },
     },
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
         notes: [{ text: "P without Smith.", support: [] }],
       },
     },
-    { submission: coordination("n2", { verify: [] }) },
   ]);
   const phase = await runWorkflow(
     campaign,
     createPiRoles(campaign, workflow.settings, drive),
   );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 2 });
+  expect(phase).toMatchObject({ kind: "turn-limit", turns: 3 });
   if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
   expect(shorthand(phase.notes)).toEqual([
     ["correctness:PASS", "source:FAIL"],
     [],
   ]);
   expect(phase.notes[0]).toMatchObject({ verified: false, dead: true });
-  expect(drive.calls).toHaveLength(5);
-  expect(drive.calls[3]?.prompt).toContain(`"dead": true`);
-  expect(drive.calls[3]?.prompt).toContain("Smith 2020");
+  expect(drive.calls).toHaveLength(6);
+  expect(drive.calls[5]?.prompt).toContain(`"dead": true`);
+  expect(drive.calls[5]?.prompt).toContain("Smith 2020");
   expect(
     drive.calls.some(({ label }) => label === verifierLabels.requirements),
   ).toBe(false);
   expect(
     coordinatorResultFor(phase.notes).safeParse({
-      filings: [],
+      filings: [{ note: "n2", summary: "P." }],
       explorerGuidance: "Go.",
       support: [],
       verify: [{ note: "n1", verifiers: all }],
+      action: { role: "verifier" },
     }).success,
   ).toBe(false);
   campaign.close();
@@ -741,8 +754,9 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
 test("a source PASS that confirms sources without searching is inconclusive", async () => {
   const path = campaignPath();
   const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"], "PASS", () => ["Every X is Y."]),
@@ -919,7 +933,12 @@ test("coordination files every note without a summary and lists live notes over 
     filings: [{ note: "n2", summary: "new" }],
     explorerGuidance: "Go.",
   };
-  const accepts = (value: unknown) => schema.safeParse(value).success;
+  // The action follows the list: a verifier dispatch for a nonempty list.
+  const accepts = (value: Record<string, unknown> & { verify: unknown[] }) =>
+    schema.safeParse({
+      ...value,
+      action: { role: value.verify.length > 0 ? "verifier" : "explorer" },
+    }).success;
   expect(
     accepts({ filings: [], explorerGuidance: "Go.", support: [], verify: [] }),
   ).toBe(false);
@@ -1199,8 +1218,9 @@ test("drains requested verification batches at the turn cap and stops at the fir
     task,
     settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -1232,7 +1252,7 @@ test("drains requested verification batches at the turn cap and stops at the fir
   const phase = await runWorkflow(campaign, roles);
   expect(phase).toMatchObject({
     kind: "accepted",
-    turns: 1,
+    turns: 2,
     note: { id: "n3" },
   });
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -1249,7 +1269,7 @@ test("drains requested verification batches at the turn cap and stops at the fir
   expect(phase.candidate).toBe(candidates[2]!.seq);
   expect(drive.calls.filter(({ role }) => role === "explorer")).toHaveLength(1);
   expect(drive.calls.filter(({ role }) => role === "coordinator")).toHaveLength(
-    1,
+    2,
   );
   expect(drive.codexCalls).toHaveLength(3);
   const settledCount = campaign.records().length;
@@ -1274,8 +1294,9 @@ test.each([
       task,
       settings: { ...roleSettings(), window: 1 },
     });
-    const campaign = await createWorkflowCampaign(path, workflow, 1);
+    const campaign = await createWorkflowCampaign(path, workflow, 2);
     const drive = dependencies([
+      dispatchExplorer(),
       {
         submission: {
           solution: false,
@@ -1308,7 +1329,7 @@ test.each([
     );
     expect(phase).toMatchObject({
       kind: "accepted",
-      turns: 1,
+      turns: 2,
       note: { id: "n4" },
     });
     if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -1336,8 +1357,9 @@ test("an interrupted later verification batch resumes on its own candidate witho
     task,
     settings: { ...roleSettings(), window: 1 },
   });
-  let campaign = await createWorkflowCampaign(path, workflow, 1);
+  let campaign = await createWorkflowCampaign(path, workflow, 2);
   const first = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -1385,7 +1407,7 @@ test("an interrupted later verification batch resumes on its own candidate witho
   );
   expect(phase).toMatchObject({
     kind: "accepted",
-    turns: 1,
+    turns: 2,
     candidate: paused.candidate,
     note: { id: "n2" },
   });
@@ -1408,8 +1430,9 @@ test("later batches can use verified support that failed task completion", async
     task,
     settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -1438,7 +1461,7 @@ test("later batches can use verified support that failed task completion", async
   );
   expect(phase).toMatchObject({
     kind: "accepted",
-    turns: 1,
+    turns: 2,
     note: { id: "n2" },
   });
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -1449,14 +1472,15 @@ test("later batches can use verified support that failed task completion", async
   campaign.close();
 });
 
-test("the next explorer starts only after all requested partial-result batches settle", async () => {
+test("the next coordinator starts only after all requested partial-result batches settle", async () => {
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
     settings: { ...roleSettings(), window: 1 },
   });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
+  const campaign = await createWorkflowCampaign(path, workflow, 3);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: {
         solution: false,
@@ -1482,14 +1506,15 @@ test("the next explorer starts only after all requested partial-result batches s
   const phase = await runWorkflow(
     campaign,
     createPiRoles(campaign, workflow.settings, drive),
-    { pauseRequested: () => drive.calls.length === 4 },
+    { pauseRequested: () => drive.calls.length === 5 },
   );
-  expect(phase.kind).toBe("explorer");
-  if (phase.kind !== "explorer") throw new Error("expected explorer");
+  expect(phase.kind).toBe("coordinator");
+  if (phase.kind !== "coordinator") throw new Error("expected coordinator");
   expect(phase.input.notes.map(({ verified }) => verified)).toEqual([
     true,
     true,
   ]);
+  expect(phase.input.afterVerification).toBe(true);
   expect(drive.codexCalls).toHaveLength(2);
   expect(drive.calls.filter(({ role }) => role === "explorer")).toHaveLength(1);
   campaign.close();
@@ -1508,8 +1533,9 @@ test("a self-contained proof records a local source PASS without calling Codex",
       },
     },
   });
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
+  const campaign = await createWorkflowCampaign(path, workflow, 2);
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [good] } },
     {
       submission: coordination("n1", {
@@ -1522,7 +1548,7 @@ test("a self-contained proof records a local source PASS without calling Codex",
     campaign,
     createPiRoles(campaign, workflow.settings, drive),
   );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
+  expect(phase).toMatchObject({ kind: "turn-limit", turns: 2 });
   if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
   expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(drive.codexCalls).toHaveLength(0);
@@ -1566,7 +1592,7 @@ test("a self-contained proof records a local source PASS without calling Codex",
   });
 });
 
-test("the first Explorer works on the task without fixed guidance in settings", async () => {
+test("a fresh campaign starts with the coordinator over no notes", async () => {
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
@@ -1574,8 +1600,8 @@ test("the first Explorer works on the task without fixed guidance in settings", 
   });
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   expect(await phaseOf(campaign)).toMatchObject({
-    kind: "explorer",
-    input: { task, explorerGuidance: "" },
+    kind: "coordinator",
+    input: { task, notes: [], literatureStatus: "not-started" },
   });
   campaign.close();
 });

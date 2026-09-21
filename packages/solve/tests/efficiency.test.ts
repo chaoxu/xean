@@ -23,6 +23,7 @@ import {
   createWorkflowCampaign,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
 } from "./harness";
 
@@ -213,7 +214,7 @@ test("startup reuses its captured derivation only while the journal boundary mat
           initial,
         )
       ).kind,
-    ).toBe("explorer");
+    ).toBe("coordinator");
     expect(derivations).toBe(0);
     await campaign.call(
       { label: "new-boundary", request: null },
@@ -228,7 +229,7 @@ test("startup reuses its captured derivation only while the journal boundary mat
           initial,
         )
       ).kind,
-    ).toBe("explorer");
+    ).toBe("coordinator");
     expect(derivations).toBe(1);
   } finally {
     Projection.prototype.at = original;
@@ -332,6 +333,7 @@ test("completed Explorer replay reads submissions once and preserves tool and se
   const campaign = await createWorkflowCampaign(campaignPath(), config);
   const first = { text: "A durable partial proof.", support: [] };
   const drive = dependencies([
+    dispatchExplorer(),
     {
       onStarted: async (tools) => {
         await tools[0]!.execute({ notes: [first], solution: false });
@@ -340,10 +342,10 @@ test("completed Explorer replay reads submissions once and preserves tool and se
     },
   ]);
   try {
-    const initial = (await deriveWorkflow(campaign.records())).phase;
-    if (initial.kind !== "explorer") throw new Error("expected Explorer");
-    await createPiRoles(campaign, config.settings, drive).explorer(
-      initial.input,
+    await runWorkflow(
+      campaign,
+      createPiRoles(campaign, config.settings, drive),
+      { pauseRequested: () => drive.calls.length === 2 },
     );
     const records = campaign.records();
     const owner = records.find(
@@ -384,8 +386,11 @@ test("completed Explorer replay reads submissions once and preserves tool and se
     );
     expect(beforeReceipt.phase.kind).toBe("explorer");
     expect(beforeReceipt.notes).toMatchObject([{ id: "n1", text: first.text }]);
+    // Explorer's saved submissions are durable without their receipts.
     const withoutReceipts = await deriveWorkflow(
-      records.filter((entry) => entry.kind !== "tool-result"),
+      records.filter(
+        (entry) => entry.kind !== "tool-result" || entry.seq < owner.seq,
+      ),
     );
     expect(withoutReceipts.phase).toEqual(completed.phase);
   } finally {

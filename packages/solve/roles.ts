@@ -250,6 +250,14 @@ export const coordinatorBehavior = z.strictObject({
 });
 export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
 
+/** The campaign policy new campaigns freeze unless their settings supply one. */
+export const defaultCoordinatorBehavior: CoordinatorBehavior = {
+  literature: "never",
+  verification: "decide",
+  instructions:
+    "At each boundary, inspect every new or unverified note and decide whether it is ready for verification now, and list every ready note in the same verifier dispatch. If a live note claims to meet the completion criteria, list it with all four verifiers and choose verifier before another Explorer call when the verifier action is available. For a partial note, list correctness and source when later work can safely build on it; otherwise explain the missing work and choose another role. Literature is disabled by default: choose it only when the coordinator behavior explicitly opts in. After the one literature search, choose explorer and let its notes decide which citations need checking; do not list literature notes on their own. Keep the original problem and completion criteria as the objective.",
+};
+
 export const literatureInput = z.strictObject({
   task,
   request: nonblank,
@@ -310,12 +318,12 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
 export const coordinatorInput = z.strictObject({
   task,
   notes: z.array(note),
-  literatureStatus: literatureStatus.optional(),
-  coordinatorBehavior: coordinatorBehavior.optional(),
+  literatureStatus: literatureStatus.default("not-started"),
+  coordinatorBehavior: coordinatorBehavior.default(defaultCoordinatorBehavior),
   emptySubmission: z.literal(true).optional(),
   /**
-   * Coordinator workflow mode: no note has been added since the last
-   * completed verification, so the verifier action is unavailable.
+   * No note has been added since the last completed verification, so the
+   * verifier action is unavailable.
    */
   afterVerification: z.literal(true).optional(),
 });
@@ -337,36 +345,36 @@ const verification = z
   );
 export type Verification = z.output<typeof verification>;
 
-/** The coordinator's scheduling choice in coordinator workflow mode. */
+/** The coordinator's choice of the role that runs next. */
 export const coordinatorAction = z.discriminatedUnion("role", [
   z.strictObject({ role: z.literal("explorer") }),
   z.strictObject({ role: z.literal("literature"), request: nonblank }),
   z.strictObject({ role: z.literal("verifier") }),
 ]);
 export type CoordinatorAction = z.output<typeof coordinatorAction>;
+const actionRoles = ["explorer", "literature", "verifier"] as const;
 
 export const coordinatorResult = z.strictObject({
   filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
   explorerGuidance: nonblank,
   support: z.array(noteId),
   verify: z.array(verification),
-  action: coordinatorAction.optional(),
+  action: coordinatorAction,
 });
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
 /**
- * The coordinator submission schema over these notes. In coordinator workflow
- * mode `allowedActions` lists the roles the frozen coordinator behavior
- * permits next, the submission must choose one of them, and
- * `requiredVerification` lists the notes that behavior requires in the
- * verify list.
+ * The coordinator submission schema over these notes. `allowedActions` lists
+ * the roles the frozen coordinator behavior permits next, the submission must
+ * choose one of them, and `requiredVerification` lists the notes that
+ * behavior requires in the verify list.
  */
 export function coordinatorResultFor(
   notes: readonly Pick<
     Note,
     "id" | "summary" | "support" | "verified" | "dead"
   >[],
-  allowedActions?: readonly CoordinatorAction["role"][],
+  allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
   requiredVerification: readonly string[] = [],
 ) {
   const known = new Set(notes.map(({ id }) => id));
@@ -377,29 +385,21 @@ export function coordinatorResultFor(
     notes.filter(({ verified }) => verified).map(({ id }) => id),
   );
   return coordinatorResult.superRefine((value, ctx) => {
-    if (
-      allowedActions !== undefined &&
-      (value.action === undefined ||
-        !allowedActions.includes(value.action.role))
-    ) {
+    if (!allowedActions.includes(value.action.role)) {
       ctx.addIssue({
         code: "custom",
-        message: `coordinator workflow mode requires an action among: ${allowedActions.join(", ")}`,
+        message: `the action must be among: ${allowedActions.join(", ")}`,
         path: ["action"],
       });
     }
-    if (value.action?.role === "verifier" && value.verify.length === 0) {
+    if (value.action.role === "verifier" && value.verify.length === 0) {
       ctx.addIssue({
         code: "custom",
         message: "a verifier action must list a note to verify",
         path: ["verify"],
       });
     }
-    if (
-      value.action !== undefined &&
-      value.action.role !== "verifier" &&
-      value.verify.length > 0
-    ) {
+    if (value.action.role !== "verifier" && value.verify.length > 0) {
       ctx.addIssue({
         code: "custom",
         message:
@@ -949,7 +949,9 @@ export function succeededSubmission(
 
 export interface Roles {
   readonly explorer: (input: ExplorerInput) => Promise<ExplorerResult>;
-  readonly coordinator: (input: CoordinatorInput) => Promise<CoordinatorResult>;
+  readonly coordinator: (
+    input: z.input<typeof coordinatorInput>,
+  ) => Promise<CoordinatorResult>;
   readonly literature: (
     input: LiteratureInput,
     after?: EntryId,

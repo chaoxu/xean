@@ -5,6 +5,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -30,6 +31,7 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
   const first = { text: "A saved lemma.", support: [] };
   const next = { text: "A consequence of n1.", support: ["n1"] };
   const drive = dependencies([
+    dispatchExplorer(),
     {
       ...failure,
       onStarted: async (tools) => {
@@ -40,14 +42,6 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
       },
     },
     { submission: { notes: [next], solution: true } },
-    {
-      submission: {
-        filings: ["n1", "n2"].map((note) => ({ note, summary: "A result." })),
-        explorerGuidance: "Continue.",
-        support: [],
-        verify: [],
-      },
-    },
   ]);
   const result = await run(
     {
@@ -63,32 +57,35 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
   );
   expect(result).toMatchObject({ outcome: "turn-limit", turns: 1 });
   expect(drive.calls.map((call) => call.role)).toEqual([
-    "explorer",
-    "explorer",
     "coordinator",
+    "explorer",
+    "explorer",
   ]);
-  expect(drive.calls[1]!.prompt).toContain(first.text);
-  expect(drive.calls[1]!.prompt).toContain("Your first note is n2.");
-  expect(drive.calls[1]!.prompt).not.toContain("UNSAVED_PROVIDER_CONTEXT");
-  expect(drive.calls[1]!.prompt).not.toContain("old-provider-response");
-  expect(drive.calls[1]!.prompt).not.toContain("Advice for a later turn.");
+  expect(drive.calls[2]!.prompt).toContain(first.text);
+  expect(drive.calls[2]!.prompt).toContain("Your first note is n2.");
+  expect(drive.calls[2]!.prompt).not.toContain("UNSAVED_PROVIDER_CONTEXT");
+  expect(drive.calls[2]!.prompt).not.toContain("old-provider-response");
+  expect(drive.calls[2]!.prompt).not.toContain("Advice for a later turn.");
   const inspection: any = await inspectCampaign(path);
   expect(inspection.notes.map((note: any) => [note.id, note.text])).toEqual([
     ["n1", first.text],
     ["n2", next.text],
   ]);
-  expect(inspection.calls[0].outcome).toBe("failed");
-  expect(inspection.calls[1].outcome).toBe("succeeded");
+  expect(inspection.calls[1].outcome).toBe("failed");
+  expect(inspection.calls[2].outcome).toBe("succeeded");
 });
 
 test("fresh role retries are bounded even when every continuation fails", async () => {
-  const drive = dependencies(Array.from({ length: 4 }, () => failure));
+  const drive = dependencies([
+    dispatchExplorer(),
+    ...Array.from({ length: 4 }, () => failure),
+  ]);
   const result = await run(
     { task, campaignPath: campaignPath(), settings: roleSettings() },
     drive,
   );
   expect(result).toMatchObject({ outcome: "call-failure", at: "explorer" });
-  expect(drive.calls).toHaveLength(4);
+  expect(drive.calls).toHaveLength(5);
 }, 15_000);
 
 test.each([
@@ -163,6 +160,6 @@ test("operator pause preserves a failed role without dispatching its retry", asy
     { task, campaignPath: campaignPath(), settings: roleSettings() },
     { ...drive, pauseRequested: () => pause },
   );
-  expect(result).toMatchObject({ outcome: "paused", at: "explorer" });
+  expect(result).toMatchObject({ outcome: "paused", at: "coordinator" });
   expect(drive.calls).toHaveLength(1);
 });

@@ -16,6 +16,7 @@ import {
   campaignPath,
   cleanupCampaigns,
   dependencies,
+  dispatchExplorer,
   roleSettings,
   type Reply,
 } from "./harness";
@@ -68,6 +69,7 @@ async function inspect(path: string, includeSubmissions = false) {
   })) as unknown as Inspection;
 }
 
+/** File the notes and dispatch the verifier over `verify`, or Explorer when the list is empty. */
 function coordinate(
   ids: string[],
   support: string[] = [],
@@ -79,6 +81,7 @@ function coordinate(
       explorerGuidance: "Prove the remaining implication.",
       support,
       verify,
+      action: { role: verify.length > 0 ? "verifier" : "explorer" },
     },
   };
 }
@@ -131,7 +134,7 @@ function coordinatorNotes(prompt: string): Note[] {
 }
 
 test("submission-local support follows its own notes after active Explorer output", async () => {
-  const { path, request } = await setup();
+  const { path, request } = await setup(2);
   const graph = {
     notes: [
       { text: "An isolated external theorem T.", support: [] },
@@ -139,6 +142,7 @@ test("submission-local support follows its own notes after active Explorer outpu
     ],
   };
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: { solution: false, notes: [partial] },
       onStarted: async () => {
@@ -151,8 +155,13 @@ test("submission-local support follows its own notes after active Explorer outpu
     },
     coordinate(["n1", "n2", "n3", "n4", "n5"]),
   ]);
-  expect(await run(request, drive)).toMatchObject({ outcome: "turn-limit" });
-  const projected = coordinatorNotes(drive.allCalls[1]!.prompt);
+  expect(
+    await run(request, {
+      ...drive,
+      pauseRequested: () => drive.allCalls.length === 3,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
+  const projected = coordinatorNotes(drive.allCalls[2]!.prompt);
   expect(projected.map(({ id, support }) => ({ id, support }))).toEqual([
     { id: "n1", support: [] },
     { id: "n2", support: [] },
@@ -223,12 +232,10 @@ test("an imported theorem graph reaches focused source checking without flatteni
     },
     verdict("n1", "source"),
   ]);
-  expect(
-    await run(request, {
-      ...drive,
-      pauseRequested: () => drive.allCalls.length === 3,
-    }),
-  ).toMatchObject({ outcome: "paused", at: "explorer" });
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 1,
+  });
   const packet = JSON.parse(drive.codexCalls[0]!.prompt);
   expect(packet.notes.map((n: { id: string }) => n.id)).toEqual(["n1"]);
   expect(drive.codexCalls[0]!.prompt).toContain(theorem);
@@ -271,17 +278,17 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(24);
+  expect(workflowSchemaVersion).toBe(25);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 24, task },
+    config: { schemaVersion: 25, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
-  expect((await inspect(path)).phase).toBe("explorer");
+  expect((await inspect(path)).phase).toBe("coordinator");
   await expect(
     init({ ...request, task: { ...task, problem: "A different task." } }),
   ).rejects.toThrow();
@@ -289,7 +296,7 @@ test("init creates a declaration and allowance without resolving test-only provi
 });
 
 test("unchecked initial notes reach coordinator and verification before the first explorer", async () => {
-  const { path, request } = await setup();
+  const { path, request } = await setup(2);
   await submitNotes(
     path,
     { notes: [{ text: externalText, support: [] }] },
@@ -303,30 +310,30 @@ test("unchecked initial notes reach coordinator and verification before the firs
     coordinate(["n1"], ["n1"], [{ note: "n1", verifiers: lemmaVerifiers }]),
     verdict("n1", "correctness"),
     verdict("n1", "source"),
+    coordinate([], ["n1"]),
     {
       submission: {
         solution: false,
         notes: [{ text: "Using n1, another partial result.", support: ["n1"] }],
       },
     },
-    coordinate(["n2"]),
   ]);
   expect(await run(request, drive)).toMatchObject({
     outcome: "turn-limit",
-    turns: 1,
+    turns: 2,
   });
   expect(drive.allCalls.map((call) => call.role)).toEqual([
     "coordinator",
     "verifier",
     "verifier",
-    "explorer",
     "coordinator",
+    "explorer",
   ]);
   expect(coordinatorNotes(drive.allCalls[0]!.prompt)).toMatchObject([
     { id: "n1", text: externalText, verified: false, verdicts: [] },
   ]);
-  expect(drive.allCalls[3]!.prompt).toContain(externalText);
-  expect(drive.allCalls[3]!.prompt).toContain("Your first note is n2.");
+  expect(drive.allCalls[4]!.prompt).toContain(externalText);
+  expect(drive.allCalls[4]!.prompt).toContain("Your first note is n2.");
   const report = await inspect(path);
   expect(report.notes.map((note) => [note.id, note.verified])).toEqual([
     ["n1", true],
@@ -336,8 +343,9 @@ test("unchecked initial notes reach coordinator and verification before the firs
 });
 
 test("a note arriving during explorer is numbered after explorer notes in the following coordinator", async () => {
-  const { path, request } = await setup();
+  const { path, request } = await setup(2);
   const drive = dependencies([
+    dispatchExplorer(),
     {
       submission: { solution: false, notes: [partial] },
       onStarted: async () => {
@@ -356,17 +364,20 @@ test("a note arriving during explorer is numbered after explorer notes in the fo
     },
     coordinate(["n1", "n2"]),
   ]);
-  expect(await run(request, drive)).toMatchObject({
-    outcome: "turn-limit",
-    turns: 1,
-  });
+  expect(
+    await run(request, {
+      ...drive,
+      pauseRequested: () => drive.allCalls.length === 3,
+    }),
+  ).toMatchObject({ outcome: "paused", at: "explorer" });
   expect(drive.allCalls.map((call) => call.role)).toEqual([
+    "coordinator",
     "explorer",
     "coordinator",
   ]);
-  expect(drive.allCalls[0]!.prompt).not.toContain(externalText);
+  expect(drive.allCalls[1]!.prompt).not.toContain(externalText);
   expect(
-    coordinatorNotes(drive.allCalls[1]!.prompt).map((note) => [
+    coordinatorNotes(drive.allCalls[2]!.prompt).map((note) => [
       note.id,
       note.text,
     ]),
@@ -384,8 +395,9 @@ test("a note arriving during explorer is numbered after explorer notes in the fo
 });
 
 test("a frozen coordinator retries identical input while a later note waits for the next coordinator cycle", async () => {
-  const { path, request } = await setup(2);
+  const { path, request } = await setup(3);
   const initial = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [partial] } },
     {
       state: "failed",
@@ -408,20 +420,18 @@ test("a frozen coordinator retries identical input while a later note waits for 
     coordinate(["n1"]),
     coordinate(["n2"], ["n2"]),
     { submission: { solution: false, notes: [partial] } },
-    coordinate(["n3"]),
   ]);
   expect(await run(request, rest)).toMatchObject({
     outcome: "turn-limit",
-    turns: 2,
+    turns: 3,
   });
   expect(rest.allCalls.map((call) => call.role)).toEqual([
     "coordinator",
     "coordinator",
     "explorer",
-    "coordinator",
   ]);
-  expect(rest.allCalls[0]!.prompt).toBe(initial.allCalls[1]!.prompt);
-  expect(rest.allCalls[0]!.system).toBe(initial.allCalls[1]!.system);
+  expect(rest.allCalls[0]!.prompt).toBe(initial.allCalls[2]!.prompt);
+  expect(rest.allCalls[0]!.system).toBe(initial.allCalls[2]!.system);
   expect(rest.allCalls[0]!.prompt).not.toContain(externalText);
   expect(
     coordinatorNotes(rest.allCalls[1]!.prompt).map((note) => note.id),
@@ -432,7 +442,7 @@ test("a frozen coordinator retries identical input while a later note waits for 
 });
 
 test("external verification establishes support without inventing verdicts or accepting the final result", async () => {
-  const { path, request } = await setup();
+  const { path, request } = await setup(2);
   await submitNotes(
     path,
     { notes: [{ text: externalText, support: [], verification: attestation }] },
@@ -473,7 +483,7 @@ test("external verification establishes support without inventing verdicts or ac
   ]);
   expect(await run(request, drive)).toMatchObject({
     outcome: "accepted",
-    turns: 1,
+    turns: 2,
     note: { id: "n2" },
   });
   expect(
@@ -498,7 +508,7 @@ test("external verification establishes support without inventing verdicts or ac
   ).toEqual(verifierNames.map((name) => [name, "PASS"]));
 });
 
-test("a supplied complete proof still needs all four checks and accepts with zero explorer turns", async () => {
+test("a supplied complete proof still needs all four checks and accepts after one verifier dispatch", async () => {
   const { path, request } = await setup();
   await submitNotes(
     path,
@@ -525,7 +535,7 @@ test("a supplied complete proof still needs all four checks and accepts with zer
   ]);
   expect(await run(request, drive)).toMatchObject({
     outcome: "accepted",
-    turns: 0,
+    turns: 1,
     note: { id: "n1" },
   });
   expect(drive.allCalls.map((call) => call.label)).toEqual([
@@ -551,7 +561,7 @@ test("an explorer cannot issue its own external verification attestation", () =>
 
 for (const result of ["PASS", "FAIL"] as const) {
   test(`external verification cannot bypass a support dependency whose check returns ${result}`, async () => {
-    const { path, request } = await setup();
+    const { path, request } = await setup(2);
     await submitNotes(
       path,
       { notes: [{ text: "An unchecked prerequisite.", support: [] }] },
@@ -582,13 +592,10 @@ for (const result of ["PASS", "FAIL"] as const) {
       verdict("n1", "correctness", result),
       ...(result === "PASS" ? [verdict("n1", "source")] : []),
     ]);
-    expect(
-      await run(request, {
-        ...drive,
-        pauseRequested: () =>
-          drive.allCalls.length === (result === "PASS" ? 3 : 2),
-      }),
-    ).toMatchObject({ outcome: "paused", at: "explorer" });
+    expect(await run(request, drive)).toMatchObject({
+      outcome: "turn-limit",
+      turns: 2,
+    });
     expect(
       coordinatorNotes(drive.allCalls[0]!.prompt).find(
         (note) => note.id === "n2",
@@ -614,8 +621,8 @@ test("caller submissions validate declared support without scanning mathematical
   await run(
     request,
     dependencies([
+      dispatchExplorer(),
       { submission: { solution: false, notes: ids.map(() => partial) } },
-      coordinate(ids),
     ]),
   );
   const notes = ["n2^{-q}", "n4^{-L}", "n8^(-L)", "Provenance: n1"].map(
@@ -673,8 +680,8 @@ test("same-id submissions are idempotent and invalid fields never append journal
 test("reinitializing a terminal campaign neither changes its result nor resolves providers", async () => {
   const { path, request } = await setup();
   const drive = dependencies([
+    dispatchExplorer(),
     { submission: { solution: false, notes: [partial] } },
-    coordinate(["n1"]),
   ]);
   const result = await run(request, drive);
   expect(result).toMatchObject({ outcome: "turn-limit", turns: 1 });
