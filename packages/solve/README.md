@@ -172,4 +172,4 @@ bun run e2e:roles
 
 ## License
 
-The solver is available under the [MIT license](LICENSE).
+The solver is available under the [MIT license](../../LICENSE).
