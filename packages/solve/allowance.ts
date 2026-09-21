@@ -55,16 +55,3 @@ export async function appendAllowance(
     campaign.records({ kinds: ["call"], labels: [allowanceLabel] }),
   ).at(-1)!;
 }
-
-export async function initializeAllowance(campaign: Campaign, turns?: number) {
-  const initial = turnAllowances(
-    campaign.records({ kinds: ["call"], labels: [allowanceLabel] }),
-  )[0];
-  if (initial === undefined)
-    return appendAllowance(campaign, turns ?? 20, 0, "initial");
-  if (turns !== undefined && initial.turns !== turns)
-    throw new Error(
-      "--turns disagrees with the initial allowance; use run --turns N --id ID to add turns",
-    );
-  return initial;
-}

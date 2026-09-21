@@ -15,19 +15,21 @@ import {
   type PiRoleDependencies,
   type SolveSettings,
 } from "./pi-roles";
-import { applicationId, nonblank, task, workflowRecords } from "./roles";
 import {
-  appendAllowance,
-  initializeAllowance,
-  positiveTurns,
-  turnAllowances,
-} from "./allowance";
+  applicationId,
+  assertApplication,
+  nonblank,
+  task,
+  workflowRecords,
+} from "./roles";
+import { appendAllowance, positiveTurns, turnAllowances } from "./allowance";
 import {
   codexCommand,
   requireCredentials,
   selectModel,
   withCampaignLock,
 } from "./runtime";
+import { withSerialToolCalls } from "./serial-tools";
 import { requireCodex } from "./source";
 import {
   deriveWorkflow,
@@ -87,15 +89,11 @@ export async function init(input: z.input<typeof runRequest>) {
       : createCampaign(request.campaignPath, applicationId, config);
     try {
       const declaration = campaign.record(1);
-      if (
-        declaration?.kind !== "campaign" ||
-        declaration.application !== applicationId
-      )
-        throw new Error("not a current Xean solver journal");
+      assertApplication(declaration);
       const frozen = workflowConfig.parse(declaration.config);
       if (!isDeepStrictEqual(frozen, config))
         throw new Error("task or settings disagree with the workflow journal");
-      await initializeAllowance(campaign, request.turns);
+      await prepareAllowance(campaign, request.turns);
       return {
         application: applicationId,
         campaignPath: request.campaignPath,
@@ -196,14 +194,8 @@ export async function run(
     try {
       if (campaign !== undefined) {
         const declaration = campaign.record(1);
-        if (
-          declaration?.kind !== "campaign" ||
-          declaration.application !== applicationId
-        )
-          throw new Error("not a current Xean solver journal");
-        const frozen = workflowConfig.parse(
-          declaration?.kind === "campaign" ? declaration.config : undefined,
-        );
+        assertApplication(declaration);
+        const frozen = workflowConfig.parse(declaration.config);
         if (!isDeepStrictEqual(frozen, config)) {
           throw new Error(
             "task or settings disagree with the workflow journal",
@@ -219,10 +211,11 @@ export async function run(
         if (phase.kind === "accepted" || phase.kind === "turn-limit")
           return workflowResult(phase);
       }
-      const models =
+      const models = withSerialToolCalls(
         typeof dependencies.models === "function"
           ? await dependencies.models()
-          : (dependencies.models ?? builtinPi());
+          : (dependencies.models ?? builtinPi()),
+      );
       // Resolve every configured Pi role before creating a fresh journal or
       // dispatching any work, including roles reached only after exploration.
       for (const name of piProfileNames) {
@@ -257,8 +250,10 @@ export async function run(
             : { signal: dependencies.signal }),
         });
       }
-      campaign ??= createCampaign(request.campaignPath, applicationId, config);
-      await prepareAllowance(campaign, request.turns, request.id);
+      if (campaign === undefined) {
+        campaign = createCampaign(request.campaignPath, applicationId, config);
+        await prepareAllowance(campaign, request.turns, request.id);
+      }
       const pending = drive(campaign, config, dependencies, models, initial);
       initial = undefined;
       return await pending;

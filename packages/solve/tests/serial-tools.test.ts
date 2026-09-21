@@ -105,6 +105,57 @@ test("codex payloads have parallel_tool_calls forced to false", async () => {
   });
 });
 
+test.each([
+  [
+    "hoists a leading developer message into instructions",
+    platformModel,
+    {
+      model: "m",
+      input: [
+        { role: "developer", content: "System role text." },
+        { role: "user", content: "Hi" },
+      ],
+    },
+    {
+      model: "m",
+      instructions: "System role text.",
+      input: [{ role: "user", content: "Hi" }],
+    },
+  ],
+  [
+    "leaves populated instructions untouched",
+    platformModel,
+    {
+      instructions: "Already set.",
+      input: [{ role: "developer", content: "kept in place" }],
+    },
+    {
+      instructions: "Already set.",
+      input: [{ role: "developer", content: "kept in place" }],
+    },
+  ],
+  [
+    "does not hoist for the codex adapter",
+    codexModel,
+    { input: [{ role: "developer", content: "kept in place" }] },
+    { input: [{ role: "developer", content: "kept in place" }] },
+  ],
+])("%s", async (_name, model, payload, expected) => {
+  expect(await observedRewrite(model, payload)).toEqual(expected);
+});
+
+test.each([
+  [platformModel, "sse"],
+  [codexModel, "auto"],
+])("$api streams over its transport", (model, transport) => {
+  const observed: { options?: unknown } = {};
+  const models = withSerialToolCalls(fakeModels(observed));
+  expect(() =>
+    models.streamSimple(model, { messages: [] }, { transport: "websocket" }),
+  ).toThrow("stream not exercised");
+  expect(observed.options).toMatchObject({ transport });
+});
+
 test("getModel passes through unchanged", () => {
   const observed: { options?: unknown } = {};
   const models = withSerialToolCalls(fakeModels(observed));

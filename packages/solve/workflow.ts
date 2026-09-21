@@ -18,14 +18,15 @@ import {
   literatureCall,
   literatureNotesId,
   literatureOutcome,
+  matchingCalls,
   RoleCallError,
-  sameRequest,
   solveSettings,
   verifierCall,
+  type CallEntry,
   type RoleCall,
 } from "./pi-roles";
 import {
-  applicationId,
+  assertApplication,
   coordinatorInput,
   explorerInput,
   journalVerdicts,
@@ -48,7 +49,6 @@ import {
   type LiteratureInput,
   type LiteratureStatus,
   type Note,
-  type RoleName,
   type Roles,
   type Task,
   type Verification,
@@ -115,12 +115,7 @@ export interface WorkflowSnapshot {
 }
 
 function parseConfig(declaration: Entry | undefined): WorkflowConfig {
-  if (
-    declaration?.kind !== "campaign" ||
-    declaration.application !== applicationId
-  ) {
-    throw new Error("not a Xean workflow campaign");
-  }
+  assertApplication(declaration);
   const parsed = workflowConfig.safeParse(declaration.config);
   if (!parsed.success) {
     throw new Error(`invalid workflow campaign: ${parsed.error.message}`);
@@ -128,29 +123,14 @@ function parseConfig(declaration: Entry | undefined): WorkflowConfig {
   return parsed.data;
 }
 
-type CallEntry = Extract<Entry, { readonly kind: "call" }>;
-
 function firstCall(
   records: readonly Entry[],
   after: EntryId,
-  role: RoleName,
   label: string,
   request: Json | RoleCall<z.ZodType>,
 ): CallEntry | undefined {
-  const call = records.find(
-    (entry): entry is CallEntry =>
-      entry.kind === "call" &&
-      entry.seq > after &&
-      entry.label === label &&
-      entry.role === role,
-  );
-  if (call === undefined) return undefined;
-  if (!sameRequest(call.request, request)) {
-    throw new Error(
-      `call ${call.seq} does not match the derived ${role} request`,
-    );
-  }
-  return call;
+  for (const call of matchingCalls(records, after, label, request)) return call;
+  return undefined;
 }
 
 function settledCall<S extends z.ZodType>(
@@ -158,17 +138,7 @@ function settledCall<S extends z.ZodType>(
   after: EntryId,
   roleCall: RoleCall<S>,
 ): { readonly settled: EntryId; readonly value: z.output<S> } | undefined {
-  for (
-    let call = firstCall(
-      records,
-      after,
-      roleCall.role,
-      roleCall.label,
-      roleCall,
-    );
-    call !== undefined;
-    call = firstCall(records, call.seq, roleCall.role, roleCall.label, roleCall)
-  ) {
+  for (const call of matchingCalls(records, after, roleCall.label, roleCall)) {
     const submission = succeededSubmission(records, call.seq, roleCall.tool);
     if (submission === undefined) continue;
     const parsed = roleCall.schema.safeParse(submission.input);
@@ -335,13 +305,7 @@ async function replayExplorerTurn(
       base.config.settings.explorerContextBudgetTokens,
       base.config.settings.maxExplorerResponses,
     );
-    const call = firstCall(
-      records,
-      after,
-      roleCall.role,
-      roleCall.label,
-      roleCall,
-    );
+    const call = firstCall(records, after, roleCall.label, roleCall);
     if (call === undefined) {
       return snapshot(
         fold,
@@ -422,7 +386,6 @@ async function replayVerification(
     const first = firstCall(
       records,
       fold.cursor,
-      "verifier",
       verifierLabels.correctness,
       await verifierCall("correctness", verifierRequest, judged),
     );
@@ -534,23 +497,7 @@ function settledLiteratureCall(
   after: EntryId,
   call: ReturnType<typeof literatureCall>,
 ): EntryId | undefined {
-  for (
-    let entry = firstCall(
-      records,
-      after,
-      "literature",
-      call.label,
-      call.request,
-    );
-    entry !== undefined;
-    entry = firstCall(
-      records,
-      entry.seq,
-      "literature",
-      call.label,
-      call.request,
-    )
-  ) {
+  for (const entry of matchingCalls(records, after, call.label, call.request)) {
     const outcome = literatureOutcome(records, entry.seq);
     if (outcome === undefined) continue;
     if (

@@ -749,45 +749,6 @@ function completionStopReason(
   return value === "pending" ? "error" : value;
 }
 
-// Pi's openai-responses adapter renders the system prompt as a leading
-// developer message and leaves the top-level instructions field empty, whereas
-// its codex adapter places the system prompt in instructions. On the ChatGPT
-// reasoning backend the developer-message shape, combined with a required
-// terminal tool, makes the model emit the tool call before reasoning (a few
-// hundred reasoning tokens); the instructions shape reasons first (tens of
-// thousands). Normalize the responses payload to the codex shape by hoisting
-// the leading developer message into instructions.
-function hoistResponsesInstructions(
-  payload: unknown,
-  model: Model<Api>,
-): unknown {
-  if (model.api !== "openai-responses") return payload;
-  if (typeof payload !== "object" || payload === null) return payload;
-  const record = payload as Record<string, unknown>;
-  if (
-    typeof record.instructions === "string" &&
-    record.instructions.length > 0
-  ) {
-    return payload;
-  }
-  const input = record.input;
-  if (!Array.isArray(input)) return payload;
-  const [head, ...rest] = input;
-  if (
-    typeof head !== "object" ||
-    head === null ||
-    (head as { role?: unknown }).role !== "developer" ||
-    typeof (head as { content?: unknown }).content !== "string"
-  ) {
-    return payload;
-  }
-  return {
-    ...record,
-    instructions: (head as { content: string }).content,
-    input: rest,
-  };
-}
-
 function measuredStream(
   campaign: Campaign,
   parent: EntryId,
@@ -828,10 +789,7 @@ function measuredStream(
               requestModel,
             );
             const effective = withPromptCacheKey(
-              hoistResponsesInstructions(
-                replacement === undefined ? payload : replacement,
-                requestModel,
-              ),
+              replacement === undefined ? payload : replacement,
               cacheKey,
             );
             const encoded = JSON.stringify(effective);

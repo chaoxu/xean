@@ -28,7 +28,6 @@ import {
   modelRegistryPath,
   type SolveModels,
 } from "./runtime";
-import { withSerialToolCalls } from "./serial-tools";
 
 export { executionContract, guideCampaign, init, run, settings, submitNotes };
 export type { ExecutionContract, ExecutionReport } from "./execution-contract";
@@ -224,11 +223,7 @@ async function main(args: readonly string[]): Promise<void> {
   process.on("SIGTERM", stop);
   try {
     const result = await run(request, {
-      models: async () => {
-        return withSerialToolCalls(
-          await createModelRuntime(modelRuntimeOptions(process.env)),
-        );
-      },
+      models: () => createModelRuntime(modelRuntimeOptions(process.env)),
       signal: controller.signal,
       pauseRequested: () => pauseRequested,
       status: (phase) => console.error(phase),

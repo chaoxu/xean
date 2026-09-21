@@ -26,6 +26,7 @@ import {
 } from "./pi-roles";
 import {
   applicationId,
+  assertApplication,
   coordinatorInput,
   coordinatorResult,
   correctnessVerdicts,
@@ -90,15 +91,6 @@ async function readJson(path: string): Promise<unknown> {
 
 export async function readSettings(path: string): Promise<SolveSettings> {
   return solveSettings.parse(await readJson(path));
-}
-
-function assertApplication(declaration: Entry | undefined): void {
-  if (
-    declaration?.kind !== "campaign" ||
-    declaration.application !== applicationId
-  ) {
-    throw new Error("not a current Xean solver journal");
-  }
 }
 
 function openCalls(path: string): Campaign {

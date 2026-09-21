@@ -323,36 +323,20 @@ test.each([
   },
 );
 
-test.each(["openai-responses", "openai-codex-responses"] as const)(
-  "Solver selects transport for the model adapter: %s",
-  async (api) => {
-    const campaign = createCampaign(campaignPath(), applicationId, {
-      kind: "calls",
-    });
-    const drive = dependencies([
-      { submission: { notes: [note], solution: false } },
-    ]);
-    const models = {
-      ...drive.models,
-      getModel(provider: string, id: string) {
-        const selected = drive.models.getModel(provider, id);
-        return selected === undefined ? undefined : { ...selected, api };
-      },
-    };
-    try {
-      await createPiRoles(campaign, roleSettings(), {
-        ...drive,
-        models,
-      }).explorer(input);
-      expect(drive.calls[0]?.model.api).toBe(api);
-      expect(drive.calls[0]?.transport).toBe(
-        api === "openai-codex-responses" ? "auto" : "sse",
-      );
-    } finally {
-      campaign.close();
-    }
-  },
-);
+test("the role runner leaves the transport choice to the models wrapper", async () => {
+  const campaign = createCampaign(campaignPath(), applicationId, {
+    kind: "calls",
+  });
+  const drive = dependencies([
+    { submission: { notes: [note], solution: false } },
+  ]);
+  try {
+    await createPiRoles(campaign, roleSettings(), drive).explorer(input);
+    expect(drive.calls[0]).not.toHaveProperty("transport");
+  } finally {
+    campaign.close();
+  }
+});
 
 test.each([false, true])(
   "the first empty handoff returns to the coordinator and a fresh Explorer with saved notes: %s",

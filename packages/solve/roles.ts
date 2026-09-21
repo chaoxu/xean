@@ -17,6 +17,18 @@ const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 export const applicationId = "xean-solve";
 export const workflowProtocol = "workflow";
 
+/** Rejects a journal that is not a current solver campaign before its declaration is read. */
+export function assertApplication(
+  declaration: Entry | undefined,
+): asserts declaration is Extract<Entry, { readonly kind: "campaign" }> {
+  if (
+    declaration?.kind !== "campaign" ||
+    declaration.application !== applicationId
+  ) {
+    throw new Error("not a current Xean solver journal");
+  }
+}
+
 /** Workflow semantics use role calls and receipts, never provider checkpoint payloads. */
 export function workflowRecords(reader: Reader): readonly Entry[] {
   return reader.records({ excludeLabels: ["xean/pi-request"] });

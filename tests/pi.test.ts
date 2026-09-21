@@ -1297,93 +1297,6 @@ function invalidPayloadModels(calls: number): PiModels {
 }
 
 describe("thin Pi runner", () => {
-  test("hoists a leading developer system message into instructions", async () => {
-    const store = campaign();
-    const sent: unknown[] = [];
-    await runPi(store, {
-      models: payloadModels(
-        [assistant([{ type: "text", text: "ok" }], "stop")],
-        [
-          {
-            model: model.id,
-            stream: true,
-            input: [
-              { role: "developer", content: "System role text." },
-              {
-                role: "user",
-                content: [{ type: "input_text", text: "Hi" }],
-              },
-            ],
-            reasoning: { effort: "max" },
-          },
-        ],
-        sent,
-      ),
-      model,
-      label: "hoist/v1",
-      system: "System role text.",
-      prompt: "Hi",
-      reasoning: "max",
-    });
-    expect(sent[0]).toEqual({
-      model: model.id,
-      stream: true,
-      instructions: "System role text.",
-      input: [{ role: "user", content: [{ type: "input_text", text: "Hi" }] }],
-      reasoning: { effort: "max" },
-    });
-  });
-
-  test("leaves a populated instructions field untouched", async () => {
-    const store = campaign();
-    const sent: unknown[] = [];
-    await runPi(store, {
-      models: payloadModels(
-        [assistant([{ type: "text", text: "ok" }], "stop")],
-        [
-          {
-            instructions: "Already set.",
-            input: [{ role: "developer", content: "kept in place" }],
-          },
-        ],
-        sent,
-      ),
-      model,
-      label: "hoist-skip/v1",
-      system: "Already set.",
-      prompt: "Hi",
-      reasoning: "max",
-    });
-    expect(sent[0]).toEqual({
-      instructions: "Already set.",
-      input: [{ role: "developer", content: "kept in place" }],
-    });
-  });
-
-  test("does not hoist for a non-responses adapter", async () => {
-    const store = campaign();
-    const sent: unknown[] = [];
-    const codexModel: Model<"openai-codex-responses"> = {
-      ...model,
-      api: "openai-codex-responses",
-    };
-    await runPi(store, {
-      models: payloadModels(
-        [assistant([{ type: "text", text: "ok" }], "stop")],
-        [{ input: [{ role: "developer", content: "kept in place" }] }],
-        sent,
-      ),
-      model: codexModel,
-      label: "hoist-codex/v1",
-      system: "kept in place",
-      prompt: "Hi",
-      reasoning: "max",
-    });
-    expect(sent[0]).toEqual({
-      input: [{ role: "developer", content: "kept in place" }],
-    });
-  });
-
   test("treats complete zero usage as measured and rejects partial usage", () => {
     const zero = {
       input: 0,
@@ -1979,8 +1892,8 @@ describe("thin Pi runner", () => {
         payload: {
           model: model.id,
           stream: true,
-          instructions: "Answer briefly.",
           input: [
+            { role: "developer", content: "Answer briefly." },
             {
               role: "user",
               content: [{ type: "input_text", text: "Test" }],

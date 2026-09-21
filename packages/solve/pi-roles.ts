@@ -20,6 +20,7 @@ import {
   codexSubmission,
   type CodexExec,
   type CodexRequest,
+  type CodexResult,
 } from "./source";
 import {
   candidateMaterial,
@@ -47,6 +48,7 @@ import {
   reconstructionResultFor,
   roleLabels,
   roleCallRecords,
+  roleFromLabel,
   roleTools,
   sourceVerdictsFor,
   sourceSubmission,
@@ -723,7 +725,6 @@ async function runCall<S extends z.ZodType>(
     // on an interrupted attempt is unknown spend, not evidence of no billing.
     maxRecoveries: 8,
     maxLengthContinuations: 8,
-    transport: model.api === "openai-codex-responses" ? "auto" : "sse",
     cacheKey: createHash("sha256")
       .update(`${roleLabels[roleCall.role]}\n${roleCall.system}`)
       .digest("hex"),
@@ -784,6 +785,13 @@ export function createPiRoles(
   dependencies: PiRoleDependencies,
 ): Roles {
   const profiles = solveSettings.parse(settingsValue);
+  const codex: CodexDependencies = {
+    ...(dependencies.signal === undefined
+      ? {}
+      : { signal: dependencies.signal }),
+    codex:
+      dependencies.codex ?? codexExec({ command: codexCommand(process.env) }),
+  };
   return {
     async explorer(inputValue) {
       const input = explorerInput.parse(inputValue);
@@ -850,13 +858,7 @@ export function createPiRoles(
     async literature(inputValue, after = 0) {
       const input = literatureInput.parse(inputValue);
       return (
-        await runLiterature(
-          campaign,
-          profiles.source,
-          input,
-          dependencies,
-          after,
-        )
+        await runLiterature(campaign, profiles.source, input, codex, after)
       ).value;
     },
     // One verification: one candidate for the listed notes and their
@@ -977,7 +979,7 @@ export function createPiRoles(
               input,
               remote,
               correctness,
-              dependencies,
+              codex,
               candidate,
             );
             record(result.call, result.value.verdicts);
@@ -1046,6 +1048,59 @@ export function sameRequest(
     );
   }
   return isDeepStrictEqual(journaled, request);
+}
+
+export type CallEntry = Extract<Entry, { readonly kind: "call" }>;
+
+/**
+ * The calls of one label after `after`, in journal order, each matched
+ * against the request derived for it. A same-label call with a different
+ * request is journal corruption, not a call to skip.
+ */
+export function* matchingCalls(
+  records: readonly Entry[],
+  after: EntryId,
+  label: string,
+  request: Json | RoleCall<z.ZodType>,
+): Generator<CallEntry, undefined> {
+  for (const entry of records) {
+    if (entry.kind !== "call" || entry.seq <= after || entry.label !== label)
+      continue;
+    if (!sameRequest(entry.request, request)) {
+      throw new Error(
+        `call ${entry.seq} does not match the derived ${roleFromLabel(label) ?? label} request`,
+      );
+    }
+    yield entry;
+  }
+}
+
+type CodexDependencies = Pick<PiRoleDependencies, "signal"> & {
+  readonly codex: CodexExec;
+};
+
+/** One journaled Codex call: its entry and parsed output. Callers keep their own failure policy. */
+async function codexCall(
+  campaign: Campaign,
+  call: {
+    readonly label: string;
+    readonly role: RoleName;
+    readonly candidate?: EntryId;
+  },
+  request: Json | CodexRequest,
+  exec: CodexExec,
+  signal?: AbortSignal,
+): Promise<{ readonly call: EntryId; readonly output: CodexResult }> {
+  const receipt = await campaign.call(
+    {
+      ...call,
+      request: jsonSnapshot(request),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    async (context) =>
+      exec(codexRequest.parse(context.request), context.signal),
+  );
+  return { call: receipt.call, output: codexResult.parse(receipt.output) };
 }
 
 /** A note's INCONCLUSIVE source verdict when a response cannot be used: its assigned premises stand unchecked. */
@@ -1320,7 +1375,7 @@ async function runSource(
   input: VerifierInput,
   judged: readonly string[],
   correctness: CorrectnessAssessment,
-  dependencies: PiRoleDependencies,
+  dependencies: CodexDependencies,
   candidate: EntryId,
 ): Promise<{
   readonly call: EntryId;
@@ -1381,25 +1436,16 @@ async function runSource(
     (call) => (successful(call) ? conclude(call) : undefined),
   );
   if (prior !== undefined) return prior;
-  const exec =
-    dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
-  const receipt = await campaign.call(
-    {
-      label,
-      role: "verifier",
-      candidate,
-      request: jsonSnapshot(request),
-      ...(dependencies.signal === undefined
-        ? {}
-        : { signal: dependencies.signal }),
-    },
-    async ({ request: exact, signal }) =>
-      exec(codexRequest.parse(exact), signal),
+  const { call, output } = await codexCall(
+    campaign,
+    { label, role: "verifier", candidate },
+    request,
+    dependencies.codex,
+    dependencies.signal,
   );
-  const output = codexResult.parse(receipt.output);
   if (output.state !== "succeeded")
     throw new RoleCallError(`verifier failed: ${output.error}`);
-  return { call: receipt.call, value: conclude(receipt.call) };
+  return { call, value: conclude(call) };
 }
 
 /**
@@ -1411,7 +1457,7 @@ async function runLiterature(
   campaign: Campaign,
   profile: z.output<typeof codexProfile>,
   input: LiteratureInput,
-  dependencies: PiRoleDependencies,
+  dependencies: CodexDependencies,
   after: EntryId,
 ): Promise<{ readonly call: EntryId; readonly value: LiteratureReport }> {
   const { label, request } = literatureCall(input, profile);
@@ -1428,34 +1474,25 @@ async function runLiterature(
     }
     return { call, value };
   };
-  for (const entry of campaign.records({ kinds: ["call"], labels: [label] })) {
-    if (
-      entry.kind !== "call" ||
-      entry.seq <= after ||
-      !sameRequest(entry.request, request)
-    )
-      continue;
+  for (const entry of matchingCalls(
+    campaign.records({ kinds: ["call"], labels: [label] }),
+    after,
+    label,
+    request,
+  )) {
     const prior = await conclude(entry.seq);
     if (prior !== undefined) return prior;
   }
-  const exec =
-    dependencies.codex ?? codexExec({ command: codexCommand(process.env) });
-  const receipt = await campaign.call(
-    {
-      label,
-      role: "literature",
-      request: jsonSnapshot(request),
-      ...(dependencies.signal === undefined
-        ? {}
-        : { signal: dependencies.signal }),
-    },
-    async ({ request: exact, signal }) =>
-      exec(codexRequest.parse(exact), signal),
+  const { call, output } = await codexCall(
+    campaign,
+    { label, role: "literature" },
+    request,
+    dependencies.codex,
+    dependencies.signal,
   );
-  const output = codexResult.parse(receipt.output);
   if (output.state === "cancelled")
     throw new RoleCallError(`literature cancelled: ${output.error}`);
-  const fresh = await conclude(receipt.call);
+  const fresh = await conclude(call);
   if (fresh === undefined)
     throw new RoleCallError("literature returned no valid note candidates");
   return fresh;

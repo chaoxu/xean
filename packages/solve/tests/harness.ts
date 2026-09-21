@@ -1,4 +1,3 @@
-import { expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +10,7 @@ import {
   type Campaign,
   type Json,
 } from "xean";
-import { initializeAllowance } from "../allowance";
+import { appendAllowance } from "../allowance";
 import {
   applicationId,
   defaultCoordinatorBehavior,
@@ -108,7 +107,7 @@ export async function createWorkflowCampaign(
   turns = 4,
 ) {
   const campaign = createCampaign(path, applicationId, config);
-  await initializeAllowance(campaign, turns);
+  await appendAllowance(campaign, turns, 0, "initial");
   return campaign;
 }
 
@@ -148,9 +147,6 @@ export function dependencies(replies: readonly Reply[]) {
       if (reply.codex !== undefined) {
         throw new Error(`expected a Codex call, got ${options.label}`);
       }
-      expect(options.transport).toBe(
-        options.model.api === "openai-codex-responses" ? "auto" : "sse",
-      );
       return respond(campaign, options, reply);
     },
     async codex(request: CodexRequest): Promise<CodexResult> {
