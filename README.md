@@ -55,7 +55,7 @@ The task is one JSON object:
 }
 ```
 
-`run` creates a campaign or resumes the next missing workflow action after matching the task and settings recorded in its declaration. `inspect` derives the phase, notes, verdicts, result, and spend from the journal. `export` emits an accepted note with its transitive support.
+`run` creates a campaign or resumes it, `inspect` derives its phase, notes, verdicts, result, and spend from the journal, and `export` emits an accepted note with its transitive support.
 
 ## Supply work and guidance
 
@@ -74,7 +74,7 @@ bun packages/solve/solve.ts guide --id next-route campaign.db guidance.txt
 bun packages/solve/solve.ts inspect --include-guidance campaign.db
 ```
 
-Notes and guidance are journaled immediately. Guidance reaches a later Explorer turn whose input is not frozen. Every note keeps its text and declared support; a correction creates a new note. The four verifiers check source use, correctness, task requirements, and reconstruction. A note is accepted only when all required checks pass over verified support.
+Notes and guidance are journaled immediately and reach the next role input that is not yet frozen. The [inbox rules](packages/solve/docs/role-runner.md#inbox) state delivery.
 
 ## Build an application
 
@@ -84,17 +84,11 @@ The deterministic verifier example is [`examples/scripted-verifier.ts`](examples
 
 ## xean-solve workflow
 
-`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The coordinator opens every campaign, files notes, selects support, and after each role settles chooses the next one: Explorer, literature, or verifier. The Explorer writes self-contained notes and verifiers record structured verdicts. Each coordinator dispatch is one turn of the journaled allowance. The workflow derives notes, support closure, dead notes, verified candidates, phase, and result from journal records. It never treats model prose or process stdout as verification authority.
-
-Explorer submits notes in one context until it claims completion, submits an empty note set, reaches `maxExplorerResponses` (default 4), or reaches its context budget. Each valid `{notes, solution}` submission saves notes and returns their `{noteIds}`. Nonterminal submissions receive a fresh user message directing the next step. Set `maxExplorerResponses: 1` to allow at most one non-error response, which must contain a valid submission to hand off. Plain text, length-limited output, and rejected submissions count toward that limit. Provider errors use a separate recovery allowance. The context budget is bounded by model capacity. Provider retries, cancellation, output limits, and context overflow remain recorded outcomes with bounded handling. A Pi role profile may set `replayReasoning: false` so later responses in one call receive the transcript without the model's earlier reasoning items. The journal still records them. See the solver's [update policy](packages/solve/README.md#updates) for campaign formats.
-
-The source verifier inspects primary-source passages for nonroutine external results and checks their exact hypotheses and application. It records bibliographic corrections without failing verified mathematics. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
+`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The coordinator opens every campaign and, after each role settles, dispatches Explorer, literature, or a verifier; each dispatch is one turn of the journaled allowance. Explorer writes self-contained notes, four verifiers record structured verdicts, and the journal alone determines the notes, phase, and result. The [workflow guide](packages/solve/docs/role-runner.md) is the authority on this behavior, and the solver [README](packages/solve/README.md) lists its commands and settings. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
 
 ```sh
 bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json
 ```
-
-Xean supports current settings and journal formats only. An incompatible update requires a fresh campaign. Archived journals remain unchanged, and Git history retains the original implementation. Use `submit` or `guide` to carry selected prior work into a new campaign.
 
 ## Development
 
