@@ -366,13 +366,52 @@ export const coordinatorAction = z.discriminatedUnion("role", [
 export type CoordinatorAction = z.output<typeof coordinatorAction>;
 const actionRoles = ["explorer", "literature", "verifier"] as const;
 
-export const coordinatorResult = z.strictObject({
-  filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
-  explorerGuidance: nonblank,
-  support: z.array(noteId),
-  verify: z.array(verification),
-  action: coordinatorAction,
-});
+export const coordinatorResult = z
+  .strictObject({
+    filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
+    // Guidance and full-note support are consumed only when the coordinator
+    // dispatches Explorer.  Verifier and literature dispatches return to a
+    // fresh coordinator before either field could be used.
+    explorerGuidance: nonblank.optional(),
+    support: z.array(noteId).optional(),
+    verify: z.array(verification),
+    action: coordinatorAction,
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.action.role === "explorer" &&
+      value.explorerGuidance === undefined
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "an explorer action must provide explorer guidance",
+        path: ["explorerGuidance"],
+      });
+    }
+    if (value.action.role === "explorer" && value.support === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "an explorer action must provide support",
+        path: ["support"],
+      });
+    }
+    if (value.action.role !== "explorer") {
+      if (value.explorerGuidance !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "non-Explorer actions must omit explorer guidance",
+          path: ["explorerGuidance"],
+        });
+      }
+      if (value.support !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "non-Explorer actions must omit support",
+          path: ["support"],
+        });
+      }
+    }
+  });
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
 /**
@@ -446,7 +485,7 @@ export function coordinatorResultFor(
         path: ["filings"],
       });
     }
-    distinctKnown(known, value.support, ctx, ["support"]);
+    distinctKnown(known, value.support ?? [], ctx, ["support"]);
     distinctKnown(
       known,
       value.verify.map(({ note }) => note),

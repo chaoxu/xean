@@ -58,8 +58,6 @@ test("additional allowances preserve source evidence, failures, support, guidanc
           { note: "n1", summary: "A useful lemma." },
           { note: "n2", summary: "A possible route." },
         ],
-        support: ["n1"],
-        explorerGuidance: "Use the verified lemma.",
         verify: [
           { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: ["correctness", "source"] },

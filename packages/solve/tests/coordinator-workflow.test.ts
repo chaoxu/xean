@@ -44,8 +44,12 @@ const coordination = (
   filings: { note: string; summary: string }[] = [],
 ) => ({
   filings,
-  explorerGuidance: "Choose the next useful mathematical step.",
-  support: [],
+  ...(action.role === "explorer"
+    ? {
+        explorerGuidance: "Choose the next useful mathematical step.",
+        support: [],
+      }
+    : {}),
   verify,
   action,
 });
@@ -619,7 +623,7 @@ test("after a verification without new notes the coordinator schema omits the ve
   ).toBe(false);
   expect(
     open.schema.safeParse({
-      ...base,
+      filings: [],
       verify: listed,
       action: { role: "verifier" },
     }).success,
@@ -630,7 +634,7 @@ test("after a verification without new notes the coordinator schema omits the ve
   );
   expect(
     guarded.schema.safeParse({
-      ...base,
+      filings: [],
       verify: listed,
       action: { role: "verifier" },
     }).success,
@@ -640,8 +644,9 @@ test("after a verification without new notes the coordinator schema omits the ve
   ).toBe(true);
   expect(
     guarded.schema.safeParse({
-      ...base,
+      filings: [],
       action: { role: "literature", request: "Search." },
+      verify: [],
     }).success,
   ).toBe(true);
 });
@@ -787,7 +792,11 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
 });
 
 test("a coordinator result requires a typed action and a nonempty verifier list", () => {
-  const call = coordinatorCall({ task, notes: [] });
+  const call = coordinatorCall({
+    task,
+    notes: [],
+    coordinatorBehavior: { literature: "optional", verification: "decide" },
+  });
   const base = {
     filings: [],
     explorerGuidance: "Choose the next useful mathematical step.",
@@ -808,6 +817,37 @@ test("a coordinator result requires a typed action and a nonempty verifier list"
       verify: [{ note: "n1", verifiers: ["correctness"] }],
     }).success,
   ).toBe(false);
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      verify: [],
+      action: { role: "literature", request: "Search." },
+    }).success,
+  ).toBe(true);
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      verify: [],
+      action: { role: "explorer" },
+    }).success,
+  ).toBe(false);
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      explorerGuidance: "Explore.",
+      verify: [],
+      action: { role: "explorer" },
+    }).success,
+  ).toBe(false);
+  expect(
+    call.schema.safeParse({
+      filings: [],
+      explorerGuidance: "Discarded.",
+      support: [],
+      verify: [],
+      action: { role: "literature", request: "Search." },
+    }).success,
+  ).toBe(false);
 });
 
 test("the frozen coordinator behavior and literature status reach the coordinator prompt", () => {
@@ -826,6 +866,9 @@ test("the frozen coordinator behavior and literature status reach the coordinato
     'Coordinator behavior:\n{\n  "literature": "never",\n  "verification": "decide",\n  "instructions": "Use Explorer for this campaign."\n}',
   );
   expect(call.system).toContain("The frozen coordinator behavior");
+  expect(call.system).toContain(
+    "When action is verifier or literature, omit explorerGuidance and support",
+  );
 });
 
 test("new campaigns disable literature unless their policy opts in", () => {
@@ -866,7 +909,7 @@ test("structured coordinator policies constrain optional literature and verifica
   ).toBe(false);
   expect(
     literatureFirst.schema.safeParse({
-      ...base,
+      filings: [],
       verify: [],
       action: { role: "literature", request: "Search." },
     }).success,
@@ -911,14 +954,14 @@ test("structured coordinator policies constrain optional literature and verifica
   // Every live note without a verdict over verified support must be listed.
   expect(
     alwaysVerify.schema.safeParse({
-      ...base,
+      filings: [],
       verify: [{ note: "n1", verifiers: all }],
       action: { role: "verifier" },
     }).success,
   ).toBe(false);
   expect(
     alwaysVerify.schema.safeParse({
-      ...base,
+      filings: [],
       verify: [
         { note: "n1", verifiers: checks },
         { note: "n3", verifiers: checks },
@@ -928,7 +971,7 @@ test("structured coordinator policies constrain optional literature and verifica
   ).toBe(true);
   expect(
     alwaysVerify.schema.safeParse({
-      ...base,
+      filings: [],
       verify: [
         { note: "n1", verifiers: checks },
         { note: "n2", verifiers: checks },

@@ -128,8 +128,12 @@ function coordination(
   const verify = options.verify ?? [{ note: filed.at(-1)!, verifiers: all }];
   return {
     filings: filed.map((note) => ({ note, summary: `Summary of ${note}.` })),
-    explorerGuidance: `Continue from ${filed.at(-1)}.`,
-    support: options.read ?? [filed.at(-1)!],
+    ...(verify.length > 0
+      ? {}
+      : {
+          explorerGuidance: `Continue from ${filed.at(-1)}.`,
+          support: options.read ?? [filed.at(-1)!],
+        }),
     verify,
     action: { role: verify.length > 0 ? "verifier" : "explorer" },
   };
@@ -739,8 +743,6 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   expect(
     coordinatorResultFor(phase.notes).safeParse({
       filings: [{ note: "n2", summary: "P." }],
-      explorerGuidance: "Go.",
-      support: [],
       verify: [{ note: "n1", verifiers: all }],
       action: { role: "verifier" },
     }).success,
@@ -927,7 +929,6 @@ test("coordination files every note without a summary and lists live notes over 
   ]);
   const filed = {
     filings: [{ note: "n2", summary: "new" }],
-    explorerGuidance: "Go.",
   };
   // The action follows the list: a verifier dispatch for a nonempty list.
   const accepts = (value: Record<string, unknown> & { verify: unknown[] }) =>
@@ -949,7 +950,6 @@ test("coordination files every note without a summary and lists live notes over 
   expect(
     accepts({
       ...filed,
-      support: ["n2"],
       verify: [{ note: "n2", verifiers: lemma }],
     }),
   ).toBe(true);
@@ -957,21 +957,18 @@ test("coordination files every note without a summary and lists live notes over 
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [{ note: "n9", verifiers: all }],
     }),
   ).toBe(false);
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [{ note: "n3", verifiers: all }],
     }),
   ).toBe(false);
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [
         { note: "n2", verifiers: lemma },
         { note: "n3", verifiers: all },
@@ -981,7 +978,6 @@ test("coordination files every note without a summary and lists live notes over 
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [
         { note: "n2", verifiers: ["correctness"] },
         { note: "n3", verifiers: all },
@@ -991,7 +987,6 @@ test("coordination files every note without a summary and lists live notes over 
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [
         { note: "n3", verifiers: all },
         { note: "n2", verifiers: lemma },
@@ -1001,27 +996,24 @@ test("coordination files every note without a summary and lists live notes over 
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [{ note: "n4", verifiers: all }],
     }),
   ).toBe(false);
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [{ note: "n2", verifiers: ["correctness"] }],
     }),
   ).toBe(true);
   expect(
     accepts({
       ...filed,
-      support: [],
       verify: [{ note: "n2", verifiers: ["correctness", "requirements"] }],
     }),
   ).toBe(false);
-  expect(
-    accepts({ ...filed, support: [], verify: [{ note: "n2", verifiers: [] }] }),
-  ).toBe(false);
+  expect(accepts({ ...filed, verify: [{ note: "n2", verifiers: [] }] })).toBe(
+    false,
+  );
   expect(
     accepts({
       ...filed,

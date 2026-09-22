@@ -223,8 +223,6 @@ test("workflow construction and per-call selection both retain ancestors across 
       {
         submission: {
           filings: [{ note: n.id, summary: n.summary! }],
-          explorerGuidance: "Complete coverage.",
-          support: [n.id],
           verify: [{ note: n.id, verifiers: ["correctness", "source"] }],
           action: { role: "verifier" },
         },

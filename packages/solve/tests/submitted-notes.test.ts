@@ -77,8 +77,12 @@ function coordinate(
   return {
     submission: {
       filings: ids.map((note) => ({ note, summary: `Statement of ${note}.` })),
-      explorerGuidance: "Prove the remaining implication.",
-      support,
+      ...(verify.length === 0
+        ? {
+            explorerGuidance: "Prove the remaining implication.",
+            support,
+          }
+        : {}),
       verify,
       action: { role: verify.length > 0 ? "verifier" : "explorer" },
     },
@@ -276,13 +280,13 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(26);
+  expect(workflowSchemaVersion).toBe(27);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 26, task },
+    config: { schemaVersion: 27, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);

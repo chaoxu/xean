@@ -132,8 +132,6 @@ test("run honors an injected source executor instead of invoking the CLI", async
       {
         submission: {
           filings: [{ note: "n1", summary: "P holds." }],
-          explorerGuidance: "Prove P.",
-          support: [],
           verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
           action: { role: "verifier" },
         },

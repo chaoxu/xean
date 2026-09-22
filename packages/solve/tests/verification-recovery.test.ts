@@ -89,8 +89,6 @@ const start: readonly Reply[] = [
   {
     submission: {
       filings: [{ note: "n1", summary: "P holds." }],
-      explorerGuidance: "Prove P fully.",
-      support: ["n1"],
       verify: [{ note: "n1", verifiers: [...verifierNames] }],
       action: { role: "verifier" },
     },
@@ -229,8 +227,6 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
         filings: [
           { note: "n2", summary: "P holds by a self-contained proof." },
         ],
-        explorerGuidance: "Prove P.",
-        support: [],
         verify: [{ note: "n2", verifiers: [...verifierNames] }],
         action: { role: "verifier" },
       },
@@ -422,8 +418,6 @@ test("resuming an interrupted verification preserves inconclusive and successful
           { note: "n1", summary: "L holds." },
           { note: "n2", summary: "P holds." },
         ],
-        explorerGuidance: "Prove P.",
-        support: [],
         verify: [
           { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: [...verifierNames] },
@@ -505,8 +499,6 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
           { note: "n1", summary: "Lemma." },
           { note: "n2", summary: "P holds." },
         ],
-        explorerGuidance: "Prove P.",
-        support: [],
         verify: [
           { note: "n1", verifiers: [...verifierNames] },
           { note: "n2", verifiers: [...verifierNames] },
@@ -598,8 +590,6 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
           { note: "n1", summary: "L holds." },
           { note: "n2", summary: "P holds." },
         ],
-        explorerGuidance: "Prove P.",
-        support: ["n1"],
         verify: [
           { note: "n1", verifiers: ["correctness", "source"] },
           { note: "n2", verifiers: [...verifierNames] },

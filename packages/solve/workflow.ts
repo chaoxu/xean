@@ -55,7 +55,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 26;
+export const workflowSchemaVersion = 27;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -575,8 +575,11 @@ export async function deriveWorkflow(
       if (includeSubmitted(fold, fold.cursor)) continue;
       const turn = await replayExplorerTurn(
         fold,
-        coordinated.explorerGuidance,
-        coordinated.support,
+        // coordinatorResultFor requires these fields for Explorer actions;
+        // the assertions keep that action-specific contract local to this
+        // branch while verifier/literature results may omit them.
+        coordinated.explorerGuidance!,
+        coordinated.support!,
       );
       if ("phase" in turn) return turn;
       emptySubmission = turn.emptySubmission;
