@@ -15,7 +15,7 @@ export async function createModelRuntime(
 ): Promise<ModelRuntime> {
   const modelsPath = options?.modelsPath;
   if (typeof modelsPath === "string") await access(modelsPath, constants.R_OK);
-  // Pi 0.85.1 has no public runtime subpath. Keep its pinned layout here so
+  // Pi has no public runtime subpath. Keep its pinned layout here so
   // model setup does not load the coding-agent CLI and terminal UI.
   const url = new URL(
     "./core/model-runtime.js",

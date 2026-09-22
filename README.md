@@ -29,7 +29,7 @@ bun packages/solve/solve.ts contract
 The Codex profile uses Pi's OpenAI Codex provider. Authenticate it with Pi:
 
 ```sh
-bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
+bunx --package @earendil-works/pi-coding-agent@0.87.0 pi
 ```
 
 Enter `/login`, choose **OpenAI Codex**, and exit. The OpenAI API profile uses `OPENAI_API_KEY` and `packages/solve/examples/settings-openai.json`. Provider access, credentials, and model availability come from Pi and the selected profile. The solver examples use public OpenAI endpoints and need no xean-lab service.

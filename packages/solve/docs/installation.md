@@ -18,7 +18,7 @@ The checkout contains the kernel, solver, and examples under the MIT license. Ru
 With an OpenAI Codex subscription, use Pi's `/login` command to authenticate the **OpenAI Codex** provider:
 
 ```sh
-bunx --package @earendil-works/pi-coding-agent@0.85.1 pi
+bunx --package @earendil-works/pi-coding-agent@0.87.0 pi
 ```
 
 Xean uses Pi's saved credential for these roles. Source verification and independent review use the Codex CLI, selected by `XEAN_CODEX_COMMAND` or found on the path. By default, authenticate it with `codex login`; its credential is read from `CODEX_HOME` or `~/.codex`. A selected custom provider in that home’s `config.toml` can instead use its configured endpoint and `env_key` credential.

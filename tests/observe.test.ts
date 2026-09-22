@@ -34,7 +34,7 @@ function campaignPath(): string {
 
 function piRequest() {
   return {
-    protocol: "xean/pi-run/v2" as const,
+    protocol: "xean/pi-run/v3" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",
@@ -74,7 +74,7 @@ async function piResult(
         },
       },
       async () => ({
-        protocol: "xean/pi-request-completion/v1",
+        protocol: "xean/pi-request-completion/v2",
         parent: call,
         operation: {
           provider: model.provider,

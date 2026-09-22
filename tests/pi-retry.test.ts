@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { getEventListeners } from "node:events";
 import {
   retryAssistantCall,
+  normalizeContext,
   type AssistantMessage,
   type Model,
 } from "@earendil-works/pi-ai";
@@ -54,17 +55,13 @@ async function retry(
       },
       { preconnect: fetch.preconnect },
     );
-    result = await streamSimple(
-      model,
-      { messages: [] },
-      {
-        apiKey: "offline-proxy-key",
-        transport: "sse",
-        fetch: stubFetch,
-        maxRetries: 1,
-        signal,
-      },
-    ).result();
+    result = await streamSimple(model, normalizeContext({ messages: [] }), {
+      apiKey: "offline-proxy-key",
+      transport: "sse",
+      fetch: stubFetch,
+      maxRetries: 1,
+      signal,
+    }).result();
   } else {
     result = await retryAssistantCall(
       async () => ({

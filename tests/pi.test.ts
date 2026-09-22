@@ -6,6 +6,8 @@ import { z } from "zod";
 
 import {
   createAssistantMessageEventStream,
+  getCurrentTools,
+  normalizeContext,
   registerSessionResourceCleanup,
   type AssistantMessage,
   type Context,
@@ -27,6 +29,7 @@ import {
   derivePiSpend,
   piRequest,
   piRequestAttempts,
+  piRequestCompletion,
   piStoredResult,
   piResultRecord,
   readPiResult,
@@ -100,6 +103,71 @@ test("forwards provider events before completion and cleans the logical session"
     store.close();
   }
 }, 1000);
+
+test("HTTP status belongs to its logical request and does not persist response headers", async () => {
+  const store = campaign();
+  const failure = {
+    ...assistant([], "error"),
+    errorMessage: "503 Service Unavailable",
+  };
+  const provider = payloadModels(
+    [failure, failure, assistant([{ type: "text", text: "done" }], "stop")],
+    [{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }],
+    [],
+  );
+  const responses = [[503], [], [429, 200]];
+  let index = 0;
+  try {
+    const result = await runPi(store, {
+      model,
+      label: "http-status",
+      prompt: "Test request recovery",
+      maxRecoveries: 2,
+      models: {
+        streamSimple(requestModel, context, options) {
+          const statuses = responses[index++]!;
+          return provider.streamSimple(requestModel, context, {
+            ...options,
+            onPayload: async (payload, model) => {
+              const replacement = await options?.onPayload?.(payload, model);
+              for (const status of statuses)
+                await options?.onResponse?.(
+                  { status, headers: { authorization: "response-secret" } },
+                  model,
+                );
+              return replacement;
+            },
+          });
+        },
+      },
+    });
+    expect(result.state).toBe("succeeded");
+    const records = store.records();
+    const requests = new Set(piRequestAttempts(records).map((r) => r.call));
+    const completions = records.flatMap((entry) =>
+      entry.kind === "call-result" &&
+      entry.state === "returned" &&
+      requests.has(entry.parent)
+        ? [piRequestCompletion.parse(entry.output)]
+        : [],
+    );
+    expect(completions.map((entry) => entry.httpStatus)).toEqual([
+      503,
+      undefined,
+      200,
+    ]);
+    expect(completions[1]).not.toHaveProperty("httpStatus");
+    expect(JSON.stringify(records)).not.toContain("response-secret");
+    expect(
+      piRequestCompletion.safeParse({
+        ...completions[0],
+        protocol: "xean/pi-request-completion/v1",
+      }).success,
+    ).toBe(false);
+  } finally {
+    store.close();
+  }
+});
 
 test("request accounting is durable before tool execution and counted once after continuation", async () => {
   const store = campaign();
@@ -262,7 +330,7 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "xean/pi-run/v2",
+        protocol: "xean/pi-run/v3",
         model,
         modelProfile: null,
         prompt: "test",
@@ -289,7 +357,7 @@ function spendEntries(
       parent: 3,
       state: "returned",
       output: {
-        protocol: "xean/pi-request-completion/v1",
+        protocol: "xean/pi-request-completion/v2",
         parent: 2,
         operation: {
           provider: model.provider,
@@ -844,7 +912,7 @@ test("empty submissions receive user continuation until the context threshold", 
   ]);
 });
 
-test("the application continuation prompt reaches native steering but yields to finalization", async () => {
+test("the application continuation prompt reaches native turn hooks but yields to finalization", async () => {
   const gate = {
     ...submissionGate,
     continuationPrompt: "Investigate another route.",
@@ -905,7 +973,7 @@ test.each([
       expect(result.state).toBe("succeeded");
       expect(requests).toHaveLength(2);
       expect(requests[0]).toBe(128_000);
-      // Native estimation also charges the intervening tool/steering feedback.
+      // Native estimation also charges the intervening tool/continuation feedback.
       expect(requests[1]).toBeGreaterThan(nextMaxTokens - 256);
       expect(requests[1]).toBeLessThanOrEqual(nextMaxTokens);
       const records = c.records();
@@ -1424,7 +1492,7 @@ describe("thin Pi runner", () => {
     expect(readPiResult(terminal.output, store)).toMatchObject({
       state: "succeeded",
       text: "answer",
-      transcript: [{ role: "user" }, { role: "assistant" }],
+      transcript: [{ role: "system" }, { role: "user" }, { role: "assistant" }],
     });
     expect(
       piStoredResult.safeParse({
@@ -1518,7 +1586,7 @@ describe("thin Pi runner", () => {
 
     expect(result).toMatchObject({ state: "succeeded", text: "" });
     expect(reasoning).toEqual(["max"]);
-    expect(contexts[0]?.tools).toMatchObject([
+    expect(getCurrentTools(contexts[0]!.messages)).toMatchObject([
       {
         name: "add",
         constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -1800,7 +1868,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "xean/pi-run/v2",
+          protocol: "xean/pi-run/v3",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",
@@ -1818,7 +1886,7 @@ describe("thin Pi runner", () => {
           request,
         };
         const completion = {
-          protocol: "xean/pi-request-completion/v1",
+          protocol: "xean/pi-request-completion/v2",
           parent: call,
           operation: {
             provider: model.provider,
@@ -1859,7 +1927,7 @@ describe("thin Pi runner", () => {
     );
     const adapter: PiModels = {
       streamSimple(_requestModel, context, options) {
-        return streamSimpleOpenAIResponses(model, context, {
+        return streamSimpleOpenAIResponses(model, normalizeContext(context), {
           ...options,
           apiKey: "stub-key",
           maxRetries: 0,
@@ -1967,13 +2035,14 @@ describe("thin Pi runner", () => {
     expect(result).toMatchObject({ state: "succeeded", text: "" });
     expect(requests).toBe(1);
     expect(result.transcript).toMatchObject([
+      { role: "system" },
       { role: "user" },
       { role: "assistant" },
       { role: "toolResult" },
     ]);
     expect(
       store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { protocol: "xean/pi-run/v2" } });
+    ).toMatchObject({ request: { protocol: "xean/pi-run/v3" } });
   });
 
   test("does not accept a terminal tool result after cancellation", async () => {

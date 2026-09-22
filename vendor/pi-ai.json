@@ -1,8 +1,8 @@
 {
-  "source": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.85.1.tgz",
-  "sourceIntegrity": "sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==",
-  "patch": "patches/@earendil-works%2Fpi-ai@0.85.1.patch",
-  "patchSha256": "93937a5878ccc4fc0683e341d367393d8c05e8197b625d8d1dd1cbe460278640",
-  "artifact": "vendor/pi-ai-0.85.1-xean.1.tgz",
-  "artifactSha256": "5298ff1111c0c78ed7838894e889a21622e7073af27593eb3c7bc0d3d0858146"
+  "source": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.87.0.tgz",
+  "sourceIntegrity": "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
+  "patch": "patches/@earendil-works%2Fpi-ai@0.87.0.patch",
+  "patchSha256": "843757fc3acd47ef868c8701226219db34da69bdccea6e249e2203f1e6e6b04f",
+  "artifact": "vendor/pi-ai-0.87.0-xean.1.tgz",
+  "artifactSha256": "f8df87ee4f843902226e7b4ca5512c3d32ca13bae97131afda3caf9dd4d84e34"
 }

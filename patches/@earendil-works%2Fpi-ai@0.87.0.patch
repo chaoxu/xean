@@ -1,5 +1,106 @@
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index dfdb6ec..bc8faf4 100644
+--- a/dist/api/openai-codex-responses.js
++++ b/dist/api/openai-codex-responses.js
+@@ -98,11 +98,15 @@ function sleep(ms, signal) {
+             reject(new Error("Request was aborted"));
+             return;
+         }
+-        const timeout = setTimeout(resolve, ms);
+-        signal?.addEventListener("abort", () => {
++        const timeout = setTimeout(() => {
++            signal?.removeEventListener("abort", onAbort);
++            resolve();
++        }, ms);
++        const onAbort = () => {
+             clearTimeout(timeout);
+             reject(new Error("Request was aborted"));
+-        });
++        };
++        signal?.addEventListener("abort", onAbort, { once: true });
+     });
+ }
+ function normalizeTimeoutMs(value) {
+@@ -166,7 +170,12 @@ export const stream = (model, context, options) => {
+             if (!apiKey) {
+                 throw new Error(`No API key for provider: ${model.provider}`);
+             }
+-            const accountId = extractAccountId(apiKey);
++            const proxyAuth = model.compat?.codexProxyAuth === true;
++            if (proxyAuth && (!model.baseUrl || /(^|\.)chatgpt\.com$/i.test(new URL(model.baseUrl).hostname))) {
++                throw new Error("Codex proxy authentication requires a custom base URL");
++            }
++            const accountId = proxyAuth ? undefined : extractAccountId(apiKey);
++            const cacheAccountId = accountId ?? await proxySessionIdentity(model.baseUrl, apiKey);
+             const grammarToolInputProperties = createGrammarToolInputProperties(getDeclaredTools(normalizedContext.messages), model.compat?.supportsOpenAIGrammarTools ?? false);
+             const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
+             const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
+@@ -200,7 +209,7 @@ export const stream = (model, context, options) => {
+                                 startEmitted = true;
+                                 stream.push({ type: "start", partial: output });
+                             }
+-                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, accountId, grammarToolInputProperties, options);
++                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, cacheAccountId, grammarToolInputProperties, options);
+                         if (options?.signal?.aborted) {
+                             throw new Error("Request was aborted");
+                         }
+@@ -539,6 +548,11 @@ async function* mapCodexEvents(events, output) {
+             const response = event.response;
+             const code = response?.error?.code;
+             const message = response?.error?.message;
++            if (response) {
++                // Preserve terminal usage/signatures before retaining the typed
++                // Codex error used by native transport recovery.
++                yield { ...event, type: "response.completed", response: { ...response, status: "failed" } };
++            }
+             throw new CodexApiError(message || "Codex response failed", { code, payload: event });
+         }
+         if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
+@@ -685,7 +699,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
+     }
+     websocketSessionCache.clear();
+ }
+-registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
++registerSessionResourceCleanup((sessionId) => {
++    closeOpenAICodexWebSocketSessions(sessionId);
++    resetOpenAICodexWebSocketDebugStats(sessionId);
++});
+ function isWebSocketSseFallbackActive(sessionId) {
+     return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
+ }
+@@ -1247,6 +1264,11 @@ async function parseErrorResponse(response) {
+ // ============================================================================
+ // Auth & Headers
+ // ============================================================================
++async function proxySessionIdentity(baseUrl, token) {
++    const bytes = new TextEncoder().encode(`${baseUrl}\n${token}`);
++    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
++    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
++}
+ function extractAccountId(token) {
+     try {
+         const parts = token.split(".");
+@@ -1273,7 +1295,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
+         }
+     }
+     headers.set("Authorization", `Bearer ${token}`);
+-    headers.set("chatgpt-account-id", accountId);
++    if (accountId === undefined)
++        headers.delete("chatgpt-account-id");
++    else
++        headers.set("chatgpt-account-id", accountId);
+     headers.set("originator", "pi");
+     headers.set("User-Agent", getPiUserAgent());
+     return headers;
+@@ -1300,4 +1325,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+     headers.set("session-id", requestId);
+     return headers;
+ }
+-//# sourceMappingURL=openai-codex-responses.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-codex-responses.js.map
 diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
-index 43e463d..1a9dc45 100644
+index 53597d2..7a536e6 100644
 --- a/dist/api/openai-responses-shared.js
 +++ b/dist/api/openai-responses-shared.js
 @@ -437,6 +437,7 @@ export async function processResponsesStream(openaiStream, output, stream, model
@@ -27,112 +128,11 @@ index 43e463d..1a9dc45 100644
 -//# sourceMappingURL=openai-responses-shared.js.map
 \ No newline at end of file
 +//# sourceMappingURL=openai-responses-shared.js.map
-diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index bf979d4..d99370a 100644
---- a/dist/api/openai-codex-responses.js
-+++ b/dist/api/openai-codex-responses.js
-@@ -97,11 +97,15 @@ function sleep(ms, signal) {
-             reject(new Error("Request was aborted"));
-             return;
-         }
--        const timeout = setTimeout(resolve, ms);
--        signal?.addEventListener("abort", () => {
-+        const timeout = setTimeout(() => {
-+            signal?.removeEventListener("abort", onAbort);
-+            resolve();
-+        }, ms);
-+        const onAbort = () => {
-             clearTimeout(timeout);
-             reject(new Error("Request was aborted"));
--        });
-+        };
-+        signal?.addEventListener("abort", onAbort, { once: true });
-     });
- }
- function normalizeTimeoutMs(value) {
-@@ -164,7 +168,12 @@ export const stream = (model, context, options) => {
-             if (!apiKey) {
-                 throw new Error(`No API key for provider: ${model.provider}`);
-             }
--            const accountId = extractAccountId(apiKey);
-+            const proxyAuth = model.compat?.codexProxyAuth === true;
-+            if (proxyAuth && (!model.baseUrl || /(^|\.)chatgpt\.com$/i.test(new URL(model.baseUrl).hostname))) {
-+                throw new Error("Codex proxy authentication requires a custom base URL");
-+            }
-+            const accountId = proxyAuth ? undefined : extractAccountId(apiKey);
-+            const cacheAccountId = accountId ?? await proxySessionIdentity(model.baseUrl, apiKey);
-             const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, model.compat?.supportsOpenAIGrammarTools ?? false);
-             const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
-             const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
-@@ -198,7 +207,7 @@ export const stream = (model, context, options) => {
-                                 startEmitted = true;
-                                 stream.push({ type: "start", partial: output });
-                             }
--                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, accountId, grammarToolInputProperties, options);
-+                        }, httpTimeoutMs, websocketConnectTimeoutMs, cacheSessionId, cacheAccountId, grammarToolInputProperties, options);
-                         if (options?.signal?.aborted) {
-                             throw new Error("Request was aborted");
-                         }
-@@ -536,6 +545,11 @@ async function* mapCodexEvents(events, output) {
-             const response = event.response;
-             const code = response?.error?.code;
-             const message = response?.error?.message;
-+            if (response) {
-+                // Preserve terminal usage/signatures before retaining the typed
-+                // Codex error used by native transport recovery.
-+                yield { ...event, type: "response.completed", response: { ...response, status: "failed" } };
-+            }
-             throw new CodexApiError(message || "Codex response failed", { code, payload: event });
-         }
-         if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-@@ -682,7 +696,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId) {
-     }
-     websocketSessionCache.clear();
- }
--registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
-+registerSessionResourceCleanup((sessionId) => {
-+    closeOpenAICodexWebSocketSessions(sessionId);
-+    resetOpenAICodexWebSocketDebugStats(sessionId);
-+});
- function isWebSocketSseFallbackActive(sessionId) {
-     return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
- }
-@@ -1244,6 +1261,11 @@ async function parseErrorResponse(response) {
- // ============================================================================
- // Auth & Headers
- // ============================================================================
-+async function proxySessionIdentity(baseUrl, token) {
-+    const bytes = new TextEncoder().encode(`${baseUrl}\n${token}`);
-+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-+    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-+}
- function extractAccountId(token) {
-     try {
-         const parts = token.split(".");
-@@ -1270,7 +1292,10 @@ function buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token)
-         }
-     }
-     headers.set("Authorization", `Bearer ${token}`);
--    headers.set("chatgpt-account-id", accountId);
-+    if (accountId === undefined)
-+        headers.delete("chatgpt-account-id");
-+    else
-+        headers.set("chatgpt-account-id", accountId);
-     headers.set("originator", "pi");
-     headers.set("User-Agent", getPiUserAgent());
-     return headers;
-@@ -1297,4 +1322,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
-     headers.set("session-id", requestId);
-     return headers;
- }
--//# sourceMappingURL=openai-codex-responses.js.map
-\ No newline at end of file
-+//# sourceMappingURL=openai-codex-responses.js.map
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index f61c9ea..987a114 100644
+index 5915ca6..616a506 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -305,6 +305,8 @@ export interface UserMessage {
+@@ -351,6 +351,8 @@ export interface UserMessage {
      timestamp: number;
  }
  export interface AssistantMessage {
@@ -141,7 +141,7 @@ index f61c9ea..987a114 100644
      role: "assistant";
      content: (TextContent | ThinkingContent | ToolCall)[];
      api: Api;
-@@ -532,6 +534,8 @@ export interface OpenAICompletionsCompat {
+@@ -594,6 +596,8 @@ export interface OpenAICompletionsCompat {
  }
  /** Compatibility settings for OpenAI Responses APIs. */
  export interface OpenAIResponsesCompat {
@@ -149,8 +149,8 @@ index f61c9ea..987a114 100644
 +    codexProxyAuth?: boolean;
      /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
      supportsDeveloperRole?: boolean;
-     /** Session-affinity header format: `openai` sends `session_id` and `x-client-request-id`; `openai-nosession` sends `x-client-request-id`; `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param, which is governed by cache retention. Default: auto-detected. */
-@@ -740,4 +744,4 @@ export interface ImagesModel<TApi extends ImagesApi> extends Omit<Model<Api>, "a
+     /** Whether the exact model accepts developer or system messages after the conversation has started. When false, later system messages are folded into the leading system message. Default: false; the generated model catalog enables it for verified models. */
+@@ -833,4 +837,4 @@ export interface ImagesModel<TApi extends ImagesApi> extends Omit<Model<Api>, "a
      provider: ImagesProviderId;
      output: ("text" | "image")[];
  }
@@ -158,10 +158,10 @@ index f61c9ea..987a114 100644
 \ No newline at end of file
 +//# sourceMappingURL=types.d.ts.map
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
-index ce8c4cb..7cbe47d 100644
+index 6538c63..eb4245e 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -86,11 +86,15 @@ function sleep(ms, signal) {
+@@ -94,11 +94,15 @@ function sleep(ms, signal) {
              reject(new RetrySleepAbortError());
              return;
          }

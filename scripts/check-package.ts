@@ -35,6 +35,11 @@ try {
     root,
   );
   await mkdir(consumer);
+  // The selected Pi release may be newer than the consumer's dependency age gate.
+  await Bun.write(
+    join(consumer, "bunfig.toml"),
+    `[install]\nminimumReleaseAgeExcludes = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "@earendil-works/pi-coding-agent", "@earendil-works/pi-telemetry", "@earendil-works/pi-tui", "@earendil-works/chord"]\n`,
+  );
   await Bun.write(
     join(consumer, "package.json"),
     JSON.stringify({
@@ -96,7 +101,7 @@ try {
   const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), ["v1"]);
   deriveCandidateStatus(campaign.records(), candidate);
   derivePiSpend(campaign.records());
-  piRequest.parse({ protocol: "xean/pi-run/v2", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
+  piRequest.parse({ protocol: "xean/pi-run/v3", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
   piStoredResult.parse({ state: "succeeded", text: "x", transcript: [] });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), async run() { return null; } });

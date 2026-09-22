@@ -5,7 +5,7 @@ type Outcome = "succeeded" | "failed" | "cancelled";
 
 export function fakePiRequest(options: PiRunOptions): Json {
   const request = {
-    protocol: "xean/pi-run/v2",
+    protocol: "xean/pi-run/v3",
     model: {
       provider: options.model.provider,
       id: options.model.id,
@@ -59,7 +59,7 @@ export async function fakePiRequestCheckpoint(
       },
     },
     async () => ({
-      protocol: "xean/pi-request-completion/v1",
+      protocol: "xean/pi-request-completion/v2",
       parent: call,
       operation: {
         provider,

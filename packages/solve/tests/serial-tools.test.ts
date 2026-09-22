@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { streamSimple as streamCodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
@@ -198,12 +199,12 @@ test.each([platformModel, codexModel])(
         return model.api === "openai-responses"
           ? streamResponses(
               model as Parameters<typeof streamResponses>[0],
-              context,
+              normalizeContext(context),
               configured,
             )
           : streamCodexResponses(
               model as Parameters<typeof streamCodexResponses>[0],
-              context,
+              normalizeContext(context),
               configured,
             );
       },
@@ -228,9 +229,14 @@ test.each([platformModel, codexModel])(
         model,
         {
           messages: [
+            {
+              role: "system",
+              content: "",
+              ...(tools === undefined ? {} : { toolsAdded: tools }),
+              timestamp: 0,
+            },
             { role: "user", content: "Submit the result", timestamp: 0 },
           ],
-          ...(tools === undefined ? {} : { tools }),
         },
         {
           reasoning: "max",

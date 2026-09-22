@@ -34,9 +34,9 @@
     "check:all": "bun run check"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.85.1",
-    "@earendil-works/pi-ai": "0.85.1",
-    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-agent-core": "0.87.0",
+    "@earendil-works/pi-ai": "0.87.0",
+    "@earendil-works/pi-coding-agent": "0.87.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -49,6 +49,6 @@
   ],
   "overrides": {
     "tar": "^7.5.7",
-    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.85.1-xean.1.tgz"
+    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.87.0-xean.1.tgz"
   }
 }

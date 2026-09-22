@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { z } from "zod";
-import type {
-  Api,
-  AssistantMessage,
-  Model,
-  Models,
+import {
+  normalizeContext,
+  type Api,
+  type AssistantMessage,
+  type Model,
+  type Models,
 } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-agent-core";
 import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/openai-responses";
@@ -172,8 +173,8 @@ function scriptedAdapter(
         fetch: stubFetch,
       };
       return model.api === "openai-responses"
-        ? streamResponses(model, context, configured)
-        : streamCodex(model, context, configured);
+        ? streamResponses(model, normalizeContext(context), configured)
+        : streamCodex(model, normalizeContext(context), configured);
     },
   };
   return { models, sent };
@@ -262,6 +263,7 @@ describe.each([platformModel, codexModel])(
         expect(requests).toHaveLength(2);
         expect(requests[1]?.payload as unknown).toEqual(adapter.sent[1]);
         expect(result.transcript).toMatchObject([
+          { role: "system", toolsAdded: [{ name: "record" }] },
           { role: "user" },
           {
             role: "assistant",
@@ -547,6 +549,7 @@ describe.each([platformModel, codexModel])(
       expect(input(adapter.sent[2])).toEqual([...prior, first]);
       expect(input(adapter.sent[3])).toEqual([...prior, first, second]);
       expect(recovered.transcript).toMatchObject([
+        { role: "system", toolsAdded: [{ name: "record" }] },
         { role: "user" },
         { role: "assistant", stopReason: "toolUse" },
         { role: "toolResult" },
@@ -735,7 +738,7 @@ describe("reasoning recovery admission", () => {
       expect(
         convertResponsesMessages(
           platformModel,
-          { messages },
+          normalizeContext({ messages }),
           new Set([platformModel.provider]),
         ),
       ).toEqual([]);

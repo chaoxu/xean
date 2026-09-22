@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupSessionResources,
+  normalizeContext,
   type AssistantMessage,
-  type Context,
   type Model,
   type Models,
 } from "@earendil-works/pi-ai";
@@ -84,8 +84,16 @@ test.each(["openai-responses", "openai-codex-responses"] as const)(
           fetch: stubFetch,
         };
         return api === "openai-responses"
-          ? streamResponses({ ...configured, api }, context, opts)
-          : streamCodex({ ...configured, api }, context, opts);
+          ? streamResponses(
+              { ...configured, api },
+              normalizeContext(context),
+              opts,
+            )
+          : streamCodex(
+              { ...configured, api },
+              normalizeContext(context),
+              opts,
+            );
       },
     };
     const store = campaign();
@@ -151,7 +159,7 @@ test("native zero usage is measured and omitted usage stays unknown", async () =
         prompt: "Test",
         models: {
           streamSimple(_model, context, options) {
-            return streamCodex(model, context, {
+            return streamCodex(model, normalizeContext(context), {
               ...options,
               apiKey,
               transport: "sse",
@@ -238,10 +246,12 @@ test("Pi proxy WebSockets send full then delta input, recover missing context, a
     ...model,
     baseUrl: "http://127.0.0.1:" + server.port + "/backend-api",
   };
-  const context: Context = {
-    systemPrompt: "Offline fixture",
-    messages: [{ role: "user", content: "Begin", timestamp: 1 }],
-  };
+  const context = normalizeContext({
+    messages: [
+      { role: "system", content: "Offline fixture", timestamp: 0 },
+      { role: "user", content: "Begin", timestamp: 1 },
+    ],
+  });
   const run = async (key = apiKey): Promise<AssistantMessage> => {
     const stream = streamCodex(configured, context, {
       apiKey: key,
@@ -300,7 +310,9 @@ test("Pi proxy WebSockets send full then delta input, recover missing context, a
 
 test("proxy authentication requires an explicit custom endpoint", async () => {
   const direct = { ...model, baseUrl: "https://chatgpt.com/backend-api" };
-  const stream = streamCodex(direct, { messages: [] }, { apiKey });
+  const stream = streamCodex(direct, normalizeContext({ messages: [] }), {
+    apiKey,
+  });
   for await (const _event of stream) {
     /* No transport is reached. */
   }
