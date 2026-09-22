@@ -30,7 +30,7 @@ import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { z } from "zod";
 
 import { entryId, json } from "./schemas";
-import { ReasoningRecovery, withoutReasoning } from "./pi-recovery";
+import { ReasoningRecovery } from "./pi-recovery";
 import type {
   AuditedTool,
   Campaign,
@@ -847,9 +847,7 @@ async function runPiBody(
   // The transcript always retains reasoning; only the model-input view drops
   // it when the request declines replay.
   const modelInput = (messages: AgentMessage[]): AgentMessage[] =>
-    exact.replayReasoning === false
-      ? withoutReasoning(recovery.forModel(messages))
-      : recovery.forModel(messages);
+    recovery.forModel(messages, exact.replayReasoning !== false);
   try {
     let responses = 0;
     let errorRecoveries = 0;

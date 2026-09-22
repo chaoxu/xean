@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   defineTool,
+  returnedToolSubmission,
   type Campaign,
   type Entry,
   type EntryId,
@@ -64,7 +65,7 @@ import {
   sourcePrompt,
   localSourceRequest,
   statement as statementSchema,
-  succeededSubmission,
+  succeededOutput,
   returnedOutput,
   explorerResult,
   verdictsFor,
@@ -1200,13 +1201,23 @@ export function readPiSubmission<S extends z.ZodType>(
   | undefined {
   const partial = partialExplorer && roleCall.tool === roleTools.explorer;
   const saved = partial ? savedExplorerSubmission(records, call) : undefined;
-  const completed = succeededSubmission(records, call, roleCall.tool, saved);
-  const submission = partial ? saved : completed;
-  return submission === undefined
+  const completed = succeededOutput(records, call);
+  let input: Json | undefined = saved?.input;
+  if (!partial && completed !== undefined) {
+    try {
+      input =
+        roleCall.tool === roleTools.explorer
+          ? savedExplorerSubmission(records, call)?.input
+          : returnedToolSubmission(records, call, roleCall.tool).input;
+    } catch {
+      return undefined;
+    }
+  }
+  return input === undefined
     ? undefined
     : {
-        settled: submission.settled,
-        value: roleCall.schema.parse(submission.input),
+        settled: saved?.settled ?? completed!.settled,
+        value: roleCall.schema.parse(input),
         ...(saved !== undefined
           ? { emptySubmission: saved.emptySubmission }
           : {}),

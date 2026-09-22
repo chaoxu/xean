@@ -1,12 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import {
-  returnedToolSubmission,
-  type Entry,
-  type EntryId,
-  type Json,
-  type Reader,
-} from "xean";
+import { type Entry, type EntryId, type Json, type Reader } from "xean";
 import { z } from "zod";
 
 import { byId, supportClosure } from "./support";
@@ -1186,30 +1180,6 @@ export function savedExplorerSubmission(
           solution: last.value.solution,
         },
       };
-}
-
-export function succeededSubmission(
-  records: readonly Entry[],
-  call: EntryId,
-  tool: string,
-  savedExplorer?: ReturnType<typeof savedExplorerSubmission>,
-): { readonly settled: EntryId; readonly input: Json } | undefined {
-  const returned = succeededOutput(records, call);
-  if (returned === undefined) return undefined;
-  try {
-    if (tool === roleTools.explorer) {
-      const saved = savedExplorer ?? savedExplorerSubmission(records, call);
-      return saved === undefined
-        ? undefined
-        : { settled: returned.settled, input: saved.input };
-    }
-    return {
-      settled: returned.settled,
-      input: returnedToolSubmission(records, call, tool).input,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 export interface Roles {

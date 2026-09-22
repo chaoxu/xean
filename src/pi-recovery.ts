@@ -78,16 +78,22 @@ export class ReasoningRecovery {
     };
   }
 
-  forModel(messages: AgentMessage[]): AgentMessage[] {
+  forModel(messages: AgentMessage[], replayReasoning = true): AgentMessage[] {
     const ids = new Set<string>();
-    return messages.flatMap((message) => {
-      if (message.role !== "assistant" || message.stopReason !== "error") {
-        if (message.role === "assistant") {
-          for (const block of message.content) {
-            if (block.type !== "thinking") continue;
-            const id = this.itemId(block);
-            if (id !== undefined) ids.add(id);
-          }
+    return messages.flatMap((message): AgentMessage[] => {
+      if (message.role !== "assistant") return [message];
+      if (!replayReasoning) {
+        if (message.stopReason === "error") return [];
+        const content = message.content.filter(
+          (block) => block.type !== "thinking",
+        );
+        return content.length === 0 ? [] : [{ ...message, content }];
+      }
+      if (message.stopReason !== "error") {
+        for (const block of message.content) {
+          if (block.type !== "thinking") continue;
+          const id = this.itemId(block);
+          if (id !== undefined) ids.add(id);
         }
         return [message];
       }
@@ -103,18 +109,4 @@ export class ReasoningRecovery {
       return [{ ...message, content: blocks, stopReason: "stop" as const }];
     });
   }
-}
-
-/** The model-input view without reasoning blocks; the transcript keeps them. */
-export function withoutReasoning(messages: AgentMessage[]): AgentMessage[] {
-  return messages.flatMap((message): AgentMessage[] => {
-    if (message.role !== "assistant") return [message];
-    const content = message.content.filter(
-      (block): block is Exclude<typeof block, ThinkingContent> =>
-        block.type !== "thinking",
-    );
-    if (content.length === 0) return [];
-    const trimmed: AssistantMessage = { ...message, content };
-    return [trimmed];
-  });
 }
