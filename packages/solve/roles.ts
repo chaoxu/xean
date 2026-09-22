@@ -408,8 +408,7 @@ const actionRoles = ["explorer", "literature", "verifier"] as const;
 export const coordinatorResult = z
   .strictObject({
     filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
-    // A verifier action may pair both fields to dispatch Explorer concurrently
-    // when the frozen coordinator behavior permits overlap.
+    // A verifier action includes both fields whenever overlap is enabled.
     explorerGuidance: nonblank.optional(),
     support: z.array(noteId).optional(),
     verify: z.array(verification),
@@ -467,8 +466,8 @@ export type CoordinatorResult = z.output<typeof coordinatorResult>;
  * The coordinator submission schema over these notes. `allowedActions` lists
  * the roles the frozen coordinator behavior permits next, the submission must
  * choose one of them, and `requiredVerification` lists the notes that
- * behavior requires in the verify list. `allowOverlap` permits a verifier
- * action to dispatch Explorer concurrently by supplying guidance and support.
+ * behavior requires in the verify list. `overlap` requires a verifier action
+ * to dispatch Explorer concurrently by supplying guidance and support.
  */
 export function coordinatorResultFor(
   notes: readonly Pick<
@@ -477,7 +476,7 @@ export function coordinatorResultFor(
   >[],
   allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
   requiredVerification: readonly string[] = [],
-  allowOverlap = false,
+  overlap = false,
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -489,13 +488,13 @@ export function coordinatorResultFor(
   return coordinatorResult.superRefine((value, ctx) => {
     if (
       value.action.role === "verifier" &&
-      value.explorerGuidance !== undefined &&
-      !allowOverlap
+      (value.explorerGuidance !== undefined) !== overlap
     ) {
       ctx.addIssue({
         code: "custom",
-        message:
-          "concurrent Explorer requires overlap enabled with verification decide",
+        message: overlap
+          ? "overlap requires explorer guidance and support on every verifier action"
+          : "concurrent Explorer requires overlap enabled",
         path: ["explorerGuidance"],
       });
     }

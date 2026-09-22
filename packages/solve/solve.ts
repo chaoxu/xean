@@ -49,7 +49,7 @@ const usage = `Usage:
 
 run starts or resumes the durable workflow: the coordinator chooses explorer,
 literature, or verifier, and control returns after the dispatched work settles.
-coordinatorBehavior.overlap enables optional concurrent Explorer and verification.
+coordinatorBehavior.overlap pairs every verifier dispatch with Explorer when true.
 init creates or matches its declaration without provider setup or model calls.
 --turns sets the initial allowance (default 20), outside the frozen settings.
 run --turns N --id ID adds an allowance to an exhausted campaign, then resumes.
