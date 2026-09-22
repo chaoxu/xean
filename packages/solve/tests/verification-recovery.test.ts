@@ -279,98 +279,6 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   });
 });
 
-test("an inconclusive native source check respects the turn limit", async () => {
-  const configuration = workflowConfiguration({
-    task,
-    settings: roleSettings(),
-  });
-  const path = campaignPath();
-  const campaign = await createWorkflowCampaign(path, configuration, 2);
-  const drive = dependencies([
-    ...start,
-    correctness(),
-    sourceCheck("INCONCLUSIVE"),
-  ]);
-  expect(
-    await runWorkflow(
-      campaign,
-      createPiRoles(campaign, configuration.settings, drive),
-    ),
-  ).toMatchObject({
-    kind: "turn-limit",
-    turns: 2,
-    notes: [{ verified: false, dead: false }],
-  });
-  expect(drive.codexCalls).toHaveLength(1);
-  expect(drive.allCalls).toHaveLength(5);
-  campaign.close();
-
-  expect(await inspectCampaign(path)).toMatchObject({
-    result: { schemaVersion: 2, outcome: "turn-limit", turns: 2 },
-  });
-});
-
-test("a corrected reconstruction statement preserves the note and all successful checks", async () => {
-  const path = campaignPath();
-  const configuration = config();
-  const campaign = await createWorkflowCampaign(path, configuration, 4);
-  const drive = dependencies([
-    ...beforeReconstruction,
-    correction("The precise proposition P."),
-    proof("A proof from the corrected statement."),
-    reconstruction(),
-  ]);
-  const phase = await runWorkflow(
-    campaign,
-    createPiRoles(campaign, configuration.settings, drive),
-  );
-  expect(phase).toMatchObject({
-    kind: "accepted",
-    turns: 2,
-    note: { id: "n1", text },
-  });
-  expect(drive.allCalls.map(({ label }) => label)).toEqual([
-    "xean-solve/coordinator",
-    "xean-solve/explorer",
-    "xean-solve/coordinator",
-    verifierLabels.correctness,
-    verifierLabels.source,
-    verifierLabels.requirements,
-    `${verifierLabels.reconstruction}/statement`,
-    `${verifierLabels.reconstruction}/proof`,
-    verifierLabels.reconstruction,
-    `${verifierLabels.reconstruction}/proof`,
-    verifierLabels.reconstruction,
-  ]);
-  expect(drive.allCalls[9]?.prompt).toContain("The precise proposition P.");
-  expect(drive.allCalls[9]?.prompt).not.toContain("ORIGINAL_PROOF");
-  expect(
-    campaign
-      .records()
-      .filter(
-        (entry) =>
-          entry.kind === "call" && entry.label === "xean-solve/verification",
-      ),
-  ).toHaveLength(1);
-  expect(
-    campaign.records().filter((entry) => entry.kind === "evidence"),
-  ).toHaveLength(4);
-  const noCalls = dependencies([]);
-  await runWorkflow(
-    campaign,
-    createPiRoles(campaign, configuration.settings, noCalls),
-  );
-  expect(noCalls.allCalls).toHaveLength(0);
-  campaign.close();
-  const inspected = (await inspectCampaign(path)) as {
-    calls: { submission?: unknown }[];
-  };
-  expect(inspected.calls[8]?.submission).toMatchObject({
-    statement: "The precise proposition P.",
-    verdicts: [],
-  });
-});
-
 test("reopening after a corrected proof settled reuses it and retries only the failed verdict call", async () => {
   const path = campaignPath();
   const configuration = config();
@@ -387,6 +295,18 @@ test("reopening after a corrected proof settled reuses it and retries only the f
       createPiRoles(campaign, configuration.settings, first),
     ),
   ).rejects.toThrow("interrupted verifier");
+  expect(first.allCalls.at(-2)?.prompt).toContain("The precise proposition P.");
+  expect(first.allCalls.at(-2)?.prompt).not.toContain("ORIGINAL_PROOF");
+  expect((await inspectCampaign(path)) as any).toMatchObject({
+    calls: expect.arrayContaining([
+      expect.objectContaining({
+        submission: expect.objectContaining({
+          statement: "The precise proposition P.",
+          verdicts: [],
+        }),
+      }),
+    ]),
+  });
   campaign.close();
 
   campaign = openCampaign(path);
@@ -396,7 +316,7 @@ test("reopening after a corrected proof settled reuses it and retries only the f
       campaign,
       createPiRoles(campaign, configuration.settings, resumed),
     ),
-  ).toMatchObject({ kind: "accepted", turns: 2 });
+  ).toMatchObject({ kind: "accepted", turns: 2, note: { id: "n1", text } });
   expect(resumed.allCalls.map(({ label }) => label)).toEqual([
     verifierLabels.reconstruction,
   ]);

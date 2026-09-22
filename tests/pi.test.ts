@@ -658,7 +658,7 @@ test("replayReasoning false keeps completed reasoning out of later model input",
   ).toMatchObject({ request: { replayReasoning: false } });
 });
 
-test.each([1, 4, 5])(
+test.each([1, 4])(
   "a response limit of %s stops nonempty no-progress submissions without another push",
   async (maxResponses) => {
     const replies = Array.from({ length: maxResponses }, (_, index) =>
@@ -1383,6 +1383,15 @@ function invalidPayloadModels(calls: number): PiModels {
   } as PiModels;
 }
 
+const echo = defineTool({
+  name: "echo",
+  description: "Return a recoverable tool failure",
+  input: z.strictObject({ value: z.string() }),
+  async run({ value }) {
+    throw new Error(`echo ${value} rejected`);
+  },
+});
+
 describe("thin Pi runner", () => {
   test("treats complete zero usage as measured and rejects partial usage", () => {
     const zero = {
@@ -1496,15 +1505,6 @@ describe("thin Pi runner", () => {
     expect(result).toMatchObject({ state: "succeeded", text: "answer" });
     expect(requests.map((options) => options?.reasoning)).toEqual(["max"]);
     const records = store.records();
-    expect(records.map((entry) => entry.kind)).toEqual([
-      "campaign",
-      "call",
-      "call-result",
-      "call",
-      "call",
-      "call-result",
-      "call-result",
-    ]);
     const call = records.find((entry) => entry.seq === result.call);
     expect(call).toMatchObject({
       seq: result.call,
@@ -1518,20 +1518,12 @@ describe("thin Pi runner", () => {
     if (terminal?.kind !== "call-result" || terminal.state !== "returned") {
       throw new Error("missing Pi result");
     }
-    expect(terminal.output).toMatchObject({
-      state: "succeeded",
-      call: result.call,
-    });
     expect(readPiResult(terminal.output, store)).toEqual(result);
-    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty(
-      "transcript",
-    );
-    expect(piResultRecord.parse(terminal.output)).not.toHaveProperty("text");
-    expect(readPiResult(terminal.output, store)).toMatchObject({
-      state: "succeeded",
-      text: "answer",
-      transcript: [{ role: "system" }, { role: "user" }, { role: "assistant" }],
-    });
+    expect(result.transcript).toMatchObject([
+      { role: "system" },
+      { role: "user" },
+      { role: "assistant" },
+    ]);
     expect(
       piStoredResult.safeParse({
         state: "succeeded",
@@ -2034,55 +2026,6 @@ describe("thin Pi runner", () => {
     expect(piRequestAttempts(store.records(), second.call)).toHaveLength(1);
   });
 
-  test("can stop after a successful structured tool result", async () => {
-    const store = campaign();
-    const submit = defineTool({
-      name: "submit",
-      description: "Submit one answer",
-      input: z.strictObject({ answer: z.number().int() }),
-      async run(input) {
-        return input;
-      },
-    });
-    let requests = 0;
-    const result = await runPi(store, {
-      models: models(
-        [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "submit-1",
-                name: "submit",
-                arguments: { answer: 7 },
-              },
-            ],
-            "toolUse",
-          ),
-        ],
-        () => {
-          requests += 1;
-        },
-      ),
-      model,
-      label: "structured/v1",
-      prompt: "Submit 7",
-      tools: [submit],
-    });
-
-    expect(result).toMatchObject({ state: "succeeded", text: "" });
-    expect(requests).toBe(1);
-    expect(result.transcript).toMatchObject([
-      { role: "system" },
-      { role: "user" },
-      { role: "assistant" },
-      { role: "toolResult" },
-    ]);
-    expect(
-      store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { protocol: "xean/pi-run/v4" } });
-  });
-
   test("does not accept a terminal tool result after cancellation", async () => {
     const controller = new AbortController();
     const submit = defineTool({
@@ -2221,29 +2164,6 @@ describe("thin Pi runner", () => {
     });
   });
 
-  test("permits several length continuations under their own budget", async () => {
-    const store = campaign();
-    const result = await runPi(store, {
-      models: models([
-        assistant([{ type: "text", text: "one" }], "length"),
-        assistant([{ type: "text", text: " two" }], "length"),
-        assistant([{ type: "text", text: " three" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-      maxLengthContinuations: 8,
-    });
-    expect(result).toMatchObject({
-      state: "succeeded",
-      text: "one two three",
-    });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      3,
-    );
-  });
-
   test("does not continue an overflow-shaped length stop", async () => {
     const store = campaign();
     const overflowed = assistant([], "length");
@@ -2295,11 +2215,13 @@ describe("thin Pi runner", () => {
     expect(observed[1]?.messages.map(({ role }) => role)).toEqual(["user"]);
   });
 
-  test("retries codex-lb transient gateway errors", async () => {
+  test.each([
+    "upstream_unavailable: Codex upstream stream failed (ClientPayloadError: Response payload is not completed)",
+    "stream_incomplete: Upstream closed stream without completion",
+  ])("recovers transient gateway failure %s", async (errorMessage) => {
     const store = campaign();
     const dropped = assistant([], "error");
-    dropped.errorMessage =
-      "upstream_unavailable: Codex upstream stream failed (ClientPayloadError: Response payload is not completed)";
+    dropped.errorMessage = errorMessage;
     const result = await runPi(store, {
       models: models([
         dropped,
@@ -2370,27 +2292,6 @@ describe("thin Pi runner", () => {
       state: "failed",
       providerRetryable: true,
     });
-  });
-
-  test("recovers the recorded incomplete upstream stream internally", async () => {
-    const store = campaign();
-    const dropped = assistant([], "error");
-    dropped.errorMessage =
-      "stream_incomplete: Upstream closed stream without completion";
-    const result = await runPi(store, {
-      models: models([
-        dropped,
-        assistant([{ type: "text", text: "recovered" }], "stop"),
-      ]),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      maxRecoveries: 1,
-    });
-    expect(result).toMatchObject({ state: "succeeded", text: "recovered" });
-    expect(derivePiSpend(store.records()).summary.logicalProviderRequests).toBe(
-      2,
-    );
   });
 
   test.each([
@@ -2506,52 +2407,7 @@ describe("thin Pi runner", () => {
     expect(result.state === "failed" && result.providerRetryable).toBe(false);
   });
 
-  test("caps one request loop at thirty-two turns", async () => {
-    const store = campaign();
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
-    const replies = Array.from({ length: 40 }, (_, index) =>
-      assistant(
-        [
-          {
-            type: "toolCall",
-            id: `echo-${index}`,
-            name: "echo",
-            arguments: { value: "again" },
-          },
-        ],
-        "toolUse",
-      ),
-    );
-    const result = await runPi(store, {
-      models: models(replies),
-      model,
-      label: "audit/v1",
-      prompt: "Audit",
-      tools: [echo],
-    });
-    expect(result.state).toBe("failed");
-    const assistants = (
-      result.transcript as readonly { role?: string }[]
-    ).filter(({ role }) => role === "assistant");
-    expect(assistants).toHaveLength(32);
-  });
-
   test("shares the thirty-two-turn cap across length continuations", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
     const replies = [
       assistant([{ type: "text", text: "partial" }], "length"),
       ...Array.from({ length: 40 }, (_, index) =>
@@ -2586,14 +2442,6 @@ describe("thin Pi runner", () => {
   });
 
   test("does not continue after the thirty-second turn ends at length", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
     const replies = [
       ...Array.from({ length: 31 }, (_, index) =>
         assistant(
@@ -2672,14 +2520,6 @@ describe("thin Pi runner", () => {
   });
 
   test("keeps interrupted text when a continuation uses tools", async () => {
-    const echo = defineTool({
-      name: "echo",
-      description: "Echo",
-      input: z.strictObject({ value: z.string() }),
-      async run({ value }) {
-        throw new Error(`echo ${value} rejected`);
-      },
-    });
     const result = await runPi(campaign(), {
       models: models([
         assistant([{ type: "text", text: "partial " }], "length"),

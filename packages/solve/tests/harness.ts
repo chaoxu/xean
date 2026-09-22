@@ -73,7 +73,7 @@ export function roleSettings(): SolveSettings {
   return {
     window: 100_000,
     maxExplorerResponses: 1,
-    coordinatorBehavior: defaultCoordinatorBehavior,
+    coordinatorBehavior: { ...defaultCoordinatorBehavior },
     explorer: profile,
     coordinator: profile,
     correctness: profile,

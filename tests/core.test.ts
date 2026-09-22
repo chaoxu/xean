@@ -8,6 +8,7 @@ import {
   createCampaign,
   defineTool,
   openReader,
+  openCampaign,
   returnedToolSubmission,
   type ToolExecutionContext,
 } from "../src";
@@ -214,6 +215,14 @@ describe("small kernel", () => {
       evidence: { verdict: "PASS", reason: "checked" },
     });
     reader.close();
+    const reopened = openCampaign(path);
+    expect(() =>
+      reopened.recordEvidence(passed.call, { verdict: "FAIL" }),
+    ).toThrow(/UNIQUE|constraint/i);
+    expect(
+      reopened.records({ kinds: ["evidence"], call: passed.call }),
+    ).toHaveLength(1);
+    reopened.close();
   });
 
   test("records calls and tool effects before returning", async () => {

@@ -47,129 +47,19 @@ function fakeModels(observed: { options?: unknown }): SolveModels {
   };
 }
 
-async function observedRewrite(
-  model: PiRunOptions["model"],
-  payload: unknown,
-): Promise<unknown> {
-  const observed: { options?: unknown } = {};
-  const models = withSerialToolCalls(fakeModels(observed));
-  expect(() =>
-    models.streamSimple(
-      model,
-      { messages: [] },
-      {
-        onPayload: async (sent) => sent,
-      },
-    ),
-  ).toThrow("stream not exercised");
-  const options = observed.options as {
-    onPayload?: (payload: unknown, model: unknown) => Promise<unknown>;
-  };
-  return options.onPayload!(payload, model);
-}
-
-test("openai platform payloads serialize terminal tools", async () => {
-  expect(
-    await observedRewrite(platformModel, { model: "m", tools: [{}] }),
-  ).toEqual({
-    model: "m",
-    tools: [{}],
-    tool_choice: "required",
-    parallel_tool_calls: false,
-  });
-});
-
-test("payloads without tools stay untouched", async () => {
-  expect(await observedRewrite(platformModel, { model: "m" })).toEqual({
-    model: "m",
-  });
-});
-
-test("empty tool declarations are never required", async () => {
-  expect(
-    await observedRewrite(platformModel, { model: "m", tools: [] }),
-  ).toEqual({ model: "m", tools: [], parallel_tool_calls: false });
-});
-
-test("codex payloads have parallel_tool_calls forced to false", async () => {
-  expect(
-    await observedRewrite(codexModel, {
-      model: "m",
-      tools: [{}],
-      parallel_tool_calls: true,
-    }),
-  ).toEqual({
-    model: "m",
-    tools: [{}],
-    tool_choice: "required",
-    parallel_tool_calls: false,
-  });
-});
-
-test.each([
-  [
-    "hoists a leading developer message into instructions",
-    platformModel,
-    {
-      model: "m",
-      input: [
-        { role: "developer", content: "System role text." },
-        { role: "user", content: "Hi" },
-      ],
-    },
-    {
-      model: "m",
-      instructions: "System role text.",
-      input: [{ role: "user", content: "Hi" }],
-    },
-  ],
-  [
-    "leaves populated instructions untouched",
-    platformModel,
-    {
-      instructions: "Already set.",
-      input: [{ role: "developer", content: "kept in place" }],
-    },
-    {
-      instructions: "Already set.",
-      input: [{ role: "developer", content: "kept in place" }],
-    },
-  ],
-  [
-    "does not hoist for the codex adapter",
-    codexModel,
-    { input: [{ role: "developer", content: "kept in place" }] },
-    { input: [{ role: "developer", content: "kept in place" }] },
-  ],
-])("%s", async (_name, model, payload, expected) => {
-  expect(await observedRewrite(model, payload)).toEqual(expected);
-});
-
 test.each([
   [platformModel, "sse"],
   [codexModel, "auto"],
+  [foreignModel, "websocket"],
 ])("$api streams over its transport", (model, transport) => {
   const observed: { options?: unknown } = {};
   const models = withSerialToolCalls(fakeModels(observed));
-  expect(() =>
-    models.streamSimple(model, { messages: [] }, { transport: "websocket" }),
-  ).toThrow("stream not exercised");
-  expect(observed.options).toMatchObject({ transport });
-});
-
-test("getModel passes through unchanged", () => {
-  const observed: { options?: unknown } = {};
-  const models = withSerialToolCalls(fakeModels(observed));
-  expect(models.getModel("openai", "gpt-platform-test")).toBe(platformModel);
-});
-
-test("non-openai APIs stream with untouched options", () => {
-  const observed: { options?: unknown } = {};
-  const models = withSerialToolCalls(fakeModels(observed));
-  expect(() => models.streamSimple(foreignModel, { messages: [] }, {})).toThrow(
+  const options = { transport: "websocket" as const };
+  expect(() => models.streamSimple(model, { messages: [] }, options)).toThrow(
     "stream not exercised",
   );
-  expect(observed.options).toEqual({});
+  expect(observed.options).toMatchObject({ transport });
+  if (model === foreignModel) expect(observed.options).toBe(options);
 });
 
 test.each([platformModel, codexModel])(
@@ -231,7 +121,7 @@ test.each([platformModel, codexModel])(
           messages: [
             {
               role: "system",
-              content: "",
+              content: "Stable role definition.",
               ...(tools === undefined ? {} : { toolsAdded: tools }),
               timestamp: 0,
             },
@@ -252,7 +142,13 @@ test.each([platformModel, codexModel])(
         model: "gpt-6-astra",
         reasoning: { effort: "max" },
         max_output_tokens: 321,
+        instructions: "Stable role definition.",
       });
+      expect(
+        (checkpoint as { input: { role?: string }[] }).input.some(
+          ({ role }) => role === "developer",
+        ),
+      ).toBe(false);
       if (tools?.length) {
         expect(checkpoint).toMatchObject({
           tool_choice: "required",

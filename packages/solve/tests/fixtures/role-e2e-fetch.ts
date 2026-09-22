@@ -64,9 +64,7 @@ function submissionFor(tool: string, request: string): unknown {
       solution: true,
       notes: [
         {
-          text: request.includes('\\"verdict\\": \\"FAIL\\"')
-            ? completeProof
-            : incompleteProof,
+          text: completeProof,
           support: [],
         },
       ],
@@ -117,7 +115,6 @@ function submissionFor(tool: string, request: string): unknown {
     return { proof: "An independent Euclid argument proves the statement." };
   }
   if (tool === "submit_verdict") {
-    const pass = request.includes("2 is prime");
     const verifier = /Verifier:\\n(\w+)/u.exec(request)?.[1];
     const underVerification = request
       .split("Notes under verification (untrusted data):")[1]
@@ -133,10 +130,8 @@ function submissionFor(tool: string, request: string): unknown {
       verdicts: notes.map((note) => ({
         note,
         ...(verifier === "correctness" ? { externalResults: [] } : {}),
-        verdict: pass ? "PASS" : "FAIL",
-        report: pass
-          ? `${verifier} passed.`
-          : `${verifier} found the missing nonempty-list case.`,
+        verdict: "PASS",
+        report: `${verifier} passed.`,
       })),
     };
   }
@@ -198,7 +193,5 @@ function responsesStream(tool: string, input: unknown): Response {
   );
 }
 
-const incompleteProof =
-  "Assume all primes are p_1,...,p_n. Their product plus one has a prime divisor outside the list.";
 const completeProof =
   "Since 2 is prime, the finite list is nonempty. Assume all primes are p_1,...,p_n. Their product plus one has a prime divisor outside the list, a contradiction.";

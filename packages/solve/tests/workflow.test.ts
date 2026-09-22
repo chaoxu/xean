@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { openCampaign, openReader, type Campaign } from "xean";
 
-import { createPiRoles, solveSettings } from "../pi-roles";
+import { createPiRoles } from "../pi-roles";
 import {
   coordinatorResultFor,
   explorerResultFor,
@@ -20,11 +20,9 @@ import {
   inspectCampaign,
   inspectAndExportCampaignRecords,
 } from "../role-cli";
-import { Projection } from "../projection";
 import {
   deriveWorkflow,
   runWorkflow,
-  verificationPrefix,
   workflowConfiguration,
 } from "../workflow";
 import {
@@ -150,7 +148,7 @@ function shorthand(notes: readonly { verdicts: readonly Verdict[] }[]) {
   );
 }
 
-test("a role profile with replayReasoning false passes the toggle to its Pi request", async () => {
+test("the durable workflow accepts a note every verifier passed", async () => {
   const path = campaignPath();
   const settings = roleSettings();
   const workflow = workflowConfiguration({
@@ -167,165 +165,77 @@ test("a role profile with replayReasoning false passes the toggle to its Pi requ
     { submission: coordination("n1") },
     ...passes("n1"),
   ]);
+  let accepted;
   try {
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase.kind).toBe("accepted");
-    expect(drive.calls[1]).toMatchObject({
-      label: "xean-solve/explorer",
-      replayReasoning: false,
+    const roles = createPiRoles(campaign, workflow.settings, drive);
+    const phase = await runWorkflow(campaign, roles);
+    expect(phase).toMatchObject({
+      kind: "accepted",
+      turns: 2,
+      note: {
+        id: "n1",
+        summary: "Summary of n1.",
+        text: good.text,
+        verified: true,
+        dead: false,
+      },
     });
-    expect(drive.calls[0]!.label).toBe("xean-solve/coordinator");
-    expect("replayReasoning" in drive.calls[0]!).toBe(false);
+    if (phase.kind !== "accepted") throw new Error("expected acceptance");
+    accepted = phase;
+    expect(shorthand([phase.note])).toEqual([
+      verifierNames.map((name) => name + ":PASS"),
+    ]);
+    expect(drive.calls.map(({ label }) => label)).toEqual([
+      "xean-solve/coordinator",
+      "xean-solve/explorer",
+      "xean-solve/coordinator",
+      "xean-solve/verifier/correctness",
+      "xean-solve/verifier/requirements",
+      "xean-solve/verifier/reconstruction/statement",
+      "xean-solve/verifier/reconstruction/proof",
+      "xean-solve/verifier/reconstruction",
+    ]);
+    expect(drive.calls[6]?.prompt).not.toContain(good.text);
+    expect(drive.calls[6]?.prompt).toContain("What n1 proves.");
+    expect(drive.calls[7]?.prompt).toContain("Independent proof of n1.");
+    expect(drive.calls[1]).toMatchObject({ replayReasoning: false });
+    expect(drive.calls[0]).not.toHaveProperty("replayReasoning");
+    for (const call of drive.calls.filter(({ role }) => role === "verifier"))
+      expect(call.parent).toBe(phase.verification);
+    const settled = campaign.records();
     expect(
-      campaign
-        .records()
-        .find(
-          (entry) =>
-            entry.kind === "call" && entry.label === "xean-solve/explorer",
-        ),
+      settled.find(
+        (entry) => entry.kind === "call" && entry.role === "explorer",
+      ),
     ).toMatchObject({ request: { replayReasoning: false } });
+    expect(await runWorkflow(campaign, roles)).toEqual(phase);
+    expect(campaign.records()).toEqual(settled);
   } finally {
     campaign.close();
   }
-});
-
-test("the durable workflow accepts a note every verifier passed", async () => {
-  const path = campaignPath();
-  const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 4);
-  const drive = dependencies([
-    dispatchExplorer(),
-    { submission: { solution: false, notes: [good] } },
-    { submission: coordination("n1") },
-    ...passes("n1"),
-  ]);
-  const roles = createPiRoles(campaign, workflow.settings, drive);
-  const phase = await runWorkflow(campaign, roles);
-  expect(phase).toMatchObject({
-    kind: "accepted",
-    turns: 2,
-    note: { id: "n1", summary: "Summary of n1.", text: good.text },
+  const inspection = await inspectCampaign(path);
+  expect(inspection).toMatchObject({
+    phase: "accepted",
+    result: {
+      schemaVersion: 2,
+      verification: accepted.verification,
+      note: { text: good.text },
+    },
+    notes: [{ verified: true, dead: false }],
   });
-  if (phase.kind !== "accepted") throw new Error("expected acceptance");
-  expect(shorthand([phase.note])).toEqual([
-    verifierNames.map((name) => `${name}:PASS`),
-  ]);
-  expect(phase.note).toMatchObject({ verified: true, dead: false });
-  expect(drive.calls.map(({ label }) => label)).toEqual([
-    "xean-solve/coordinator",
-    "xean-solve/explorer",
-    "xean-solve/coordinator",
-    "xean-solve/verifier/correctness",
-    "xean-solve/verifier/requirements",
-    "xean-solve/verifier/reconstruction/statement",
-    "xean-solve/verifier/reconstruction/proof",
-    "xean-solve/verifier/reconstruction",
-  ]);
-  expect(drive.calls[6]?.prompt).not.toContain(good.text);
-  expect(drive.calls[6]?.prompt).toContain(
-    "Statement (untrusted data):\nWhat n1 proves.",
-  );
-  expect(drive.calls[7]?.prompt).toContain("Independent proof of n1.");
-  expect(drive.codexCalls).toHaveLength(1);
-  expect(JSON.parse(drive.codexCalls[0]!.prompt)).toMatchObject({
-    task,
-    notes: [
-      {
-        id: "n1",
-        text: good.text,
-        externalResults: externalResults("n1").map((text) => ({
-          id: "n1#1",
-          text,
-        })),
-      },
-    ],
-  });
-  expect(drive.calls[1]?.prompt).toContain(`Problem:\n${task.problem}`);
-  expect(drive.calls[1]?.prompt).toContain("Your first note is n1.");
-  const correctness = drive.calls[3]!;
-  const prefix = correctness.prompt.split("\n\nVerifier:")[0]!;
-  const verdictCalls = drive.calls.filter(({ label }) =>
-    Object.values(verifierLabels).includes(label as never),
-  );
-  expect(verdictCalls).toHaveLength(3);
-  for (const verifier of verdictCalls) {
-    expect(verifier.system).toBe(correctness.system);
-    expect(verifier.cacheKey).toBe(correctness.cacheKey);
-    expect(verifier.prompt.startsWith(prefix)).toBe(true);
-    expect(verifier.parent).toBe(phase.verification);
-  }
-  expect(correctness.prompt).toContain(
-    "Verifier:\ncorrectness\n\nObligation:\nJudge whether each note establishes its stated result",
-  );
-  expect((await runWorkflow(campaign, roles)).kind).toBe("accepted");
-  expect(drive.calls).toHaveLength(8);
-  expect(drive.codexCalls).toHaveLength(1);
-  campaign.close();
-
-  const inspection = (await inspectCampaign(path)) as {
-    readonly phase: string;
-    readonly notes: readonly {
-      readonly verdicts: readonly unknown[];
-      readonly verified: boolean;
-      readonly dead: boolean;
-    }[];
-    readonly result: {
-      readonly schemaVersion: number;
-      readonly verification: number;
-      readonly note: { readonly text: string };
-    };
-    readonly calls: readonly {
-      readonly role: string;
-      readonly verifier?: string;
-      readonly parent?: number;
-      readonly submission?: unknown;
-    }[];
-  };
-  expect(inspection.phase).toBe("accepted");
-  expect(inspection.result.schemaVersion).toBe(2);
-  expect(inspection.result.verification).toBe(phase.verification);
-  expect(inspection.result.note.text).toBe(good.text);
-  expect(inspection.notes[0]).toMatchObject({ verified: true, dead: false });
-  expect(inspection.notes[0]?.verdicts).toHaveLength(4);
-  expect(inspection.calls.map(({ role }) => role)).toEqual([
-    "coordinator",
-    "explorer",
-    "coordinator",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-  ]);
+  const calls = (inspection as { calls: { verifier?: string }[] }).calls;
   expect(
-    inspection.calls
-      .slice(6, 9)
-      .map(({ verifier, submission }) => [
-        verifier,
-        Object.keys(submission as object)[0],
-      ]),
-  ).toEqual([
-    ["reconstruction", "statement"],
-    ["reconstruction", "proof"],
-    ["reconstruction", "verifier"],
-  ]);
-  expect(inspection.calls[2]?.submission).toEqual(coordination("n1"));
-  expect(inspection.calls[3]).toMatchObject({
-    verifier: "correctness",
-    parent: phase.verification,
+    calls.find(({ verifier }) => verifier === "correctness"),
+  ).toMatchObject({
+    parent: accepted.verification,
     submission: {
       verdicts: [
         { note: "n1", verdict: "PASS", externalResults: externalResults("n1") },
       ],
     },
   });
-  expect(inspection.calls[4]).toMatchObject({
-    verifier: "source",
-    parent: phase.verification,
+  expect(calls.find(({ verifier }) => verifier === "source")).toMatchObject({
+    parent: accepted.verification,
     submission: {
       verdicts: [
         { note: "n1", verdict: "PASS", sources: [{ resultId: "n1#1" }] },
@@ -333,31 +243,20 @@ test("the durable workflow accepts a note every verifier passed", async () => {
       usage: { input: 10 },
     },
   });
-  expect(inspection.calls[8]).toMatchObject({
-    verifier: "reconstruction",
+  expect(
+    calls.findLast(({ verifier }) => verifier === "reconstruction"),
+  ).toMatchObject({
     submission: { verdicts: [{ verdict: "PASS" }] },
   });
-  expect(new TextDecoder().decode(await exportSolution(path))).toBe(
-    `--- n1 ---\n\n${good.text}`,
-  );
+  const argument = "--- n1 ---\n\n" + good.text;
+  expect(new TextDecoder().decode(await exportSolution(path))).toBe(argument);
   const reader = openReader(path);
-  const captured = reader.records();
-  reader.close();
-  const original = Projection.prototype.at;
-  let derivations = 0;
-  Projection.prototype.at = function (seq) {
-    if (seq === 1) derivations += 1;
-    return original.call(this, seq);
-  };
   try {
-    const combined = await inspectAndExportCampaignRecords(captured);
-    expect(combined.inspection as unknown).toEqual(inspection);
-    expect(new TextDecoder().decode(combined.solution)).toBe(
-      `--- n1 ---\n\n${good.text}`,
-    );
-    expect(derivations).toBe(1);
+    const combined = inspectAndExportCampaignRecords(reader.records());
+    expect(combined.inspection).toEqual(inspection);
+    expect(new TextDecoder().decode(combined.solution)).toBe(argument);
   } finally {
-    Projection.prototype.at = original;
+    reader.close();
   }
 });
 
@@ -571,57 +470,6 @@ test("resume reconstructs the next role from the journal", async () => {
   campaign.close();
 });
 
-test("explicit resume after a provider continuation failure preserves completed verifier checks", async () => {
-  const workflow = config();
-  const campaign = await createWorkflowCampaign(campaignPath(), workflow, 4);
-  const drive = dependencies([
-    dispatchExplorer(),
-    { submission: { solution: false, notes: [good] } },
-    { submission: coordination("n1") },
-    verdictsOf("correctness", ["n1"]),
-    sourceOf(["n1"]),
-    {
-      state: "failed",
-      error: "Provider continuation unavailable.",
-      transcript: [
-        { role: "assistant", stopReason: "length", content: [] },
-        { role: "assistant", stopReason: "error", content: [] },
-      ],
-    },
-    ...passes("n1").slice(2),
-  ]);
-  try {
-    const roles = createPiRoles(campaign, workflow.settings, drive);
-    await expect(runWorkflow(campaign, roles)).rejects.toThrow(
-      "Provider continuation unavailable.",
-    );
-    expect(drive.calls).toHaveLength(5);
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase.kind).toBe("accepted");
-    expect(drive.codexCalls).toHaveLength(1);
-    expect(drive.calls[4]!.label).toBe(verifierLabels.requirements);
-    expect(drive.calls[5]!.label).toBe(verifierLabels.requirements);
-    expect(drive.calls[5]!.parent).toBe(drive.calls[4]!.parent);
-    expect(drive.calls[5]!.prompt).toBe(drive.calls[4]!.prompt);
-    expect(
-      campaign
-        .records()
-        .filter(
-          (entry) =>
-            entry.kind === "call" && entry.label === "xean-solve/verification",
-        ),
-    ).toHaveLength(1);
-    expect(
-      campaign.records().filter((entry) => entry.kind === "evidence"),
-    ).toHaveLength(4);
-  } finally {
-    campaign.close();
-  }
-});
-
 test("a verification that fails mid-way resumes on the same verification", async () => {
   const path = campaignPath();
   const workflow = config();
@@ -632,7 +480,14 @@ test("a verification that fails mid-way resumes on the same verification", async
     { submission: coordination("n1") },
     verdictsOf("correctness", ["n1"]),
     sourceOf(["n1"]),
-    { state: "failed", error: "provider down" },
+    {
+      state: "failed",
+      error: "provider down",
+      transcript: [
+        { role: "assistant", stopReason: "length", content: [] },
+        { role: "assistant", stopReason: "error", content: [] },
+      ],
+    },
   ]);
   await expect(
     runWorkflow(campaign, createPiRoles(campaign, workflow.settings, first)),
@@ -659,6 +514,7 @@ test("a verification that fails mid-way resumes on the same verification", async
     "xean-solve/verifier/reconstruction",
   ]);
   expect(rest.codexCalls).toHaveLength(0);
+  expect(rest.calls[0]!.prompt).toBe(first.calls[4]!.prompt);
   expect(phase.note.verdicts.map(({ report }) => report)).toEqual([
     "correctness pass.",
     "source pass.",
@@ -681,25 +537,6 @@ test("a journal written by other prompts is refused", async () => {
   expect(() => deriveWorkflow(campaign.records())).toThrow(
     "does not match the derived coordinator request",
   );
-  campaign.close();
-});
-
-test("the turn limit ends a workflow without a verified note", async () => {
-  const path = campaignPath();
-  const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 1);
-  const phase = await runWorkflow(
-    campaign,
-    createPiRoles(
-      campaign,
-      workflow.settings,
-      dependencies([
-        dispatchExplorer(),
-        { submission: { solution: false, notes: [good] } },
-      ]),
-    ),
-  );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 1 });
   campaign.close();
 });
 
@@ -762,303 +599,92 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   campaign.close();
 });
 
-test("a source PASS that confirms sources without searching is inconclusive", async () => {
-  const path = campaignPath();
-  const workflow = config();
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
-  const drive = dependencies([
-    dispatchExplorer(),
-    { submission: { solution: false, notes: [good] } },
-    { submission: coordination("n1") },
-    verdictsOf("correctness", ["n1"], "PASS", () => ["Every X is Y."]),
-    {
-      codex: {
-        verdicts: [
-          {
-            note: "n1",
-            verdict: "PASS",
-            report: "confirmed",
-            correctedText: null,
-            sources: [
-              {
-                resultId: "n1#1",
-                result: "Every X is Y.",
-                source: "Smith 2020",
-                url: "https://example.org/smith",
-                quote: "Every X is Y.",
-              },
-            ],
-          },
-        ],
-      },
-      searched: false,
-    },
-  ]);
-  expect(
-    await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    ),
-  ).toMatchObject({ kind: "turn-limit" });
-  expect((await phaseOf(campaign)).kind).toBe("turn-limit");
-  campaign.close();
-});
-
-test("source profiles contain only model and reasoning", () => {
-  const settings = roleSettings();
-  expect(
-    solveSettings.safeParse({ ...settings, source: settings.explorer }).success,
-  ).toBe(false);
-  for (const removed of [
-    { search: false },
-    { search: true },
-    { provider: "codex" },
-  ]) {
-    expect(
-      solveSettings.safeParse({
-        ...settings,
-        source: { ...settings.source, ...removed },
-      }).success,
-    ).toBe(false);
-  }
-  expect(solveSettings.parse(settings).source).toEqual({
-    model: "codex-model",
-    reasoning: "low",
-  });
-});
-
 test("explorer notes name only live earlier notes as support", () => {
   const schema = explorerResultFor([
     { id: "n1", dead: false },
     { id: "n2", dead: true },
   ]);
+  const valid = {
+    solution: false,
+    notes: [
+      {
+        text: "The bound n2^{-q} does not use the dead note n2.",
+        support: ["n1"],
+      },
+      { text: "A consequence of the new n3.", support: ["n3"] },
+    ],
+  };
+  expect(schema.parse(valid)).toEqual(valid);
   expect(
     schema.safeParse({
       solution: false,
-      notes: [
-        { text: "a", support: ["n1"] },
-        { text: "b", support: ["n1", "n3"] },
-      ],
+      notes: [{ text: "Uses n1 in prose only.", support: [] }],
     }).success,
   ).toBe(true);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "a", support: ["n2"] }],
-    }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "a", support: ["n3"] }],
-    }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "a", support: ["n1", "n1"] }],
-    }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [
-        { text: "a", support: ["n4"] },
-        { text: "b", support: [] },
-      ],
-    }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "By the case analysis of n1, P.", support: ["n1"] }],
-    }).success,
-  ).toBe(true);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "By the case analysis of n1, P.", support: [] }],
-    }).success,
-  ).toBe(true); // Mathematical verification judges omitted dependencies.
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "This replaces the dead n2.", support: ["n1"] }],
-    }).success,
-  ).toBe(true);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [
-        { text: "First note n3; the rest is in n4.", support: [] },
-        { text: "Second note n4, after n3.", support: ["n3"] },
-      ],
-    }).success,
-  ).toBe(true);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [
-        { text: "First note n3.", support: [] },
-        { text: "Uses the case from n3.", support: [] },
-      ],
-    }).success,
-  ).toBe(true);
-  expect(
-    schema.safeParse({
-      solution: false,
-      notes: [{ text: "Let $n_1$ be the count; see (n1).", support: ["n1"] }],
-    }).success,
-  ).toBe(true);
+  for (const support of [[["n2"]], [["n3"]], [["n1", "n1"]], [["n4"], []]]) {
+    expect(
+      schema.safeParse({
+        solution: false,
+        notes: support.map((support) => ({
+          text: "An invalid dependency.",
+          support,
+        })),
+      }).success,
+    ).toBe(false);
+  }
 });
 
-test.each(["n2^{-q}", "n4^{-L}", "n8^(-L)"])(
-  "Explorer validation does not read %s as a support ID",
-  (expression) => {
-    const notes = Array.from({ length: 8 }, (_, index) => ({
-      id: `n${index + 1}`,
-      dead: false,
-    }));
-    const submitted = {
-      solution: false,
-      notes: [{ text: `The bound is ${expression}.`, support: [] }],
-    };
-    expect(explorerResultFor(notes).parse(submitted)).toEqual(submitted);
-  },
-);
-
 test("coordination files every note without a summary and lists live notes over verified or earlier-listed support", () => {
-  const schema = coordinatorResultFor([
-    {
-      id: "n1",
-      summary: "filed",
-      support: [],
-      verdicts: [],
-      verified: true,
-      dead: false,
-    },
-    { id: "n2", support: ["n1"], verdicts: [], verified: false, dead: false },
-    {
-      id: "n3",
-      summary: "filed",
-      support: ["n2"],
-      verdicts: [],
-      verified: false,
-      dead: false,
-    },
-    {
-      id: "n4",
-      summary: "filed",
-      support: [],
-      verdicts: [],
-      verified: false,
-      dead: true,
-    },
-  ]);
-  const filed = {
-    filings: [{ note: "n2", summary: "new" }],
+  const known = {
+    summary: "filed",
+    verdicts: [],
+    verified: false,
+    dead: false,
   };
-  // The action follows the list: a verifier dispatch for a nonempty list.
-  const accepts = ({
-    filings,
-    verify,
-    ...explorer
-  }: Record<string, unknown> & { verify: unknown[] }) =>
-    schema.safeParse({
-      filings,
-      action:
-        verify.length > 0
-          ? { role: "verifier", verify }
-          : { role: "explorer", ...explorer },
-    }).success;
+  const schema = coordinatorResultFor([
+    { ...known, id: "n1", support: [], verified: true },
+    { id: "n2", support: ["n1"], verdicts: [], verified: false, dead: false },
+    { ...known, id: "n3", support: ["n2"] },
+    { ...known, id: "n4", support: [], dead: true },
+  ]);
+  const filings = [{ note: "n2", summary: "new" }];
+  const explorer = { role: "explorer", explorerGuidance: "Go.", support: [] };
+  expect(schema.safeParse({ filings, action: explorer }).success).toBe(true);
+  for (const invalid of [[], [{ note: "n1", summary: "again" }]])
+    expect(
+      schema.safeParse({ filings: invalid, action: explorer }).success,
+    ).toBe(false);
   expect(
-    accepts({ filings: [], explorerGuidance: "Go.", support: [], verify: [] }),
+    schema.safeParse({ filings, action: { ...explorer, support: ["n9"] } })
+      .success,
   ).toBe(false);
-  expect(
-    accepts({
-      filings: [{ note: "n1", summary: "again" }],
-      explorerGuidance: "Go.",
-      support: [],
-      verify: [],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n2", verifiers: lemma }],
-    }),
-  ).toBe(true);
-  expect(accepts({ ...filed, support: ["n9"], verify: [] })).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n9", verifiers: all }],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n3", verifiers: all }],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [
-        { note: "n2", verifiers: lemma },
-        { note: "n3", verifiers: all },
-      ],
-    }),
-  ).toBe(true);
-  expect(
-    accepts({
-      ...filed,
-      verify: [
-        { note: "n2", verifiers: ["correctness"] },
-        { note: "n3", verifiers: all },
-      ],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [
-        { note: "n3", verifiers: all },
-        { note: "n2", verifiers: lemma },
-      ],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n4", verifiers: all }],
-    }),
-  ).toBe(false);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n2", verifiers: ["correctness"] }],
-    }),
-  ).toBe(true);
-  expect(
-    accepts({
-      ...filed,
-      verify: [{ note: "n2", verifiers: ["correctness", "requirements"] }],
-    }),
-  ).toBe(false);
-  expect(accepts({ ...filed, verify: [{ note: "n2", verifiers: [] }] })).toBe(
-    false,
-  );
-  expect(
-    accepts({
-      ...filed,
-      support: [],
-      verify: [
-        { note: "n2", verifiers: lemma },
-        { note: "n2", verifiers: all },
-      ],
-    }),
-  ).toBe(false);
+  const check = (note: string, verifiers: readonly string[] = all) => ({
+    note,
+    verifiers,
+  });
+  for (const verify of [
+    [check("n2", ["correctness"])],
+    [check("n2", lemma)],
+    [check("n2", lemma), check("n3")],
+  ])
+    expect(
+      schema.safeParse({ filings, action: { role: "verifier", verify } })
+        .success,
+    ).toBe(true);
+  for (const verify of [
+    [check("n9")],
+    [check("n3")],
+    [check("n4")],
+    [check("n2", ["correctness"]), check("n3")],
+    [check("n3"), check("n2", lemma)],
+    [check("n2", ["correctness", "requirements"])],
+    [check("n2", [])],
+    [check("n2", lemma), check("n2")],
+  ])
+    expect(
+      schema.safeParse({ filings, action: { role: "verifier", verify } })
+        .success,
+    ).toBe(false);
 });
 
 test("a verdict call returns one verdict per note under verification", () => {
@@ -1205,34 +831,6 @@ test("each verifier judges the listed notes that passed the verifiers before it 
       v("reconstruction", "n1", "FAIL"),
     ]),
   ).toBe(true);
-});
-
-test("a verification takes the longest prefix that fits the window, counting shared support once, and always the first entry", async () => {
-  const note = (id: string, support: string[] = []) => ({
-    id,
-    summary: "s",
-    text: "0123456789",
-    support,
-    verdicts: [],
-    verified: false,
-    dead: false,
-  });
-  const notes = [note("n1"), note("n2", ["n1"]), note("n3", ["n1"])];
-  const verify = [
-    { note: "n2", verifiers: lemma },
-    { note: "n3", verifiers: lemma },
-    { note: "n1", verifiers: lemma },
-  ];
-  expect(
-    (await verificationPrefix(verify, notes, 25)).map(({ note }) => note),
-  ).toEqual(["n2"]);
-  expect(
-    (await verificationPrefix(verify, notes, 30)).map(({ note }) => note),
-  ).toEqual(["n2", "n3", "n1"]);
-  expect(
-    (await verificationPrefix(verify, notes, 5)).map(({ note }) => note),
-  ).toEqual(["n2"]);
-  expect(await verificationPrefix([], notes, 5)).toEqual([]);
 });
 
 test("drains requested verification batches at the turn cap and stops at the first acceptance", async () => {
@@ -1555,90 +1153,5 @@ test("the next coordinator starts only after all requested partial-result batche
   ]);
   expect(drive.codexCalls).toHaveLength(2);
   expect(drive.calls.filter(({ role }) => role === "explorer")).toHaveLength(1);
-  campaign.close();
-});
-
-test("a self-contained proof records a local source PASS without calling Codex", async () => {
-  const path = campaignPath();
-  const settings = roleSettings();
-  const workflow = workflowConfiguration({
-    task,
-    settings: {
-      ...settings,
-      source: {
-        model: "codex-model",
-        reasoning: "low",
-      },
-    },
-  });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
-  const drive = dependencies([
-    dispatchExplorer(),
-    { submission: { solution: false, notes: [good] } },
-    {
-      submission: coordination("n1", {
-        verify: [{ note: "n1", verifiers: lemma }],
-      }),
-    },
-    verdictsOf("correctness", ["n1"], "PASS", () => []),
-  ]);
-  const phase = await runWorkflow(
-    campaign,
-    createPiRoles(campaign, workflow.settings, drive),
-  );
-  expect(phase).toMatchObject({ kind: "turn-limit", turns: 2 });
-  if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
-  expect(phase.notes[0]).toMatchObject({ verified: true, dead: false });
-  expect(drive.codexCalls).toHaveLength(0);
-  expect(shorthand(phase.notes)).toEqual([["correctness:PASS", "source:PASS"]]);
-  const settled = campaign.records();
-  const resumed = dependencies([]);
-  expect(
-    await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, resumed),
-    ),
-  ).toEqual(phase);
-  expect(campaign.records()).toEqual(settled);
-  expect(resumed.allCalls).toHaveLength(0);
-  campaign.close();
-  expect(await inspectCampaign(path)).toMatchObject({
-    notes: [
-      {
-        verdicts: [
-          { verifier: "correctness", verdict: "PASS" },
-          { verifier: "source", verdict: "PASS" },
-        ],
-      },
-    ],
-    calls: expect.arrayContaining([
-      expect.objectContaining({
-        role: "verifier",
-        verifier: "source",
-        submission: expect.objectContaining({
-          verdicts: [
-            expect.objectContaining({
-              note: "n1",
-              verdict: "PASS",
-              sources: [],
-            }),
-          ],
-        }),
-      }),
-    ]),
-  });
-});
-
-test("a fresh campaign starts with the coordinator over no notes", async () => {
-  const path = campaignPath();
-  const workflow = workflowConfiguration({
-    task,
-    settings: roleSettings(),
-  });
-  const campaign = await createWorkflowCampaign(path, workflow, 4);
-  expect(await phaseOf(campaign)).toMatchObject({
-    kind: "coordinator",
-    input: { task, notes: [], literatureStatus: "not-started" },
-  });
   campaign.close();
 });

@@ -13,6 +13,16 @@ import { dirname, join } from "node:path";
 
 import { prepareCodex } from "../source";
 
+const request = {
+  protocol: "xean/codex-exec/v1" as const,
+  model: "fixture-model",
+  reasoning: "low" as const,
+  search: true as const,
+  developerInstructions: "Verify this source.",
+  prompt: "Exact task.",
+  outputSchema: { type: "object" },
+};
+
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -122,66 +132,40 @@ function expectCleaned(captures: readonly Capture[]) {
   }
 }
 
-test("preflight and execution share the isolated auth and environment boundary", async () => {
-  const setup = await fixture({ customHome: true });
-  const exec = await prepareCodex(setup.options);
-  const prompt = "Exact prompt bytes.\n☃\n";
-  const result = await exec({
-    protocol: "xean/codex-exec/v1",
-    model: "fixture-model",
-    reasoning: "low",
-    search: true,
-    developerInstructions: "Verify the cited source.",
-    prompt,
-    outputSchema: { type: "object" },
-  });
-  expect(result.state).toBe("succeeded");
-  const captures = await setup.captures();
-  expect(
-    captures.map(
-      (capture) =>
-        capture.args.includes("exec") && !capture.args.includes("--help"),
-    ),
-  ).toEqual([false, false, false, false, true]);
-  for (const capture of captures) {
-    expect(capture.env["HOME"]).toBe(setup.directory);
-    expect(capture.env["PATH"]).toBe(setup.options.environment.PATH);
-    expect(capture.env["HTTPS_PROXY"]).toBe("http://proxy.invalid:1234");
-    expect(capture.env["NO_PROXY"]).toBe("proxy.invalid");
-    expect(capture.env["OPENAI_API_KEY"]).toBeUndefined();
-    expect(capture.env["CODEX_API_KEY"]).toBeUndefined();
-    expect(capture.env["CODEX_API_BASE_URL"]).toBeUndefined();
-    expect(capture.env["OTHER_SECRET"]).toBeUndefined();
-    expect(capture.auth).toBe(
-      await realpath(join(setup.authHome, "auth.json")),
-    );
-    expect(capture.files).toEqual(["auth.json"]);
-    expect(capture.env["CODEX_HOME"]).not.toBe(setup.authHome);
-    if (capture.args.includes("login") || capture.input !== "") {
-      expect(capture.args).toContain('cli_auth_credentials_store="file"');
+test.each([false, true])(
+  "preflight and execution isolate native credentials, customHome=%s",
+  async (customHome) => {
+    const setup = await fixture({ customHome });
+    const exec = await prepareCodex(setup.options);
+    const prompt = "Exact prompt bytes.\n☃\n";
+    const result = await exec({ ...request, prompt });
+    expect(result.state).toBe("succeeded");
+    const captures = await setup.captures();
+    expect(captures.filter(({ input }) => input !== "")).toHaveLength(1);
+    for (const capture of captures) {
+      expect(capture.env["HOME"]).toBe(setup.directory);
+      expect(capture.env["PATH"]).toBe(setup.options.environment.PATH);
+      expect(capture.env["HTTPS_PROXY"]).toBe("http://proxy.invalid:1234");
+      expect(capture.env["NO_PROXY"]).toBe("proxy.invalid");
+      expect(capture.env["OPENAI_API_KEY"]).toBeUndefined();
+      expect(capture.env["CODEX_API_KEY"]).toBeUndefined();
+      expect(capture.env["CODEX_API_BASE_URL"]).toBeUndefined();
+      expect(capture.env["OTHER_SECRET"]).toBeUndefined();
+      expect(capture.auth).toBe(
+        await realpath(join(setup.authHome, "auth.json")),
+      );
+      expect(capture.files).toEqual(["auth.json"]);
+      expect(capture.env["CODEX_HOME"]).not.toBe(setup.authHome);
+      if (capture.args.includes("login") || capture.input !== "") {
+        expect(capture.args).toContain('cli_auth_credentials_store="file"');
+      }
     }
-  }
-  expect(captures.at(-1)?.input).toBe(prompt);
-  expect(captures.at(-1)?.args).toContain('web_search="live"');
-  expectCleaned(captures);
-  expect(existsSync(join(setup.authHome, "auth.json"))).toBe(true);
-});
-
-test("preflight uses HOME/.codex when CODEX_HOME is absent", async () => {
-  const setup = await fixture();
-  await prepareCodex(setup.options);
-  const captures = await setup.captures();
-  expect(captures.at(-1)?.args).toEqual([
-    "-c",
-    'cli_auth_credentials_store="file"',
-    "login",
-    "status",
-  ]);
-  expect(captures.at(-1)?.auth).toBe(
-    await realpath(join(setup.authHome, "auth.json")),
-  );
-  expectCleaned(captures);
-});
+    expect(captures.at(-1)?.input).toBe(prompt);
+    expect(captures.at(-1)?.args).toContain('web_search="live"');
+    expectCleaned(captures);
+    expect(existsSync(join(setup.authHome, "auth.json"))).toBe(true);
+  },
+);
 
 test("preflight rejects a missing executable", async () => {
   const setup = await fixture();
@@ -252,15 +236,7 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
     },
   };
   const exec = await prepareCodex(options);
-  const result = await exec({
-    protocol: "xean/codex-exec/v1",
-    model: "fixture-model",
-    reasoning: "low",
-    search: true,
-    developerInstructions: "Verify this source.",
-    prompt: "Exact task.",
-    outputSchema: { type: "object" },
-  });
+  const result = await exec(request);
   expect(result.state).toBe("succeeded");
   const captures = await setup.captures();
   expect(captures.some((capture) => capture.args.includes("login"))).toBe(
@@ -313,15 +289,7 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
     parsed.model_providers["xean-source"]!.env_http_headers["x-usage-tag"],
   ).toBe("XEAN_SOURCE_HEADER_0");
   options.environment.GATEWAY_KEY = "refreshed-fixture-secret";
-  const refreshed = await exec({
-    protocol: "xean/codex-exec/v1",
-    model: "fixture-model",
-    reasoning: "low",
-    search: true,
-    developerInstructions: "Verify this source.",
-    prompt: "A later source check.",
-    outputSchema: { type: "object" },
-  });
+  const refreshed = await exec({ ...request, prompt: "A later source check." });
   expect(refreshed.state).toBe("succeeded");
   const later = await setup.captures();
   expect(later.at(-1)?.env["GATEWAY_KEY"]).toBe("refreshed-fixture-secret");
@@ -331,13 +299,8 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
   );
   Reflect.deleteProperty(options.environment, "GATEWAY_KEY");
   const missing = await exec({
-    protocol: "xean/codex-exec/v1",
-    model: "fixture-model",
-    reasoning: "low",
-    search: true,
-    developerInstructions: "Verify this source.",
+    ...request,
     prompt: "This must fail before executing.",
-    outputSchema: { type: "object" },
   });
   expect(missing.state).toBe("failed");
   expect(await setup.captures()).toHaveLength(later.length);

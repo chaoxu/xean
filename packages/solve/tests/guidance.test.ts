@@ -6,7 +6,7 @@ import { createCampaign, openCampaign, openReader } from "xean";
 
 import { guidanceInbox, inspectGuidance } from "../guidance";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
-import { applicationId, jsonSnapshot, roleLabels } from "../roles";
+import { applicationId, jsonSnapshot } from "../roles";
 import { run } from "../runner";
 import { deriveWorkflow, workflowConfiguration } from "../workflow";
 import {
@@ -109,11 +109,18 @@ test("guidance leaves default inspection, settings, and historical entries uncha
   expect(await inspectCampaign(path, { includeGuidance: true })).toMatchObject({
     guidance: [{ id: "strategy-1", pending: true, calls: [] }],
   });
-  const drive = dependencies([...turn(1), ...turn(2)]);
+  const advice = "Develop the direct argument.";
+  const drive = dependencies([
+    dispatchExplorer(advice),
+    explore(1),
+    ...turn(2),
+  ]);
   expect((await run(request, drive)).outcome).toBe("turn-limit");
   const explorers = drive.calls.filter((call) => call.role === "explorer");
   expect(explorers).toHaveLength(2);
   expect(explorers[0]!.prompt.split(first)).toHaveLength(2);
+  expect(explorers[0]!.prompt.split(advice)).toHaveLength(2);
+  expect(explorers[0]!.system).not.toContain(advice);
   expect(explorers[1]!.prompt).not.toContain(first);
   expect(explorers[1]!.prompt).toContain("Prove the remaining case.");
   for (const call of drive.calls.filter((call) => call.role !== "explorer"))
@@ -196,30 +203,6 @@ test("guidance submitted after a frozen boundary waits through its retries and r
   ).toEqual([2, 1]);
 });
 
-test("a crash after freezing guidance but before starting Explorer preserves the boundary", async () => {
-  const { path, request } = await setup();
-  const initial = dependencies([coordinate(1)]);
-  expect(
-    await run(request, {
-      ...initial,
-      pauseRequested: () => initial.calls.length === 1,
-    }),
-  ).toMatchObject({ outcome: "paused", at: "explorer" });
-  await guideCampaign(path, first, "a");
-  const campaign = openCampaign(path);
-  const snapshot = await deriveWorkflow(campaign.records());
-  expect(await guidanceInbox.freeze(campaign, snapshot.after!)).toBe(true);
-  campaign.close();
-  await guideCampaign(path, second, "b");
-  const rest = dependencies([explore(1), ...turn(2)]);
-  expect((await run(request, rest)).outcome).toBe("turn-limit");
-  const explorers = rest.calls.filter((call) => call.role === "explorer");
-  expect(explorers[0]!.prompt).toContain(first);
-  expect(explorers[0]!.prompt).not.toContain(second);
-  expect(explorers[1]!.prompt).toContain(second);
-  expect(explorers[1]!.prompt).not.toContain(first);
-});
-
 test("a note submitted after guidance is frozen waits for the coordinator after that Explorer turn", async () => {
   const { path, request } = await setup();
   const initial = dependencies([coordinate(1)]);
@@ -289,43 +272,6 @@ test("concurrent CLI retries through a path alias append one guidance request", 
   });
 });
 
-test("coordinator guidance and external advice share the next Explorer input without duplicate records", async () => {
-  const { path, request } = await setup();
-  const initial = dependencies([...turn(1), coordinate(2)]);
-  expect(
-    await run(request, {
-      ...initial,
-      pauseRequested: () => initial.calls.length === 3,
-    }),
-  ).toMatchObject({ outcome: "paused", at: "explorer" });
-  const before = records(path);
-  expect(
-    before.filter((entry) => entry.kind === "call").map((entry) => entry.label),
-  ).toEqual([
-    "xean-solve/allowance",
-    roleLabels.coordinator,
-    roleLabels.explorer,
-    roleLabels.coordinator,
-  ]);
-  await guideCampaign(path, first, "outside-advice");
-  const rest = dependencies([explore(2)]);
-  expect((await run(request, rest)).outcome).toBe("turn-limit");
-  expect(rest.calls[0]!.prompt).toContain(
-    `Explorer guidance (fallible advice):\nProve the remaining case.\n\n${first}`,
-  );
-  expect(rest.calls[0]!.prompt.split("Prove the remaining case.")).toHaveLength(
-    2,
-  );
-  expect(rest.calls[0]!.system).not.toContain(first);
-  expect(records(path).slice(0, before.length)).toEqual(before);
-  expect(
-    records(path).filter(
-      (entry) =>
-        entry.kind === "call" && entry.label === roleLabels.coordinator,
-    ),
-  ).toHaveLength(2);
-});
-
 test("process death after guidance and boundary requests preserves receipt and replay", async () => {
   const { path, request } = await setup();
   const initial = dependencies([coordinate(1)]);
@@ -369,25 +315,6 @@ test("process death after guidance and boundary requests preserves receipt and r
   expect(explorers[1]!.prompt).not.toContain("Use the direct construction.");
 });
 
-test("a run without external advice adds no guidance calls", async () => {
-  const { path, request } = await setup(1);
-  const drive = dependencies(turn(1));
-  const start = records(path)[0];
-  const baseline = await inspectCampaign(path);
-  expect(baseline).not.toHaveProperty("guidance");
-  await run(request, drive);
-  expect(
-    records(path)
-      .filter((entry) => entry.kind === "call")
-      .map((entry) => entry.label),
-  ).toEqual([
-    "xean-solve/allowance",
-    roleLabels.coordinator,
-    roleLabels.explorer,
-  ]);
-  expect(records(path)[0]).toEqual(start);
-});
-
 test("unknown settings and unsupported workflow schemas are rejected without rewriting journals", async () => {
   const { path, request } = await setup();
   const before = readFileSync(path);
@@ -413,8 +340,16 @@ test("unknown settings and unsupported workflow schemas are rejected without rew
   const invalidBytes = readFileSync(invalid);
   await expect(guideCampaign(invalid, first)).rejects.toThrow();
   await expect(
-    run({ ...request, campaignPath: invalid }, dependencies([])),
-  ).rejects.toThrow();
+    run(
+      { ...request, campaignPath: invalid },
+      {
+        ...dependencies([]),
+        models: async () => {
+          throw new Error("unsupported schema must fail before provider setup");
+        },
+      },
+    ),
+  ).rejects.toThrow("configuration disagrees");
   expect(readFileSync(invalid)).toEqual(invalidBytes);
 });
 

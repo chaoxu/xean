@@ -44,8 +44,19 @@ test("Codex requests require live web search", () => {
   );
 });
 
-test("the precise compaction warning preserves a completed final submission", () => {
+test("recognized compaction and reconnect notices preserve complete submissions", () => {
   for (const events of [
+    [
+      ...start,
+      {
+        type: "error",
+        message:
+          "Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)",
+      },
+      search("s1"),
+      final,
+      completed,
+    ],
     [...start, warning, search("s1"), final, completed],
     [...start, search("s1"), final, warning, completed],
   ]) {
@@ -61,22 +72,6 @@ test("the precise compaction warning preserves a completed final submission", ()
       },
     });
   }
-});
-
-test("a reconnect notice does not discard the completed source result", () => {
-  const reconnect = {
-    type: "error",
-    message:
-      "Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)",
-  };
-  expect(
-    codexTranscript(
-      jsonl([...start, reconnect, search("s1"), final, completed]),
-    ),
-  ).toMatchObject({
-    message: JSON.stringify({ verdict: "PASS" }),
-    searches: 1,
-  });
 });
 
 test("the warning exception does not accept real errors or forbidden tools", () => {

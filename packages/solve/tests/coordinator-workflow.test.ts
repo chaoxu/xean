@@ -2,7 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import { openCampaign, openReader } from "xean";
 
 import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
-import { appendAllowance, turnAllowances } from "../allowance";
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
@@ -312,187 +311,6 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   expect(inspection.submissions).toMatchObject([
     { id: "idle", pending: false, noteIds: ["n1"] },
   ]);
-});
-
-test("an allowance extends a campaign by whole turns", async () => {
-  const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    coordinatorBehavior: {
-      literature: "optional" as const,
-      verification: "decide" as const,
-    },
-  };
-  const request = { task, settings, campaignPath: path, turns: 1 };
-  await init(request);
-  const first = dependencies([
-    {
-      submission: coordination({
-        role: "literature",
-        request: "Find prior work on P.",
-      }),
-    },
-    { codex: { notes: [] } },
-  ]);
-  expect(await run(request, first)).toMatchObject({
-    outcome: "turn-limit",
-    turns: 1,
-  });
-  // Without a new allowance the campaign stays stopped and makes no call.
-  expect(await run(request, dependencies([]))).toMatchObject({
-    outcome: "turn-limit",
-    turns: 1,
-  });
-  const more = dependencies([
-    { submission: coordination({ role: "explorer" }) },
-    { submission: { solution: false, notes: [good] } },
-  ]);
-  expect(await run({ ...request, turns: 1, id: "more" }, more)).toMatchObject({
-    outcome: "turn-limit",
-    turns: 2,
-  });
-  expect(more.allCalls.map(({ role }) => role)).toEqual([
-    "coordinator",
-    "explorer",
-  ]);
-  expect(more.allCalls[0]?.prompt).toContain("Literature status: completed");
-  expect(await inspectCampaign(path)).toMatchObject({
-    maxTurns: 2,
-    allowances: [
-      { turns: 1, afterTurns: 0 },
-      { id: "more", turns: 1, afterTurns: 1 },
-    ],
-    phase: "turn-limit",
-  });
-  const opened = openCampaign(path);
-  try {
-    await expect(appendAllowance(opened, 3, 0, "direct")).rejects.toThrow(
-      "invalid turn allowance sequence",
-    );
-    expect(turnAllowances(opened.records())).toHaveLength(2);
-  } finally {
-    opened.close();
-  }
-});
-
-test("a failed literature call settles without verifications and reports inconclusive", async () => {
-  const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    coordinatorBehavior: {
-      literature: "optional" as const,
-      verification: "decide" as const,
-    },
-  };
-  const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
-  const drive = dependencies([
-    {
-      submission: coordination({
-        role: "literature",
-        request: "Find prior work on P.",
-      }),
-    },
-    { codex: {}, state: "failed", error: "gateway unavailable" },
-    { submission: coordination({ role: "explorer" }) },
-    { submission: { solution: false, notes: [good] } },
-  ]);
-  try {
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase.kind).toBe("turn-limit");
-    expect(drive.allCalls.map(({ label }) => label)).toEqual([
-      "xean-solve/coordinator",
-      "xean-solve/literature",
-      "xean-solve/coordinator",
-      "xean-solve/explorer",
-    ]);
-    expect(drive.allCalls[2]?.prompt).toContain(
-      "Literature status: inconclusive",
-    );
-    expect(
-      campaign.records({ kinds: ["call"], labels: ["xean-solve/notes"] }),
-    ).toHaveLength(0);
-    expect(
-      campaign.records({ kinds: ["call"], labels: ["xean-solve/literature"] }),
-    ).toHaveLength(1);
-  } finally {
-    campaign.close();
-  }
-});
-
-test("a coordinator verifier action drains its list in window batches before the next coordinator", async () => {
-  const path = campaignPath();
-  const settings = {
-    ...roleSettings(),
-    window: 1,
-  };
-  const workflow = workflowConfiguration({ task, settings });
-  const campaign = await createWorkflowCampaign(path, workflow, 2);
-  const partial = (id: string) => ({
-    note: id,
-    verdict: "PASS",
-    report: "Correct.",
-    externalResults: [],
-  });
-  const drive = dependencies([
-    { submission: coordination({ role: "explorer" }) },
-    {
-      submission: {
-        solution: false,
-        notes: [
-          { text: "Lemma A.", support: [] },
-          { text: "Lemma B.", support: [] },
-        ],
-      },
-    },
-    {
-      submission: coordination(
-        { role: "verifier" },
-        [
-          { note: "n1", verifiers: ["correctness", "source"] },
-          { note: "n2", verifiers: ["correctness", "source"] },
-        ],
-        [
-          { note: "n1", summary: "Lemma A." },
-          { note: "n2", summary: "Lemma B." },
-        ],
-      ),
-    },
-    { submission: { verdicts: [partial("n1")] } },
-    { submission: { verdicts: [partial("n2")] } },
-  ]);
-  try {
-    const phase = await runWorkflow(
-      campaign,
-      createPiRoles(campaign, workflow.settings, drive),
-    );
-    expect(phase.kind).toBe("turn-limit");
-    expect(drive.allCalls.map(({ label }) => label)).toEqual([
-      "xean-solve/coordinator",
-      "xean-solve/explorer",
-      "xean-solve/coordinator",
-      "xean-solve/verifier/correctness",
-      "xean-solve/verifier/correctness",
-    ]);
-    expect(
-      campaign.records({
-        kinds: ["call"],
-        labels: ["xean-solve/verification"],
-      }),
-    ).toHaveLength(2);
-    expect(
-      phase.kind === "turn-limit" &&
-        phase.notes.map(({ id, verified }) => [id, verified]),
-    ).toEqual([
-      ["n1", true],
-      ["n2", true],
-    ]);
-  } finally {
-    campaign.close();
-  }
 });
 
 test("a coordinator can verify an omitted ready note immediately after another verification", async () => {
@@ -871,27 +689,17 @@ test("the frozen coordinator behavior and literature status reach the coordinato
     },
   });
   expect(call.prompt).toContain("Literature status: inconclusive");
-  expect(call.prompt).toContain(
-    'Coordinator behavior:\n{\n  "literature": "never",\n  "verification": "decide",\n  "overlap": false,\n  "instructions": "Use Explorer for this campaign."\n}',
-  );
-  expect(call.system).toContain("The frozen coordinator behavior");
-  expect(call.system).toContain(
-    "When action is verifier or literature, omit explorerGuidance and support",
-  );
-});
-
-test("new campaigns disable literature unless their policy opts in", () => {
-  expect(defaultCoordinatorBehavior.literature).toBe("never");
-  const call = coordinatorCall({ task, notes: [] });
-  expect(
-    call.schema.safeParse({
-      filings: [],
-      action: { role: "literature", request: "Search." },
-    }).success,
-  ).toBe(false);
+  expect(call.prompt).toContain("Use Explorer for this campaign.");
+  expect(call.system).not.toContain("Use Explorer for this campaign.");
 });
 
 test("structured coordinator policies constrain optional literature and verification dispatch", () => {
+  expect(defaultCoordinatorBehavior.literature).toBe("never");
+  expect(
+    coordinatorCall({ task, notes: [] }).schema.safeParse(
+      coordination({ role: "literature", request: "Search." }),
+    ).success,
+  ).toBe(false);
   const literatureFirst = coordinatorCall({
     task,
     notes: [],

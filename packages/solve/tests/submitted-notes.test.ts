@@ -11,7 +11,7 @@ import {
   type Note,
   type Verification,
 } from "../roles";
-import { workflowSchemaVersion } from "../workflow";
+import { deriveWorkflow, workflowSchemaVersion } from "../workflow";
 import {
   campaignPath,
   cleanupCampaigns,
@@ -150,11 +150,17 @@ test("submission-local support follows its own notes after active Explorer outpu
     {
       submission: { solution: false, notes: [partial] },
       onStarted: async () => {
+        const active = records(path).find(
+          (entry) => entry.kind === "call" && entry.role === "explorer",
+        )!;
         await submitNotes(path, graph, "graph-a");
         const beforeRetry = records(path);
         await submitNotes(path, graph, "graph-a");
         expect(records(path)).toEqual(beforeRetry);
         await submitNotes(path, graph, "graph-b");
+        expect(records(path).find((entry) => entry.seq === active.seq)).toEqual(
+          active,
+        );
       },
     },
     coordinate(["n1", "n2", "n3", "n4", "n5"]),
@@ -166,6 +172,7 @@ test("submission-local support follows its own notes after active Explorer outpu
     }),
   ).toMatchObject({ outcome: "paused", at: "explorer" });
   const projected = coordinatorNotes(drive.allCalls[2]!.prompt);
+  expect(drive.allCalls[1]!.prompt).not.toContain(graph.notes[0]!.text);
   expect(projected.map(({ id, support }) => ({ id, support }))).toEqual([
     { id: "n1", support: [] },
     { id: "n2", support: [] },
@@ -178,8 +185,18 @@ test("submission-local support follows its own notes after active Explorer outpu
     ...graph.notes.map(({ text }) => text),
   ]);
   expect((await inspect(path, true)).submissions).toMatchObject([
-    { id: "graph-a", notes: graph.notes, noteIds: ["n2", "n3"] },
-    { id: "graph-b", notes: graph.notes, noteIds: ["n4", "n5"] },
+    {
+      id: "graph-a",
+      notes: graph.notes,
+      noteIds: ["n2", "n3"],
+      pending: false,
+    },
+    {
+      id: "graph-b",
+      notes: graph.notes,
+      noteIds: ["n4", "n5"],
+      pending: false,
+    },
   ]);
 });
 
@@ -292,6 +309,10 @@ test("init creates a declaration and allowance without resolving test-only provi
   await init(request);
   expect(records(path)).toEqual(before);
   expect((await inspect(path)).phase).toBe("coordinator");
+  expect(deriveWorkflow(before).phase).toMatchObject({
+    kind: "coordinator",
+    input: { task, notes: [], literatureStatus: "not-started" },
+  });
   await expect(
     init({ ...request, task: { ...task, problem: "A different task." } }),
   ).rejects.toThrow();
@@ -343,58 +364,6 @@ test("unchecked initial notes reach coordinator and verification before the firs
     ["n2", false],
   ]);
   expect(records(path).slice(0, before.length)).toEqual(before);
-});
-
-test("a note arriving during explorer is numbered after explorer notes in the following coordinator", async () => {
-  const { path, request } = await setup(2);
-  const drive = dependencies([
-    dispatchExplorer(),
-    {
-      submission: { solution: false, notes: [partial] },
-      onStarted: async () => {
-        const active = records(path).find(
-          (entry) => entry.kind === "call" && entry.role === "explorer",
-        )!;
-        await submitNotes(
-          path,
-          { notes: [{ text: externalText, support: [] }] },
-          "during-explorer",
-        );
-        expect(records(path).find((entry) => entry.seq === active.seq)).toEqual(
-          active,
-        );
-      },
-    },
-    coordinate(["n1", "n2"]),
-  ]);
-  expect(
-    await run(request, {
-      ...drive,
-      pauseRequested: () => drive.allCalls.length === 3,
-    }),
-  ).toMatchObject({ outcome: "paused", at: "explorer" });
-  expect(drive.allCalls.map((call) => call.role)).toEqual([
-    "coordinator",
-    "explorer",
-    "coordinator",
-  ]);
-  expect(drive.allCalls[1]!.prompt).not.toContain(externalText);
-  expect(
-    coordinatorNotes(drive.allCalls[2]!.prompt).map((note) => [
-      note.id,
-      note.text,
-    ]),
-  ).toEqual([
-    ["n1", partial.text],
-    ["n2", externalText],
-  ]);
-  expect((await inspect(path)).notes.map((note) => note.id)).toEqual([
-    "n1",
-    "n2",
-  ]);
-  expect((await inspect(path, true)).submissions).toMatchObject([
-    { id: "during-explorer", pending: false, noteIds: ["n2"] },
-  ]);
 });
 
 test("a frozen coordinator retries identical input while a later note waits for the next coordinator cycle", async () => {

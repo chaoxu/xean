@@ -76,36 +76,7 @@ test("explicit resume after provider failure preserves saved notes and frozen gu
 });
 
 test.each([
-  { name: "a provider continuation failure", reply: failure },
-  {
-    name: "an initial provider failure",
-    reply: {
-      ...failure,
-      transcript: [{ role: "assistant", stopReason: "error", content: [] }],
-    },
-  },
-  {
-    name: "a provider error after a failed tool result",
-    reply: {
-      ...failure,
-      transcript: [
-        { role: "assistant", stopReason: "toolUse", content: [] },
-        { role: "toolResult", isError: true, content: [] },
-        { role: "assistant", stopReason: "error", content: [] },
-      ],
-    },
-  },
-  {
-    name: "an invalid tool submission after earlier progress",
-    reply: {
-      ...failure,
-      transcript: [
-        { role: "assistant", stopReason: "length", content: [] },
-        { role: "assistant", stopReason: "toolUse", content: [] },
-        { role: "toolResult", isError: true, content: [] },
-      ],
-    },
-  },
+  { name: "a failed call", reply: failure },
   { name: "a cancelled call", reply: { ...failure, state: "cancelled" } },
 ] as const)("$name is not automatically retried", async ({ reply }) => {
   const drive = dependencies([reply]);

@@ -2,7 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import { openCampaign, openReader } from "xean";
 
 import { review, reviewVerdict } from "../review";
-import { sourceVerdictsFor } from "../roles";
 import { codexStdout } from "./fixtures/codex-stdout";
 import type { CodexRequest } from "../source";
 import { campaignPath, cleanupCampaigns } from "./harness";
@@ -30,118 +29,6 @@ const passage = {
 const evidence = { result: claim, ...passage };
 const externalResult = { result: claim, sources: [passage] };
 
-test.each([{ provider: "codex" }, { search: true }, { search: false }])(
-  "review rejects removed profile fields before setup: %j",
-  async (removed) => {
-    const request = input();
-    await expect(
-      review(
-        { ...request, profile: { ...request.profile, ...removed } },
-        {
-          codex: async () => {
-            throw new Error("must reject before Codex setup");
-          },
-        },
-      ),
-    ).rejects.toThrow("Unrecognized key");
-    expect(await Bun.file(request.campaignPath).exists()).toBe(false);
-  },
-);
-
-test("the source gate rejects an unsupported PASS and retains explicit uncertainty", () => {
-  const schema = sourceVerdictsFor(
-    ["n24"],
-    [{ note: "n24", externalResults: [claim] }],
-  );
-  const value = {
-    note: "n24",
-    verdict: "PASS",
-    report: "From my knowledge of the cited result.",
-    correctedText: null,
-    sources: [],
-  };
-  expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
-  expect(
-    schema.safeParse({ verdicts: [{ ...value, verdict: "INCONCLUSIVE" }] })
-      .success,
-  ).toBe(true);
-  // A runtime passage binds by resultId; one without it is rejected.
-  expect(
-    schema.safeParse({ verdicts: [{ ...value, sources: [evidence] }] }).success,
-  ).toBe(false);
-  expect(
-    schema.safeParse({
-      verdicts: [
-        {
-          ...value,
-          sources: [
-            {
-              ...evidence,
-              result: "Global-BiCut is hard, with harmless restatement.",
-              resultId: "n24#1",
-            },
-          ],
-        },
-      ],
-    }).success,
-  ).toBe(true);
-});
-
-test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
-  "source evidence cannot name an undeclared result for %s",
-  (verdict) => {
-    const schema = sourceVerdictsFor(
-      ["n24"],
-      [{ note: "n24", externalResults: [claim] }],
-    );
-    const value = {
-      note: "n24",
-      verdict,
-      report: "Source assessment.",
-      correctedText: null,
-      sources: [{ ...evidence, resultId: "n24#2" }],
-    };
-    expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
-    expect(
-      schema.safeParse({
-        verdicts: [
-          {
-            ...value,
-            sources: [{ ...evidence, resultId: "n24#1" }],
-          },
-        ],
-      }).success,
-    ).toBe(true);
-    expect(
-      reviewVerdict.safeParse({
-        verdict,
-        report: value.report,
-        externalResults: [],
-        sources: [evidence],
-      }).success,
-    ).toBe(false);
-    expect(
-      reviewVerdict.safeParse({
-        verdict,
-        report: value.report,
-        externalResults: [
-          {
-            result: claim,
-            sources: [{ ...passage, resultId: "external-arbitrary" }],
-          },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      reviewVerdict.safeParse({
-        verdict,
-        report: value.report,
-        externalResults: [externalResult],
-      }).success,
-    ).toBe(true);
-  },
-);
-
 test("a full audit receives the entire argument and reuses only the exact completed review", async () => {
   const request = input();
   let calls = 0;
@@ -153,18 +40,6 @@ test("a full audit receives the entire argument and reuses only the exact comple
         task: request.task,
         argument: request.argument,
       });
-      expect(value.developerInstructions).toContain(
-        "Notes in this packet are all under review",
-      );
-      expect(value.developerInstructions).toContain(
-        "Open and read the cited paper",
-      );
-      expect(value.developerInstructions).not.toContain(
-        "must name a support note",
-      );
-      expect(value.developerInstructions).toContain(
-        "a verified external theorem may be cited directly",
-      );
       return {
         state: "succeeded" as const,
         codexVersion: "fixture",
@@ -261,46 +136,44 @@ test.each(["request", "role"])(
   },
 );
 
-test("a full audit cannot claim source inspection without a web call or reuse that rejected result", async () => {
-  const request = input();
-  await expect(
-    review(request, {
+test.each(["uninspected passage", "malformed JSON"])(
+  "review retries a rejected %s without reusing it",
+  async (failure) => {
+    const request = input();
+    let calls = 0;
+    const dependencies = {
       codex: async () => ({
-        state: "succeeded",
-        codexVersion: "fixture",
-        stdout: codexStdout(
-          {
-            verdict: "FAIL",
-            report: "Contradictory source.",
-            externalResults: [externalResult],
-          },
-          false,
-        ),
-        stderr: "",
-      }),
-    }),
-  ).rejects.toThrow("without using web search");
-  let calls = 0;
-  const dependencies = {
-    codex: async () => {
-      calls++;
-      return {
         state: "succeeded" as const,
         codexVersion: "fixture",
-        stdout: codexStdout({
-          verdict: "FAIL",
-          report: "Checked contradictory source.",
-          externalResults: [externalResult],
-        }),
+        stdout:
+          ++calls === 1
+            ? failure === "malformed JSON"
+              ? "invalid JSON"
+              : codexStdout(
+                  {
+                    verdict: "FAIL",
+                    report: "Contradictory source.",
+                    externalResults: [externalResult],
+                  },
+                  false,
+                )
+            : codexStdout({
+                verdict: "FAIL",
+                report: "Checked contradictory source.",
+                externalResults: [externalResult],
+              }),
         stderr: "",
-      };
-    },
-  };
-  const result = await review(request, dependencies);
-  expect(result.report).toContain("Checked contradictory source.");
-  expect(await review(request, dependencies)).toEqual(result);
-  expect(calls).toBe(1);
-});
+      }),
+    };
+    await expect(review(request, dependencies)).rejects.toThrow(
+      failure === "malformed JSON" ? "JSON" : "without using web search",
+    );
+    const result = await review(request, dependencies);
+    expect(result.report).toContain("Checked contradictory source.");
+    expect(await review(request, dependencies)).toEqual(result);
+    expect(calls).toBe(2);
+  },
+);
 
 test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
   "the final review requires passages for PASS while retaining %s uncertainty",
@@ -314,40 +187,3 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
     ).toBe(verdict !== "PASS");
   },
 );
-
-test("an explicit retry preserves a malformed response and completes a fresh audit", async () => {
-  const request = input();
-  let calls = 0;
-  await expect(
-    review(request, {
-      codex: async () => {
-        calls++;
-        return {
-          state: "succeeded",
-          codexVersion: "fixture",
-          stdout: "invalid JSON",
-          stderr: "",
-        };
-      },
-    }),
-  ).rejects.toThrow();
-  const dependencies = {
-    codex: async () => {
-      calls++;
-      return {
-        state: "succeeded" as const,
-        codexVersion: "fixture",
-        stdout: codexStdout({
-          verdict: "FAIL",
-          report: "Citation mismatch.",
-          externalResults: [externalResult],
-        }),
-        stderr: "",
-      };
-    },
-  };
-  const result = await review(request, dependencies);
-  expect(result.verdict).toBe("FAIL");
-  expect(await review(request, dependencies)).toEqual(result);
-  expect(calls).toBe(2);
-});

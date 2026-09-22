@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { createCampaign, defineTool, openReader } from "xean";
 
 import { createPiRoles } from "../pi-roles";
@@ -81,13 +80,13 @@ test("inspection does not interpret a Pi submission as source verification", asy
   }
 });
 
-test("inspection uses one journal prefix when Explorer finishes during the read", async () => {
+test("inspection derives every field from one captured journal prefix", async () => {
   const config = workflowConfiguration({
     task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
     settings: roleSettings(),
   });
-  const fixturePath = campaignPath();
-  const fixture = await createWorkflowCampaign(fixturePath, config, 4);
+  const path = campaignPath();
+  const fixture = await createWorkflowCampaign(path, config, 4);
   try {
     const drive = dependencies([
       dispatchExplorer(),
@@ -104,34 +103,16 @@ test("inspection uses one journal prefix when Explorer finishes during the read"
   } finally {
     fixture.close();
   }
-  using source = new Database(fixturePath, { readonly: true });
-  const appended = source
-    .query<{ seq: number; at_ms: number; kind: string; body: string }, []>(
-      "SELECT seq, at_ms, kind, body FROM entries WHERE seq > 3 ORDER BY seq",
-    )
-    .all();
-  const path = campaignPath();
-  (await createWorkflowCampaign(path, config, 4)).close();
-  using writer = new Database(path);
   const reader = openReader(path);
   const prototype = Object.getPrototypeOf(reader) as typeof reader;
   reader.close();
   const original = prototype.records;
   let reads = 0;
-  // A writer may append immediately after the reader's SELECT returns.
-  // Copy a valid completed call to make that interleaving deterministic.
+  // Return the prefix captured before Explorer completed. A second read would
+  // observe the later entries already in the database and mix the two views.
   prototype.records = function () {
     const records = original.call(this);
-    reads += 1;
-    if (reads === 1) {
-      for (const row of appended) {
-        writer.run(
-          "INSERT INTO entries(seq, at_ms, kind, body) VALUES (?, ?, ?, ?)",
-          [row.seq, row.at_ms, row.kind, row.body],
-        );
-      }
-    }
-    return records;
+    return ++reads === 1 ? records.filter(({ seq }) => seq <= 3) : records;
   };
   let report;
   try {
@@ -225,49 +206,30 @@ test.each(["failed", "cancelled"] as const)(
       campaign = createCampaign(path, applicationId, { kind: "calls" });
     const error = `Codex ${state}`;
     try {
-      const roles = createPiRoles(campaign, roleSettings(), {
-        ...dependencies([
-          {
-            submission: {
-              verdicts: [
-                {
-                  note: "n1",
-                  verdict: "PASS",
-                  report: "Conditional on the external theorem.",
-                  externalResults: ["The external theorem asserts P."],
-                },
-              ],
-            },
+      await campaign.call(
+        {
+          label: verifierLabels.source,
+          role: "verifier",
+          request: {
+            protocol: "xean/codex-exec/v1",
+            model: "fixture",
+            reasoning: "low",
+            search: true,
+            developerInstructions: "Check the source.",
+            prompt: "A failed source call.",
+            outputSchema: {},
           },
-        ]),
-        codex: async () => ({
+        },
+        async () => ({
           state,
           error,
           stdout: "PRIVATE_CODEX_STDOUT",
           stderr: "PRIVATE_CODEX_STDERR",
         }),
-      });
-      await expect(
-        roles.verifier({
-          task: { problem: "Prove P.", completionCriteria: "A proof." },
-          notes: [
-            {
-              id: "n1",
-              text: "A claim.",
-              support: [],
-              verdicts: [],
-              verified: false,
-              dead: false,
-            },
-          ],
-          support: [],
-          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
-        }),
-      ).rejects.toThrow(error);
+      );
       const inspection = await inspectCampaign(path);
       expect(inspection).toMatchObject({
         calls: [
-          { verifier: "correctness", state: "returned", outcome: "succeeded" },
           {
             role: "verifier",
             verifier: "source",

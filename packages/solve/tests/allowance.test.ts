@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, openCampaign, openReader } from "xean";
 
-import { allowanceLabel, turnAllowances } from "../allowance";
+import { allowanceLabel, appendAllowance, turnAllowances } from "../allowance";
 import {
   guideCampaign,
   inspectCampaign,
@@ -232,7 +232,7 @@ test("default allowance is outside config and invalid requests do not mutate it"
     run(
       {
         ...request,
-        settings: { ...request.settings, maxTurns: 1 },
+        settings: { ...request.settings, unknownSetting: true },
       } as never,
       dependencies([]),
     ),
@@ -242,6 +242,14 @@ test("default allowance is outside config and invalid requests do not mutate it"
       "running process",
     );
   });
+  const campaign = openCampaign(path);
+  try {
+    await expect(appendAllowance(campaign, 3, 1, "direct")).rejects.toThrow(
+      "invalid turn allowance sequence",
+    );
+  } finally {
+    campaign.close();
+  }
   expect(records(path)).toEqual(before);
 });
 

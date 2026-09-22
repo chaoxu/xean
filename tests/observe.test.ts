@@ -32,31 +32,6 @@ function campaignPath(): string {
   return join(directory, "campaign.db");
 }
 
-test("full observation exposes opaque application evidence without adding it to call summaries", async () => {
-  const campaign = createCampaign(campaignPath(), "test", {});
-  try {
-    const { call } = await campaign.call(
-      { label: "application/check", request: {} },
-      async () => ({ state: "succeeded" }),
-    );
-    const evidence = {
-      verdicts: [
-        { note: "n1", verdict: "PASS", report: "Application judgment." },
-      ],
-    };
-    campaign.recordEvidence(call, evidence);
-    expect(
-      inspectCoreCampaignRecords(campaign, campaign.records()).calls[0]
-        ?.evidence,
-    ).toEqual(evidence);
-    expect(inspectCoreCallSummaries(campaign.records())[0]).not.toHaveProperty(
-      "evidence",
-    );
-  } finally {
-    campaign.close();
-  }
-});
-
 function piRequest() {
   return {
     protocol: "xean/pi-run/v4" as const,
@@ -153,6 +128,10 @@ test("call summaries preserve full metadata at the captured boundary", async () 
     });
     expect(inspectCoreCallSummaries(records)).toEqual(metadata);
     expect(full.calls[0]?.pi?.responseText).toBe("done");
+    const summary = inspectCoreCampaignSummaryRecords(records);
+    expect(summary.schema).toBe("xean.core-observation-summary/v2");
+    expect(summary).not.toHaveProperty("applicationConfig");
+    expect(JSON.stringify(summary)).not.toContain('"done"');
     await campaign.call({ label: "later", request: null }, async () => null);
     expect(inspectCoreCallSummaries(records)).toEqual(metadata);
     expect(inspectCoreCallSummaries(campaign.records())).toHaveLength(3);
@@ -182,7 +161,7 @@ const measured = (usage: typeof firstUsage) => ({
 });
 const message = (usage: typeof firstUsage) => ({ role: "assistant", usage });
 
-test("derives token buckets from request completions", async () => {
+test("derives token buckets only from request completions, ignoring transcript usage", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "changing-workflow", null);
   try {
@@ -193,7 +172,7 @@ test("derives token buckets from request completions", async () => {
           campaign,
           call,
           [measured(firstUsage), measured(secondUsage)],
-          [message(firstUsage), message(secondUsage)],
+          [{ role: "assistant", usage: { invalid: true } }],
         ),
     );
   } finally {
@@ -257,7 +236,11 @@ test("projects call ownership without interpreting application evidence", async 
         },
       ],
     });
-    expect(before).not.toHaveProperty("candidates");
+    expect(before.calls[1]?.evidence).toEqual({
+      verdict: "PASS",
+      checked: "directly",
+    });
+    expect(inspectCoreCallSummaries(records)[1]).not.toHaveProperty("evidence");
     await campaign.call({ label: "later", request: null }, async () => null);
     expect(inspectCoreCampaignRecords(campaign, records)).toEqual(before);
   } finally {
@@ -313,28 +296,6 @@ test("a captured pending call stays pending after its result is appended", async
     await pending;
     campaign.close();
   }
-});
-
-test("summarizes without response or operation payloads", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", { opaque: true });
-  try {
-    await campaign.call(
-      { label: "workflow/call", request: { opaque: true } },
-      async () => ({ response: "large response" }),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  const summary = inspectCoreCampaignSummary(path);
-  expect(summary).toMatchObject({
-    schema: "xean.core-observation-summary/v2",
-    application: "changing-workflow",
-    callCount: 1,
-  });
-  expect(JSON.stringify(summary)).not.toContain("large response");
-  expect(summary).not.toHaveProperty("applicationConfig");
 });
 
 test("keeps understood spend when another Pi result is unsupported", async () => {
@@ -434,10 +395,9 @@ test("reports an unsettled Pi call as unaccounted", async () => {
   }
 });
 
-test.each([
-  "stream_incomplete: Upstream closed stream without completion",
-  "Response incomplete: max_messages",
-])("separates fresh-call cache coverage from recovered %s", async (failure) => {
+test("separates fresh-call cache coverage from recovered request errors", async () => {
+  const failure =
+    "stream_incomplete: Upstream closed stream without completion";
   const path = campaignPath();
   const campaign = createCampaign(path, "recovered-workflow", null);
   const cached = {
@@ -701,35 +661,3 @@ test.each([
     }
   },
 );
-
-test("request accounting ignores transcript usage snapshots", async () => {
-  const campaign = createCampaign(campaignPath(), "request-accounting", null);
-  try {
-    await campaign.call(
-      { label: "measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(
-          campaign,
-          call,
-          [measured(firstUsage)],
-          [{ role: "assistant", usage: { invalid: true } }],
-        ),
-    );
-    const records = campaign.records();
-    const full = inspectCoreCampaignRecords(campaign, records);
-    expect(full.calls[0]?.pi?.accounting.state).toBe("available");
-    expect(full.spend.breakdown).toEqual({
-      freshInputTokens: 9,
-      cachedInputTokens: 2,
-      reasoningOutputTokens: 3,
-      nonReasoningOutputTokens: 2,
-    });
-    expect(inspectCoreCampaignSummaryRecords(records).spend).toEqual({
-      ...full.spend,
-      unsupportedCalls: 0,
-      unaccountedCalls: 0,
-    });
-  } finally {
-    campaign.close();
-  }
-});

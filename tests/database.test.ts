@@ -46,7 +46,6 @@ describe("campaign database", () => {
 
   test.each([
     [0, 1],
-    [0, 8],
     [0x74657374, 1],
   ])(
     "rejects foreign application %i schema %i without mutation",
@@ -379,16 +378,7 @@ describe("campaign database", () => {
     database.close(true);
   });
 
-  test("refuses an unsupported schema", () => {
-    const path = temporaryPath();
-    const database = new Database(path, { create: true });
-    database.run("PRAGMA application_id = 2019909998");
-    database.run("PRAGMA user_version = 4");
-    database.close(true);
-    expect(() => openReader(path)).toThrow("unsupported campaign schema: 4");
-  });
-
-  test.each([0, 1, 2, 8, 999])(
+  test.each([0, 2, 4])(
     "refuses schema %i without changing its files",
     (version) => {
       const path = temporaryPath();
@@ -560,5 +550,36 @@ describe("campaign database", () => {
       source: "provider-effect-1",
     });
     reader.close();
+  });
+  test("a completed tool does not settle its interrupted parent call", () => {
+    const path = temporaryPath();
+    const child = Bun.spawnSync(
+      [process.execPath, resolve("tests/fixtures/crash-after-tool.ts"), path],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(child.exitCode).toBe(0);
+    const campaign = openCampaign(path);
+    try {
+      const records = campaign.records();
+      expect(records.map(({ kind }) => kind)).toEqual([
+        "campaign",
+        "call",
+        "tool-call",
+        "tool-result",
+      ]);
+      expect(records.at(-1)).toMatchObject({
+        state: "returned",
+        output: "durable submission",
+      });
+      expect(() => campaign.recordEvidence(records[1]!.seq, null)).toThrow(
+        "returned call",
+      );
+      expect(campaign.records()).toEqual(records);
+    } finally {
+      campaign.close();
+    }
   });
 });

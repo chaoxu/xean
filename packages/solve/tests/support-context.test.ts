@@ -56,7 +56,6 @@ const inherited = note(
 );
 const target = note("n3", "Use the inherited coverage in n2.", ["n2"]);
 const unrelated = note("n4", "UNRELATED PROOF");
-const all = [first, inherited, target, unrelated];
 const input = {
   task,
   notes: [target],
@@ -64,41 +63,16 @@ const input = {
   verify: [{ note: "n3", verifiers: [...verifierNames] }],
 };
 
-test("verification requires the complete dependency chain while preserving the direct support edges", async () => {
+test("verification requires a distinct, complete, ordered support closure", () => {
   expect(verifierInput.parse(input)).toEqual(input);
-  expect(supportClosure([target], all)).toEqual(["n1", "n2"]);
-  expect(target.support).toEqual(["n2"]);
-  expect(
-    verifierInput.safeParse({ ...input, support: [inherited] }).success,
-  ).toBe(false);
-  expect(
-    verifierInput.safeParse({
-      ...input,
-      support: [first, inherited, unrelated],
-    }).success,
-  ).toBe(false);
-  expect(
-    verifierInput.safeParse({
-      ...input,
-      support: [inherited, first],
-    }).success,
-  ).toBe(false);
-});
-
-test("cycles and duplicate notes cannot leak target text through reconstruction support", async () => {
-  const cycle = { ...first, support: ["n3"] };
-  expect(
-    verifierInput.safeParse({
-      ...input,
-      support: [cycle, inherited],
-    }).success,
-  ).toBe(false);
-  expect(
-    verifierInput.safeParse({
-      ...input,
-      support: [first, first, inherited],
-    }).success,
-  ).toBe(false);
+  for (const support of [
+    [inherited],
+    [first, inherited, unrelated],
+    [inherited, first],
+    [{ ...first, support: ["n3"] }, inherited],
+    [first, first, inherited],
+  ])
+    expect(verifierInput.safeParse({ ...input, support }).success).toBe(false);
   expect(
     verifierInput.safeParse({
       ...input,
@@ -108,7 +82,7 @@ test("cycles and duplicate notes cannot leak target text through reconstruction 
   ).toBe(false);
 });
 
-test("support closure combines roots, shares ancestors, and sorts numeric ids", async () => {
+test("support closure combines roots, shares ancestors, and sorts numeric ids", () => {
   const shared = note("n9", "Shared result.", ["n2", "n1"]);
   const left = note("n10", "Left result.", ["n9"]);
   const right = note("n11", "Right result.", ["n9", "n2"]);
@@ -144,17 +118,14 @@ test("correctness and reconstruction retain support while source reads only assi
     },
   );
   for (const prompt of calls.map((c) => c.prompt)) {
-    expect(prompt.split(first.text)).toHaveLength(3); // summary plus proof, one note object
+    expect(prompt).toContain(first.text);
     expect(prompt).toContain(inherited.text);
     expect(prompt).not.toContain(unrelated.text);
   }
   expect(native.request.prompt).not.toContain(first.text);
   expect(native.request.prompt).not.toContain(inherited.text);
   expect(native.request.prompt).toContain(target.text);
-  const reconstructed = await proofCall(input, target, {
-    statement: "Coverage holds.",
-  });
-  expect(reconstructed.prompt).not.toContain(target.text);
+  expect(calls[3]!.prompt).not.toContain(target.text);
   const batch = {
     ...input,
     notes: [inherited, target],

@@ -2,18 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import { createCampaign, type Campaign, type Json } from "xean";
 import { z } from "zod";
 
-import {
-  createPiRoles,
-  sourceCall,
-  sourceVerdictsOf,
-  verifierCall,
-} from "../pi-roles";
+import { createPiRoles, sourceCall, sourceVerdictsOf } from "../pi-roles";
 import {
   applicationId,
   correctnessVerdictsFor,
   journalVerdicts,
   localSourceRequest,
-  sourceVerdictsFor,
   type Note,
   type VerifierInput,
 } from "../roles";
@@ -89,27 +83,6 @@ const calls = (campaign: Campaign) =>
   campaign
     .records({ kinds: ["call"] })
     .filter((entry) => entry.kind === "call");
-
-test("correctness lists hidden premises and preserves mathematical defects before source checking", async () => {
-  const call = await verifierCall("correctness", input([makeNote("n1")]), [
-    "n1",
-  ]);
-  expect(call.prompt).toContain(
-    "Include hidden external premises even when the citation is vague or absent",
-  );
-  expect(call.prompt).toContain(
-    "fail an undeclared substantive dependency or an application that does not meet those hypotheses",
-  );
-  expect(call.prompt).toContain(
-    "An isolated theorem note may cite its external source directly without proving that theorem",
-  );
-  expect(call.prompt).toContain("an unsupported essential premise");
-  expect(
-    correctnessVerdictsFor(["n1"]).safeParse({
-      verdicts: [{ note: "n1", verdict: "PASS", report: "Correct." }],
-    }).success,
-  ).toBe(false);
-});
 
 test("mixed verification sends only notes with external premises and journals local PASS honestly", async () => {
   const path = campaignPath();
@@ -238,47 +211,14 @@ test("unusable source evidence is inconclusive for that note alone", () => {
   expect(outcome([verdict("n1", [])])).toBeUndefined();
 });
 
-test("the source output schema admits only this call's premise IDs and requires a passage for each on PASS", () => {
-  const schema = sourceVerdictsFor(
-    ["n1"],
-    [{ note: "n1", externalResults: [result] }],
-  );
-  const value = {
-    note: "n1",
-    verdict: "PASS",
-    report: "Checked.",
-    correctedText: null,
-    sources: [{ ...source, resultId: "n1#1" }],
-  };
-  expect(z.toJSONSchema(schema, { io: "input" })).toMatchObject({
-    properties: {
-      verdicts: {
-        items: {
-          properties: {
-            sources: {
-              items: { properties: { resultId: { enum: ["n1#1"] } } },
-            },
-          },
-        },
-      },
-    },
-  });
-  expect(schema.safeParse({ verdicts: [value] }).success).toBe(true);
-  for (const sources of [[], [{ ...source, resultId: "n1#2" }]]) {
-    expect(
-      schema.safeParse({ verdicts: [{ ...value, sources }] }).success,
-    ).toBe(false);
-  }
+test("source wire schemas require assigned premises and explicit nullable corrections", () => {
   expect(
-    schema.safeParse({
-      verdicts: [{ ...value, verdict: "INCONCLUSIVE", sources: [] }],
+    correctnessVerdictsFor(["n1"]).safeParse({
+      verdicts: [{ note: "n1", verdict: "PASS", report: "Missing premises." }],
     }).success,
-  ).toBe(true);
-});
-
-test("the source request uses strict structured output with explicit nullable corrections", async () => {
+  ).toBe(false);
   const assigned = [{ note: "n1", externalResults: [result] }];
-  const call = await sourceCall(
+  const call = sourceCall(
     roleSettings().source,
     input([makeNote("n1")]),
     ["n1"],
@@ -314,6 +254,17 @@ test("the source request uses strict structured output with explicit nullable co
     report: "Checked.",
     sources: [{ ...source, resultId: "n1#1" }],
   };
+  expect(
+    wire.safeParse({
+      verdicts: [
+        {
+          ...base,
+          correctedText: null,
+          sources: [{ ...source, resultId: "n1#2" }],
+        },
+      ],
+    }).success,
+  ).toBe(false);
   expect(wire.safeParse({ verdicts: [base] }).success).toBe(false);
   const correctedText =
     "Theorem T(x) for x > 0, by the primary paper's Theorem 2.";

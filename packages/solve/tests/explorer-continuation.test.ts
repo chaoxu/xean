@@ -1,20 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign, openCampaign } from "xean";
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-} from "@earendil-works/pi-ai";
+import { openCampaign } from "xean";
 
 import {
   createPiRoles,
   explorerCall,
   sameRequest,
   solveSettings,
-  type PiRoleDependencies,
 } from "../pi-roles";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
-import { applicationId, jsonSnapshot } from "../roles";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -38,15 +32,6 @@ const input = {
   support: [],
 };
 const note = { text: "An alleged complete proof.", support: [] };
-
-test("sameRequest compares generic JSON by value rather than key order", () => {
-  expect(
-    sameRequest(
-      { kind: "request", nested: { first: 1, second: ["x", "y"] } },
-      { nested: { second: ["x", "y"], first: 1 }, kind: "request" },
-    ),
-  ).toBe(true);
-});
 
 test("Explorer always requires a solution claim and defaults to four responses", () => {
   const call = explorerCall(input);
@@ -78,16 +63,6 @@ test("Explorer always requires a solution claim and defaults to four responses",
   );
 });
 
-test.each([false, true])(
-  "removed Explorer continuation setting is rejected: %s",
-  (explorerContinuation) => {
-    expect(
-      solveSettings.safeParse({ ...roleSettings(), explorerContinuation })
-        .success,
-    ).toBe(false);
-  },
-);
-
 test.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
   "Explorer rejects an invalid response limit: %s",
   (maxExplorerResponses) => {
@@ -97,15 +72,6 @@ test.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
     ).toBe(false);
   },
 );
-
-test("Explorer accepts a large response limit", () => {
-  expect(
-    solveSettings.parse({
-      ...roleSettings(),
-      maxExplorerResponses: 1_000_000_000_000_000,
-    }).maxExplorerResponses,
-  ).toBe(1_000_000_000_000_000);
-});
 
 test("only Explorer uses a gate; a solution claim still goes through ordinary verification", async () => {
   const { maxExplorerResponses: _, ...defaults } = roleSettings();
@@ -191,149 +157,6 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
     expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
       "turn-limit",
     );
-  } finally {
-    campaign.close();
-  }
-});
-
-test("a one-response Explorer keeps the gate and returns assigned note IDs", async () => {
-  const campaign = createCampaign(campaignPath(), applicationId, {
-    kind: "calls",
-  });
-  const drive = dependencies([
-    { submission: { notes: [note], solution: false } },
-  ]);
-  try {
-    await createPiRoles(campaign, roleSettings(), drive).explorer(input);
-    expect(drive.calls[0]?.submissionGate?.maxResponses).toBe(1);
-    expect(
-      campaign.records().find((entry) => entry.kind === "tool-result"),
-    ).toMatchObject({
-      state: "returned",
-      output: { noteIds: ["n1"] },
-    });
-  } finally {
-    campaign.close();
-  }
-});
-
-test.each([
-  { first: "invalid", maxExplorerResponses: 1, succeeds: false },
-  { first: "invalid", maxExplorerResponses: 2, succeeds: true },
-  { first: "length", maxExplorerResponses: 1, succeeds: false },
-  { first: "length", maxExplorerResponses: 2, succeeds: true },
-  { first: "stop", maxExplorerResponses: 1, succeeds: false },
-  { first: "stop", maxExplorerResponses: 2, succeeds: true },
-  { first: "error", maxExplorerResponses: 1, succeeds: true },
-] as const)(
-  "Explorer response budget $maxExplorerResponses handles a first $first response",
-  async ({ first, maxExplorerResponses, succeeds }) => {
-    const settings = { ...roleSettings(), maxExplorerResponses };
-    const catalog = dependencies([]).models;
-    const model = catalog.getModel(
-      settings.explorer.provider,
-      settings.explorer.model,
-    );
-    if (model === undefined) throw new Error("missing fixture model");
-    const submission = (solution?: boolean): AssistantMessage["content"] => [
-      {
-        type: "toolCall",
-        id: solution === undefined ? "missing-solution" : "valid-submission",
-        name: "submit_notes",
-        arguments: {
-          notes: [note],
-          ...(solution === undefined ? {} : { solution }),
-        },
-      },
-    ];
-    const reply = (
-      content: AssistantMessage["content"],
-      stopReason: AssistantMessage["stopReason"],
-    ): AssistantMessage => ({
-      role: "assistant",
-      content,
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 11,
-        output: 7,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 18,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason,
-      timestamp: Date.now(),
-      ...(stopReason === "error"
-        ? { errorMessage: "upstream_error: Codex upstream request failed" }
-        : {}),
-    });
-    const replies = [
-      reply(
-        first === "invalid"
-          ? submission()
-          : [{ type: "text", text: "Partial reasoning." }],
-        first === "invalid" ? "toolUse" : first,
-      ),
-      reply(submission(false), "toolUse"),
-    ];
-    let requests = 0;
-    const models: PiRoleDependencies["models"] = {
-      ...catalog,
-      streamSimple(requestModel, context, options) {
-        const message = replies[requests++];
-        if (message === undefined)
-          throw new Error("unexpected fixture request");
-        const stream = createAssistantMessageEventStream();
-        void (async () => {
-          await options?.onPayload?.(
-            { model: requestModel.id, context },
-            requestModel,
-          );
-          if (message.stopReason === "error")
-            stream.push({ type: "error", reason: "error", error: message });
-          else if (
-            message.stopReason === "toolUse" ||
-            message.stopReason === "length" ||
-            message.stopReason === "stop"
-          )
-            stream.push({ type: "done", reason: message.stopReason, message });
-          else throw new Error("unexpected fixture stop reason");
-        })();
-        return stream;
-      },
-    };
-    const campaign = createCampaign(campaignPath(), applicationId, {
-      kind: "calls",
-    });
-    try {
-      const result = createPiRoles(campaign, settings, { models }).explorer(
-        input,
-      );
-      if (succeeds)
-        expect(await result).toEqual({ notes: [note], solution: false });
-      else await expect(result).rejects.toThrow("explorer failed:");
-      expect(requests).toBe(succeeds ? 2 : 1);
-      expect(
-        campaign.records().filter((entry) => entry.kind === "tool-call"),
-      ).toHaveLength(succeeds ? 1 : 0);
-    } finally {
-      campaign.close();
-    }
-  },
-);
-
-test("the role runner leaves the transport choice to the models wrapper", async () => {
-  const campaign = createCampaign(campaignPath(), applicationId, {
-    kind: "calls",
-  });
-  const drive = dependencies([
-    { submission: { notes: [note], solution: false } },
-  ]);
-  try {
-    await createPiRoles(campaign, roleSettings(), drive).explorer(input);
-    expect(drive.calls[0]).not.toHaveProperty("transport");
   } finally {
     campaign.close();
   }
@@ -501,33 +324,6 @@ test("omitted response budget is saved explicitly and matches its explicit defau
       },
     }),
   ).toMatchObject({ created: false });
-});
-
-test("an unsupported workflow schema is rejected without changing the journal", async () => {
-  const settings = roleSettings();
-  const path = campaignPath();
-  createCampaign(
-    path,
-    applicationId,
-    jsonSnapshot({
-      kind: "workflow",
-      schemaVersion: 0,
-      task,
-      settings,
-    }),
-  ).close();
-  const before = await Bun.file(path).arrayBuffer();
-  await expect(
-    run(
-      { task, campaignPath: path, settings },
-      {
-        models: async () => {
-          throw new Error("must reject the schema before provider setup");
-        },
-      },
-    ),
-  ).rejects.toThrow("configuration disagrees");
-  expect(await Bun.file(path).arrayBuffer()).toEqual(before);
 });
 
 test.each([1, 3])(

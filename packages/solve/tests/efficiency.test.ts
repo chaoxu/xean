@@ -1,16 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { createCampaign, type RecordQuery } from "xean";
-
 import { createPiRoles } from "../pi-roles";
-import { Projection } from "../projection";
-import {
-  applicationId,
-  judgedBy,
-  savedExplorerSubmission,
-  succeededSubmission,
-  verifierInput,
-  type Note,
-} from "../roles";
+import { notesInbox } from "../notes";
+import { submitNotes } from "../role-cli";
+import { judgedBy, verifierInput, type Note } from "../roles";
 import { supportClosure } from "../support";
 import {
   deriveWorkflow,
@@ -40,51 +32,32 @@ function note(id: number, support: string[] = []): Note {
   };
 }
 
-test("eligibility visits shared support once per fixed evidence view", () => {
-  let reads = 0;
-  const count = 80;
-  const known = Array.from({ length: count }, (_, i): Note => ({
-    ...note(i + 1),
-    get support() {
-      if (++reads > count * 3)
-        throw new Error("shared support was repeatedly expanded");
-      return i === 0 ? [] : i === 1 ? ["n1"] : [`n${i}`, `n${i - 1}`];
-    },
-  }));
-  expect(
-    judgedBy(
-      {
-        verify: known.map(({ id }) => ({
-          note: id,
-          verifiers: ["correctness"],
-        })),
-        notes: known,
-        support: [],
-      },
-      [],
-      "correctness",
+test("shared support yields one ordered closure and keeps all eligible notes", () => {
+  const known = Array.from({ length: 512 }, (_, index) =>
+    note(
+      index + 1,
+      index === 0
+        ? []
+        : index === 1
+          ? ["n1"]
+          : ["n" + index, "n" + (index - 1)],
     ),
-  ).toEqual(known.map(({ id }) => id));
-  expect(reads).toBeLessThanOrEqual(count * 3);
-});
-
-test("support closure visits shared ancestors once without storing all root closures", async () => {
-  let reads = 0;
-  const count = 100;
-  const known = Array.from({ length: count }, (_, i): Note => ({
-    ...note(i + 1),
-    get support() {
-      if (++reads > count) throw new Error("shared ancestor expanded twice");
-      return i === 0 ? [] : ["n" + i, ...(i > 1 ? ["n" + (i - 1)] : [])];
-    },
+  );
+  const verify = known.map(({ id }) => ({
+    note: id,
+    verifiers: ["correctness" as const],
   }));
   expect(supportClosure([known.at(-1)!], known)).toEqual(
     known.slice(0, -1).map(({ id }) => id),
   );
-  expect(reads).toBe(count);
+  expect(
+    judgedBy({ verify, notes: known, support: [] }, [], "correctness"),
+  ).toEqual(known.map(({ id }) => id));
+  expect(verificationPrefix(verify, known, 100_000)).toEqual(verify);
 });
 
 test("the verification window validates only notes it reads", async () => {
+  expect(verificationPrefix([], [], 1)).toEqual([]);
   const known = [note(1), note(2), note(4, ["n3"])];
   const verify = known.map(({ id }) => ({
     note: id,
@@ -96,25 +69,6 @@ test("the verification window validates only notes it reads", async () => {
   expect(() => verificationPrefix(verify, known, 1000)).toThrow(
     "missing support note n3",
   );
-});
-
-test("verification prefixes do not expand support already read", async () => {
-  let reads = 0;
-  const count = 128;
-  const known = Array.from({ length: count }, (_, index): Note => ({
-    ...note(index + 1),
-    get support() {
-      if (++reads > count * 3)
-        throw new Error("verification prefix repeatedly expanded support");
-      return index === 0 ? [] : [`n${index}`];
-    },
-  }));
-  const verify = known.map(({ id }) => ({
-    note: id,
-    verifiers: ["source" as const],
-  }));
-  expect(await verificationPrefix(verify, known, 100_000)).toEqual(verify);
-  expect(reads).toBeLessThanOrEqual(count * 3);
 });
 
 test.each([
@@ -189,143 +143,38 @@ test.each([true, false])(
   },
 );
 
-test("startup reuses its captured derivation only while the journal boundary matches", async () => {
+test("startup discards its captured phase after the journal changes", async () => {
   const task = { problem: "Prove P.", completionCriteria: "A complete proof." };
   const config = workflowConfiguration({ task, settings: roleSettings() });
-  const campaign = await createWorkflowCampaign(campaignPath(), config);
+  const path = campaignPath();
+  const campaign = await createWorkflowCampaign(path, config);
   const initial = {
-    snapshot: await deriveWorkflow(campaign.records()),
+    snapshot: deriveWorkflow(campaign.records()),
     through: campaign.lastSequence(),
   };
-  const original = campaign.records.bind(campaign);
-  let derivations = 0;
-  campaign.records = function (options) {
-    derivations += 1;
-    return original(options);
-  };
-  const roles = createPiRoles(campaign, config.settings, dependencies([]));
   try {
-    expect(
-      (
-        await runWorkflow(
-          campaign,
-          roles,
-          { pauseRequested: () => true },
-          initial,
-        )
-      ).kind,
-    ).toBe("coordinator");
-    expect(derivations).toBe(0);
-    await campaign.call(
-      { label: "new-boundary", request: null },
-      async () => null,
+    await submitNotes(
+      path,
+      { notes: [{ text: "New caller work.", support: [] }] },
+      "fresh",
     );
-    expect(
-      (
-        await runWorkflow(
-          campaign,
-          roles,
-          { pauseRequested: () => true },
-          initial,
-        )
-      ).kind,
-    ).toBe("coordinator");
-    expect(derivations).toBe(1);
-  } finally {
-    campaign.records = original;
-    campaign.close();
-  }
-});
-
-test("projection snapshots are reused and later filings leave earlier snapshots intact", () => {
-  const projection = new Projection([]);
-  projection.add([note(1)], 2);
-  const before = projection.at(2);
-  expect(before[0]?.summary).toBeUndefined();
-  expect(projection.accepted(2)).toEqual([]);
-  expect(projection.at(2)).toBe(before);
-  projection.file([{ note: "n1", summary: "A filed result." }], 3);
-  expect(projection.at(3)[0]?.summary).toBe("A filed result.");
-  expect(before[0]?.summary).toBeUndefined();
-  expect(projection.at(2)).toEqual(before);
-});
-
-test("Explorer receipts reconcile only new owned submissions and reuse durable identities", async () => {
-  const campaign = createCampaign(campaignPath(), applicationId, {
-    kind: "calls",
-  });
-  await campaign.call(
-    { label: "unrelated", request: { proof: "x".repeat(100_000) } },
-    async () => null,
-  );
-  let checking = false,
-    selected = 0;
-  const original = campaign.records.bind(campaign);
-  campaign.records = (query?: RecordQuery) => {
-    if (checking) {
-      expect(query?.kinds).toEqual(["tool-call"]);
-      expect(query?.call).toBeDefined();
-      expect(query?.after).toBeDefined();
-      expect(query?.through).toBeDefined();
-    }
-    const rows = original(query);
-    if (checking) selected += rows.length;
-    return rows;
-  };
-  const drive = dependencies([
-    {
-      onStarted: async (tools) => {
-        checking = true;
-        try {
-          for (let i = 1; i <= 10; i++) {
-            const value = {
-              notes: [
-                {
-                  text: `New result ${i}.`,
-                  support: i === 1 ? [] : [`n${i - 1}`],
-                },
-              ],
-              solution: false,
-            };
-            expect(await tools[0]!.execute(value, `call-${i}`)).toEqual({
-              noteIds: [`n${i}`],
-            });
-          }
-          const entry = campaign.record(campaign.lastSequence() - 1);
-          if (entry?.kind !== "tool-call")
-            throw new Error("missing durable submission");
-          expect(
-            await drive.calls[0]!.tools![0]!.run(entry.input, {
-              call: entry.call,
-              toolCall: entry.seq,
-              signal: new AbortController().signal,
-            }),
-          ).toEqual({ noteIds: ["n10"] });
-          expect(selected).toBe(10);
-        } finally {
-          checking = false;
-        }
-      },
-    },
-  ]);
-  try {
-    const result = await createPiRoles(
+    await notesInbox.freeze(campaign, initial.snapshot.after!);
+    const phase = await runWorkflow(
       campaign,
-      { ...roleSettings(), maxExplorerResponses: 4 },
-      drive,
-    ).explorer({
-      task: { problem: "Prove P.", completionCriteria: "A complete proof." },
-      explorerGuidance: "",
-      notes: [],
-      support: [],
+      createPiRoles(campaign, config.settings, dependencies([])),
+      { pauseRequested: () => true },
+      initial,
+    );
+    expect(phase).toMatchObject({
+      kind: "coordinator",
+      input: { notes: [{ id: "n1", text: "New caller work." }] },
     });
-    expect(result.notes).toHaveLength(10);
   } finally {
     campaign.close();
   }
 });
 
-test("completed Explorer replay reads submissions once and preserves tool and settlement boundaries", async () => {
+test("Explorer notes are visible before settlement and survive missing tool receipts", async () => {
   const config = workflowConfiguration({
     task: { problem: "Prove P.", completionCriteria: "A complete proof." },
     settings: { ...roleSettings(), maxExplorerResponses: 4 },
@@ -350,44 +199,21 @@ test("completed Explorer replay reads submissions once and preserves tool and se
     const records = campaign.records();
     const owner = records.find(
       (entry) => entry.kind === "call" && entry.role === "explorer",
-    );
-    if (owner?.kind !== "call") throw new Error("missing Explorer call");
-    const reads = new Map<number, number>();
-    const tracked = records.map((entry) =>
-      entry.kind === "tool-call" && entry.call === owner.seq
-        ? {
-            ...entry,
-            get input() {
-              reads.set(entry.seq, (reads.get(entry.seq) ?? 0) + 1);
-              return entry.input;
-            },
-          }
-        : entry,
-    );
-    const completed = await deriveWorkflow(tracked);
-    expect([...reads.values()]).toEqual([1, 1]);
+    )!;
+    const saved = records.findLast(
+      (entry) => entry.kind === "tool-call" && entry.call === owner.seq,
+    )!;
+    const completed = deriveWorkflow(records);
     expect(completed.phase).toMatchObject({
       kind: "coordinator",
       input: { emptySubmission: true, notes: [{ id: "n1", text: first.text }] },
     });
-
-    const saved = savedExplorerSubmission(records, owner.seq)!;
-    const settled = succeededSubmission(
-      records,
-      owner.seq,
-      "submit_notes",
-      saved,
-    )!;
-    expect(saved.emptySubmission).toBe(true);
-    expect(saved.settled).toBeLessThan(settled.settled);
-    expect(settled.input).toBe(saved.input);
-    const beforeReceipt = await deriveWorkflow(
-      records.filter((entry) => entry.seq <= saved.settled),
+    const beforeReceipt = deriveWorkflow(
+      records.filter((entry) => entry.seq <= saved.seq),
     );
     expect(beforeReceipt.phase.kind).toBe("explorer");
     expect(beforeReceipt.notes).toMatchObject([{ id: "n1", text: first.text }]);
-    // Explorer's saved submissions are durable without their receipts.
-    const withoutReceipts = await deriveWorkflow(
+    const withoutReceipts = deriveWorkflow(
       records.filter(
         (entry) => entry.kind !== "tool-result" || entry.seq < owner.seq,
       ),

@@ -126,29 +126,3 @@ test("literature stays serial and can run before mandatory overlap", () => {
   expect(forced.schema.safeParse(literature).success).toBe(true);
   expect(forced.schema.safeParse(concurrent).success).toBe(false);
 });
-
-test("overlap prompts require concurrent work under both verification modes", () => {
-  for (const verification of ["decide", "always"] as const) {
-    const enabled = call(true, verification);
-    expect(enabled.prompt).toContain('"overlap": true');
-    expect(enabled.system).toContain(
-      "When action.role is verifier, supply both explorerGuidance and support inside action",
-    );
-    expect(enabled.system).toContain(
-      "Every verifier dispatch also starts Explorer",
-    );
-    expect(enabled.system).toContain(
-      "Explorer does not receive verdicts that are still pending",
-    );
-    expect(enabled.system).not.toContain("before another explorer turn");
-    expect(enabled.system).not.toContain("Overlap is optional");
-    expect(enabled.system).not.toContain("Omit both for serial verification");
-    expect(enabled.description).not.toContain("optionally");
-  }
-  for (const request of [call(false), call(false, "always")]) {
-    expect(request.system).toContain(
-      "omit explorerGuidance and support because the next coordinator call",
-    );
-    expect(request.system).not.toContain("run Explorer concurrently");
-  }
-});

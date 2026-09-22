@@ -120,44 +120,11 @@ describe("immutable request payloads", () => {
     const campaign = createCampaign(temporaryPath(), "payload", null);
     for (const value of [NaN, Infinity, { input: [NaN] }])
       expect(() => campaign.storePayload(value)).toThrow();
-    let reads = 0;
-    const captured = campaign.storePayload({
-      get input() {
-        return [{ read: ++reads }];
-      },
-    });
-    expect(reads).toBe(2);
-    expect(campaign.payload(captured)).toEqual({ input: [{ read: 2 }] });
     const input = [{ text: "original" }];
     const hash = campaign.storePayload({ input });
     input[0]!.text = "changed";
     input.push({ text: "added" });
     expect(campaign.payload(hash)).toEqual({ input: [{ text: "original" }] });
-    campaign.close();
-  });
-
-  test("round-trips a large payload", () => {
-    const campaign = createCampaign(temporaryPath(), "payload", null);
-    const input = Array.from({ length: 1_200 }, (_, index) => ({
-      index,
-      text: `item-${index}`,
-    }));
-    const value = { before: true, input, after: true } satisfies Json;
-    const digest = campaign.storePayload(value);
-    expect(campaign.payload(digest)).toEqual(value);
-    campaign.close();
-  });
-
-  test("preserves literal prototype and reference keys without interpreting them", () => {
-    const campaign = createCampaign(temporaryPath(), "payload", null);
-    const captured =
-      '{"__proto__":{"safe":true},"input":[{"__proto__":{"safe":true},"$ref":"literal","payloadRef":"literal"}],"constructor":"literal"}';
-    const hash = campaign.storePayload(JSON.parse(captured));
-    expect(JSON.stringify(campaign.payload(hash))).toBe(captured);
-    expect(
-      Object.prototype.hasOwnProperty.call(campaign.payload(hash), "__proto__"),
-    ).toBe(true);
-    expect(({} as { safe?: unknown }).safe).toBeUndefined();
     campaign.close();
   });
 

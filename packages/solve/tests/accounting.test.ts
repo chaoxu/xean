@@ -5,28 +5,20 @@ import { derivePiSpend, storePiResult, type PiRunOptions } from "xean/pi";
 import { campaignAccounting } from "../accounting";
 import { inspectCampaign } from "../role-cli";
 import { fakePiRequest, fakePiRequestCheckpoint } from "./fake-pi";
-import { campaignPath, cleanupCampaigns } from "./harness";
+import {
+  campaignPath,
+  cleanupCampaigns,
+  dependencies,
+  roleSettings,
+} from "./harness";
 
 afterEach(cleanupCampaigns);
 
+const models = dependencies([]).models;
+const profile = roleSettings().explorer;
 const options: PiRunOptions = {
-  models: {
-    streamSimple() {
-      throw new Error("no model call");
-    },
-  },
-  model: {
-    id: "test",
-    name: "Test",
-    provider: "test",
-    api: "openai-responses",
-    baseUrl: "https://invalid.test/v1",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 1000,
-    maxTokens: 100,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  },
+  models,
+  model: models.getModel(profile.provider, profile.model)!,
   label: "xean-solve/explorer",
   prompt: "Test accounting",
 };

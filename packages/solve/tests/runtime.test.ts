@@ -4,7 +4,6 @@ import { basename, dirname, join } from "node:path";
 
 import { withCampaignLock } from "../runtime";
 import { run } from "../runner";
-import { inspectCampaign } from "../role-cli";
 import {
   campaignPath,
   cleanupCampaigns,
@@ -116,107 +115,57 @@ test("a completed campaign is returned before initializing models or checking cr
   expect(await Bun.file(path).arrayBuffer()).toEqual(before);
 });
 
-test("run honors an injected source executor instead of invoking the CLI", async () => {
+test("run injects Codex without preflighting the CLI", async () => {
   const path = campaignPath();
   const previous = process.env["XEAN_CODEX_COMMAND"];
   process.env["XEAN_CODEX_COMMAND"] = join(dirname(path), "codex-must-not-run");
   try {
+    const settings = roleSettings();
+    settings.coordinatorBehavior = {
+      ...settings.coordinatorBehavior,
+      literature: "required-if-not-started",
+    };
     const drive = dependencies([
-      dispatchExplorer(),
       {
         submission: {
-          solution: false,
-          notes: [{ text: "Proof of P.", support: [] }],
+          filings: [],
+          action: { role: "literature", request: "Find P." },
         },
       },
-      {
-        submission: {
-          filings: [{ note: "n1", summary: "P holds." }],
-
-          action: {
-            role: "verifier",
-            verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
-          },
-        },
-      },
-      {
-        submission: {
-          verdicts: [
-            {
-              note: "n1",
-              verdict: "PASS",
-              report: "Conditional on the external theorem.",
-              externalResults: ["P is the cited external theorem."],
-            },
-          ],
-        },
-      },
-      {
-        codex: {
-          verdicts: [
-            {
-              note: "n1",
-              verdict: "INCONCLUSIVE",
-              report: "Source unavailable.",
-              correctedText: null,
-              sources: [],
-            },
-          ],
-        },
-      },
+      { codex: { notes: [] } },
     ]);
     expect(
       await run(
         {
           task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
           campaignPath: path,
-          settings: roleSettings(),
-          turns: 2,
+          settings,
+          turns: 1,
         },
         drive,
       ),
-    ).toMatchObject({ outcome: "turn-limit", turns: 2 });
+    ).toMatchObject({ outcome: "turn-limit", turns: 1 });
     expect(drive.codexCalls).toHaveLength(1);
-    expect(drive.calls).toHaveLength(4);
-    expect(await inspectCampaign(path)).toMatchObject({
-      phase: "turn-limit",
-      result: {
-        schemaVersion: 2,
-        application: "xean-solve",
-        protocol: "workflow",
-        outcome: "turn-limit",
-        turns: 2,
-      },
-    });
+    expect(drive.calls).toHaveLength(1);
   } finally {
     if (previous === undefined) delete process.env["XEAN_CODEX_COMMAND"];
     else process.env["XEAN_CODEX_COMMAND"] = previous;
   }
 });
 
-test("only one process may own a campaign", async () => {
-  const path = campaignPath();
-  await withCampaignLock(path, async () => {
-    expect(existsSync(`${path}.runner.lock`)).toBe(true);
-    await expect(
-      withCampaignLock(path, async () => {
-        throw new Error("the contender must never run");
-      }),
-    ).rejects.toThrow("campaign already has a running process");
-  });
-});
-
-test("campaign lock resolves path aliases", async () => {
+test("campaign locking excludes direct and aliased contenders", async () => {
   const path = campaignPath();
   const alias = join(dirname(path), "campaign-alias.db");
   writeFileSync(path, "");
   symlinkSync(basename(path), alias);
 
   await withCampaignLock(path, async () => {
-    await expect(
-      withCampaignLock(alias, async () => {
-        throw new Error("the alias contender must never run");
-      }),
-    ).rejects.toThrow("campaign already has a running process");
+    for (const contender of [path, alias]) {
+      await expect(
+        withCampaignLock(contender, async () => {
+          throw new Error("the contender must never run");
+        }),
+      ).rejects.toThrow("campaign already has a running process");
+    }
   });
 });

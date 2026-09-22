@@ -4,12 +4,6 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCampaign } from "xean";
-
-import { applicationId, task as taskSchema } from "../roles";
-import { solveSettings as settingsSchema } from "../pi-roles";
-import { workflowConfiguration } from "../workflow";
-
 interface CliResult {
   readonly code: number;
   readonly stdout: string;
@@ -24,7 +18,7 @@ afterEach(async () => {
   }
 });
 
-test("run starts, resumes, inspects, and exports one workflow", async () => {
+test("CLI initializes, guides, runs, resumes, inspects, and exports one workflow", async () => {
   const directory = await testDirectory();
   const settings = await writeSettings(directory);
   const task = await writeJson(directory, "task.json", {
@@ -33,6 +27,15 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   });
   const campaign = join(directory, "run.db");
 
+  expect((await cli(directory, "init", task, campaign, settings)).code).toBe(0);
+  const guidance = "Test small counterexamples first.";
+  const guidancePath = join(directory, "guidance.txt");
+  await Bun.write(guidancePath, guidance);
+  expect(
+    (await cli(directory, "guide", "--id", "e2e-1", campaign, guidancePath))
+      .code,
+  ).toBe(0);
+
   const first = await cli(directory, "run", task, campaign, settings);
   expect(first.code).toBe(0);
   expect(JSON.parse(first.stdout)).toMatchObject({
@@ -40,11 +43,11 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
     application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
-    turns: 4,
-    note: { id: "n2" },
+    turns: 2,
+    note: { id: "n1" },
   });
   const requests = await recordedRequests(directory);
-  expect(requests).toHaveLength(12);
+  expect(requests).toHaveLength(8);
   // The runner's model wrapper shapes every request: a required serial
   // terminal tool and the hoisted instructions.
   expect(requests[1]).toMatchObject({
@@ -65,18 +68,27 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   const second = await cli(directory, "run", task, campaign, settings);
   expect(second.code).toBe(0);
   expect(JSON.parse(second.stdout).outcome).toBe("accepted");
-  expect(await recordedRequests(directory)).toHaveLength(12);
+  expect(await recordedRequests(directory)).toHaveLength(8);
 
   const inspection = JSON.parse(
-    (await cli(directory, "inspect", campaign)).stdout,
+    (
+      await cli(
+        directory,
+        "inspect",
+        "--include-guidance",
+        "--include-requests",
+        campaign,
+      )
+    ).stdout,
   );
   expect(inspection).toMatchObject({
     task: {
       problem: "Prove that there are infinitely many prime numbers.",
     },
     phase: "accepted",
-    result: { outcome: "accepted", note: { id: "n2" } },
-    spend: { logicalProviderRequests: 12, requestErrors: 0 },
+    result: { outcome: "accepted", note: { id: "n1" } },
+    spend: { logicalProviderRequests: 8, requestErrors: 0 },
+    guidance: [{ id: "e2e-1", pending: false }],
     accounting: {
       complete: true,
       unmeasuredRequests: 0,
@@ -86,58 +98,22 @@ test("run starts, resumes, inspects, and exports one workflow", async () => {
   });
   // The self-contained proof records a local source PASS with no provider cost.
   expect(inspection.accounting.unpricedCalls).toHaveLength(0);
-  expect(
-    inspection.calls.map(({ role }: { readonly role: string }) => role),
-  ).toEqual([
-    "coordinator",
-    "explorer",
-    "coordinator",
-    "verifier",
-    "coordinator",
-    "explorer",
-    "coordinator",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-    "verifier",
-  ]);
-  expect(
-    inspection.calls.map(
-      ({ verifier }: { readonly verifier?: string }) => verifier ?? null,
-    ),
-  ).toEqual([
-    null,
-    null,
-    null,
-    "correctness",
-    null,
-    null,
-    null,
-    "correctness",
-    "source",
-    "requirements",
-    "reconstruction",
-    "reconstruction",
-    "reconstruction",
-  ]);
-  expect(
-    inspection.notes.map(
-      ({
-        id,
-        verdicts,
-        dead,
-      }: {
-        id: string;
-        verdicts: unknown[];
-        dead: boolean;
-      }) => [id, verdicts.length, dead],
-    ),
-  ).toEqual([
-    ["n1", 1, true],
-    ["n2", 4, false],
-  ]);
+  expect(inspection.result).toEqual(JSON.parse(first.stdout));
+  expect(inspection.guidance[0].calls).toHaveLength(1);
+  for (const call of inspection.calls) {
+    if (call.call === inspection.guidance[0].calls[0])
+      expect(call.request.prompt).toContain(guidance);
+    else expect(JSON.stringify(call.request)).not.toContain(guidance);
+  }
+  const contract = JSON.parse((await cli(directory, "contract")).stdout);
+  expect(contract.run.command).toBe("run");
+  expect(contract.run.arguments).toEqual(["task", "campaign", "settings"]);
+  expect(contract.run.report.schemaVersion).toBe(
+    inspection.result.schemaVersion,
+  );
+  expect(contract.run.report.terminalOutcomes).toContain(
+    inspection.result.outcome,
+  );
 
   const exported = await cli(directory, "export", campaign);
   expect(exported.code).toBe(0);
@@ -157,70 +133,6 @@ test("run refuses a concurrent owner of the same campaign", async () => {
   const result = await cli(directory, "run", task, campaign, settings);
   expect(result.code).toBe(1);
   expect(result.stderr).toContain("campaign already has a running process");
-});
-
-test("guided CLI workflow retains its verification, accounting, and execution report contract", async () => {
-  const directory = await testDirectory();
-  const settings = await writeSettings(directory);
-  const task = await writeJson(directory, "task.json", {
-    problem: "Prove that there are infinitely many prime numbers.",
-    completionCriteria: "Give a complete self-contained proof.",
-  });
-  const campaign = join(directory, "guided.db");
-  createCampaign(
-    campaign,
-    applicationId,
-    workflowConfiguration({
-      task: taskSchema.parse(await Bun.file(task).json()),
-      settings: settingsSchema.parse(await Bun.file(settings).json()),
-    }),
-  ).close();
-  const text = "Test small counterexamples first.";
-  const guidance = join(directory, "guidance.txt");
-  await Bun.write(guidance, text);
-  const submitted = await cli(
-    directory,
-    "guide",
-    "--id",
-    "e2e-1",
-    campaign,
-    guidance,
-  );
-  expect(submitted.code, submitted.stderr).toBe(0);
-  const result = await cli(directory, "run", task, campaign, settings);
-  expect(result.code, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toMatchObject({
-    schemaVersion: 2,
-    application: "xean-solve",
-    protocol: "workflow",
-    outcome: "accepted",
-    turns: 4,
-    note: { id: "n2" },
-  });
-  const inspected = await cli(
-    directory,
-    "inspect",
-    "--include-guidance",
-    "--include-requests",
-    campaign,
-  );
-  expect(inspected.code, inspected.stderr).toBe(0);
-  const report = JSON.parse(inspected.stdout);
-  expect(report).toMatchObject({
-    phase: "accepted",
-    spend: { logicalProviderRequests: 12, requestErrors: 0 },
-    guidance: [{ id: "e2e-1", pending: false }],
-    accounting: { unaccountedCalls: [], potentialRequests: [] },
-  });
-  expect(report.guidance[0].calls).toHaveLength(1);
-  for (const call of report.calls) {
-    if (call.call === report.guidance[0].calls[0])
-      expect(call.request.prompt).toContain(text);
-    else expect(JSON.stringify(call.request)).not.toContain(text);
-  }
-  expect((await cli(directory, "export", campaign)).stdout).toContain(
-    "Since 2 is prime",
-  );
 });
 
 test("a provider failure leaves no verdict", async () => {
