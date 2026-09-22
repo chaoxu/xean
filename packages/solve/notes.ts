@@ -14,6 +14,7 @@ const notes = inbox({
   receiptSchema: requestSchema,
   boundaryLabel: boundaryLabels.notes,
   startedLabels: [
+    boundaryLabels.overlap,
     roleLabels.explorer,
     roleLabels.coordinator,
     boundaryLabels.guidance,

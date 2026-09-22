@@ -14,6 +14,7 @@ import { jsonSnapshot } from "./roles";
 
 /** The boundaries that freeze submitted notes into the next coordinator input and guidance into the next Explorer input. */
 export const boundaryLabels = {
+  overlap: "xean-solve/overlap",
   notes: "xean-solve/coordinator-notes",
   guidance: "xean-solve/explorer-guidance",
 } as const;

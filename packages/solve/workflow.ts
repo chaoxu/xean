@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { Projection } from "./projection";
+import { boundaryLabels } from "./inbox";
 import { turnAllowances } from "./allowance";
 import { explorerGuidance, freezeExplorerGuidance } from "./guidance";
 import {
@@ -53,7 +54,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 28;
+export const workflowSchemaVersion = 29;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -78,8 +79,27 @@ type TurnLimitPhase = {
 };
 
 export type WorkflowTerminal = AcceptedPhase | TurnLimitPhase;
+type ExplorerPhase = {
+  readonly kind: "explorer";
+  readonly input: ExplorerInput;
+};
+type VerifierPhase = {
+  readonly kind: "verifier";
+  readonly input: VerifierInput;
+  readonly candidate?: EntryId;
+};
+type OverlapPhase = {
+  readonly kind: "overlap";
+  /** The settled coordinator decision owning both roles and every retry. */
+  readonly after: EntryId;
+  readonly request: Json;
+  readonly opened?: EntryId;
+  readonly explorer?: ExplorerPhase;
+  readonly verifier?: VerifierPhase;
+  readonly accepted?: AcceptedPhase;
+};
 export type WorkflowPhase =
-  | { readonly kind: "explorer"; readonly input: ExplorerInput }
+  | ExplorerPhase
   | { readonly kind: "coordinator"; readonly input: CoordinatorInput }
   | {
       readonly kind: "literature";
@@ -87,11 +107,8 @@ export type WorkflowPhase =
       /** The dispatching coordinator's settled entry; earlier calls are not reused. */
       readonly after: EntryId;
     }
-  | {
-      readonly kind: "verifier";
-      readonly input: VerifierInput;
-      readonly candidate?: EntryId;
-    }
+  | VerifierPhase
+  | OverlapPhase
   | WorkflowTerminal;
 
 export type WorkflowResult =
@@ -264,6 +281,30 @@ function includeSubmitted(fold: Fold, after: EntryId): boolean {
   return true;
 }
 
+async function explorerInputFor(
+  task: Task,
+  known: readonly Note[],
+  selected: readonly string[],
+  advice: string,
+): Promise<ExplorerInput> {
+  return explorerInput.parse({
+    task,
+    explorerGuidance: advice,
+    notes: known.map(({ text, ...rest }) => rest),
+    support: [
+      ...new Set([
+        ...selected,
+        ...(await supportClosure(
+          selected.map((id) => pick(known, id)),
+          known,
+        )),
+      ]),
+    ]
+      .sort(byId)
+      .map((id) => pick(known, id)),
+  });
+}
+
 /**
  * Replay one Explorer call from the cursor. Returns the pending explorer
  * snapshot, or advances past the settled call and reports whether it ended
@@ -273,6 +314,7 @@ async function replayExplorerTurn(
   fold: Fold,
   guidance: string,
   support: readonly string[],
+  savedProjection?: Projection,
 ): Promise<WorkflowSnapshot | { readonly emptySubmission: boolean }> {
   const { records, base } = fold;
   let after = fold.cursor;
@@ -282,22 +324,12 @@ async function replayExplorerTurn(
   // also receives every note already saved by this turn, in full.
   const advice = explorerGuidance(records, fold.cursor, guidance);
   for (;;) {
-    const explorerRequest = explorerInput.parse({
-      task: base.config.task,
-      explorerGuidance: advice,
-      notes: known.map(({ text, ...rest }) => rest),
-      support: [
-        ...new Set([
-          ...selected,
-          ...(await supportClosure(
-            selected.map((id) => pick(known, id)),
-            known,
-          )),
-        ]),
-      ]
-        .sort(byId)
-        .map((id) => pick(known, id)),
-    });
+    const explorerRequest = await explorerInputFor(
+      base.config.task,
+      known,
+      selected,
+      advice,
+    );
     const roleCall = explorerCall(
       explorerRequest,
       base.config.settings.explorerContextBudgetTokens,
@@ -327,7 +359,10 @@ async function replayExplorerTurn(
         id: noteIdAfter(known.length, position),
         ...entry,
       }));
-      if (notes.length > 0) fold.projection.add(notes, saved.settled);
+      if (notes.length > 0) {
+        fold.projection.add(notes, saved.settled);
+        savedProjection?.add(notes, saved.settled);
+      }
       selected.push(...notes.map(({ id }) => id));
       known = fold.projection.at(saved.settled);
     }
@@ -439,6 +474,138 @@ async function replayVerification(
   return undefined;
 }
 
+const overlapJoinLabel = "xean-solve/overlap-join";
+
+/** Fork historical evidence without allowing either role's cursor to move the other. */
+function forkFold(fold: Fold, verdicts = fold.verdicts): Fold {
+  const projection = new Projection(verdicts);
+  const notes = fold.projection.at(fold.cursor);
+  projection.add(
+    notes.map(({ id, text, support, verification }) => ({
+      id,
+      text,
+      support,
+      ...(verification === undefined ? {} : { verification }),
+    })),
+    fold.cursor,
+  );
+  projection.file(
+    notes.flatMap(({ id, summary }) =>
+      summary === undefined ? [] : [{ note: id, summary }],
+    ),
+    fold.cursor,
+  );
+  return { ...fold, verdicts, projection };
+}
+
+/** Replay the bounded pair within its durable opening and join. */
+async function replayOverlap(
+  fold: Fold,
+  coordinated: CoordinatorResult,
+): Promise<WorkflowSnapshot | { readonly emptySubmission: boolean }> {
+  const after = fold.cursor;
+  const advice = explorerGuidance(
+    fold.records,
+    after,
+    coordinated.explorerGuidance!,
+  );
+  const input = await explorerInputFor(
+    fold.base.config.task,
+    fold.projection.at(after),
+    coordinated.support!,
+    advice,
+  );
+  const request = jsonSnapshot({
+    schemaVersion: 1,
+    after,
+    explorer: input,
+    verify: coordinated.verify,
+  });
+  const opening = firstCall(
+    fold.records,
+    after,
+    boundaryLabels.overlap,
+    request,
+  );
+  if (opening === undefined)
+    return snapshot(fold, { kind: "overlap", after, request });
+
+  const joined = firstCall(fold.records, opening.seq, overlapJoinLabel, {
+    schemaVersion: 1,
+    after: opening.seq,
+  });
+  const records =
+    joined === undefined
+      ? fold.records
+      : fold.records.filter((entry) => entry.seq <= joined.seq);
+  const explorer = forkFold(
+    fold,
+    fold.verdicts.filter((entry) => entry.seq <= after),
+  );
+  const verifier = forkFold(fold);
+  // Caller notes enter only after the join. Explorer alone assigns new note IDs.
+  explorer.cursor = verifier.cursor = opening.seq;
+  const exploring = await replayExplorerTurn(
+    { ...explorer, records },
+    advice,
+    coordinated.support!,
+    fold.projection,
+  );
+  const verifying = await replayVerification(
+    { ...verifier, records },
+    coordinated.verify,
+  );
+  const pendingExplorer = "phase" in exploring ? exploring.phase : undefined;
+  const pendingVerifier = verifying?.phase;
+  if (pendingExplorer !== undefined && pendingExplorer.kind !== "explorer")
+    throw new Error("invalid overlap explorer phase");
+  if (
+    pendingVerifier !== undefined &&
+    pendingVerifier.kind !== "verifier" &&
+    pendingVerifier.kind !== "accepted"
+  )
+    throw new Error("invalid overlap verifier phase");
+  const through = joined?.seq ?? records.at(-1)!.seq;
+  const notes = fold.projection.at(through);
+  if (joined !== undefined) {
+    if (pendingVerifier?.kind === "accepted") {
+      return snapshot(
+        fold,
+        {
+          ...pendingVerifier,
+          notes,
+          note: pick(notes, pendingVerifier.note.id),
+        },
+        notes,
+      );
+    }
+    if (pendingExplorer !== undefined || pendingVerifier !== undefined)
+      throw new Error("overlap joined before both roles completed");
+    fold.cursor = joined.seq;
+    return {
+      emptySubmission:
+        "emptySubmission" in exploring && exploring.emptySubmission,
+    };
+  }
+  return snapshot(
+    fold,
+    {
+      kind: "overlap",
+      after,
+      request,
+      opened: opening.seq,
+      ...(pendingExplorer === undefined ? {} : { explorer: pendingExplorer }),
+      ...(pendingVerifier?.kind === "verifier"
+        ? { verifier: pendingVerifier }
+        : {}),
+      ...(pendingVerifier?.kind === "accepted"
+        ? { accepted: pendingVerifier }
+        : {}),
+    },
+    notes,
+  );
+}
+
 /**
  * Replay one coordinator call from the cursor. Returns the pending
  * coordinator snapshot, with the unfrozen submission boundary unless a
@@ -515,7 +682,7 @@ function settledLiteratureCall(
 /**
  * Every completed role returns to a fresh coordinator decision; literature
  * notes enter the ordinary note graph, never a verifier result. A turn is one
- * coordinator call and the role it dispatches, so the journaled allowance
+ * coordinator call and its dispatched work, so the journaled allowance
  * bounds the whole loop and no role has a separate cap. A verifier dispatch
  * checks the whole list; later dispatches can check other ready notes or
  * extend completed checks without requiring more exploration.
@@ -577,6 +744,10 @@ export async function deriveWorkflow(
       );
       if ("phase" in turn) return turn;
       emptySubmission = turn.emptySubmission;
+    } else if (coordinated.explorerGuidance !== undefined) {
+      const overlap = await replayOverlap(fold, coordinated);
+      if ("phase" in overlap) return overlap;
+      emptySubmission = overlap.emptySubmission;
     } else {
       const verification = await replayVerification(fold, coordinated.verify);
       if (verification !== undefined) return verification;
@@ -597,6 +768,115 @@ export interface WorkflowDependencies {
   readonly pauseRequested?: () => boolean;
   readonly status?: (message: string) => void;
   readonly signal?: AbortSignal;
+}
+
+/** Drive only the two roles belonging to this opening, then drain before joining. */
+async function runOverlap(
+  campaign: Campaign,
+  roles: Roles,
+  initial: OverlapPhase,
+  dependencies: WorkflowDependencies,
+): Promise<void> {
+  if (initial.opened === undefined) {
+    await freezeExplorerGuidance(campaign, initial.after);
+    const { phase } = await deriveWorkflow(workflowRecords(campaign));
+    if (phase.kind !== "overlap" || phase.after !== initial.after)
+      throw new Error("overlap boundary changed");
+    await campaign.call(
+      { label: boundaryLabels.overlap, request: phase.request },
+      async () => null,
+    );
+    return;
+  }
+  const explorer = new AbortController();
+  const verifier = new AbortController();
+  const signals = {
+    explorer:
+      dependencies.signal === undefined
+        ? explorer.signal
+        : AbortSignal.any([explorer.signal, dependencies.signal]),
+    verifier:
+      dependencies.signal === undefined
+        ? verifier.signal
+        : AbortSignal.any([verifier.signal, dependencies.signal]),
+  };
+  const current = async (): Promise<OverlapPhase> => {
+    const { phase } = await deriveWorkflow(workflowRecords(campaign));
+    if (phase.kind !== "overlap" || phase.opened !== initial.opened)
+      throw new Error("overlap changed before join");
+    return phase;
+  };
+  const run = async (role: "explorer" | "verifier") => {
+    let recoveries = 0;
+    for (;;) {
+      const phase = await current();
+      if (phase.accepted !== undefined) {
+        explorer.abort();
+        return;
+      }
+      const step = phase[role];
+      if (
+        step === undefined ||
+        signals[role].aborted ||
+        dependencies.pauseRequested?.()
+      )
+        return;
+      try {
+        if (step.kind === "explorer")
+          await roles.explorer(step.input, signals.explorer);
+        else await roles.verifier(step.input, step.candidate, signals.verifier);
+        recoveries = 0;
+      } catch (error) {
+        if (
+          !(error instanceof RoleCallError) ||
+          !error.retryable ||
+          recoveries >= 3 ||
+          signals[role].aborted
+        )
+          throw error;
+        recoveries += 1;
+        if (dependencies.pauseRequested?.()) return;
+        dependencies.status?.(
+          `${role}: retrying with a fresh call (${recoveries}/3)`,
+        );
+        await delay(1000 * 2 ** (recoveries - 1), undefined, {
+          signal: signals[role],
+        });
+        continue;
+      }
+      const next = await current();
+      if (next.accepted !== undefined) explorer.abort();
+      // A replacement role that made no durable progress leaves a resumable phase.
+      if (isDeepStrictEqual(next[role], step)) return;
+    }
+  };
+  let failure: unknown;
+  const guarded = async (role: "explorer" | "verifier") => {
+    try {
+      await run(role);
+    } catch (error) {
+      failure ??= error;
+      explorer.abort();
+      verifier.abort();
+    }
+  };
+  await Promise.allSettled([guarded("explorer"), guarded("verifier")]);
+  const phase = await current();
+  if (
+    phase.accepted !== undefined ||
+    (phase.explorer === undefined && phase.verifier === undefined)
+  ) {
+    await campaign.call(
+      {
+        label: overlapJoinLabel,
+        request: { schemaVersion: 1, after: initial.opened },
+      },
+      async () => null,
+    );
+  }
+  if (phase.accepted !== undefined) return;
+  if (failure !== undefined) throw failure;
+  dependencies.signal?.throwIfAborted();
 }
 
 export async function runWorkflow(
@@ -628,8 +908,11 @@ export async function runWorkflow(
     }
     dependencies.status?.(phase.kind);
     const verifying = phase.kind === "verifier" ? phase.input : undefined;
+    const overlapping = phase.kind === "overlap" ? phase : undefined;
     try {
-      if (phase.kind === "explorer") {
+      if (phase.kind === "overlap") {
+        await runOverlap(campaign, roles, phase, dependencies);
+      } else if (phase.kind === "explorer") {
         if (await freezeExplorerGuidance(campaign, snapshot.after!)) {
           snapshot = await deriveWorkflow(workflowRecords(campaign));
           phase = snapshot.phase;
@@ -647,6 +930,7 @@ export async function runWorkflow(
       errorRecoveries = 0;
     } catch (error) {
       if (
+        overlapping !== undefined ||
         !(error instanceof RoleCallError) ||
         !error.retryable ||
         errorRecoveries >= 3 ||
@@ -673,6 +957,8 @@ export async function runWorkflow(
       phase.kind === "verifier" &&
       isDeepStrictEqual(phase.input, verifying)
     )
+      return phase;
+    if (phase.kind === "overlap" && overlapping?.opened !== undefined)
       return phase;
   }
 }

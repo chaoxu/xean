@@ -14,6 +14,7 @@ const guidance = inbox({
   receiptSchema: guidanceRequest,
   boundaryLabel: boundaryLabels.guidance,
   startedLabels: [
+    boundaryLabels.overlap,
     roleLabels.explorer,
     roleLabels.coordinator,
     boundaryLabels.notes,

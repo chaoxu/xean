@@ -84,7 +84,7 @@ The deterministic verifier example is [`examples/scripted-verifier.ts`](examples
 
 ## xean-solve workflow
 
-`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The coordinator opens every campaign and, after each role settles, dispatches Explorer, literature, or a verifier; each dispatch is one turn of the journaled allowance. Explorer writes self-contained notes, four verifiers record structured verdicts, and the journal alone determines the notes, phase, and result. The [workflow guide](packages/solve/docs/role-runner.md) is the authority on this behavior, and the solver [README](packages/solve/README.md) lists its commands and settings. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
+`xean-solve` runs one workflow from a task to `accepted` or `turn-limit`. The coordinator opens every campaign and, after its dispatched work settles, chooses Explorer, literature, or a verifier. The optional `coordinatorBehavior.overlap` setting lets it pair Explorer with verification. Each dispatch, including a concurrent pair, is one turn of the journaled allowance. Explorer writes self-contained notes, four verifiers record structured verdicts, and the journal alone determines the notes, phase, and result. The [workflow guide](packages/solve/docs/role-runner.md) is the authority on this behavior, and the solver [README](packages/solve/README.md) lists its commands and settings. The separate `review` command runs a full independent Codex audit of a final argument and its citations:
 
 ```sh
 bun packages/solve/solve.ts review task.json argument.md review.db packages/solve/examples/profile-review.json

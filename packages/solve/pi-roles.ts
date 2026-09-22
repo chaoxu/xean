@@ -249,6 +249,7 @@ export function coordinatorCall(
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
   const input = coordinatorInput.parse(inputValue);
   const { coordinatorBehavior: behavior, literatureStatus: status } = input;
+  const allowOverlap = behavior.overlap && behavior.verification === "decide";
   // A live note that no verification has judged yet, over verified support.
   // A checked note whose evidence stayed inconclusive is not forced back into
   // verification, and a note over unverified support waits for its support.
@@ -294,15 +295,20 @@ export function coordinatorCall(
       "You coordinate one mathematical search.",
       "File every note that has no summary. A summary is for navigation and is never verified. It is the note's exact statement, as a mathematician would state the result, not a description of the note, and adds nothing but what the text itself says about its status: a gap it leaves and what it is, a failed approach and why, or that it meets the completion criteria. It repeats nothing the note's fields already say, such as its support, never judges the text, and never copies proof text.",
       "Keep the note's hypotheses and limitations exact, especially when it strengthens or corrects an earlier note. A verifier report does not enlarge what a note establishes.",
-      "When action is explorer, give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Never ask the explorer to check, polish, or restate a verified note. When action is verifier or literature, omit explorerGuidance and support because the next coordinator call will choose the next Explorer dispatch.",
-      `Then list the notes to verify, in priority order, each with the checks it needs: a prefix of correctness, source, requirements, reconstruction. Earlier PASS checks are reused, so each entry must have an outstanding reachable check. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch, before another explorer turn. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
+      `When action is explorer, give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Never ask the explorer to check, polish, or restate a verified note. ${allowOverlap ? "When action is verifier, you may supply both explorerGuidance and support to run Explorer concurrently with verification. Omit both for serial verification. Literature always omits both fields." : "When action is verifier or literature, omit explorerGuidance and support because the next coordinator call will choose the next Explorer dispatch."}`,
+      `Then list the notes to verify, in priority order, each with the checks it needs: a prefix of correctness, source, requirements, reconstruction. Earlier PASS checks are reused, so each entry must have an outstanding reachable check. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch${allowOverlap ? ". Explorer may run alongside it only when you supplied both Explorer fields" : ", before another explorer turn"}. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
       verdictText,
       completionText,
       "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. A requirements FAIL leaves a sound partial result available as support but blocks completion checks on that note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence; you may explicitly retry that check when useful. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again.",
       "After an Explorer handoff, inspect each newly submitted live note; do not ask Explorer to rewrite or polish a complete-looking note. For a partial note that later work cannot safely build on, explain the missing work and choose another role.",
-      "Choose exactly one next role in action: explorer, literature, or verifier. Control returns to you after that role settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you. You may then verify other ready notes or extend a note's completed checks without adding a new note. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.",
+      `Choose exactly one ${allowOverlap ? "action" : "next role in action"}: explorer, literature, or verifier. Control returns to you after ${allowOverlap ? "the dispatched work" : "that role"} settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you. You may then verify other ready notes or extend a note's completed checks without adding a new note. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.`,
+      ...(allowOverlap
+        ? [
+            "Concurrent Explorer and verification receive the current notes; Explorer does not receive verdicts that are still pending. Choose useful work that does not need those pending results. Overlap is optional: leave verification serial when Explorer should wait for its feedback. Both roles retain their ordinary mathematical authority and support rules.",
+          ]
+        : []),
       "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
@@ -318,12 +324,14 @@ export function coordinatorCall(
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
     ].join("\n\n"),
     tool: roleTools.coordinator,
-    description:
-      "File every note without a summary, plan Explorer only when dispatching it, and list the notes to verify with their verifiers",
+    description: allowOverlap
+      ? "File notes, choose a role, and optionally give Explorer guidance and support alongside verification"
+      : "File every note without a summary, plan Explorer only when dispatching it, and list the notes to verify with their verifiers",
     schema: coordinatorResultFor(
       input.notes,
       allowedActions,
       requiredVerification,
+      allowOverlap,
     ),
   };
 }
@@ -856,7 +864,7 @@ export function createPiRoles(
       dependencies.codex ?? codexExec({ command: codexCommand(process.env) }),
   };
   return {
-    async explorer(inputValue) {
+    async explorer(inputValue, signal = dependencies.signal) {
       const input = explorerInput.parse(inputValue);
       const roleCall = explorerCall(
         input,
@@ -906,7 +914,7 @@ export function createPiRoles(
           campaign,
           profiles.explorer,
           roleCall,
-          dependencies,
+          { ...dependencies, ...(signal === undefined ? {} : { signal }) },
           undefined,
           submissionTool,
         )
@@ -932,7 +940,11 @@ export function createPiRoles(
     // kernel verdict listing the verdict of every note it judged, and a call
     // that already has one is not recorded again, so a verification resumes
     // where it stopped.
-    async verifier(inputValue, candidateValue) {
+    async verifier(inputValue, candidateValue, signal = dependencies.signal) {
+      const verifierDependencies = {
+        ...dependencies,
+        ...(signal === undefined ? {} : { signal }),
+      };
       const input = await verifierInput.parseAsync(inputValue);
       const candidate =
         candidateValue ??
@@ -999,7 +1011,7 @@ export function createPiRoles(
               profiles.reconstruction,
               working,
               pick(working.notes, next),
-              dependencies,
+              verifierDependencies,
               candidate,
             );
             record(call, value.verdicts);
@@ -1040,7 +1052,7 @@ export function createPiRoles(
                 working,
                 remote,
                 correctness,
-                codex,
+                { ...codex, ...(signal === undefined ? {} : { signal }) },
                 candidate,
               );
               record(result.call, result.value.verdicts);
@@ -1052,7 +1064,7 @@ export function createPiRoles(
           campaign,
           profiles[name],
           await verifierCall(name, working, judged),
-          dependencies,
+          verifierDependencies,
           candidate,
         );
         record(call, value.verdicts);

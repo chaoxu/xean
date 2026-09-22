@@ -899,7 +899,7 @@ test("the frozen coordinator behavior and literature status reach the coordinato
   });
   expect(call.prompt).toContain("Literature status: inconclusive");
   expect(call.prompt).toContain(
-    'Coordinator behavior:\n{\n  "literature": "never",\n  "verification": "decide",\n  "instructions": "Use Explorer for this campaign."\n}',
+    'Coordinator behavior:\n{\n  "literature": "never",\n  "verification": "decide",\n  "overlap": false,\n  "instructions": "Use Explorer for this campaign."\n}',
   );
   expect(call.system).toContain("The frozen coordinator behavior");
   expect(call.system).toContain(

@@ -22,7 +22,21 @@ Settings are frozen with the campaign, and the turn allowance lives outside them
 - `window`: the character cap on the note and support texts one verification reads, default 100000.
 - `maxExplorerResponses`: the non-error model responses one Explorer call may use, default 4.
 - `explorerContextBudgetTokens`: the Explorer call's preferred total context in tokens, default 400000, bounded by the model's context window.
-- `coordinatorBehavior`: the frozen scheduling policy `{literature, verification, instructions?}`, where `literature` is `optional`, `never`, or `required-if-not-started`, `verification` is `decide` or `always`, and the default is `{"literature": "never", "verification": "decide"}`.
+- `coordinatorBehavior`: the frozen scheduling policy `{literature, verification, overlap?, instructions?}`, where `literature` is `optional`, `never`, or `required-if-not-started` and `verification` is `decide` or `always`. The default is `{"literature": "never", "verification": "decide", "overlap": false}`.
+
+Set `coordinatorBehavior.overlap` to `true` to let the coordinator run Explorer alongside verification when `verification` is `decide`:
+
+```json
+{
+  "coordinatorBehavior": {
+    "literature": "never",
+    "verification": "decide",
+    "overlap": true
+  }
+}
+```
+
+The coordinator chooses overlap per dispatch and can still wait for verification feedback before more exploration. Set `overlap` to `false`, or omit it, to run roles serially. `verification: "always"` and literature dispatches stay serial. This setting is frozen when the campaign starts, so changing it requires a new campaign.
 
 A source verdict whose passages do not bind to the note's assigned premise IDs records INCONCLUSIVE for that note alone. The [verification section](docs/role-runner.md#verification) states every verifier's rules.
 

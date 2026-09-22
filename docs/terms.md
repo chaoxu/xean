@@ -51,7 +51,8 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | coordinator | The role that files summaries, gives explorer guidance for the next turn, selects support, and lists the notes to verify with their verifiers. It also chooses one typed action for the next role, following the campaign's coordinator behavior. |
 | literature | The opt-in role that searches for papers and writes a small set of self-contained candidate notes, each preserving the cited result's hypotheses, limitations, and source details, delivered as submitted notes. |
 | literature status | The coordinator's view of discovery history: `not-started`, `completed`, or `inconclusive`. It schedules the literature role and is not mathematical evidence. |
-| action | The typed role choice in a coordinator result: `explorer`, `literature` with a request, or `verifier`. |
+| action | The typed role choice in a coordinator result: `explorer`, `literature` with a request, or `verifier`. When overlap is allowed, a verifier action may also supply Explorer guidance and support to dispatch Explorer concurrently. |
+| overlap | One coordinator turn that runs an Explorer turn concurrently with a verifier dispatch. Enabled by `coordinatorBehavior.overlap` with verification mode `decide`, then chosen by the coordinator. Its local opening freezes the role inputs, each role replays independently, and its durable join precedes the next coordinator or terminal result. |
 | input | The typed value handed to a role: `ExplorerInput`, `CoordinatorInput`, `LiteratureInput`, or `VerifierInput`. A role call's prompt is derived from it. |
 | notes | Notes as handed to a role, written by Explorer or submitted by a caller or the literature role. |
 | support | The notes whose results a text uses without proving them, in any form: a fact cited, a case inherited, an object taken as defined, or a hypothesis assumed established, declared by the writer in the note's `support` array. Also the notes the coordinator has Explorer read in full. In caller submissions, strings name existing campaign notes and positive integers name earlier notes in that submission, counted from 1. A verifier receives support as established and not under review. |
@@ -71,9 +72,9 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | statement | What a text establishes, with nothing of how: one or several propositions, each with hypotheses, quantifiers, parameters, side conditions, and conclusion. The reconstruction verifier's first submission for a note; a reconstruction judgment may return a corrected `statement` instead of a verdict. |
 | proof | The reconstruction verifier's evidence: a proof of the statement written by a fresh call from the statement and the support notes alone, never from the note's text. It may leave something unproved and say so. |
 | report | The text of a verdict. Qualified as execution report: a run's result with `schemaVersion`, `application`, and `protocol`, as `run` and `inspect` emit it. |
-| turn | One workflow cycle: one coordinator call and the role it dispatches. Capped by the cumulative journaled allowance, exposed as `maxTurns`. |
+| turn | One workflow cycle: one coordinator call and the work it dispatches, including both roles in an overlap. Capped by the cumulative journaled allowance, exposed as `maxTurns`. |
 | allowance | A journaled authorization for a positive number of turns, identified by an id and the previously spent `afterTurns`, outside the frozen task and settings. The sum is the effective `maxTurns`. |
-| phase | Where the fold stands: the role to call next (`explorer`, `coordinator`, `literature`, or `verifier`), or the terminal kind `accepted` or `turn-limit`. |
+| phase | Where the fold stands: the role to call next (`explorer`, `coordinator`, `literature`, or `verifier`), an `overlap` with unfinished concurrent work, or the terminal kind `accepted` or `turn-limit`. |
 | outcome | A run's ending: `accepted`, `turn-limit`, `paused`, `call-failure`, `interrupted`. |
 | result | A run's outcome with its data. Terminal results carry the turns, notes, and for `accepted` the note and candidate. Resumable results carry the phase as `at` and an optional reason. `inspect.result` is derived from the journal for terminal phases. |
 | fold | `deriveWorkflow`: the derivation of notes and phase from the journal, matching each role call by its derived request. It builds the projection and asks it which notes exist at a journal sequence, which are accepted, and for a note's closure. |
@@ -81,7 +82,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | schema version | The number identifying a persisted contract's current format and meaning. Older formats are unsupported. |
 | contract | The output of `xean-solve contract`: command, arguments, outcomes, and the execution report schema. |
 | settings | One profile for the explorer, one for the coordinator, one per verifier, role response and context budgets, `window`, and the frozen `coordinatorBehavior` policy. Fixed for the campaign. |
-| coordinator behavior | The frozen campaign policy supplied in each coordinator prompt: a `literature` mode, a `verification` mode, and optional `instructions`. |
+| coordinator behavior | The frozen campaign policy supplied in each coordinator prompt: a `literature` mode, a `verification` mode, `overlap` defaulting to false, and optional `instructions`. |
 | guidance | Fallible advice for the next Explorer turn, carried in its `explorerGuidance` string: the coordinator's recommendation joined with external advice appended by `guide`. |
 | inbox | Caller input waiting in the campaign until a boundary freezes it into the next role input: guidance for the next Explorer turn and submitted notes for the next coordinator. Each inbox has a receipt label and a boundary label. |
 | profile | A Pi profile selects a provider, model, and reasoning level. A Codex profile is `{model, reasoning}`, used by source verification, literature, and independent review. |

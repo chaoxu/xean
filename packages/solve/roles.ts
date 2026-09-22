@@ -277,6 +277,7 @@ export type LiteratureStatus = z.output<typeof literatureStatus>;
 export const coordinatorBehavior = z.strictObject({
   literature: z.enum(["optional", "never", "required-if-not-started"]),
   verification: z.enum(["decide", "always"]),
+  overlap: z.boolean().default(false),
   instructions: nonblank.optional(),
 });
 export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
@@ -289,6 +290,7 @@ export type CoordinatorBehavior = z.output<typeof coordinatorBehavior>;
 export const defaultCoordinatorBehavior: CoordinatorBehavior = {
   literature: "never",
   verification: "decide",
+  overlap: false,
 };
 
 export const literatureInput = z.strictObject({
@@ -406,9 +408,8 @@ const actionRoles = ["explorer", "literature", "verifier"] as const;
 export const coordinatorResult = z
   .strictObject({
     filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
-    // Guidance and full-note support are consumed only when the coordinator
-    // dispatches Explorer.  Verifier and literature dispatches return to a
-    // fresh coordinator before either field could be used.
+    // A verifier action may pair both fields to dispatch Explorer concurrently
+    // when the frozen coordinator behavior permits overlap.
     explorerGuidance: nonblank.optional(),
     support: z.array(noteId).optional(),
     verify: z.array(verification),
@@ -432,21 +433,32 @@ export const coordinatorResult = z
         path: ["support"],
       });
     }
-    if (value.action.role !== "explorer") {
+    if (value.action.role === "literature") {
       if (value.explorerGuidance !== undefined) {
         ctx.addIssue({
           code: "custom",
-          message: "non-Explorer actions must omit explorer guidance",
+          message: "literature actions must omit explorer guidance",
           path: ["explorerGuidance"],
         });
       }
       if (value.support !== undefined) {
         ctx.addIssue({
           code: "custom",
-          message: "non-Explorer actions must omit support",
+          message: "literature actions must omit support",
           path: ["support"],
         });
       }
+    }
+    if (
+      value.action.role === "verifier" &&
+      (value.explorerGuidance === undefined) !== (value.support === undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "a verifier action must provide both explorer guidance and support or omit both",
+        path: ["explorerGuidance"],
+      });
     }
   });
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
@@ -455,7 +467,8 @@ export type CoordinatorResult = z.output<typeof coordinatorResult>;
  * The coordinator submission schema over these notes. `allowedActions` lists
  * the roles the frozen coordinator behavior permits next, the submission must
  * choose one of them, and `requiredVerification` lists the notes that
- * behavior requires in the verify list.
+ * behavior requires in the verify list. `allowOverlap` permits a verifier
+ * action to dispatch Explorer concurrently by supplying guidance and support.
  */
 export function coordinatorResultFor(
   notes: readonly Pick<
@@ -464,6 +477,7 @@ export function coordinatorResultFor(
   >[],
   allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
   requiredVerification: readonly string[] = [],
+  allowOverlap = false,
 ) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
@@ -473,6 +487,18 @@ export function coordinatorResultFor(
     notes.filter(({ verified }) => verified).map(({ id }) => id),
   );
   return coordinatorResult.superRefine((value, ctx) => {
+    if (
+      value.action.role === "verifier" &&
+      value.explorerGuidance !== undefined &&
+      !allowOverlap
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "concurrent Explorer requires overlap enabled with verification decide",
+        path: ["explorerGuidance"],
+      });
+    }
     if (!allowedActions.includes(value.action.role)) {
       ctx.addIssue({
         code: "custom",
@@ -1104,7 +1130,10 @@ export function succeededSubmission(
 }
 
 export interface Roles {
-  readonly explorer: (input: ExplorerInput) => Promise<ExplorerResult>;
+  readonly explorer: (
+    input: ExplorerInput,
+    signal?: AbortSignal,
+  ) => Promise<ExplorerResult>;
   readonly coordinator: (
     input: z.input<typeof coordinatorInput>,
   ) => Promise<CoordinatorResult>;
@@ -1115,5 +1144,6 @@ export interface Roles {
   readonly verifier: (
     input: VerifierInput,
     candidate?: EntryId,
+    signal?: AbortSignal,
   ) => Promise<VerifierResult>;
 }

@@ -312,6 +312,17 @@ async function projectCampaignRecords(
             maxTurns: snapshot.maxTurns,
             allowances: snapshot.allowances,
             phase: phase?.kind,
+            ...(phase?.kind === "overlap"
+              ? {
+                  overlap: {
+                    after: phase.after,
+                    opened: phase.opened,
+                    explorerPending: phase.explorer !== undefined,
+                    verifierPending: phase.verifier !== undefined,
+                    acceptedNote: phase.accepted?.note.id,
+                  },
+                }
+              : {}),
             notes: snapshot.notes,
             ...(report === undefined
               ? {}

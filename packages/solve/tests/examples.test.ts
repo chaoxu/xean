@@ -63,6 +63,7 @@ test("a frozen example declaration carries no coordinator instructions", () => {
   expect(config.settings.coordinatorBehavior).toEqual({
     literature: "never",
     verification: "decide",
+    overlap: false,
   });
   expect(JSON.stringify(config)).not.toContain("instructions");
 });
