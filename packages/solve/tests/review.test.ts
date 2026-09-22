@@ -22,12 +22,13 @@ const input = () => ({
   campaignPath: campaignPath(),
 });
 const claim = "Global-BiCut is UGC-hard.";
-const evidence = {
-  result: claim,
+const passage = {
   source: "Global and fixed-terminal cuts in digraphs, Section 1.1",
   url: "https://arxiv.org/html/1612.00156v2",
   quote: "we do not have a hardness result",
 };
+const evidence = { result: claim, ...passage };
+const externalResult = { result: claim, sources: [passage] };
 
 test.each([{ provider: "codex" }, { search: true }, { search: false }])(
   "review rejects removed profile fields before setup: %j",
@@ -121,16 +122,19 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
       reviewVerdict.safeParse({
         verdict,
         report: value.report,
-        externalResults: [claim],
-        sources: [{ ...evidence, resultId: "external-arbitrary" }],
+        externalResults: [
+          {
+            result: claim,
+            sources: [{ ...passage, resultId: "external-arbitrary" }],
+          },
+        ],
       }).success,
     ).toBe(false);
     expect(
       reviewVerdict.safeParse({
         verdict,
         report: value.report,
-        externalResults: [claim],
-        sources: [evidence],
+        externalResults: [externalResult],
       }).success,
     ).toBe(true);
   },
@@ -165,8 +169,7 @@ test("a full audit receives the entire argument and reuses only the exact comple
         stdout: codexStdout({
           verdict: "FAIL",
           report: "The paper leaves global edge-bicut hardness open.",
-          externalResults: [claim],
-          sources: [evidence],
+          externalResults: [externalResult],
         }),
         stderr: "",
       };
@@ -186,6 +189,7 @@ test("a full audit receives the entire argument and reuses only the exact comple
   expect(calls).toBe(1);
   const reader = openReader(request.campaignPath);
   try {
+    expect(reader.record(1)).toMatchObject({ config: { schemaVersion: 2 } });
     expect(reader.records({ kinds: ["call"] })).toHaveLength(1);
     expect(reader.records({ kinds: ["call-result"] })).toHaveLength(1);
   } finally {
@@ -203,8 +207,7 @@ test("a full audit cannot claim source inspection without a web call", async () 
           {
             verdict: "FAIL",
             report: "Contradictory source.",
-            externalResults: [claim],
-            sources: [evidence],
+            externalResults: [externalResult],
           },
           false,
         ),
@@ -214,16 +217,18 @@ test("a full audit cannot claim source inspection without a web call", async () 
   ).rejects.toThrow("without using web search");
 });
 
-test("the final review also refuses PASS when a declared external theorem lacks a passage", () => {
-  expect(
-    reviewVerdict.safeParse({
-      verdict: "PASS",
-      report: "Seems known.",
-      externalResults: [claim],
-      sources: [],
-    }).success,
-  ).toBe(false);
-});
+test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
+  "the final review requires passages for PASS while retaining %s uncertainty",
+  (verdict) => {
+    expect(
+      reviewVerdict.safeParse({
+        verdict,
+        report: "Seems known.",
+        externalResults: [{ result: claim, sources: [] }],
+      }).success,
+    ).toBe(verdict !== "PASS");
+  },
+);
 
 test("an explicit retry preserves a malformed response and completes a fresh audit", async () => {
   const request = input();
@@ -250,8 +255,7 @@ test("an explicit retry preserves a malformed response and completes a fresh aud
         stdout: codexStdout({
           verdict: "FAIL",
           report: "Citation mismatch.",
-          externalResults: [claim],
-          sources: [evidence],
+          externalResults: [externalResult],
         }),
         stderr: "",
       };
