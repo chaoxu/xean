@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { codexExec, requireCodex } from "../source";
+import { prepareCodex } from "../source";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -124,9 +124,9 @@ function expectCleaned(captures: readonly Capture[]) {
 
 test("preflight and execution share the isolated auth and environment boundary", async () => {
   const setup = await fixture({ customHome: true });
-  await requireCodex(setup.options);
+  const exec = await prepareCodex(setup.options);
   const prompt = "Exact prompt bytes.\n☃\n";
-  const result = await codexExec(setup.options)({
+  const result = await exec({
     protocol: "xean/codex-exec/v1",
     model: "fixture-model",
     reasoning: "low",
@@ -142,7 +142,7 @@ test("preflight and execution share the isolated auth and environment boundary",
       (capture) =>
         capture.args.includes("exec") && !capture.args.includes("--help"),
     ),
-  ).toEqual([false, false, false, false, false, true]);
+  ).toEqual([false, false, false, false, true]);
   for (const capture of captures) {
     expect(capture.env["HOME"]).toBe(setup.directory);
     expect(capture.env["PATH"]).toBe(setup.options.environment.PATH);
@@ -169,7 +169,7 @@ test("preflight and execution share the isolated auth and environment boundary",
 
 test("preflight uses HOME/.codex when CODEX_HOME is absent", async () => {
   const setup = await fixture();
-  await requireCodex(setup.options);
+  await prepareCodex(setup.options);
   const captures = await setup.captures();
   expect(captures.at(-1)?.args).toEqual([
     "-c",
@@ -186,7 +186,7 @@ test("preflight uses HOME/.codex when CODEX_HOME is absent", async () => {
 test("preflight rejects a missing executable", async () => {
   const setup = await fixture();
   await expect(
-    requireCodex({
+    prepareCodex({
       ...setup.options,
       command: join(setup.directory, "missing"),
     }),
@@ -202,7 +202,7 @@ test.each([
   "preflight rejects a CLI missing %s without invoking a model",
   async (missingFlag) => {
     const setup = await fixture({ missingFlag });
-    await expect(requireCodex(setup.options)).rejects.toThrow(
+    await expect(prepareCodex(setup.options)).rejects.toThrow(
       "source verifier requires Codex CLI options: " + missingFlag,
     );
     const captures = await setup.captures();
@@ -213,7 +213,7 @@ test.each([
 
 test("ambient API credentials cannot satisfy missing native credentials", async () => {
   const setup = await fixture({ auth: false });
-  await expect(requireCodex(setup.options)).rejects.toThrow(
+  await expect(prepareCodex(setup.options)).rejects.toThrow(
     "source verifier requires native Codex credentials",
   );
   const captures = await setup.captures();
@@ -251,8 +251,8 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
       SSL_CERT_FILE: "/example/ca.pem",
     },
   };
-  await requireCodex(options);
-  const result = await codexExec(options)({
+  const exec = await prepareCodex(options);
+  const result = await exec({
     protocol: "xean/codex-exec/v1",
     model: "fixture-model",
     reasoning: "low",
@@ -312,7 +312,37 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
   expect(
     parsed.model_providers["xean-source"]!.env_http_headers["x-usage-tag"],
   ).toBe("XEAN_SOURCE_HEADER_0");
+  options.environment.GATEWAY_KEY = "refreshed-fixture-secret";
+  const refreshed = await exec({
+    protocol: "xean/codex-exec/v1",
+    model: "fixture-model",
+    reasoning: "low",
+    search: true,
+    developerInstructions: "Verify this source.",
+    prompt: "A later source check.",
+    outputSchema: { type: "object" },
+  });
+  expect(refreshed.state).toBe("succeeded");
+  const later = await setup.captures();
+  expect(later.at(-1)?.env["GATEWAY_KEY"]).toBe("refreshed-fixture-secret");
+  expect(later.at(-1)?.env["CODEX_HOME"]).not.toBe(execution.env["CODEX_HOME"]);
+  expect(later.filter(({ args }) => args.includes("--version"))).toHaveLength(
+    1,
+  );
+  Reflect.deleteProperty(options.environment, "GATEWAY_KEY");
+  const missing = await exec({
+    protocol: "xean/codex-exec/v1",
+    model: "fixture-model",
+    reasoning: "low",
+    search: true,
+    developerInstructions: "Verify this source.",
+    prompt: "This must fail before executing.",
+    outputSchema: { type: "object" },
+  });
+  expect(missing.state).toBe("failed");
+  expect(await setup.captures()).toHaveLength(later.length);
   expectCleaned(captures);
+  expectCleaned(later);
 });
 
 test("missing selected provider credentials never fall back to the native account", async () => {
@@ -327,20 +357,9 @@ base_url = "https://gateway.example.test/v1"
 env_key = "ABSENT_GATEWAY_KEY"
 `,
   );
-  await expect(requireCodex(setup.options)).rejects.toThrow(
+  await expect(prepareCodex(setup.options)).rejects.toThrow(
     "source provider requires environment variable ABSENT_GATEWAY_KEY",
   );
-  expect(existsSync(join(setup.directory, "capture.jsonl"))).toBe(false);
-  const result = await codexExec(setup.options)({
-    protocol: "xean/codex-exec/v1",
-    model: "fixture-model",
-    reasoning: "low",
-    search: true,
-    developerInstructions: "Verify.",
-    prompt: "Task.",
-    outputSchema: { type: "object" },
-  });
-  expect(result.state).toBe("failed");
   expect(existsSync(join(setup.directory, "capture.jsonl"))).toBe(false);
 });
 
@@ -348,7 +367,7 @@ test("rejected login status suppresses credential output and cleans up", async (
   const setup = await fixture({ loginExit: 1 });
   let message = "";
   try {
-    await requireCodex(setup.options);
+    await prepareCodex(setup.options);
   } catch (error) {
     message = String(error);
   }
@@ -361,7 +380,7 @@ test("rejected login status suppresses credential output and cleans up", async (
 
 test("a broken CLI version check suppresses command output and cleans up", async () => {
   const setup = await fixture({ versionExit: 1 });
-  await expect(requireCodex(setup.options)).rejects.toThrow(
+  await expect(prepareCodex(setup.options)).rejects.toThrow(
     "source verifier requires an executable Codex CLI",
   );
   expectCleaned(await setup.captures());
@@ -370,7 +389,7 @@ test("a broken CLI version check suppresses command output and cleans up", async
 test("an aborted preflight starts no CLI process", async () => {
   const setup = await fixture();
   await expect(
-    requireCodex({ ...setup.options, signal: AbortSignal.abort() }),
+    prepareCodex({ ...setup.options, signal: AbortSignal.abort() }),
   ).rejects.toThrow("source verifier preflight cancelled");
   expect(existsSync(join(setup.directory, "capture.jsonl"))).toBe(false);
 });

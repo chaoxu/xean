@@ -22,7 +22,7 @@ import {
   withCampaignLock,
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
-import { requireCodex } from "./source";
+import { prepareCodex } from "./source";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -215,14 +215,14 @@ export async function run(
           piProviders(config.settings),
         );
       }
-      if (dependencies.codex === undefined) {
-        await requireCodex({
+      const codex =
+        dependencies.codex ??
+        (await prepareCodex({
           command: codexCommand(process.env),
           ...(dependencies.signal === undefined
             ? {}
             : { signal: dependencies.signal }),
-        });
-      }
+        }));
       if (campaign === undefined) {
         campaign = openConfiguredCampaign(
           request.campaignPath,
@@ -231,7 +231,13 @@ export async function run(
         );
         await prepareAllowance(campaign, request.turns, request.id);
       }
-      const pending = drive(campaign, config, dependencies, models, initial);
+      const pending = drive(
+        campaign,
+        config,
+        { ...dependencies, codex },
+        models,
+        initial,
+      );
       initial = undefined;
       return await pending;
     } finally {

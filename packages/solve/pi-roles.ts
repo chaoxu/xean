@@ -13,15 +13,14 @@ import { piReasoning, piRequest, runPi, type PiSubmissionGate } from "xean/pi";
 import { z } from "zod";
 
 import {
-  codexExec,
+  prepareCodex,
+  codexCall,
   codexReasoning,
   codexRequest,
-  codexResult,
   codexOutcome,
   codexSubmission,
   type CodexExec,
   type CodexRequest,
-  type CodexResult,
 } from "./source";
 import {
   coordinatorInput,
@@ -62,7 +61,8 @@ import {
   sourceVerdictsFor,
   sourceSubmission,
   sourceVerdict,
-  sources,
+  sourcePrompt,
+  localSourceRequest,
   statement as statementSchema,
   succeededSubmission,
   returnedOutput,
@@ -88,7 +88,7 @@ import {
 } from "./roles";
 import { codexCommand, selectModel, type SolveModels } from "./runtime";
 import { supportClosure } from "./support";
-import { appendSubmittedNotesLocked } from "./notes";
+import { appendSubmittedNotes } from "./notes";
 
 const piRoleProfile = z.strictObject({
   provider: nonblank,
@@ -560,13 +560,7 @@ export function reconstructionCall(
   };
 }
 
-// A packet supplies an earlier passage under this call's premise ID, with
-// the call and note that inspected it.
-const sourcePassage = sources.element.extend({
-  call: z.number().int().positive(),
-  note: nonblank,
-});
-type SourcePassage = z.output<typeof sourcePassage>;
+type SourcePassage = z.output<typeof sourcePrompt>["passages"][number];
 /** A recorded passage with its provenance; its ID is per call, so it carries none. */
 type InspectedPassage = Omit<SourcePassage, "resultId">;
 type Evidence = Pick<SourcePassage, "result" | "source" | "url" | "quote">;
@@ -583,7 +577,7 @@ type CorrectnessAssessment = {
   >["verdicts"];
 };
 
-/** Source continues from the original correctness submission, including across dispatches. */
+/** Source continues from admitted correctness evidence, including across dispatches. */
 function correctnessForSources(
   campaign: Campaign,
   input: VerifierInput,
@@ -608,59 +602,24 @@ function correctnessForSources(
               isDeepStrictEqual(verdict, entry.verdict),
             ))),
     );
-    const receipt =
-      prior === undefined ? undefined : campaign.record(prior.seq);
-    if (receipt?.kind !== "evidence")
+    if (prior?.externalResults === undefined)
       throw new RoleCallError(
         "source requires a recorded correctness PASS with its external premises",
       );
-    let group = groups.get(receipt.call);
+    let group = groups.get(prior.call);
     if (group === undefined) {
-      const saved = readPiSubmission(records, receipt.call, {
-        tool: roleTools.verifier,
-        schema: correctnessVerdicts,
-      });
-      if (saved === undefined)
-        throw new RoleCallError(
-          "source requires the completed correctness submission",
-        );
-      group = {
-        correctness: {
-          call: receipt.call,
-          ...saved.value,
-        },
-        notes: [],
-      };
-      groups.set(receipt.call, group);
+      group = { correctness: { call: prior.call, verdicts: [] }, notes: [] };
+      groups.set(prior.call, group);
     }
+    group.correctness.verdicts.push({
+      ...prior.verdict,
+      externalResults: prior.externalResults,
+    });
     group.notes.push(id);
   }
   return [...groups.values()];
 }
 
-const sourcePrompt = z.strictObject({
-  task: z.strictObject({ problem: nonblank, completionCriteria: nonblank }),
-  correctnessCall: z.number().int().positive(),
-  notes: z
-    .array(
-      z.strictObject({
-        id: nonblank,
-        text: nonblank,
-        support: z.array(nonblank),
-        externalResults: z
-          .array(z.strictObject({ id: nonblank, text: nonblank }))
-          .min(1),
-      }),
-    )
-    .min(1),
-  passages: z.array(sourcePassage),
-});
-
-export const localSourceRequest = z.strictObject({
-  protocol: z.literal("xean/source-local/v1"),
-  correctnessCall: z.number().int().positive(),
-  notes: z.array(nonblank).min(1),
-});
 export const localSourceResult = z.strictObject({
   state: z.literal("succeeded"),
   verdicts: z.array(sourceVerdict),
@@ -816,12 +775,23 @@ export function createPiRoles(
   dependencies: PiRoleDependencies,
 ): Roles {
   const profiles = solveSettings.parse(settingsValue);
+  let prepared: Promise<CodexExec> | undefined;
   const codex: CodexDependencies = {
     ...(dependencies.signal === undefined
       ? {}
       : { signal: dependencies.signal }),
     codex:
-      dependencies.codex ?? codexExec({ command: codexCommand(process.env) }),
+      dependencies.codex ??
+      (async (request, signal) => {
+        prepared ??= prepareCodex({
+          command: codexCommand(process.env),
+          ...(signal === undefined ? {} : { signal }),
+        }).catch((error: unknown) => {
+          prepared = undefined;
+          throw error;
+        });
+        return (await prepared)(request, signal);
+      }),
   };
   return {
     async explorer(inputValue, signal = dependencies.signal) {
@@ -928,14 +898,7 @@ export function createPiRoles(
           .records({ kinds: ["evidence"], call })
           .some((entry) => entry.kind === "evidence" && entry.call === call);
         if (already) return;
-        campaign.recordEvidence(call, {
-          verdicts: values.map(({ note, verdict, report, correctedText }) => ({
-            note,
-            verdict,
-            report,
-            ...(correctedText === undefined ? {} : { correctedText }),
-          })),
-        });
+        campaign.recordEvidence(call, jsonSnapshot({ verdicts: values }));
       };
       for (const name of verifierNames) {
         for (;;) {
@@ -1095,30 +1058,6 @@ type CodexDependencies = Pick<PiRoleDependencies, "signal"> & {
   readonly codex: CodexExec;
 };
 
-/** One journaled Codex call: its entry and parsed output. Callers keep their own failure policy. */
-async function codexCall(
-  campaign: Campaign,
-  call: {
-    readonly label: string;
-    readonly role: RoleName;
-    readonly parent?: EntryId;
-  },
-  request: Json | CodexRequest,
-  exec: CodexExec,
-  signal?: AbortSignal,
-): Promise<{ readonly call: EntryId; readonly output: CodexResult }> {
-  const receipt = await campaign.call(
-    {
-      ...call,
-      request: jsonSnapshot(request),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    async (context) =>
-      exec(codexRequest.parse(context.request), context.signal),
-  );
-  return { call: receipt.call, output: codexResult.parse(receipt.output) };
-}
-
 /** A note's INCONCLUSIVE source verdict when a response cannot be used: its assigned premises stand unchecked. */
 function unusableSourceVerdict(
   note: string,
@@ -1183,54 +1122,23 @@ function inspectedPassages(
   before: EntryId,
 ): InspectedPassage[] {
   const records = campaign.records({ through: before - 1 });
-  const passes = new Set(
-    journalVerdicts(records).flatMap(({ seq, verdict }) => {
-      if (verdict.verifier !== "source" || verdict.verdict !== "PASS")
-        return [];
-      const entry = campaign.record(seq);
-      return entry?.kind === "evidence"
-        ? [`${entry.call}/${verdict.note}`]
-        : [];
-    }),
-  );
   const passages: InspectedPassage[] = [];
-  const known = (source: Evidence): boolean =>
-    passages.some((passage) =>
-      isDeepStrictEqual(evidence(passage), evidence(source)),
-    );
-  for (const entry of records) {
-    if (entry.kind !== "call" || entry.label !== verifierLabels.source)
+  for (const entry of journalVerdicts(records).toSorted(
+    (a, b) => a.call - b.call,
+  )) {
+    if (entry.verdict.verifier !== "source" || entry.verdict.verdict !== "PASS")
       continue;
-    const request = codexRequest.safeParse(entry.request);
-    if (!request.success) continue;
-    let packet: z.output<typeof sourcePrompt>;
-    let submission: ReturnType<typeof codexSubmission>;
-    try {
-      packet = sourcePrompt.parse(JSON.parse(request.data.prompt));
-      submission = codexSubmission(records, entry.seq);
-    } catch {
-      continue;
-    }
-    const supplied = packet.passages.filter(known);
-    const assigned = packet.notes.map(({ id: note, externalResults }) => ({
-      note,
-      externalResults: externalResults.map(({ text }) => text),
-    }));
-    const value = sourceVerdictsOf(submission, supplied, assigned);
-    for (const verdict of value?.verdicts ?? []) {
+    for (const source of entry.sources!) {
       if (
-        verdict.verdict !== "PASS" ||
-        !passes.has(`${entry.seq}/${verdict.note}`)
+        !passages.some((passage) =>
+          isDeepStrictEqual(evidence(passage), evidence(source)),
+        )
       )
-        continue;
-      for (const source of verdict.sources) {
-        if (!known(source))
-          passages.push({
-            call: entry.seq,
-            note: verdict.note,
-            ...evidence(source),
-          });
-      }
+        passages.push({
+          call: entry.call,
+          note: entry.verdict.note,
+          ...evidence(source),
+        });
     }
   }
   return passages;
@@ -1503,7 +1411,7 @@ async function runLiterature(
     if (outcome === undefined) return undefined;
     const value = outcome.report ?? { notes: [] };
     if (value.notes.length > 0) {
-      await appendSubmittedNotesLocked(
+      await appendSubmittedNotes(
         campaign,
         { notes: value.notes },
         literatureNotesId(call),

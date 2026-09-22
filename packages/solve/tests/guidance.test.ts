@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { createCampaign, openCampaign, openReader } from "xean";
 
-import { freezeExplorerGuidance, inspectGuidance } from "../guidance";
+import { guidanceInbox, inspectGuidance } from "../guidance";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { applicationId, jsonSnapshot, roleLabels } from "../roles";
 import { run } from "../runner";
@@ -208,7 +208,7 @@ test("a crash after freezing guidance but before starting Explorer preserves the
   await guideCampaign(path, first, "a");
   const campaign = openCampaign(path);
   const snapshot = await deriveWorkflow(campaign.records());
-  expect(await freezeExplorerGuidance(campaign, snapshot.after!)).toBe(true);
+  expect(await guidanceInbox.freeze(campaign, snapshot.after!)).toBe(true);
   campaign.close();
   await guideCampaign(path, second, "b");
   const rest = dependencies([explore(1), ...turn(2)]);
@@ -232,7 +232,7 @@ test("a note submitted after guidance is frozen waits for the coordinator after 
   await guideCampaign(path, first, "a");
   const campaign = openCampaign(path);
   const snapshot = await deriveWorkflow(campaign.records());
-  expect(await freezeExplorerGuidance(campaign, snapshot.after!)).toBe(true);
+  expect(await guidanceInbox.freeze(campaign, snapshot.after!)).toBe(true);
   campaign.close();
   const lemma = "A submitted lemma.";
   await submitNotes(path, { notes: [{ text: lemma, support: [] }] }, "lemma");
@@ -373,7 +373,6 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = await setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 32 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);

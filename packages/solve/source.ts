@@ -12,10 +12,10 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import type { Entry, EntryId, Json } from "xean";
+import type { Campaign, Entry, EntryId, Json } from "xean";
 import { z } from "zod";
 
-import { nonblank, returnedOutput } from "./roles";
+import { jsonSnapshot, nonblank, returnedOutput, type RoleName } from "./roles";
 
 // The source verifier runs Codex with live web search, isolated in a fresh
 // CODEX_HOME. Only the selected provider's connection settings and credentials
@@ -179,6 +179,29 @@ export function codexSubmission(
     searches: transcript.searches,
     usage: transcript.usage,
   };
+}
+
+/** One journaled Codex invocation; callers retain their own failure policy. */
+export async function codexCall(
+  campaign: Campaign,
+  call: {
+    readonly label: string;
+    readonly role: RoleName;
+    readonly parent?: EntryId;
+  },
+  request: Json | CodexRequest,
+  exec: CodexExec,
+  signal?: AbortSignal,
+): Promise<{ readonly call: EntryId; readonly output: CodexResult }> {
+  const receipt = await campaign.call(
+    {
+      ...call,
+      request: jsonSnapshot(request),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    (context) => exec(codexRequest.parse(context.request), context.signal),
+  );
+  return { call: receipt.call, output: codexResult.parse(receipt.output) };
 }
 
 interface CommandResult {
@@ -443,19 +466,21 @@ async function sourceEnvironment(
   };
 }
 
-/** Check local CLI capabilities and native credentials without a model call. */
-export async function requireCodex(
+/** Check the CLI and credentials once, then execute each request in a fresh environment. */
+export async function prepareCodex(
   options: {
     readonly command?: string;
     readonly environment?: NodeJS.ProcessEnv;
     readonly signal?: AbortSignal;
   } = {},
-): Promise<void> {
+): Promise<CodexExec> {
   const command = options.command ?? "codex";
+  const inherited = options.environment ?? process.env;
   const directory = await mkdtemp(join(tmpdir(), "xean-source-"));
+  let codexVersion: string;
   try {
     const { env, hasAuth, providerArgs, requiresLogin } =
-      await sourceEnvironment(directory, options.environment ?? process.env);
+      await sourceEnvironment(directory, inherited);
     const check = async (args: readonly string[], failure: string) => {
       if (options.signal?.aborted) {
         throw new Error("source verifier preflight cancelled");
@@ -483,7 +508,8 @@ export async function requireCodex(
       return result.stdout;
     };
     const versionFailure = "source verifier requires an executable Codex CLI";
-    if ((await check(["--version"], versionFailure)).trim() === "") {
+    codexVersion = (await check(["--version"], versionFailure)).trim();
+    if (codexVersion === "") {
       throw new Error(versionFailure);
     }
     for (const [args, flags] of [
@@ -529,20 +555,8 @@ export async function requireCodex(
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-}
-
-export function codexExec(
-  options: {
-    readonly command?: string;
-    readonly environment?: NodeJS.ProcessEnv;
-  } = {},
-): CodexExec {
-  const command = options.command ?? "codex";
-  const inherited = options.environment ?? process.env;
-  let knownVersion: string | undefined;
   return async (request, signal) => {
     let directory: string | undefined;
-    let codexVersion = knownVersion;
     let stdout = "";
     let stderr = "";
     let exitCode: number | null | undefined;
@@ -554,29 +568,6 @@ export function codexExec(
       );
       const schemaPath = join(directory, "verdict.schema.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));
-      if (codexVersion === undefined) {
-        const version = await runCommand(command, ["--version"], {
-          env,
-          ...(signal === undefined ? {} : { signal }),
-        });
-        const reported = version.stdout.trim();
-        if (version.cancelled) {
-          return {
-            state: "cancelled",
-            ...(reported === "" ? {} : { codexVersion: reported }),
-            stdout,
-            stderr: version.stderr,
-            error: "source verification cancelled",
-          };
-        }
-        if (version.exitCode !== 0 || reported === "") {
-          throw new Error(
-            version.stderr || "could not determine Codex version",
-          );
-        }
-        codexVersion = reported;
-        knownVersion = reported;
-      }
       const run = await runCommand(
         command,
         [
@@ -652,7 +643,7 @@ export function codexExec(
     } catch (error) {
       return {
         state: signal?.aborted ? "cancelled" : "failed",
-        ...(codexVersion === undefined ? {} : { codexVersion }),
+        codexVersion,
         stdout,
         stderr,
         ...(exitCode === undefined ? {} : { exitCode }),

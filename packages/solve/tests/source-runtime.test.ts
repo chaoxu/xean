@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { codexExec, codexRequest, codexTranscript } from "../source";
+import { prepareCodex, codexRequest, codexTranscript } from "../source";
 import { codexStdout } from "./fixtures/codex-stdout";
 
 const warning = {
@@ -126,6 +126,11 @@ async function fixture(script: string) {
   const directory = await mkdtemp(join(tmpdir(), "xean-source-runtime-"));
   directories.push(directory);
   const command = join(directory, "fake-codex");
+  await mkdir(join(directory, ".codex"));
+  await writeFile(
+    join(directory, ".codex", "auth.json"),
+    JSON.stringify({ tokens: { access_token: "fixture" } }),
+  );
   await writeFile(
     command,
     `#!${process.execPath}
@@ -135,6 +140,11 @@ if (Bun.argv.includes("--version")) {
   console.log("codex-cli fixture");
   process.exit(0);
 }
+if (Bun.argv.includes("--help")) {
+  console.log("--search --disable --model --config --ephemeral --ignore-user-config --ignore-rules --strict-config --skip-git-repo-check --sandbox --json --color --output-schema --cd");
+  process.exit(0);
+}
+if (Bun.argv.includes("login")) process.exit(0);
 await Bun.stdin.text();
 const save = (name, value = "ready") => writeFileSync(join(process.env.HOME, name), value);
 save("pid", String(process.pid));
@@ -144,7 +154,7 @@ ${script}
   );
   return {
     directory,
-    exec: codexExec({
+    exec: await prepareCodex({
       command,
       environment: { HOME: directory, PATH: dirname(process.execPath) },
     }),

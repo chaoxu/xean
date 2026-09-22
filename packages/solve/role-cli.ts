@@ -14,7 +14,6 @@ import {
   roleSubmission,
   piProviders,
   solveSettings,
-  localSourceRequest,
   type SolveSettings,
 } from "./pi-roles";
 import {
@@ -23,7 +22,9 @@ import {
   coordinatorInput,
   explorerInput,
   literatureInput,
+  localSourceRequest,
   jsonSnapshot,
+  journalVerdicts,
   roleFromLabel,
   roleNames,
   submittedNotes,
@@ -42,7 +43,7 @@ import {
   withSignals,
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
-import { codexRequest, codexOutcome, requireCodex } from "./source";
+import { codexRequest, codexOutcome, prepareCodex } from "./source";
 import {
   deriveWorkflow,
   workflowConfig,
@@ -113,6 +114,7 @@ function projectCampaignRecords(
   const config = inspectionConfig.parse(
     declaration?.kind === "campaign" ? declaration.config : undefined,
   );
+  if (config.kind === "calls") journalVerdicts(records);
   const entries = new Map(records.map((entry) => [entry.seq, entry]));
   const evidence = new Map(
     records.flatMap((entry) =>
@@ -238,12 +240,9 @@ export async function submitNotes(
     workflowConfig.parse(
       declaration?.kind === "campaign" ? declaration.config : undefined,
     );
-    return await appendSubmittedNotes(
+    return await appendSubmittedNotes(campaign, value, id, {
       path,
-      campaign,
-      value,
-      id,
-      async (records) => {
+      validate: async (records) => {
         const snapshot = await deriveWorkflow(records);
         const live = new Set(
           snapshot.notes.filter((note) => !note.dead).map((note) => note.id),
@@ -259,7 +258,7 @@ export async function submitNotes(
             );
         }
       },
-    );
+    });
   } finally {
     campaign.close();
   }
@@ -319,11 +318,13 @@ export async function runRoleCommand(
       : await createModelRuntime({
           modelsPath: modelRegistryPath(process.env),
         });
-  if (command === "literature") {
-    await requireCodex({ command: codexCommand(process.env) });
-  } else {
+  if (runtime !== undefined) {
     await requireCredentials(runtime!, piProviders(settings, command));
   }
+  const codex =
+    command === "literature" || command === "verifier"
+      ? await prepareCodex({ command: codexCommand(process.env) })
+      : undefined;
   const models =
     runtime === undefined ? builtinPi() : withSerialToolCalls(runtime);
   const controller = new AbortController();
@@ -337,6 +338,7 @@ export async function runRoleCommand(
         try {
           const roles = createPiRoles(campaign, settings, {
             models,
+            ...(codex === undefined ? {} : { codex }),
             signal: controller.signal,
           });
           return jsonSnapshot(await roles[command](input as never));

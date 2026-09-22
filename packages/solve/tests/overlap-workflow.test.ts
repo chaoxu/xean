@@ -95,7 +95,7 @@ const coordinate = (all = false): Reply => ({
 async function setup(
   turns = 1,
   window = 100_000,
-  notes = [{ text: original, support: [] as string[] }],
+  notes = [{ text: original, support: [] as (string | number)[] }],
 ) {
   const path = campaignPath();
   const profiles = roleSettings();
@@ -519,6 +519,104 @@ test("Explorer may save a dependency from its frozen view after that support dur
     failed.resolve();
     explorerStarted.resolve();
     await running.catch(() => {});
+    campaign.close();
+  }
+});
+
+test("an overlap retry restores unselected original support in full with frozen evidence", async () => {
+  const indirect = { text: "An unselected proof using L.", support: ["n1"] };
+  const saved = {
+    text: "A new consequence of the unselected proof.",
+    support: ["n2"],
+  };
+  const { config, campaign } = await setup(1, 100_000, [
+    { text: original, support: [] },
+    { ...indirect, support: [1] },
+  ]);
+  const checked = gate();
+  const drive = script({
+    [roleLabels.coordinator]: [
+      {
+        submission: {
+          filings: [
+            { note: "n1", summary: "Lemma L." },
+            { note: "n2", summary: "Consequence of L." },
+          ],
+          action: {
+            role: "verifier",
+            explorerGuidance: "Develop a different argument.",
+            support: [],
+            verify: [{ note: "n1", verifiers: ["correctness"] }],
+          },
+        },
+      },
+    ],
+    [roleLabels.explorer]: [
+      {
+        state: "failed",
+        error: "Explorer disconnected",
+        onStarted: async (tools) => {
+          await checked.promise;
+          await tools[0]!.execute({ notes: [saved], solution: false });
+        },
+      },
+    ],
+    [verifierLabels.correctness]: [
+      {
+        submission: {
+          verdicts: [
+            {
+              ...pass,
+              verdict: "FAIL",
+              report: "L fails.",
+              externalResults: [],
+            },
+          ],
+        },
+      },
+    ],
+  });
+  const roles = createPiRoles(campaign, config.settings, drive);
+  try {
+    await expect(
+      within(
+        runWorkflow(campaign, {
+          ...roles,
+          async verifier(...args) {
+            try {
+              return await roles.verifier(...args);
+            } finally {
+              checked.resolve();
+            }
+          },
+        }),
+      ),
+    ).rejects.toThrow("Explorer disconnected");
+    const firstPrompt = drive.calls.find(
+      ({ label }) => label === roleLabels.explorer,
+    )!.prompt;
+    expect(firstPrompt).not.toContain(original);
+    expect(firstPrompt).not.toContain(indirect.text);
+    const snapshot = deriveWorkflow(campaign.records());
+    expect(snapshot.notes.map(({ dead }) => dead)).toEqual([true, true, true]);
+    if (snapshot.phase.kind !== "overlap")
+      throw new Error("expected unfinished overlap");
+    expect(snapshot.phase.explorer?.input.support).toMatchObject([
+      { id: "n1", text: original, dead: false, verdicts: [] },
+      { id: "n2", ...indirect, dead: false, verdicts: [] },
+      { id: "n3", ...saved, dead: false, verdicts: [] },
+    ]);
+    const resumed = script({
+      [roleLabels.explorer]: [{ submission: { notes: [], solution: false } }],
+    });
+    expect(
+      await runWorkflow(
+        campaign,
+        createPiRoles(campaign, config.settings, resumed),
+      ),
+    ).toMatchObject({ kind: "turn-limit", turns: 1 });
+  } finally {
+    checked.resolve();
     campaign.close();
   }
 });

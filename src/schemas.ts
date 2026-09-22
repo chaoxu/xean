@@ -21,6 +21,21 @@ export const ENTRY_KINDS = {
   toolResult: "tool-result",
 } as const;
 
+/** Filters are intersected. Labels select calls and their call-results. */
+export const recordQuery = z.strictObject({
+  kinds: z
+    .array(z.enum(Object.values(ENTRY_KINDS)))
+    .readonly()
+    .optional(),
+  labels: z.array(z.string().min(1)).readonly().optional(),
+  excludeLabels: z.array(z.string().min(1)).readonly().optional(),
+  call: entryId.optional(),
+  parent: entryId.optional(),
+  after: z.number().int().nonnegative().optional(),
+  through: z.number().int().nonnegative().optional(),
+});
+export type RecordQuery = Readonly<z.output<typeof recordQuery>>;
+
 const base = {
   seq: entryId,
   atMs: z.number().int().nonnegative(),

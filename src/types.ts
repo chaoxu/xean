@@ -5,6 +5,7 @@ import {
   type Entry,
   type EntryId,
   type Json,
+  type RecordQuery,
   type ToolDeclaration,
 } from "./schemas";
 
@@ -13,6 +14,7 @@ export type {
   EntryDraft,
   EntryId,
   Json,
+  RecordQuery,
   ToolDeclaration,
 } from "./schemas";
 
@@ -58,17 +60,6 @@ export interface Reader {
   lastSequence(): number;
   payload(digest: string): Json;
   close(): void;
-}
-
-/** Filters are intersected. Labels select calls and their call-results. */
-export interface RecordQuery {
-  readonly kinds?: readonly Entry["kind"][];
-  readonly labels?: readonly string[];
-  readonly excludeLabels?: readonly string[];
-  readonly call?: EntryId;
-  readonly parent?: EntryId;
-  readonly after?: number;
-  readonly through?: number;
 }
 
 export interface CallOptions {

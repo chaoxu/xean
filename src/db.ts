@@ -9,6 +9,7 @@ import {
   copyJson,
   entry as entrySchema,
   entryId,
+  recordQuery,
 } from "./schemas";
 import type { Entry, EntryDraft, EntryId, Json, RecordQuery } from "./types";
 
@@ -55,19 +56,6 @@ interface EntryRow {
 const payloadDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const digest = (text: string): string =>
   new Bun.CryptoHasher("sha256").update(text).digest("hex");
-const recordQuery = z.strictObject({
-  kinds: z
-    .array(z.enum(Object.values(ENTRY_KINDS)))
-    .readonly()
-    .optional(),
-  labels: z.array(z.string().min(1)).readonly().optional(),
-  excludeLabels: z.array(z.string().min(1)).readonly().optional(),
-  call: entryId.optional(),
-  parent: entryId.optional(),
-  after: z.number().int().nonnegative().optional(),
-  through: z.number().int().nonnegative().optional(),
-});
-
 function parsedRow(row: EntryRow): Entry {
   return entrySchema.parse({
     seq: Number(row.seq),

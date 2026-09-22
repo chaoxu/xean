@@ -99,6 +99,13 @@ test("cycles and duplicate notes cannot leak target text through reconstruction 
       support: [first, first, inherited],
     }).success,
   ).toBe(false);
+  expect(
+    verifierInput.safeParse({
+      ...input,
+      notes: [target, target],
+      verify: [...input.verify, ...input.verify],
+    }).success,
+  ).toBe(false);
 });
 
 test("support closure combines roots, shares ancestors, and sorts numeric ids", async () => {

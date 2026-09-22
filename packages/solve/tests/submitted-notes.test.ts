@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { openReader } from "xean";
+import { openCampaign, openReader } from "xean";
 
 import { inspectCampaign, submitNotes } from "../role-cli";
+import { appendSubmittedNotes, notesInbox } from "../notes";
 import { init, run } from "../runner";
 import {
   explorerResultFor,
@@ -281,13 +282,12 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(32);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 32, task },
+    config: { schemaVersion: workflowSchemaVersion, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -678,6 +678,31 @@ test("same-id submissions are idempotent and invalid fields never append journal
     expect(records(path)).toEqual(before);
   }
   expect((await inspect(path, true)).submissions).toHaveLength(1);
+});
+
+test("a competing same-id submission wins even on the last validation retry", async () => {
+  const { path } = await setup();
+  const campaign = openCampaign(path);
+  const input = { notes: [partial] };
+  let validations = 0;
+  try {
+    const receipt = await appendSubmittedNotes(campaign, input, "competing", {
+      path,
+      validate: async () => {
+        if (++validations === 3)
+          await appendSubmittedNotes(campaign, input, "competing");
+        else
+          await campaign.call(
+            { label: "concurrent-writer", request: null },
+            async () => null,
+          );
+      },
+    });
+    expect(validations).toBe(3);
+    expect(notesInbox.receipts(campaign.records())).toEqual([receipt]);
+  } finally {
+    campaign.close();
+  }
 });
 
 test("reinitializing a terminal campaign neither changes its result nor resolves providers", async () => {

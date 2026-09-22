@@ -261,9 +261,10 @@ test.each(["request", "role"])(
   },
 );
 
-test("a full audit cannot claim source inspection without a web call", async () => {
+test("a full audit cannot claim source inspection without a web call or reuse that rejected result", async () => {
+  const request = input();
   await expect(
-    review(input(), {
+    review(request, {
       codex: async () => ({
         state: "succeeded",
         codexVersion: "fixture",
@@ -279,6 +280,26 @@ test("a full audit cannot claim source inspection without a web call", async () 
       }),
     }),
   ).rejects.toThrow("without using web search");
+  let calls = 0;
+  const dependencies = {
+    codex: async () => {
+      calls++;
+      return {
+        state: "succeeded" as const,
+        codexVersion: "fixture",
+        stdout: codexStdout({
+          verdict: "FAIL",
+          report: "Checked contradictory source.",
+          externalResults: [externalResult],
+        }),
+        stderr: "",
+      };
+    },
+  };
+  const result = await review(request, dependencies);
+  expect(result.report).toContain("Checked contradictory source.");
+  expect(await review(request, dependencies)).toEqual(result);
+  expect(calls).toBe(1);
 });
 
 test.each(["PASS", "FAIL", "INCONCLUSIVE"])(

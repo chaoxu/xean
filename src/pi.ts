@@ -188,11 +188,11 @@ export type PiRequestAttempt = z.output<typeof piRequestAttempt> & {
   readonly payload?: Json;
 } & ({ readonly state: "completed" } | { readonly state: "unsettled" });
 
-export function piRequestAttempts(
+function piRequestData(
   entries: readonly Entry[],
   parent?: EntryId,
   payloadReader?: Pick<Reader, "payload">,
-): readonly PiRequestAttempt[] {
+) {
   const selected = parent === undefined ? undefined : entryId.parse(parent);
   const calls = new Map(
     entries
@@ -204,7 +204,8 @@ export function piRequestAttempts(
       .filter((entry) => entry.kind === "call-result")
       .map((entry) => [entry.parent, entry]),
   );
-  return [...calls.values()].flatMap((call) => {
+  const completions = new Map<EntryId, z.output<typeof piRequestCompletion>>();
+  const attempts: PiRequestAttempt[] = [...calls.values()].flatMap((call) => {
     if (call.label !== piRequestLabel) return [];
     const parsed = piRequestAttempt.safeParse(call.request);
     if (!parsed.success) return [];
@@ -220,7 +221,7 @@ export function piRequestAttempts(
     }
     const settled = results.get(call.seq);
     if (settled?.state === "returned")
-      piRequestCompletion.parse(settled.output);
+      completions.set(call.seq, piRequestCompletion.parse(settled.output));
     const state =
       settled?.state === "returned"
         ? ({ state: "completed" } as const)
@@ -236,6 +237,15 @@ export function piRequestAttempts(
       },
     ];
   });
+  return { results, attempts, completions };
+}
+
+export function piRequestAttempts(
+  entries: readonly Entry[],
+  parent?: EntryId,
+  payloadReader?: Pick<Reader, "payload">,
+): readonly PiRequestAttempt[] {
+  return piRequestData(entries, parent, payloadReader).attempts;
 }
 
 const nonnegative = z.number().finite().nonnegative();
@@ -441,96 +451,65 @@ export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
 
 export type PiSpendSummary = ReturnType<typeof summarizePiSpend>;
 
-/** @internal One completed request checkpoint is one operation. */
-export function derivePiCallOperations(
-  call: EntryId,
-  attempts: readonly PiRequestAttempt[],
-  results: ReadonlyMap<EntryId, Extract<Entry, { kind: "call-result" }>>,
-): PiSpendOperation[] {
-  return attempts.flatMap((attempt) => {
-    const completion = results.get(attempt.call);
-    if (completion?.state !== "returned") return [];
-    const value = piRequestCompletion.parse(completion.output);
-    if (
-      value.parent !== call ||
-      value.operation.provider !== attempt.model.provider ||
-      value.operation.requestedModel !== attempt.model.id ||
-      value.operation.api !== attempt.model.api
-    )
-      throw new Error("invalid Pi request completion " + attempt.call);
-    return [value.operation];
-  });
-}
-
-type PiCallAccounting = {
-  readonly call: Extract<Entry, { kind: "call" }>;
-  readonly attempts: readonly PiRequestAttempt[];
-  readonly settled: boolean;
-} & (
-  | {
-      readonly state: "available";
-      readonly stored: z.output<typeof piResultRecord> | undefined;
-      readonly operations: readonly PiSpendOperation[];
-      readonly spend: PiSpendSummary;
-    }
-  | { readonly state: "unaccounted" }
-  | { readonly state: "unsupported"; readonly error: unknown }
-);
-
 /** Shared accounting interpretation; readers decide how unsupported records are presented. */
 export function derivePiAccounting(entries: readonly Entry[]) {
-  const results = new Map(
-    entries
-      .filter((entry) => entry.kind === "call-result")
-      .map((entry) => [entry.parent, entry]),
-  );
-  const attempts = piRequestAttempts(entries);
+  const { results, attempts, completions } = piRequestData(entries);
   const attemptsByParent = new Map<EntryId, PiRequestAttempt[]>();
   for (const attempt of attempts) {
     const values = attemptsByParent.get(attempt.parent) ?? [];
     values.push(attempt);
     attemptsByParent.set(attempt.parent, values);
   }
-  const calls: PiCallAccounting[] = [];
-  for (const call of entries) {
-    if (call.kind !== "call" || parsePiRequest(call.request) === undefined)
-      continue;
-    const result = results.get(call.seq);
-    const base = {
-      call,
-      attempts: attemptsByParent.get(call.seq) ?? [],
-      settled: result?.state === "returned",
-    };
-    try {
-      const stored =
-        result?.state === "returned"
-          ? piResultRecord.parse(result.output)
-          : undefined;
-      if (stored !== undefined && stored.call !== call.seq)
-        throw new Error(`invalid Pi result call ${call.seq}`);
-      const operations = derivePiCallOperations(
-        call.seq,
-        base.attempts,
-        results,
-      );
-      calls.push(
-        stored === undefined && operations.length === 0
-          ? { ...base, state: "unaccounted" }
+  const calls = entries
+    .filter((entry) => entry.kind === "call")
+    .map((call) => {
+      const request = parsePiRequest(call.request);
+      if (request === undefined) return undefined;
+      const result = results.get(call.seq);
+      const base = {
+        call,
+        request,
+        attempts: attemptsByParent.get(call.seq) ?? [],
+        settled: result?.state === "returned",
+      };
+      try {
+        const stored =
+          result?.state === "returned"
+            ? piResultRecord.parse(result.output)
+            : undefined;
+        if (stored !== undefined && stored.call !== call.seq)
+          throw new Error(`invalid Pi result call ${call.seq}`);
+        const operations = base.attempts.flatMap((attempt) => {
+          const completion = completions.get(attempt.call);
+          if (completion === undefined) return [];
+          const { parent, operation } = completion;
+          if (
+            parent !== call.seq ||
+            operation.provider !== attempt.model.provider ||
+            operation.requestedModel !== attempt.model.id ||
+            operation.api !== attempt.model.api
+          )
+            throw new Error("invalid Pi request completion " + attempt.call);
+          return [operation];
+        });
+        return stored === undefined && operations.length === 0
+          ? { ...base, state: "unaccounted" as const }
           : {
               ...base,
-              state: "available",
+              state: "available" as const,
               stored,
               operations,
-              spend: summarizePiSpend(operations),
-            },
-      );
-    } catch (error) {
-      calls.push({ ...base, state: "unsupported", error });
-    }
-  }
+            };
+      } catch (error) {
+        return { ...base, state: "unsupported" as const, error };
+      }
+    })
+    .filter((value) => value !== undefined);
   return {
     calls,
     attempts,
+    results,
+    completions,
     byCall: new Map(calls.map((value) => [value.call.seq, value])),
   };
 }
@@ -540,7 +519,13 @@ export function derivePiSpend(entries: readonly Entry[]) {
   const calls = accounting.calls.flatMap((value) => {
     if (value.state === "unsupported") throw value.error;
     return value.state === "available"
-      ? [{ call: value.call.seq, operations: value.operations, ...value.spend }]
+      ? [
+          {
+            call: value.call.seq,
+            operations: value.operations,
+            ...summarizePiSpend(value.operations),
+          },
+        ]
       : [];
   });
   return {

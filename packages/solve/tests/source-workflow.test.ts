@@ -4,7 +4,6 @@ import { z } from "zod";
 
 import {
   createPiRoles,
-  localSourceRequest,
   sourceCall,
   sourceVerdictsOf,
   verifierCall,
@@ -12,6 +11,8 @@ import {
 import {
   applicationId,
   correctnessVerdictsFor,
+  journalVerdicts,
+  localSourceRequest,
   sourceVerdictsFor,
   type Note,
   type VerifierInput,
@@ -343,6 +344,35 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
     const roles = createPiRoles(campaign, roleSettings(), drive);
     await roles.verifier(input([makeNote("n1")]));
     const old = calls(campaign).find((call) => call.label.endsWith("/source"))!;
+    const receipts = campaign.records({ kinds: ["evidence"] });
+    expect(receipts).toMatchObject([
+      { evidence: { verdicts: [{ externalResults: [result] }] } },
+      {
+        evidence: {
+          verdicts: [{ sources: [{ resultId: "n1#1", ...source }] }],
+        },
+      },
+    ]);
+    // Reuse consumes admitted evidence without interpreting the raw response again.
+    const records = campaign.records.bind(campaign);
+    campaign.records = (query) =>
+      records(query).map((entry) =>
+        entry.kind === "call-result" &&
+        entry.state === "returned" &&
+        entry.parent === old.seq
+          ? {
+              ...entry,
+              output: {
+                state: "succeeded",
+                get stdout(): string {
+                  throw new Error(
+                    "raw source transcript read during evidence reuse",
+                  );
+                },
+              },
+            }
+          : entry,
+      );
     const verdicts = await roles.verifier(input([makeNote("n2")]));
     expect(verdicts.at(-1)?.verdict).toBe("PASS");
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([
@@ -353,6 +383,53 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
     campaign.close();
   }
 });
+
+test.each(["wrong-id", "changed-result"])(
+  "source receipt corruption fails before reuse: %s",
+  async (corruption) => {
+    const campaign = createCampaign(campaignPath(), applicationId, {
+      kind: "calls",
+    });
+    const drive = dependencies([
+      correctness([{ note: "n1", externalResults: [result] }]),
+      checked("n1"),
+      correctness([{ note: "n2", externalResults: [result] }]),
+      checked("n2", false),
+    ]);
+    try {
+      const roles = createPiRoles(campaign, roleSettings(), drive);
+      await roles.verifier(input([makeNote("n1")]));
+      const old = calls(campaign).find((call) =>
+        call.label.endsWith("/source"),
+      )!;
+      const records = campaign.records.bind(campaign);
+      campaign.records = (query) =>
+        records(query).map((entry) => {
+          if (entry.kind !== "evidence" || entry.call !== old.seq) return entry;
+          const value = JSON.parse(JSON.stringify(entry.evidence));
+          Object.assign(
+            value.verdicts[0].sources[0],
+            corruption === "wrong-id"
+              ? { resultId: "wrong#1" }
+              : { result: "A stronger unassigned result." },
+          );
+          return { ...entry, evidence: value };
+        });
+      expect(() => journalVerdicts(campaign.records())).toThrow(
+        "malformed verdict",
+      );
+      expect(() => inspectCampaignRecords(campaign.records())).toThrow(
+        "malformed verdict",
+      );
+      await expect(roles.verifier(input([makeNote("n2")]))).rejects.toThrow(
+        "malformed verdict",
+      );
+      expect(drive.codexCalls).toHaveLength(1);
+    } finally {
+      campaign.close();
+    }
+  },
+);
 
 test("a malformed matching source transcript becomes inconclusive", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {

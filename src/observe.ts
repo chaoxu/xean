@@ -1,9 +1,6 @@
 import { openReader } from "./campaign";
 import {
   derivePiAccounting,
-  piRequest,
-  piRequestCompletion,
-  piResultRecord,
   readPiResult,
   summarizePiSpend,
   type PiRequestAttempt,
@@ -11,10 +8,8 @@ import {
   type PiSpendSummary,
 } from "./pi";
 import type { Entry, EntryId, Json, Reader } from "./types";
-import { z } from "zod";
 
 type CallEntry = Extract<Entry, { kind: "call" }>;
-type CallResultEntry = Extract<Entry, { kind: "call-result" }>;
 type ToolCallEntry = Extract<Entry, { kind: "tool-call" }>;
 
 export interface PiUsageBreakdownV2 {
@@ -127,22 +122,8 @@ export type PiAccountingObservationV2 =
   | { readonly state: "unaccounted" }
   | { readonly state: "unsupported" };
 
-interface RecordIndex {
-  readonly declaration: Extract<Entry, { kind: "campaign" }>;
-  readonly last: Entry;
-  readonly calls: readonly CallEntry[];
-  readonly results: ReadonlyMap<EntryId, CallResultEntry>;
-  readonly tools: ReadonlyMap<EntryId, readonly ToolCallEntry[]>;
-  readonly accounting: ReturnType<typeof derivePiAccounting>;
-}
-
-interface AccountingIndex {
-  readonly byCall: ReadonlyMap<EntryId, PiAccountingObservationV2>;
-  readonly stored: ReadonlyMap<EntryId, z.output<typeof piResultRecord>>;
-  readonly spend: PiObservationSpendV2;
-  readonly unsupportedCalls: readonly EntryId[];
-  readonly unaccountedCalls: readonly EntryId[];
-}
+type RecordIndex = ReturnType<typeof indexRecords>;
+type PiCallAccounting = ReturnType<typeof derivePiAccounting>["calls"][number];
 
 function observedSpend(spend: PiSpendSummary): PiObservationSpendV2 {
   if (!("measuredUsage" in spend)) return spend;
@@ -184,15 +165,12 @@ function requestPhaseSpend(
 
 function recoveredErrors(
   attempts: readonly PiRequestAttempt[],
-  results: ReadonlyMap<EntryId, CallResultEntry>,
+  completions: ReturnType<typeof derivePiAccounting>["completions"],
 ): readonly PiRecoveredErrorObservationV2[] {
   return attempts.flatMap((attempt, index) => {
-    const completion = results.get(attempt.call);
-    if (completion?.state !== "returned") return [];
-    const { operation, errorMessage } = piRequestCompletion.parse(
-      completion.output,
-    );
-    if (!operation.error) return [];
+    const completion = completions.get(attempt.call);
+    if (completion === undefined || !completion.operation.error) return [];
+    const { operation, errorMessage } = completion;
     return [
       {
         request: index + 1,
@@ -231,7 +209,6 @@ export function inspectCoreCampaignRecords(
   records: readonly Entry[],
 ): CoreCampaignObservationV2 {
   const index = indexRecords(records);
-  const accounting = indexAccounting(index);
   const evidence = new Map(
     records.flatMap((entry) =>
       entry.kind === "evidence" ? [[entry.call, entry.evidence] as const] : [],
@@ -246,12 +223,14 @@ export function inspectCoreCampaignRecords(
     lastAtMs: index.last.atMs,
     calls: index.calls.map((call) => {
       const value = {
-        ...projectCall(index, accounting, call),
+        ...projectCall(index, call),
         ...(evidence.has(call.seq)
           ? { evidence: evidence.get(call.seq)! }
           : {}),
       };
-      const stored = accounting.stored.get(call.seq);
+      const accounting = index.accounting.byCall.get(call.seq);
+      const stored =
+        accounting?.state === "available" ? accounting.stored : undefined;
       const full =
         stored === undefined ? undefined : readPiResult(stored, reader);
       return full?.text && value.pi
@@ -259,9 +238,9 @@ export function inspectCoreCampaignRecords(
         : value;
     }),
     spend: {
-      ...accounting.spend,
-      unsupportedCalls: accounting.unsupportedCalls,
-      unaccountedCalls: accounting.unaccountedCalls,
+      ...observedCallsSpend(index.accounting.calls),
+      unsupportedCalls: index.unsupportedCalls,
+      unaccountedCalls: index.unaccountedCalls,
     },
   };
 }
@@ -271,8 +250,7 @@ export function inspectCoreCallSummaries(
   records: readonly Entry[],
 ): readonly CoreCallSummaryV2[] {
   const index = indexRecords(records);
-  const accounting = indexAccounting(index);
-  return index.calls.map((call) => projectCall(index, accounting, call));
+  return index.calls.map((call) => projectCall(index, call));
 }
 
 /** Summarize a caller's captured journal boundary without loading payloads. */
@@ -280,7 +258,6 @@ export function inspectCoreCampaignSummaryRecords(
   records: readonly Entry[],
 ): CoreCampaignSummaryV2 {
   const index = indexRecords(records);
-  const accounting = indexAccounting(index);
   const unsettled = index.calls.filter(
     (call) => index.results.get(call.seq) === undefined,
   );
@@ -300,24 +277,22 @@ export function inspectCoreCampaignSummaryRecords(
           },
         }),
     spend: {
-      ...accounting.spend,
-      unsupportedCalls: accounting.unsupportedCalls.length,
-      unaccountedCalls: accounting.unaccountedCalls.length,
+      ...observedCallsSpend(index.accounting.calls),
+      unsupportedCalls: index.unsupportedCalls.length,
+      unaccountedCalls: index.unaccountedCalls.length,
     },
   };
 }
 
-function indexRecords(records: readonly Entry[]): RecordIndex {
+function indexRecords(records: readonly Entry[]) {
   const declaration = records[0];
   if (declaration?.kind !== "campaign") {
     throw new Error("campaign declaration is unavailable");
   }
   const callsById = new Map<EntryId, CallEntry>();
-  const results = new Map<EntryId, CallResultEntry>();
   const tools = new Map<EntryId, ToolCallEntry[]>();
   for (const entry of records) {
     if (entry.kind === "call") callsById.set(entry.seq, entry);
-    else if (entry.kind === "call-result") results.set(entry.parent, entry);
     else if (entry.kind === "tool-call") {
       const values = tools.get(entry.call) ?? [];
       values.push(entry);
@@ -330,87 +305,57 @@ function indexRecords(records: readonly Entry[]): RecordIndex {
     declaration,
     last: records.at(-1) ?? declaration,
     calls: [...callsById.values()].filter(({ seq }) => !attemptIds.has(seq)),
-    results,
+    results: accounting.results,
     tools,
     accounting,
+    unsupportedCalls: accounting.calls
+      .filter(({ state }) => state === "unsupported")
+      .map(({ call }) => call.seq),
+    unaccountedCalls: accounting.calls
+      .filter(({ settled }) => !settled)
+      .map(({ call }) => call.seq),
   };
 }
 
-function indexAccounting(index: RecordIndex): AccountingIndex {
-  const byCall = new Map<EntryId, PiAccountingObservationV2>();
-  const storedResults = new Map<EntryId, z.output<typeof piResultRecord>>();
-  const understoodOperations: PiSpendOperation[] = [];
-  const firstOperations: PiSpendOperation[] = [];
-  const continuationOperations: PiSpendOperation[] = [];
-  let recoveredRequestErrors = 0;
-  let availableCalls = 0;
-  const unsupportedCalls: EntryId[] = [];
-  const unaccountedCalls: EntryId[] = [];
-  for (const value of index.accounting.calls) {
-    const call = value.call.seq;
-    if (!value.settled) unaccountedCalls.push(call);
-    if (value.state !== "available") {
-      byCall.set(call, { state: value.state });
-      if (value.state === "unsupported") unsupportedCalls.push(call);
-      continue;
-    }
-    const { stored, operations, spend, attempts } = value;
-    if (stored !== undefined) storedResults.set(call, stored);
-    const recovered =
-      stored?.state === "succeeded"
-        ? recoveredErrors(attempts, index.results)
-        : [];
-    const first = operations.slice(0, 1);
-    const continuation = operations.slice(1);
-    understoodOperations.push(...operations);
-    firstOperations.push(...first);
-    continuationOperations.push(...continuation);
-    recoveredRequestErrors += recovered.length;
-    availableCalls += 1;
-    byCall.set(call, {
-      state: "available",
-      ...(stored === undefined ? { complete: false as const } : {}),
-      operations,
-      spend: {
-        ...observedSpend(spend),
-        recoveredRequestErrors: recovered.length,
-        requests: {
-          first: requestPhaseSpend(first),
-          continuation: requestPhaseSpend(continuation),
-        },
-      },
-      ...(recovered.length === 0 ? {} : { recoveredErrors: recovered }),
-    });
-  }
+function observedCallsSpend(
+  calls: readonly PiCallAccounting[],
+): PiObservationSpendV2 {
+  const available = calls.filter((value) => value.state === "available");
   return {
-    byCall,
-    stored: storedResults,
-    spend: {
-      ...observedSpend(summarizePiSpend(understoodOperations)),
-      ...(availableCalls === 0
-        ? {}
-        : {
-            recoveredRequestErrors,
-            requests: {
-              first: requestPhaseSpend(firstOperations),
-              continuation: requestPhaseSpend(continuationOperations),
-            },
-          }),
-    },
-    unsupportedCalls,
-    unaccountedCalls,
+    ...observedSpend(
+      summarizePiSpend(available.flatMap(({ operations }) => operations)),
+    ),
+    ...(available.length === 0
+      ? {}
+      : {
+          recoveredRequestErrors: available.reduce(
+            (count, { stored, operations }) =>
+              count +
+              (stored?.state === "succeeded"
+                ? operations.filter(({ error }) => error).length
+                : 0),
+            0,
+          ),
+          requests: {
+            first: requestPhaseSpend(
+              available.flatMap(({ operations }) => operations.slice(0, 1)),
+            ),
+            continuation: requestPhaseSpend(
+              available.flatMap(({ operations }) => operations.slice(1)),
+            ),
+          },
+        }),
   };
 }
 
-function projectCall(
-  index: RecordIndex,
-  accounting: AccountingIndex,
-  call: CallEntry,
-): CoreCallSummaryV2 {
+function projectCall(index: RecordIndex, call: CallEntry): CoreCallSummaryV2 {
   const result = index.results.get(call.seq);
-  const request = piRequest.safeParse(call.request);
-  const parsed = accounting.stored.get(call.seq);
-  const callAccounting = accounting.byCall.get(call.seq);
+  const value = index.accounting.byCall.get(call.seq);
+  const parsed = value?.state === "available" ? value.stored : undefined;
+  const recovered =
+    parsed?.state === "succeeded"
+      ? recoveredErrors(value!.attempts, index.accounting.completions)
+      : [];
   return {
     call: call.seq,
     label: call.label,
@@ -424,25 +369,39 @@ function projectCall(
       call: seq,
       name: tool,
     })),
-    ...(request.success && callAccounting !== undefined
+    ...(value !== undefined
       ? {
           pi: {
             requested: {
-              provider: request.data.model.provider,
-              model: request.data.model.id,
-              api: request.data.model.api,
-              ...(request.data.reasoning === undefined
+              provider: value.request.model.provider,
+              model: value.request.model.id,
+              api: value.request.model.api,
+              ...(value.request.reasoning === undefined
                 ? {}
-                : { reasoning: request.data.reasoning }),
+                : { reasoning: value.request.reasoning }),
             },
             ...(parsed === undefined ? {} : { outcome: parsed.state }),
             ...(parsed !== undefined && parsed.state !== "succeeded"
               ? { error: parsed.error }
               : {}),
-            checkpoints: (
-              index.accounting.byCall.get(call.seq)?.attempts ?? []
-            ).map((attempt) => ({ call: attempt.call, state: attempt.state })),
-            accounting: callAccounting,
+            checkpoints: value.attempts.map((attempt) => ({
+              call: attempt.call,
+              state: attempt.state,
+            })),
+            accounting:
+              value.state === "available"
+                ? {
+                    state: "available",
+                    ...(parsed === undefined
+                      ? { complete: false as const }
+                      : {}),
+                    operations: value.operations,
+                    spend: observedCallsSpend([value]),
+                    ...(recovered.length === 0
+                      ? {}
+                      : { recoveredErrors: recovered }),
+                  }
+                : { state: value.state },
           },
         }
       : {}),

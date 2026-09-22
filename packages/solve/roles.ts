@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
   returnedToolSubmission,
   type Entry,
@@ -161,14 +163,13 @@ export function correctedText(
   return text;
 }
 
-const distinctSupport = [
-  (value: { readonly support: readonly (string | number)[] }) =>
-    new Set(value.support).size === value.support.length,
-  { message: "support ids must be distinct", path: ["support"] },
-] as [
-  (value: { readonly support: readonly (string | number)[] }) => boolean,
-  { message: string; path: string[] },
-];
+const supportIds = <S extends z.ZodType>(reference: S) =>
+  z
+    .array(reference)
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      "support ids must be distinct",
+    );
 // The projection derives the flags from verifier evidence, caller attestations,
 // and support edges. A note is verified after source and correctness pass or
 // external verification is supplied, over verified support, and is not dead.
@@ -180,45 +181,44 @@ export const externalVerification = z.strictObject({
   report: nonblank,
 });
 
-export const submittedNotes = z.strictObject({
-  notes: z
-    .array(
-      z
-        .strictObject({
-          text: nonblank,
-          support: z.array(z.union([noteId, z.number().int().positive()])),
-          verification: externalVerification.optional(),
-        })
-        .refine(...distinctSupport),
-    )
-    .min(1)
-    .superRefine((notes, context) => {
-      notes.forEach((note, position) => {
-        note.support.forEach((reference, index) => {
-          if (typeof reference === "number" && reference > position) {
-            context.addIssue({
-              code: "custom",
-              path: [position, "support", index],
-              message:
-                "local support must name an earlier note in this submission (one-based)",
-            });
-          }
-        });
-      });
-    }),
+const submittedNote = z.strictObject({
+  text: nonblank,
+  support: supportIds(z.union([noteId, z.number().int().positive()])),
+  verification: externalVerification.optional(),
 });
 
-const noteFields = z.strictObject({
+function earlierSupport(
+  notes: readonly { readonly support: readonly (string | number)[] }[],
+  context: z.RefinementCtx,
+) {
+  notes.forEach((note, position) => {
+    note.support.forEach((reference, index) => {
+      if (typeof reference === "number" && reference > position) {
+        context.addIssue({
+          code: "custom",
+          path: [position, "support", index],
+          message:
+            "local support must name an earlier note in this submission (one-based)",
+        });
+      }
+    });
+  });
+}
+
+export const submittedNotes = z.strictObject({
+  notes: z.array(submittedNote).min(1).superRefine(earlierSupport),
+});
+
+export const note = z.strictObject({
   id: noteId,
   summary: nonblank.optional(),
   text: nonblank,
-  support: z.array(noteId),
+  support: supportIds(noteId),
   verdicts: z.array(verdict),
   verified: z.boolean(),
   dead: z.boolean(),
   verification: externalVerification.optional(),
 });
-export const note = noteFields.refine(...distinctSupport);
 export type Note = z.output<typeof note>;
 
 function distinctKnown(
@@ -238,31 +238,15 @@ function distinctKnown(
 }
 
 /** Notes returned by literature discovery; support names earlier notes of the same response by one-based position. */
-const literatureNotes = z
-  .array(
-    z.strictObject({
-      text: nonblank,
-      support: z.array(z.number().int().positive()),
-    }),
-  )
-  .superRefine((notes, context) => {
-    for (const [position, note] of notes.entries()) {
-      const seen = new Set<number>();
-      for (const [index, support] of note.support.entries()) {
-        if (support > position || seen.has(support)) {
-          context.addIssue({
-            code: "custom",
-            path: [position, "support", index],
-            message:
-              "literature support must name a distinct earlier note in this submission",
-          });
-        }
-        seen.add(support);
-      }
-    }
-  });
-
-export const literatureReport = z.strictObject({ notes: literatureNotes });
+export const literatureReport = z.strictObject({
+  notes: z
+    .array(
+      submittedNote.omit({ verification: true }).extend({
+        support: supportIds(z.number().int().positive()),
+      }),
+    )
+    .superRefine(earlierSupport),
+});
 export type LiteratureReport = z.output<typeof literatureReport>;
 
 /** Whether the coordinator has attempted or completed literature discovery. */
@@ -303,7 +287,7 @@ export const explorerInput = z
   .strictObject({
     task,
     explorerGuidance: z.string(),
-    notes: z.array(noteFields.omit({ text: true }).refine(...distinctSupport)),
+    notes: z.array(note.omit({ text: true })),
     support: z.array(note),
   })
   .superRefine((value, ctx) => {
@@ -497,10 +481,9 @@ const verifierAction = z.strictObject({
   role: z.literal("verifier"),
   verify: z.array(verification).min(1),
 });
-const overlapAction = verifierAction.extend({
-  explorerGuidance: nonblank,
-  support: z.array(noteId),
-});
+const overlapAction = verifierAction.extend(
+  explorerAction.omit({ role: true }).shape,
+);
 /** Each action owns exactly the payload its dispatched roles need. */
 export const coordinatorAction = z.union([
   explorerAction,
@@ -646,13 +629,6 @@ export const verifierInput = z
   })
   .superRefine((value, ctx) => {
     const listed = value.verify.map(({ note }) => note);
-    if (new Set(listed).size !== listed.length) {
-      ctx.addIssue({
-        code: "custom",
-        message: "verify must list distinct notes",
-        path: ["verify"],
-      });
-    }
     if (value.notes.map(({ id }) => id).join(",") !== listed.join(",")) {
       ctx.addIssue({
         code: "custom",
@@ -925,6 +901,35 @@ export const sourceSubmission = z.strictObject({
   verdicts: z.array(sourceWireVerdict(nonblank)),
 });
 
+// A packet supplies an earlier passage under this call's premise ID, with
+// the call and note that inspected it.
+const sourcePassage = sources.element.extend({
+  call: z.number().int().positive(),
+  note: nonblank,
+});
+export const sourcePrompt = z.strictObject({
+  task: z.strictObject({ problem: nonblank, completionCriteria: nonblank }),
+  correctnessCall: z.number().int().positive(),
+  notes: z
+    .array(
+      z.strictObject({
+        id: nonblank,
+        text: nonblank,
+        support: z.array(nonblank),
+        externalResults: z
+          .array(z.strictObject({ id: nonblank, text: nonblank }))
+          .min(1),
+      }),
+    )
+    .min(1),
+  passages: z.array(sourcePassage),
+});
+
+export const localSourceRequest = z.strictObject({
+  protocol: z.literal("xean/source-local/v1"),
+  correctnessCall: z.number().int().positive(),
+  notes: z.array(nonblank).min(1),
+});
 /** The external premises a completed correctness check assigned to each judged note. */
 export type AssignedExternalResults = readonly {
   readonly note: string;
@@ -991,14 +996,80 @@ export const verificationLabel = `${applicationId}/verification`;
 
 export interface JournalVerdict {
   readonly seq: EntryId;
+  readonly call: EntryId;
   readonly verification: EntryId;
   readonly verdict: Verdict;
+  readonly externalResults?: z.output<typeof externalResults>;
+  readonly sources?: z.output<typeof sources>;
 }
 
-// Each verifier call admits note-level evidence under its frozen verification.
-const verdictEvidence = verdicts.extend({
-  verdicts: verdicts.shape.verdicts.min(1),
-});
+// Admission preserves the validated premises and passages; raw submissions
+// remain provenance, not a second authority for source reuse.
+const evidenceSchemas = {
+  correctness: correctnessVerdicts,
+  requirements: verdicts,
+  reconstruction: verdicts,
+};
+
+/** Bind a receipt to its frozen source packet and already admitted correctness. */
+function sourceEvidenceFor(
+  call: Extract<Entry, { kind: "call" }>,
+  history: readonly JournalVerdict[],
+) {
+  const local = localSourceRequest.safeParse(call.request);
+  const packet = local.success
+    ? {
+        correctnessCall: local.data.correctnessCall,
+        notes: local.data.notes.map((id) => ({ id, externalResults: [] })),
+      }
+    : sourcePrompt.parse(
+        JSON.parse(z.object({ prompt: nonblank }).parse(call.request).prompt),
+      );
+  const assigned = packet.notes.map(({ id: note, externalResults }) => {
+    const correctness = history.find(
+      (entry) =>
+        entry.call === packet.correctnessCall &&
+        entry.seq < call.seq &&
+        entry.verdict.note === note &&
+        entry.verdict.verifier === "correctness" &&
+        entry.verdict.verdict === "PASS",
+    );
+    if (correctness?.externalResults === undefined)
+      throw new Error("source requires its assigned correctness evidence");
+    const expected = assignedPremises([
+      { note, externalResults: correctness.externalResults },
+    ]);
+    if (
+      !isDeepStrictEqual(
+        expected.map(({ resultId: id, result: text }) => ({ id, text })),
+        externalResults,
+      )
+    )
+      throw new Error("source assignments differ from correctness evidence");
+    return { note, externalResults: correctness.externalResults };
+  });
+  const premises = new Map(
+    assignedPremises(assigned).map(({ resultId, result }) => [
+      resultId,
+      result,
+    ]),
+  );
+  return verdictsOver(
+    sourceVerdict,
+    packet.notes.map(({ id }) => id),
+  ).refine(
+    ({ verdicts }) =>
+      verdicts.every(
+        (value) =>
+          sourceVerdictBinds(value, assigned) &&
+          value.sources.every(
+            (source) => premises.get(source.resultId) === source.result,
+          ),
+      ),
+    "source evidence must preserve its assigned premise IDs and text",
+  );
+}
+
 export function journalVerdicts(
   records: readonly Entry[],
 ): readonly JournalVerdict[] {
@@ -1014,10 +1085,20 @@ export function journalVerdicts(
     const verifier =
       call?.kind === "call" ? verifierFromLabel(call.label) : undefined;
     if (call?.kind !== "call" || verifier === undefined) continue;
-    const parsed = verdictEvidence.safeParse(entry.evidence);
+    let schema;
+    try {
+      schema =
+        verifier === "source"
+          ? sourceEvidenceFor(call, verdicts)
+          : evidenceSchemas[verifier];
+    } catch {
+      throw new Error(`malformed verdict ${entry.seq}`);
+    }
+    const parsed = schema.safeParse(entry.evidence);
     const result = succeededOutput(records, call.seq);
     if (
       !parsed.success ||
+      parsed.data.verdicts.length === 0 ||
       result === undefined ||
       result.settled >= entry.seq ||
       call.role !== "verifier" ||
@@ -1028,10 +1109,18 @@ export function journalVerdicts(
       throw new Error(`malformed verdict ${entry.seq}`);
     }
     for (const value of parsed.data.verdicts) {
+      const { externalResults, sources, ...noteVerdict } = {
+        externalResults: undefined,
+        sources: undefined,
+        ...value,
+      };
       verdicts.push({
         seq: entry.seq,
+        call: call.seq,
         verification: call.parent,
-        verdict: { verifier, ...value },
+        verdict: { verifier, ...noteVerdict },
+        ...(externalResults === undefined ? {} : { externalResults }),
+        ...(sources === undefined ? {} : { sources }),
       });
     }
   }

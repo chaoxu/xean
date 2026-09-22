@@ -29,6 +29,7 @@ const evidence = (
   verdict: Verdict["verdict"] = "PASS",
 ): JournalVerdict => ({
   seq,
+  call: verification,
   verification,
   verdict: { note, verifier, verdict, report: "Check report." },
 });
@@ -210,7 +211,14 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
     atMs: 0,
     call: 3,
     evidence: {
-      verdicts: [{ note: "n1", verdict: "PASS", report: "Checked." }],
+      verdicts: [
+        {
+          note: "n1",
+          verdict: "PASS",
+          report: "Checked.",
+          externalResults: [],
+        },
+      ],
     },
   };
   const result: Entry = {
@@ -224,7 +232,9 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
   expect(journalVerdicts([opening, call, result, entry])).toEqual([
     {
       seq: 5,
+      call: 3,
       verification: 2,
+      externalResults: [],
       verdict: {
         verifier: "correctness",
         note: "n1",
@@ -233,6 +243,21 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
       },
     },
   ]);
+  expect(() =>
+    journalVerdicts([
+      opening,
+      call,
+      result,
+      {
+        ...entry,
+        evidence: {
+          verdicts: [
+            { note: "n1", verdict: "PASS", report: "Missing premises." },
+          ],
+        },
+      },
+    ]),
+  ).toThrow("malformed verdict");
   for (const output of [
     null,
     { state: "failed" },
@@ -249,14 +274,21 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
   expect(() =>
     journalVerdicts([opening, call, { ...result, seq: 6 }, entry]),
   ).toThrow("malformed verdict");
-  expect(
+  expect(() =>
     journalVerdicts([
       opening,
       { ...call, label: verifierLabels.source },
       { ...result, output: { state: "succeeded", verdicts: [] } },
-      entry,
-    ])[0]?.verdict.verifier,
-  ).toBe("source");
+      {
+        ...entry,
+        evidence: {
+          verdicts: [
+            { note: "n1", verdict: "PASS", report: "Checked.", sources: [] },
+          ],
+        },
+      },
+    ]),
+  ).toThrow("malformed verdict");
   expect(() =>
     journalVerdicts([opening, { ...call, role: "explorer" }, result, entry]),
   ).toThrow("malformed verdict");

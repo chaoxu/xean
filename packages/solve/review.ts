@@ -19,10 +19,10 @@ import {
   withCampaignLock,
 } from "./runtime";
 import {
-  codexExec,
+  codexCall,
   codexRequest,
   codexSubmission,
-  requireCodex,
+  prepareCodex,
   type CodexExec,
 } from "./source";
 
@@ -94,7 +94,26 @@ export async function review(
     );
     try {
       const label = "xean-solve/review";
-      let submission: ReturnType<typeof codexSubmission>;
+      const read = (call: number) => {
+        const submission = codexSubmission(
+          roleCallRecords(campaign, call),
+          call,
+        );
+        if (submission === undefined)
+          throw new Error(
+            "Codex review did not complete; its transcript remains in the review journal",
+          );
+        const result = reviewVerdict.parse(submission.input);
+        const sources = result.externalResults.flatMap(
+          ({ sources }) => sources,
+        );
+        if (sources.length > 0 && submission.searches === 0)
+          throw new Error(
+            "review cited source passages without using web search",
+          );
+        return { result, sources, settled: submission.settled };
+      };
+      let checked: ReturnType<typeof read> | undefined;
       for (const call of matchingCalls(
         campaign.records({ kinds: ["call"], labels: [label] }),
         0,
@@ -105,66 +124,32 @@ export async function review(
         // A malformed response is an operational failure, not a completed
         // audit. An explicit retry keeps it and makes one fresh call.
         try {
-          const previous = codexSubmission(
-            roleCallRecords(campaign, call.seq),
-            call.seq,
-          );
-          const checked = reviewVerdict.safeParse(previous?.input);
-          if (
-            previous !== undefined &&
-            checked.success &&
-            (!checked.data.externalResults.some(
-              ({ sources }) => sources.length > 0,
-            ) ||
-              previous.searches > 0)
-          ) {
-            submission = previous;
-            break;
-          }
+          checked = read(call.seq);
+          break;
         } catch {
           // The original transcript remains in the journal.
         }
       }
-      if (submission === undefined) {
-        const command = codexCommand(process.env);
-        if (dependencies.codex === undefined)
-          await requireCodex({
-            command,
+      if (checked === undefined) {
+        const codex =
+          dependencies.codex ??
+          (await prepareCodex({
+            command: codexCommand(process.env),
             ...(dependencies.signal === undefined
               ? {}
               : { signal: dependencies.signal }),
-          });
-        const receipt = await campaign.call(
-          {
-            label,
-            role: "verifier",
-            request: jsonSnapshot(request),
-            ...(dependencies.signal === undefined
-              ? {}
-              : { signal: dependencies.signal }),
-          },
-          async ({ request: exact, signal }) =>
-            (dependencies.codex ?? codexExec({ command }))(
-              codexRequest.parse(exact),
-              signal,
-            ),
+          }));
+        const receipt = await codexCall(
+          campaign,
+          { label, role: "verifier" },
+          request,
+          codex,
+          dependencies.signal,
         );
-        submission = codexSubmission(
-          roleCallRecords(campaign, receipt.call),
-          receipt.call,
-        );
+        checked = read(receipt.call);
       }
-      if (submission === undefined)
-        throw new Error(
-          "Codex review did not complete; its transcript remains in the review journal",
-        );
-      const result = reviewVerdict.parse(submission.input);
-      const sources = result.externalResults.flatMap(({ sources }) => sources);
-      if (sources.length > 0 && submission.searches === 0)
-        throw new Error(
-          "review cited source passages without using web search",
-        );
-      const settled = campaign.record(submission.settled)!;
+      const { result, sources } = checked;
+      const settled = campaign.record(checked.settled)!;
       return {
         reviewer: `Codex full proof and citation audit; ${value.profile.model}/${value.profile.reasoning}`,
         reviewedAt: new Date(settled.atMs).toISOString(),

@@ -5,12 +5,8 @@ import { z } from "zod";
 import { Projection } from "./projection";
 import { boundaryLabels } from "./inbox";
 import { turnAllowances } from "./allowance";
-import { explorerGuidance, freezeExplorerGuidance } from "./guidance";
-import {
-  freezeSubmittedNotes,
-  hasSubmittedNotes,
-  submittedNotesBoundary,
-} from "./notes";
+import { explorerGuidance, guidanceInbox } from "./guidance";
+import { notesInbox } from "./notes";
 import { byId, supportClosure } from "./support";
 import {
   coordinatorCall,
@@ -52,7 +48,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 32;
+export const workflowSchemaVersion = 33;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -227,7 +223,7 @@ function openFold(records: readonly Entry[]): Fold {
 
 /** Frozen caller submissions at this boundary enter the note graph before the next coordinator. */
 function includeSubmitted(fold: Fold, after: EntryId): boolean {
-  const boundary = submittedNotesBoundary(fold.records, after);
+  const boundary = notesInbox.at(fold.records, after);
   if (boundary === undefined) return false;
   let count = fold.projection.at(after).length;
   for (const submission of boundary.receipts) {
@@ -284,12 +280,11 @@ function replayExplorerTurn(
   fold: Fold,
   guidance: string,
   support: readonly string[],
-  savedProjection?: Projection,
+  known: readonly Note[] = fold.projection.at(fold.cursor),
 ): ExplorerPhase | { readonly emptySubmission: boolean } {
   const { records, base } = fold;
   let after = fold.cursor;
   let through = fold.cursor;
-  let known = fold.projection.at(fold.cursor);
   const selected = [...support];
   // Advice stays frozen for the turn. A fresh call after interruption
   // also receives every note already saved by this turn, in full.
@@ -319,13 +314,16 @@ function replayExplorerTurn(
       const notes = saved.value.notes.map((entry, position) => ({
         id: noteIdAfter(known.length, position),
         ...entry,
+        support: [...entry.support].sort(byId),
+        verdicts: [],
+        verified: false,
+        dead: false,
       }));
-      if (notes.length > 0) {
-        fold.projection.add(notes, saved.settled);
-        savedProjection?.add(notes, saved.settled);
-      }
+      if (notes.length > 0) fold.projection.add(notes, saved.settled);
       selected.push(...notes.map(({ id }) => id));
-      known = fold.projection.at(saved.settled);
+      // New notes have no checks in this turn's frozen view. The canonical
+      // projection separately applies concurrent evidence and support failures.
+      known = [...known, ...notes];
       through = saved.settled;
     }
     if (saved?.completed !== undefined) {
@@ -426,20 +424,6 @@ function replayVerification(
 
 const overlapJoinLabel = "xean-solve/overlap-join";
 
-/** Fork historical evidence without allowing either role's cursor to move the other. */
-function forkFold(fold: Fold, verdicts: Fold["verdicts"]): Fold {
-  const projection = new Projection(verdicts);
-  const notes = fold.projection.at(fold.cursor);
-  projection.add(notes, fold.cursor);
-  projection.file(
-    notes.flatMap(({ id, summary }) =>
-      summary === undefined ? [] : [{ note: id, summary }],
-    ),
-    fold.cursor,
-  );
-  return { ...fold, verdicts, projection };
-}
-
 /** Replay the bounded pair within its durable opening and join. */
 function replayOverlap(
   fold: Fold,
@@ -450,9 +434,10 @@ function replayOverlap(
 ): OverlapPhase | AcceptedPhase | { readonly emptySubmission: boolean } {
   const after = fold.cursor;
   const advice = explorerGuidance(fold.records, after, action.explorerGuidance);
+  const known = fold.projection.at(after);
   const input = explorerInputFor(
     fold.base.config.task,
-    fold.projection.at(after),
+    known,
     action.support,
     advice,
   );
@@ -478,20 +463,16 @@ function replayOverlap(
     joined === undefined
       ? fold.records
       : fold.records.filter((entry) => entry.seq <= joined.seq);
-  const explorer = forkFold(
-    fold,
-    fold.verdicts.filter((entry) => entry.seq <= after),
-  );
   // Caller notes enter only after the join. Explorer alone assigns new note IDs.
   const pendingVerifier = replayVerification(
     { ...fold, records, cursor: opening.seq },
     action.verify,
   );
   const exploring = replayExplorerTurn(
-    { ...explorer, records, cursor: opening.seq },
+    { ...fold, records, cursor: opening.seq },
     advice,
     action.support,
-    fold.projection,
+    known,
   );
   const pendingExplorer = "kind" in exploring ? exploring : undefined;
   const through = joined?.seq ?? records.at(-1)!.seq;
@@ -566,7 +547,9 @@ function settledLiteratureCall(
     if (
       outcome.report !== undefined &&
       outcome.report.notes.length > 0 &&
-      !hasSubmittedNotes(records, literatureNotesId(entry.seq))
+      !notesInbox
+        .receipts(records)
+        .some(({ id }) => id === literatureNotesId(entry.seq))
     )
       return undefined;
     return outcome.settled;
@@ -686,7 +669,7 @@ async function runOverlap(
   dependencies: WorkflowDependencies,
 ): Promise<void> {
   if (initial.opened === undefined) {
-    await freezeExplorerGuidance(campaign, initial.after);
+    await guidanceInbox.freeze(campaign, initial.after);
     const { phase } = deriveWorkflow(workflowRecords(campaign));
     if (phase.kind !== "overlap" || phase.after !== initial.after)
       throw new Error("overlap boundary changed");
@@ -777,7 +760,7 @@ export async function runWorkflow(
     // Notes freeze first in every phase; guidance follows in the explorer phase.
     if (
       snapshot.after !== undefined &&
-      (await freezeSubmittedNotes(campaign, snapshot.after))
+      (await notesInbox.freeze(campaign, snapshot.after))
     ) {
       snapshot = deriveWorkflow(workflowRecords(campaign));
       phase = snapshot.phase;
@@ -789,7 +772,7 @@ export async function runWorkflow(
     if (phase.kind === "overlap") {
       await runOverlap(campaign, roles, phase, dependencies);
     } else if (phase.kind === "explorer") {
-      if (await freezeExplorerGuidance(campaign, snapshot.after!)) {
+      if (await guidanceInbox.freeze(campaign, snapshot.after!)) {
         snapshot = deriveWorkflow(workflowRecords(campaign));
         phase = snapshot.phase;
         if (phase.kind !== "explorer")

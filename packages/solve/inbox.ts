@@ -80,6 +80,42 @@ export function inbox<R extends { readonly id: string }>(
     return boundaries(records).find((boundary) => boundary.after === after);
   }
 
+  /** Index each receipt's boundary and started role calls once for inspection. */
+  function delivery(records: readonly Entry[]) {
+    const bound = boundaries(records);
+    const started = records.filter((entry) => entry.kind === "call");
+    const bindings = bound.map((boundary, index) => {
+      const coordinator = started.find(
+        (entry) =>
+          entry.seq > boundary.call && entry.label === roleLabels.coordinator,
+      );
+      const until = Math.min(
+        coordinator?.seq ?? Infinity,
+        bound[index + 1]?.call ?? Infinity,
+      );
+      const calls =
+        channel === "notes"
+          ? coordinator
+            ? [coordinator.seq]
+            : []
+          : started
+              .filter(
+                (entry) =>
+                  entry.label === roleLabels.explorer &&
+                  entry.seq > boundary.call &&
+                  entry.seq < until,
+              )
+              .map((entry) => entry.seq);
+      return { ...boundary, calls };
+    });
+    return receipts(records).map((receipt) => ({
+      receipt,
+      binding: bindings.find((boundary) =>
+        boundary.receipts.some((entry) => entry.call === receipt.call),
+      ),
+    }));
+  }
+
   /** The receipt this id already has; a different request under the same id is an error. */
   function existing(
     records: readonly Entry[],
@@ -113,54 +149,46 @@ export function inbox<R extends { readonly id: string }>(
   /**
    * Append under the short lock every submitter of this campaign shares; the
    * workflow keeps its independent runner lock and may be awaiting a provider
-   * throughout. With `unchangedSince`, return undefined instead of appending
-   * once the journal has grown past that sequence, so a caller can validate
-   * against a captured prefix and retry.
+   * throughout. Validation uses a captured prefix outside that lock and
+   * retries if the journal changes before appending.
    */
   async function appendLocked(
     path: string,
     campaign: Campaign,
     request: R,
-  ): Promise<Receipt>;
-  async function appendLocked(
-    path: string,
-    campaign: Campaign,
-    request: R,
-    options: { readonly unchangedSince: EntryId },
-  ): Promise<Receipt | undefined>;
-  async function appendLocked(
-    path: string,
-    campaign: Campaign,
-    request: R,
-    options: { readonly unchangedSince?: EntryId } = {},
-  ): Promise<Receipt | undefined> {
-    let pending: ReturnType<Campaign["call"]>;
-    {
+    validate?: (records: readonly Entry[]) => Promise<void>,
+  ): Promise<Receipt> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const through = campaign.lastSequence();
+      if (validate !== undefined) {
+        const records = campaign.records({
+          excludeLabels: ["xean/pi-request"],
+          through,
+        });
+        const prior = existing(records, request);
+        if (prior !== undefined) return prior;
+        await validate(records);
+      }
       using lock = new Database(`${realpathSync(path)}.inbox.lock`, {
         create: true,
       });
       lock.run("PRAGMA busy_timeout = 5000");
       lock.run("BEGIN EXCLUSIVE");
-      const prior = existing(
-        campaign.records({ kinds: ["call"], labels: [receiptLabel] }),
-        request,
-      );
-      if (prior !== undefined) return prior;
-      if (
-        options.unchangedSince !== undefined &&
-        campaign.lastSequence() !== options.unchangedSince
-      )
-        return undefined;
-      // call() appends the request synchronously before its first await.
-      // Release the lock after that append, so retrying an id cannot append
-      // it twice.
-      pending = campaign.call(
-        { label: receiptLabel, request: jsonSnapshot(request) },
-        async () => null,
-      );
+      if (validate !== undefined && campaign.lastSequence() !== through) {
+        const prior = existing(
+          campaign.records({ kinds: ["call"], labels: [receiptLabel] }),
+          request,
+        );
+        if (prior !== undefined) return prior;
+        continue;
+      }
+      // append() writes before its first await; returning its promise releases
+      // this lock while the local call settles.
+      return append(campaign, request);
     }
-    const result = await pending;
-    return receipts([campaign.record(result.call)!])[0]!;
+    throw new Error(
+      `campaign changed while validating ${channel}; retry the same id`,
+    );
   }
 
   /**
@@ -202,5 +230,5 @@ export function inbox<R extends { readonly id: string }>(
     return true;
   }
 
-  return { receipts, boundaries, at, existing, append, appendLocked, freeze };
+  return { receipts, delivery, at, append, appendLocked, freeze };
 }

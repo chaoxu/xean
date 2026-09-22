@@ -1040,6 +1040,16 @@ test("literature output is only note candidates", () => {
       ],
     }).success,
   ).toBe(false);
+  for (const fields of [
+    { support: ["n1"] },
+    { verification: { source: "literature", report: "Already checked." } },
+  ]) {
+    expect(
+      literatureReport.safeParse({
+        notes: [{ text: "A cited theorem.", support: [], ...fields }],
+      }).success,
+    ).toBe(false);
+  }
   const request = codexRequest.parse(call.request);
   expect(request.prompt).toContain('"problemToSolve": "Prove P."');
   expect(request.prompt).toContain('"request": "Search for prior work on P."');
