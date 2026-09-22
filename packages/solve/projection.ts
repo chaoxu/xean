@@ -3,6 +3,7 @@ import type { EntryId } from "xean";
 import { byId } from "./support";
 import {
   note as noteSchema,
+  correctedText,
   verifierNames,
   type JournalVerdict,
   type Note,
@@ -17,7 +18,7 @@ export class Projection {
   private readonly notes = new Map<string, StoredNote & { seq: EntryId }>();
   private readonly summaries = new Map<
     string,
-    { seq: EntryId; summary: string }
+    { seq: EntryId; summary: string }[]
   >();
   private snapshot: { seq: EntryId; value: Snapshot } | undefined;
 
@@ -34,8 +35,11 @@ export class Projection {
     filings: readonly { note: string; summary: string }[],
     seq: EntryId,
   ): void {
-    for (const { note, summary } of filings)
-      this.summaries.set(note, { seq, summary });
+    for (const { note, summary } of filings) {
+      const history = this.summaries.get(note) ?? [];
+      history.push({ seq, summary });
+      this.summaries.set(note, history);
+    }
     if (filings.length > 0) this.snapshot = undefined;
   }
 
@@ -50,7 +54,8 @@ export class Projection {
   private read(seq: EntryId): Snapshot {
     if (this.snapshot?.seq === seq) return this.snapshot.value;
     const reports = new Map<string, Verdict[]>();
-    const passes = new Map<string, Map<EntryId, Set<string>>>();
+    const passes = new Map<string, Set<string>>();
+    const corrections = new Map<string, EntryId>();
     const failures = new Set<string>();
     for (const entry of this.verdicts) {
       if (entry.seq > seq) break;
@@ -60,11 +65,11 @@ export class Projection {
       reports.set(note, history);
       if (verdict === "FAIL" && verifier !== "requirements") failures.add(note);
       if (verdict !== "PASS") continue;
-      const candidates = passes.get(note) ?? new Map<EntryId, Set<string>>();
-      const passed = candidates.get(entry.candidate) ?? new Set<string>();
+      if (entry.verdict.correctedText !== undefined)
+        corrections.set(note, entry.seq);
+      const passed = passes.get(note) ?? new Set<string>();
       passed.add(verifier);
-      candidates.set(entry.candidate, passed);
-      passes.set(note, candidates);
+      passes.set(note, passed);
     }
     const projected = new Map<string, Note>();
     const accepted: string[] = [];
@@ -73,20 +78,23 @@ export class Projection {
     )) {
       if (created > seq) continue;
       const support = entry.support.map((id) => projected.get(id));
-      const candidates = [...(passes.get(entry.id)?.values() ?? [])];
+      const passed = passes.get(entry.id) ?? new Set<string>();
       const established =
         entry.verification !== undefined ||
-        candidates.some(
-          (passed) => passed.has("source") && passed.has("correctness"),
-        );
+        (passed.has("source") && passed.has("correctness"));
       const dead = failures.has(entry.id) || support.some((note) => note?.dead);
       const verified =
         established && !dead && support.every((note) => note?.verified);
-      const summary = this.summaries.get(entry.id);
+      const summary = this.summaries
+        .get(entry.id)
+        ?.findLast((entry) => entry.seq <= seq);
       const note = noteSchema.parse({
         ...entry,
+        text: correctedText(entry.text, reports.get(entry.id) ?? []),
         support: [...entry.support].sort(byId),
-        ...(summary !== undefined && summary.seq <= seq
+        ...(summary !== undefined &&
+        summary.seq <= seq &&
+        summary.seq > (corrections.get(entry.id) ?? 0)
           ? { summary: summary.summary }
           : {}),
         verdicts: reports.get(entry.id) ?? [],
@@ -94,12 +102,7 @@ export class Projection {
         dead,
       });
       projected.set(note.id, note);
-      if (
-        verified &&
-        candidates.some((passed) =>
-          verifierNames.every((name) => passed.has(name)),
-        )
-      )
+      if (verified && verifierNames.every((name) => passed.has(name)))
         accepted.push(note.id);
     }
     const value = { notes: [...projected.values()], accepted };

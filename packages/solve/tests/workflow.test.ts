@@ -916,16 +916,31 @@ test.each(["n2^{-q}", "n4^{-L}", "n8^(-L)"])(
 
 test("coordination files every note without a summary and lists live notes over verified or earlier-listed support", () => {
   const schema = coordinatorResultFor([
-    { id: "n1", summary: "filed", support: [], verified: true, dead: false },
-    { id: "n2", support: ["n1"], verified: false, dead: false },
+    {
+      id: "n1",
+      summary: "filed",
+      support: [],
+      verdicts: [],
+      verified: true,
+      dead: false,
+    },
+    { id: "n2", support: ["n1"], verdicts: [], verified: false, dead: false },
     {
       id: "n3",
       summary: "filed",
       support: ["n2"],
+      verdicts: [],
       verified: false,
       dead: false,
     },
-    { id: "n4", summary: "filed", support: [], verified: false, dead: true },
+    {
+      id: "n4",
+      summary: "filed",
+      support: [],
+      verdicts: [],
+      verified: false,
+      dead: true,
+    },
   ]);
   const filed = {
     filings: [{ note: "n2", summary: "new" }],
@@ -1502,7 +1517,6 @@ test("the next coordinator starts only after all requested partial-result batche
     true,
     true,
   ]);
-  expect(phase.input.afterVerification).toBe(true);
   expect(drive.codexCalls).toHaveLength(2);
   expect(drive.calls.filter(({ role }) => role === "explorer")).toHaveLength(1);
   campaign.close();

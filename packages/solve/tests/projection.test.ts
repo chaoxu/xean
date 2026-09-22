@@ -26,7 +26,7 @@ const evidence = (
   verdict: { note, verifier, verdict, report: "Check report." },
 });
 
-test("verification and acceptance require the respective PASS checks on one candidate", () => {
+test("verification and acceptance reuse completed checks across dispatches", () => {
   const projection = new Projection([
     evidence(11, 10, "n1", "source"),
     evidence(22, 20, "n1", "correctness"),
@@ -41,12 +41,12 @@ test("verification and acceptance require the respective PASS checks on one cand
   ]);
   projection.add([note("n1"), note("n2")], 2);
   expect(projection.at(24).map(({ verified }) => verified)).toEqual([
-    false,
+    true,
     true,
   ]);
-  expect(projection.accepted(24)).toEqual([]);
-  expect(projection.accepted(34)).toEqual(["n1"]);
-  expect(projection.at(24)[0]!.verified).toBe(false);
+  expect(projection.accepted(24)).toEqual(["n2"]);
+  expect(projection.accepted(34)).toEqual(["n1", "n2"]);
+  expect(projection.at(24)[0]!.verified).toBe(true);
 });
 
 test("external verification needs verified support and every normal check for acceptance", () => {
@@ -69,6 +69,26 @@ test("external verification needs verified support and every normal check for ac
   ]);
   expect(projection.accepted(13)).toEqual([]);
   expect(projection.accepted(24)).toEqual(["n2"]);
+});
+
+test("an approved correction clears its stale summary and preserves historical filings", () => {
+  const correction = evidence(11, 10, "n1", "correctness");
+  const projection = new Projection([
+    {
+      ...correction,
+      verdict: { ...correction.verdict, correctedText: "Corrected proof." },
+    },
+  ]);
+  projection.add([note("n1")], 2);
+  projection.file([{ note: "n1", summary: "Old gap." }], 3);
+  expect(projection.at(11)[0]).toMatchObject({ text: "Corrected proof." });
+  expect(projection.at(11)[0]!.summary).toBeUndefined();
+  projection.file([{ note: "n1", summary: "Corrected result." }], 12);
+  expect(projection.at(12)[0]!.summary).toBe("Corrected result.");
+  expect(projection.at(3)[0]).toMatchObject({
+    text: "n1 result.",
+    summary: "Old gap.",
+  });
 });
 
 test.each(["source", "correctness", "reconstruction"] as const)(

@@ -174,12 +174,18 @@ function visibleSubmission(
     }
     if (verifier === undefined) return undefined;
     if (verifier === "reconstruction") {
-      return { verifier, ...reconstructionResult.parse(submission.input) };
+      return jsonSnapshot({
+        verifier,
+        ...reconstructionResult.parse(submission.input),
+      });
     }
     if (verifier === "correctness") {
-      return { verifier, ...correctnessVerdicts.parse(submission.input) };
+      return jsonSnapshot({
+        verifier,
+        ...correctnessVerdicts.parse(submission.input),
+      });
     }
-    return { verifier, ...verdicts.parse(submission.input) };
+    return jsonSnapshot({ verifier, ...verdicts.parse(submission.input) });
   } catch {
     return undefined;
   }

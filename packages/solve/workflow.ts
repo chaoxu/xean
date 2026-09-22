@@ -21,7 +21,6 @@ import {
   matchingCalls,
   RoleCallError,
   solveSettings,
-  verifierCall,
   type CallEntry,
   type RoleCall,
 } from "./pi-roles";
@@ -31,15 +30,14 @@ import {
   explorerInput,
   journalVerdicts,
   jsonSnapshot,
-  judgedBy,
   noteIdAfter,
   pick,
   succeededSubmission,
   savedExplorerSubmission,
   task,
   verificationComplete,
+  verificationLabel,
   verifierInput,
-  verifierLabels,
   roleLabels,
   literatureInput,
   workflowRecords,
@@ -55,7 +53,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 27;
+export const workflowSchemaVersion = 28;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -381,13 +379,12 @@ async function replayVerification(
         pick(filed, id),
       ),
     });
-    // Correctness opens every verification and freezes its complete proof input.
-    const judged = judgedBy(verifierRequest, [], "correctness");
+    // The local opening freezes the exact input even when earlier checks are reused.
     const first = firstCall(
       records,
       fold.cursor,
-      verifierLabels.correctness,
-      await verifierCall("correctness", verifierRequest, judged),
+      verificationLabel,
+      jsonSnapshot(verifierRequest),
     );
     if (first === undefined)
       return snapshot(
@@ -401,7 +398,11 @@ async function replayVerification(
     const recorded = fold.verdicts.filter(
       (entry) => entry.candidate === candidate,
     );
-    fold.cursor = Math.max(fold.cursor, ...recorded.map(({ seq }) => seq));
+    fold.cursor = Math.max(
+      fold.cursor,
+      first.seq,
+      ...recorded.map(({ seq }) => seq),
+    );
     const accepted = fold.projection.accepted(fold.cursor);
     const acceptedId = verify
       .map(({ note }) => note)
@@ -516,9 +517,8 @@ function settledLiteratureCall(
  * notes enter the ordinary note graph, never a verifier result. A turn is one
  * coordinator call and the role it dispatches, so the journaled allowance
  * bounds the whole loop and no role has a separate cap. A verifier dispatch
- * checks the whole list, and the verifier action stays unavailable until a
- * note has been added, so two verifications never run back to back over the
- * same notes.
+ * checks the whole list; later dispatches can check other ready notes or
+ * extend completed checks without requiring more exploration.
  */
 export async function deriveWorkflow(
   records: readonly Entry[],
@@ -527,9 +527,6 @@ export async function deriveWorkflow(
   const { base } = fold;
   const settings = base.config.settings;
   let emptySubmission = false;
-  // The note count when the last verification completed, derived like every
-  // other coordinator input from the records before the coordinator call.
-  let notesAtLastVerification: number | undefined;
   for (;;) {
     const included = includeSubmitted(fold, fold.cursor);
     if (fold.turns >= base.maxTurns) return turnLimit(fold);
@@ -542,9 +539,6 @@ export async function deriveWorkflow(
         literatureStatus: literatureSearchStatus(records, fold.cursor),
         coordinatorBehavior: settings.coordinatorBehavior,
         ...(emptySubmission ? { emptySubmission: true } : {}),
-        ...(notes.length === notesAtLastVerification
-          ? { afterVerification: true }
-          : {}),
       }),
       included,
     );
@@ -586,7 +580,6 @@ export async function deriveWorkflow(
     } else {
       const verification = await replayVerification(fold, coordinated.verify);
       if (verification !== undefined) return verification;
-      notesAtLastVerification = fold.projection.at(fold.cursor).length;
     }
   }
 }

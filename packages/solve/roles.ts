@@ -137,8 +137,29 @@ export const verdict = z.strictObject({
   note: noteId,
   verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
   report: nonblank,
+  correctedText: nonblank.optional(),
 });
 export type Verdict = z.output<typeof verdict>;
+
+/** A PASS may approve a complete replacement text under the local-correction policy. */
+function validCorrection(
+  value: Pick<Verdict, "verdict" | "correctedText">,
+): boolean {
+  return value.correctedText === undefined || value.verdict === "PASS";
+}
+
+/** Apply only explicit approved replacements; original submissions stay in the journal. */
+export function correctedText(
+  text: string,
+  verdicts: readonly Verdict[],
+): string {
+  for (const verdict of verdicts) {
+    if (!validCorrection(verdict))
+      throw new Error("only PASS may correct a note");
+    if (verdict.correctedText !== undefined) text = verdict.correctedText;
+  }
+  return text;
+}
 
 const distinctSupport = [
   (value: { readonly support: readonly (string | number)[] }) =>
@@ -152,8 +173,8 @@ const distinctSupport = [
 // and support edges. A note is verified after source and correctness pass or
 // external verification is supplied, over verified support, and is not dead.
 // It is dead when correctness, source, or reconstruction failed it or its support
-// is dead, so it can never be verified. A note is accepted when one
-// verification passed every verifier.
+// is dead, so it can never be verified. A note is accepted when every verifier
+// has passed; established checks may come from earlier dispatches.
 export const externalVerification = z.strictObject({
   source: nonblank,
   report: nonblank,
@@ -333,11 +354,6 @@ export const coordinatorInput = z.strictObject({
   literatureStatus: literatureStatus.default("not-started"),
   coordinatorBehavior: coordinatorBehavior.default(defaultCoordinatorBehavior),
   emptySubmission: z.literal(true).optional(),
-  /**
-   * No note has been added since the last completed verification, so the
-   * verifier action is unavailable.
-   */
-  afterVerification: z.literal(true).optional(),
 });
 export type CoordinatorInput = z.output<typeof coordinatorInput>;
 
@@ -356,6 +372,27 @@ const verification = z
     },
   );
 export type Verification = z.output<typeof verification>;
+
+/** Outstanding checks in a requested prefix; an inconclusive check may be retried. */
+export function pendingVerifiers(
+  note: Pick<Note, "dead" | "verdicts">,
+  requested: readonly VerifierName[],
+): VerifierName[] {
+  if (
+    note.dead ||
+    note.verdicts.some(
+      ({ verifier, verdict }) =>
+        verdict === "FAIL" && requested.includes(verifier),
+    )
+  )
+    return [];
+  return requested.filter(
+    (name) =>
+      !note.verdicts.some(
+        ({ verifier, verdict }) => verifier === name && verdict === "PASS",
+      ),
+  );
+}
 
 /** The coordinator's choice of the role that runs next. */
 export const coordinatorAction = z.discriminatedUnion("role", [
@@ -423,7 +460,7 @@ export type CoordinatorResult = z.output<typeof coordinatorResult>;
 export function coordinatorResultFor(
   notes: readonly Pick<
     Note,
-    "id" | "summary" | "support" | "verified" | "dead"
+    "id" | "summary" | "support" | "verified" | "dead" | "verdicts"
   >[],
   allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
   requiredVerification: readonly string[] = [],
@@ -504,6 +541,12 @@ export function coordinatorResultFor(
           code: "custom",
           message: "a dead note is not verified again",
           path: ["verify", index, "note"],
+        });
+      } else if (pendingVerifiers(target, entry.verifiers).length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a verification must request an outstanding reachable check",
+          path: ["verify", index, "verifiers"],
         });
       }
       if (
@@ -685,11 +728,49 @@ export function verificationComplete(
   input: Pick<VerifierInput, "verify" | "notes" | "support">,
   recorded: readonly Verdict[],
 ): boolean {
+  recorded = verificationVerdicts(input, recorded);
   return verifierNames.every(
     (name) =>
       missingVerdicts(recorded, name, judgedBy(input, recorded, name))
         .length === 0,
   );
+}
+
+/** Reuse established checks across dispatches; inconclusive checks can be requested again. */
+export function verificationVerdicts(
+  input: Pick<VerifierInput, "notes">,
+  recorded: readonly Verdict[],
+): Verdict[] {
+  return [
+    ...input.notes.flatMap(({ verdicts }) =>
+      verdicts.filter(({ verdict }) => verdict !== "INCONCLUSIVE"),
+    ),
+    ...recorded,
+  ];
+}
+
+/** Each later verifier reads the text approved by all preceding checks. */
+export function correctedVerifierInput(
+  input: VerifierInput,
+  recorded: readonly Verdict[],
+): VerifierInput {
+  const update = (note: Note): Note => {
+    const corrections = recorded.filter((value) => value.note === note.id);
+    const { summary, ...rest } = note;
+    return {
+      ...rest,
+      ...(summary === undefined ||
+      corrections.some((value) => value.correctedText !== undefined)
+        ? {}
+        : { summary }),
+      text: correctedText(note.text, corrections),
+    };
+  };
+  return {
+    ...input,
+    notes: input.notes.map(update),
+    support: input.support.map(update),
+  };
 }
 
 /** Checks without a verdict within one candidate. */
@@ -712,21 +793,28 @@ function verdictsOver<T extends z.ZodRawShape & { note: z.ZodString }>(
   const expected = [...judged].sort(byId).join(",");
   // Keep the provider schema stable across candidates. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
-  return z.strictObject({ verdicts: z.array(entry) }).refine(
-    (value) =>
-      (
-        value as unknown as {
-          readonly verdicts: readonly { readonly note: string }[];
-        }
-      ).verdicts
-        .map(({ note }) => note)
-        .sort(byId)
-        .join(",") === expected,
-    {
-      message: "one verdict per note under verification",
-      path: ["verdicts"],
-    },
-  );
+  return z
+    .strictObject({ verdicts: z.array(entry) })
+    .refine(
+      (value) =>
+        (
+          value as unknown as {
+            readonly verdicts: readonly { readonly note: string }[];
+          }
+        ).verdicts
+          .map(({ note }) => note)
+          .sort(byId)
+          .join(",") === expected,
+      {
+        message: "one verdict per note under verification",
+        path: ["verdicts"],
+      },
+    )
+    .refine(
+      (value) =>
+        (value.verdicts as unknown as Verdict[]).every(validCorrection),
+      "only PASS may correct a note",
+    );
 }
 
 /** The verdicts of one correctness or requirements call. */
@@ -763,6 +851,10 @@ export const reconstructionResult = z
   .refine(
     (value) => value.verdicts.length === (value.statement === null ? 1 : 0),
     "return either one verdict or a corrected statement",
+  )
+  .refine(
+    (value) => value.verdicts.every(validCorrection),
+    "only PASS may correct a note",
   );
 
 export function reconstructionResultFor(noteId: string) {
@@ -870,6 +962,9 @@ export function candidateMaterial(input: VerifierInput): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
+/** A local call freezes a verification before its first outstanding check. */
+export const verificationLabel = `${applicationId}/verification`;
+
 export interface JournalVerdict {
   readonly seq: EntryId;
   readonly candidate: EntryId;
@@ -911,6 +1006,7 @@ export function journalVerdicts(
     if (
       !parsed.success ||
       call.candidate === undefined ||
+      !parsed.data.verdicts.every(validCorrection) ||
       candidateVerdict(parsed.data.verdicts) !== entry.verdict
     ) {
       throw new Error(`malformed verdict ${entry.seq}`);

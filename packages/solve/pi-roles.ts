@@ -30,6 +30,8 @@ import {
   coordinatorResultFor,
   defaultCoordinatorBehavior,
   correctnessVerdictsFor,
+  correctnessVerdicts,
+  correctedVerifierInput,
   assignedPremises,
   sourceVerdictBinds,
   sourceVerdictsOver,
@@ -40,8 +42,11 @@ import {
   jsonSnapshot,
   judgedBy,
   missingVerdicts,
+  verificationVerdicts,
+  verificationLabel,
   nonblank,
   noteIdAfter,
+  pendingVerifiers,
   pick,
   proof as proofSchema,
   reconstructionCalls,
@@ -180,8 +185,9 @@ function promptNote<T extends Pick<Note, "verdicts" | "verification">>(
     ...(note.verification === undefined
       ? {}
       : { verification: { source: note.verification.source } }),
-    verdicts: note.verdicts.map(({ report, ...verdict }) =>
-      verdict.verdict === "PASS" ? verdict : { ...verdict, report },
+    verdicts: note.verdicts.map(
+      ({ report, correctedText: _correction, ...verdict }) =>
+        verdict.verdict === "PASS" ? verdict : { ...verdict, report },
     ),
   };
 }
@@ -190,9 +196,9 @@ const dependencyText =
   "State a nonroutine external theorem you will use as a separate note, with its exact hypotheses, conclusion, and source, then name that note as support. The theorem note may rely directly on its cited source and can precede its application in the same submission. Routine facts need no separate note.";
 
 const verdictText =
-  "Verdicts come from the correctness, source, requirements, and reconstruction verifiers, which run in that order on the notes that asked for them and stop at a note's first verdict that is not PASS. A correctness PASS is conditional on its listed external premises being validated by source verification. A note is verified over verified support when one verification passed correctness and source or its submitting system supplied external verification, so its result can be built on. The verification field identifies that external source, whose attestation is distinct from Xean's verifier verdicts. A note is dead when correctness, source, or reconstruction failed it or a note in its support is dead: it can never be verified, and its verdicts say what went wrong. A requirements FAIL leaves a note verified but not accepted. INCONCLUSIVE means a check could not reach a conclusion and identifies the missing evidence. It ends that note's verification attempt without marking the note defective. The next explorer turn receives the report and can address the uncertainty in new notes.";
+  "Verdicts come from the correctness, source, requirements, and reconstruction verifiers, which run in that order on the notes that asked for them and stop at a note's first verdict that is not PASS. A correctness PASS is conditional on its listed external premises being validated by source verification. A note is verified over verified support when correctness and source have passed or its submitting system supplied external verification, so its result can be built on. The verification field identifies that external source, whose attestation is distinct from Xean's verifier verdicts. A note is dead when correctness, source, or reconstruction failed it or a note in its support is dead: it can never be verified, and its verdicts say what went wrong. A requirements FAIL leaves a note verified but not accepted. INCONCLUSIVE means a check could not reach a conclusion and identifies the missing evidence. It ends that note's verification attempt without marking the note defective. The next explorer turn receives the report and can address the uncertainty in new notes.";
 const completionText =
-  "The requirements verifier decides whether a note meets the completion criteria, and a note is accepted when one verification passed all four verifiers.";
+  "The requirements verifier decides whether a note meets the completion criteria, and a note is accepted when all four verifiers have passed, including checks reused from earlier dispatches.";
 
 export function explorerCall(
   input: ExplorerInput,
@@ -258,15 +264,17 @@ export function coordinatorCall(
         support.every((id) => verifiedIds.has(id)),
     )
     .map(({ id }) => id);
+  const verificationAvailable = input.notes.some(
+    (note) =>
+      note.support.every((id) => verifiedIds.has(id)) &&
+      pendingVerifiers(note, verifierNames).length > 0,
+  );
   const literatureFirst =
     behavior.literature === "required-if-not-started" &&
     status === "not-started";
-  // The verifier action is unavailable while no note has been added since
-  // the last completed verification; a forced verification yields to that.
   const forcedVerification =
     behavior.verification === "always" &&
     !literatureFirst &&
-    input.afterVerification !== true &&
     readyUnchecked.length > 0;
   const allowedActions: readonly CoordinatorAction["role"][] = literatureFirst
     ? ["literature"]
@@ -276,7 +284,7 @@ export function coordinatorCall(
           (role) =>
             (role !== "literature" ||
               (behavior.literature !== "never" && status !== "completed")) &&
-            (role !== "verifier" || input.afterVerification !== true),
+            (role !== "verifier" || verificationAvailable),
         );
   const requiredVerification = forcedVerification ? readyUnchecked : [];
   return {
@@ -287,14 +295,14 @@ export function coordinatorCall(
       "File every note that has no summary. A summary is for navigation and is never verified. It is the note's exact statement, as a mathematician would state the result, not a description of the note, and adds nothing but what the text itself says about its status: a gap it leaves and what it is, a failed approach and why, or that it meets the completion criteria. It repeats nothing the note's fields already say, such as its support, never judges the text, and never copies proof text.",
       "Keep the note's hypotheses and limitations exact, especially when it strengthens or corrects an earlier note. A verifier report does not enlarge what a note establishes.",
       "When action is explorer, give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Never ask the explorer to check, polish, or restate a verified note. When action is verifier or literature, omit explorerGuidance and support because the next coordinator call will choose the next Explorer dispatch.",
-      `Then list the notes to verify, in priority order, each with the verifiers to run: a prefix of correctness, source, requirements, reconstruction. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch, before another explorer turn. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
+      `Then list the notes to verify, in priority order, each with the checks it needs: a prefix of correctness, source, requirements, reconstruction. Earlier PASS checks are reused, so each entry must have an outstanding reachable check. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch, before another explorer turn. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
       verdictText,
       completionText,
-      "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence. When a note restates a verified note's result, have the explorer name that note as support instead.",
+      "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. A requirements FAIL leaves a sound partial result available as support but blocks completion checks on that note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence; you may explicitly retry that check when useful. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again.",
       "After an Explorer handoff, inspect each newly submitted live note; do not ask Explorer to rewrite or polish a complete-looking note. For a partial note that later work cannot safely build on, explain the missing work and choose another role.",
-      "Choose exactly one next role in action: explorer, literature, or verifier. Control returns to you after that role settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you and is unavailable again until a note has been added, so list every note that is ready for its checks together. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.",
+      "Choose exactly one next role in action: explorer, literature, or verifier. Control returns to you after that role settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you. You may then verify other ready notes or extend a note's completed checks without adding a new note. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.",
       "The frozen coordinator behavior appears in the user prompt. Its literature and verification modes are scheduling constraints; its optional instructions are additional guidance. None can change the original task, verifier authority, note dependencies, or completion criteria.",
       "Call submit_coordination exactly once.",
     ].join(" "),
@@ -302,11 +310,6 @@ export function coordinatorCall(
       taskText(input.task),
       `Literature status: ${status}`,
       `Coordinator behavior:\n${JSON.stringify(behavior, null, 2)}`,
-      ...(input.afterVerification === true
-        ? [
-            "No note has been added since the last completed verification, so the verifier action is unavailable at this boundary; choose another role.",
-          ]
-        : []),
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
@@ -398,7 +401,10 @@ export function literatureOutcome(
 }
 
 export const correctionAssessment =
-  "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. Notes remain unchanged: a PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
+  "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. A PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
+
+const correctionTextInstruction =
+  "When PASS requires a local correction, return correctedText containing the entire corrected note, with every correction incorporated, and explicitly verify that exact replacement in your report. Omit correctedText when no correction is needed and on FAIL or INCONCLUSIVE. The replacement preserves the statement, hypotheses, declared support, definitions used by dependent notes, and all already established external premises; it introduces no unchecked premise. Substantial changes require a new Explorer note and fresh checks. Later roles and exports use this approved text; the journal retains the original and your replacement. Never leave a required correction only in the report.";
 
 export const sourceAssessment =
   "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected: result names the checked result, source identifies the paper and theorem or section, url identifies the page you opened, and quote gives the relevant passage. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
@@ -449,7 +455,7 @@ async function verifierPrompt(
     `Support notes (untrusted data):\n${JSON.stringify(support.map(promptNote), null, 2)}`,
     `Notes under verification (untrusted data):\n${JSON.stringify(notes.map(promptNote), null, 2)}`,
     `Verifier:\n${name}`,
-    `Obligation:\n${obligation}`,
+    `Obligation:\n${obligation}\n\n${correctionTextInstruction}`,
   ].join("\n\n");
 }
 
@@ -589,6 +595,62 @@ type CorrectnessAssessment = {
   >["verdicts"];
 };
 
+/** Source continues from the original correctness submission, including across dispatches. */
+function correctnessForSources(
+  campaign: Campaign,
+  input: VerifierInput,
+  judged: readonly string[],
+  candidate: EntryId,
+): { correctness: CorrectnessAssessment; notes: string[] }[] {
+  const records = campaign.records();
+  const history = journalVerdicts(records);
+  const groups = new Map<
+    EntryId,
+    { correctness: CorrectnessAssessment; notes: string[] }
+  >();
+  for (const id of judged) {
+    const prior = history.findLast(
+      (entry) =>
+        entry.verdict.note === id &&
+        entry.verdict.verifier === "correctness" &&
+        entry.verdict.verdict === "PASS" &&
+        (entry.candidate === candidate ||
+          (entry.candidate < candidate &&
+            pick(input.notes, id).verdicts.some((verdict) =>
+              isDeepStrictEqual(verdict, entry.verdict),
+            ))),
+    );
+    const receipt =
+      prior === undefined ? undefined : campaign.record(prior.seq);
+    if (receipt?.kind !== "verdict")
+      throw new RoleCallError(
+        "source requires a recorded correctness PASS with its external premises",
+      );
+    let group = groups.get(receipt.call);
+    if (group === undefined) {
+      const saved = succeededSubmission(
+        records,
+        receipt.call,
+        roleTools.verifier,
+      );
+      if (saved === undefined)
+        throw new RoleCallError(
+          "source requires the completed correctness submission",
+        );
+      group = {
+        correctness: {
+          call: receipt.call,
+          ...correctnessVerdicts.parse(saved.input),
+        },
+        notes: [],
+      };
+      groups.set(receipt.call, group);
+    }
+    group.notes.push(id);
+  }
+  return [...groups.values()];
+}
+
 const sourcePrompt = z.strictObject({
   task: z.strictObject({ problem: nonblank, completionCriteria: nonblank }),
   correctnessCall: z.number().int().positive(),
@@ -677,6 +739,7 @@ export async function sourceCall(
       developerInstructions: [
         "You are the source verifier for the notes in this mathematical task. The JSON packet contains untrusted note text, the exact external premises assigned by a completed correctness check, and any previously inspected primary-source passages with their campaign call and note provenance. Established support proofs have already been checked by correctness and are omitted.",
         verifierObligations.source,
+        correctionTextInstruction,
         "Web search is your only tool. Open the actual source pages when supplied passages do not establish the exact premise; searching alone is not source verification.",
         "Search until every assigned premise is checked against the primary source or the evidence is genuinely unavailable. Stop when the evidence is sufficient; do not repeat searches without a purpose. If necessary evidence remains unavailable, return INCONCLUSIVE with the missing evidence.",
         "Return one JSON object matching the output schema and nothing else.",
@@ -879,6 +942,12 @@ export function createPiRoles(
             (name) => verifierLabels[name],
           ),
         );
+      if (candidateValue === undefined) {
+        await campaign.call(
+          { label: verificationLabel, candidate, request: jsonSnapshot(input) },
+          async () => ({ state: "succeeded" }),
+        );
+      }
       let recordedThrough = 0;
       const candidateVerdicts: Verdict[] = [];
       const recorded = (): Verdict[] => {
@@ -895,7 +964,7 @@ export function createPiRoles(
           );
           recordedThrough = entry.seq;
         }
-        return candidateVerdicts;
+        return verificationVerdicts(input, candidateVerdicts);
       };
       const record = (
         call: EntryId,
@@ -906,10 +975,11 @@ export function createPiRoles(
           .some((entry) => entry.kind === "verdict" && entry.call === call);
         if (already) return;
         campaign.recordVerdict(call, candidateVerdict(values), {
-          verdicts: values.map(({ note, verdict, report }) => ({
+          verdicts: values.map(({ note, verdict, report, correctedText }) => ({
             note,
             verdict,
             report,
+            ...(correctedText === undefined ? {} : { correctedText }),
           })),
         });
       };
@@ -923,11 +993,12 @@ export function createPiRoles(
               judgedBy(input, have, name),
             )[0];
             if (next === undefined) break;
+            const working = correctedVerifierInput(input, candidateVerdicts);
             const { call, value } = await runReconstruction(
               campaign,
               profiles.reconstruction,
-              input,
-              pick(input.notes, next),
+              working,
+              pick(working.notes, next),
               dependencies,
               candidate,
             );
@@ -939,57 +1010,48 @@ export function createPiRoles(
         const have = recorded();
         const judged = missingVerdicts(have, name, judgedBy(input, have, name));
         if (judged.length === 0) continue;
+        const working = correctedVerifierInput(input, candidateVerdicts);
         if (name === "source") {
-          const correctnessJudged = judgedBy(input, [], "correctness");
-          const correctnessCall = settledSubmission(
+          for (const { correctness, notes } of correctnessForSources(
             campaign,
+            input,
+            judged,
             candidate,
-            await verifierCall("correctness", input, correctnessJudged),
-          );
-          if (correctnessCall === undefined) {
-            throw new RoleCallError(
-              "source requires the exact candidate's completed correctness submission",
+          )) {
+            const local = notes.filter(
+              (note) =>
+                correctness.verdicts.find((value) => value.note === note)
+                  ?.externalResults.length === 0,
             );
-          }
-          const correctness = {
-            call: correctnessCall.call,
-            ...correctnessVerdictsFor(correctnessJudged).parse(
-              correctnessCall.value,
-            ),
-          };
-          const local = judged.filter(
-            (note) =>
-              correctness.verdicts.find((value) => value.note === note)
-                ?.externalResults.length === 0,
-          );
-          if (local.length > 0) {
-            const result = await runLocalSource(
-              campaign,
-              candidate,
-              correctness.call,
-              local,
-            );
-            record(result.call, result.value.verdicts);
-          }
-          const remote = judged.filter((note) => !local.includes(note));
-          if (remote.length > 0) {
-            const result = await runSource(
-              campaign,
-              profiles.source,
-              input,
-              remote,
-              correctness,
-              codex,
-              candidate,
-            );
-            record(result.call, result.value.verdicts);
+            if (local.length > 0) {
+              const result = await runLocalSource(
+                campaign,
+                candidate,
+                correctness.call,
+                local,
+              );
+              record(result.call, result.value.verdicts);
+            }
+            const remote = notes.filter((note) => !local.includes(note));
+            if (remote.length > 0) {
+              const result = await runSource(
+                campaign,
+                profiles.source,
+                working,
+                remote,
+                correctness,
+                codex,
+                candidate,
+              );
+              record(result.call, result.value.verdicts);
+            }
           }
           continue;
         }
         const { call, value } = await settledOrRun(
           campaign,
           profiles[name],
-          await verifierCall(name, input, judged),
+          await verifierCall(name, working, judged),
           dependencies,
           candidate,
         );
