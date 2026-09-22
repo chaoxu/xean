@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { openReader } from "xean";
+import { openCampaign, openReader } from "xean";
 
 import { review, reviewVerdict } from "../review";
 import { sourceVerdictsFor } from "../roles";
@@ -57,6 +57,7 @@ test("the source gate rejects an unsupported PASS and retains explicit uncertain
     note: "n24",
     verdict: "PASS",
     report: "From my knowledge of the cited result.",
+    correctedText: null,
     sources: [],
   };
   expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
@@ -97,6 +98,7 @@ test.each(["PASS", "FAIL", "INCONCLUSIVE"])(
       note: "n24",
       verdict,
       report: "Source assessment.",
+      correctedText: null,
       sources: [{ ...evidence, resultId: "n24#2" }],
     };
     expect(schema.safeParse({ verdicts: [value] }).success).toBe(false);
@@ -196,6 +198,68 @@ test("a full audit receives the entire argument and reuses only the exact comple
     reader.close();
   }
 });
+
+test.each(["request", "role"])(
+  "review rejects a completed call with a different %s before reusing its verdict",
+  async (mismatch) => {
+    const request = input();
+    let frozen: CodexRequest | undefined;
+    let calls = 0;
+    await expect(
+      review(request, {
+        codex: async (value) => {
+          calls++;
+          frozen = value;
+          return {
+            state: "succeeded",
+            codexVersion: "fixture",
+            stdout: "invalid JSON",
+            stderr: "",
+          };
+        },
+      }),
+    ).rejects.toThrow();
+    if (frozen === undefined)
+      throw new Error("review request was not recorded");
+    const campaign = openCampaign(request.campaignPath);
+    try {
+      await campaign.call(
+        {
+          label: "xean-solve/review",
+          role: mismatch === "role" ? "explorer" : "verifier",
+          request:
+            mismatch === "request"
+              ? { ...frozen, prompt: "A different task and argument." }
+              : frozen,
+        },
+        async () => ({
+          state: "succeeded",
+          codexVersion: "fixture",
+          stdout: codexStdout(
+            {
+              verdict: "PASS",
+              report: "A different audit.",
+              externalResults: [],
+            },
+            false,
+          ),
+          stderr: "",
+        }),
+      );
+    } finally {
+      campaign.close();
+    }
+    await expect(
+      review(request, {
+        codex: async () => {
+          calls++;
+          throw new Error("must reject without another model call");
+        },
+      }),
+    ).rejects.toThrow("does not match the declared review request and role");
+    expect(calls).toBe(1);
+  },
+);
 
 test("a full audit cannot claim source inspection without a web call", async () => {
   await expect(

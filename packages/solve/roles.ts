@@ -811,10 +811,9 @@ export function missingVerdicts(
 }
 
 /** Binds a verdict list to the notes one call judges: one verdict per note under verification. */
-function verdictsOver<T extends z.ZodRawShape & { note: z.ZodString }>(
-  entry: z.ZodObject<T>,
-  judged: readonly string[],
-) {
+function verdictsOver<
+  T extends z.ZodType<Pick<Verdict, "note" | "verdict" | "correctedText">>,
+>(entry: T, judged: readonly string[]) {
   const expected = [...judged].sort(byId).join(",");
   // Keep the provider schema stable across candidates. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
@@ -822,11 +821,7 @@ function verdictsOver<T extends z.ZodRawShape & { note: z.ZodString }>(
     .strictObject({ verdicts: z.array(entry) })
     .refine(
       (value) =>
-        (
-          value as unknown as {
-            readonly verdicts: readonly { readonly note: string }[];
-          }
-        ).verdicts
+        value.verdicts
           .map(({ note }) => note)
           .sort(byId)
           .join(",") === expected,
@@ -836,8 +831,7 @@ function verdictsOver<T extends z.ZodRawShape & { note: z.ZodString }>(
       },
     )
     .refine(
-      (value) =>
-        (value.verdicts as unknown as Verdict[]).every(validCorrection),
+      (value) => value.verdicts.every(validCorrection),
       "only PASS may correct a note",
     );
 }
@@ -909,9 +903,27 @@ const passage = (resultId: z.ZodType<string>) =>
   z.strictObject({ resultId, result: nonblank, ...sourceLocation });
 /** Passages inspected by the source verifier, each bound to an assigned external result. */
 export const sources = z.array(passage(nonblank));
-/** The journaled shape of one source submission, before its evidence is judged against the assigned premises. */
+/** A normalized source verdict, also used by the local source check. */
+export const sourceVerdict = verdict
+  .omit({ verifier: true })
+  .extend({ sources });
+
+// Structured output requires every field. Normalize its explicit null at the
+// provider boundary so local conclusions and journal verdicts stay canonical.
+function sourceWireVerdict(resultId: z.ZodType<string>) {
+  return sourceVerdict
+    .extend({
+      correctedText: nonblank.nullable(),
+      sources: z.array(passage(resultId)),
+    })
+    .transform(({ correctedText, ...value }): z.output<typeof sourceVerdict> =>
+      correctedText === null ? value : { ...value, correctedText },
+    );
+}
+
+/** Decode a remote source submission before judging its evidence. */
 export const sourceSubmission = z.strictObject({
-  verdicts: z.array(verdict.omit({ verifier: true }).extend({ sources })),
+  verdicts: z.array(sourceWireVerdict(nonblank)),
 });
 
 /** The external premises a completed correctness check assigned to each judged note. */
@@ -966,12 +978,7 @@ export function sourceVerdictsFor(
   assigned: AssignedExternalResults,
 ) {
   const ids = assignedPremises(assigned).map(({ resultId }) => resultId);
-  return verdictsOver(
-    verdict
-      .omit({ verifier: true })
-      .extend({ sources: z.array(passage(z.enum(ids))) }),
-    judged,
-  ).refine(
+  return verdictsOver(sourceWireVerdict(z.enum(ids)), judged).refine(
     (value) =>
       value.verdicts.every((verdict) => sourceVerdictBinds(verdict, assigned)),
     "source evidence must reference the assigned external premise IDs",

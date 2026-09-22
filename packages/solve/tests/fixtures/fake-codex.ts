@@ -64,6 +64,7 @@ if (args[0] === "--version") {
           note,
           verdict: "PASS",
           report: "The primary source establishes each assigned result.",
+          correctedText: null,
           sources: externalResults.map(({ id, text }) => ({
             resultId: id,
             result: text,

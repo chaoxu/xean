@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   createPiRoles,
   localSourceRequest,
+  sourceCall,
   sourceVerdictsOf,
   verifierCall,
 } from "../pi-roles";
@@ -77,6 +78,7 @@ const checked = (note: string, searched = true, sources = [source]): Reply => ({
         verdict: "PASS",
         report:
           "The exact source establishes the stated premise and applicability.",
+        correctedText: null,
         sources: sources.map((value) => ({ ...value, resultId: `${note}#1` })),
       },
     ],
@@ -175,6 +177,7 @@ test("unusable source evidence is inconclusive for that note alone", () => {
     note,
     verdict: "PASS",
     report: "Checked.",
+    correctedText: null,
     sources,
   });
   const outcome = (
@@ -243,9 +246,10 @@ test("the source output schema admits only this call's premise IDs and requires 
     note: "n1",
     verdict: "PASS",
     report: "Checked.",
+    correctedText: null,
     sources: [{ ...source, resultId: "n1#1" }],
   };
-  expect(z.toJSONSchema(schema)).toMatchObject({
+  expect(z.toJSONSchema(schema, { io: "input" })).toMatchObject({
     properties: {
       verdicts: {
         items: {
@@ -269,6 +273,60 @@ test("the source output schema admits only this call's premise IDs and requires 
       verdicts: [{ ...value, verdict: "INCONCLUSIVE", sources: [] }],
     }).success,
   ).toBe(true);
+});
+
+test("the source request uses strict structured output with explicit nullable corrections", async () => {
+  const assigned = [{ note: "n1", externalResults: [result] }];
+  const call = await sourceCall(
+    roleSettings().source,
+    input([makeNote("n1")]),
+    ["n1"],
+    {
+      call: 1,
+      verdicts: [{ ...assigned[0]!, verdict: "PASS", report: "Correct." }],
+    },
+  );
+  const strictObjects = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    const schema = value as Record<string, unknown>;
+    if (schema.properties !== undefined) {
+      expect(schema.additionalProperties).toBe(false);
+      expect([...(schema.required as string[])].sort()).toEqual(
+        Object.keys(schema.properties as object).sort(),
+      );
+    }
+    for (const child of Object.values(value)) strictObjects(child);
+  };
+  strictObjects(call.request.outputSchema);
+  const wire = z.fromJSONSchema(
+    call.request.outputSchema as Parameters<typeof z.fromJSONSchema>[0],
+  );
+  const assess = (value: Json) =>
+    sourceVerdictsOf(
+      { settled: 1, input: { verdicts: [value] }, searches: 1, usage },
+      [],
+      assigned,
+    )?.verdicts[0];
+  const base = {
+    note: "n1",
+    verdict: "PASS",
+    report: "Checked.",
+    sources: [{ ...source, resultId: "n1#1" }],
+  };
+  expect(wire.safeParse({ verdicts: [base] }).success).toBe(false);
+  const correctedText =
+    "Theorem T(x) for x > 0, by the primary paper's Theorem 2.";
+  const corrected = { ...base, correctedText };
+  expect(wire.safeParse({ verdicts: [corrected] }).success).toBe(true);
+  expect(assess(corrected)?.correctedText).toBe(correctedText);
+  for (const verdict of ["PASS", "FAIL", "INCONCLUSIVE"]) {
+    const value = { ...base, verdict, correctedText: null };
+    expect(wire.safeParse({ verdicts: [value] }).success).toBe(true);
+    expect(assess(value)).toMatchObject({ note: "n1", verdict });
+    expect(assess(value)).not.toHaveProperty("correctedText");
+    if (verdict !== "PASS")
+      expect(assess({ ...value, correctedText })).toBeUndefined();
+  }
 });
 
 test("an earlier PASS passage is supplied under the new call's premise ID and reused without a search", async () => {
@@ -415,6 +473,7 @@ test("a failed source assessment never supplies reusable evidence", async () => 
             note: "n1",
             verdict: "FAIL",
             report: "The theorem's hypotheses do not match.",
+            correctedText: null,
             sources: [{ ...source, resultId: "n1#1" }],
           },
         ],

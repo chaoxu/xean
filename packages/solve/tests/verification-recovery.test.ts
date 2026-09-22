@@ -51,6 +51,7 @@ const correctness = (value = "PASS", note = "n1"): Reply => ({
 });
 const sourceVerdict = (note = "n1", value = "PASS") => ({
   ...verdict(note, value),
+  correctedText: null,
   sources:
     value === "PASS"
       ? [

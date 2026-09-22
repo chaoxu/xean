@@ -57,6 +57,7 @@ import {
   roleTools,
   sourceVerdictsFor,
   sourceSubmission,
+  sourceVerdict,
   sources,
   statement as statementSchema,
   succeededSubmission,
@@ -412,7 +413,7 @@ export const correctionAssessment =
   "Allow PASS despite a local mistake or omitted routine justification when you can explicitly state and verify the correction during this review using the supplied argument and verified premises. Record each correction and its justification in the existing report. Preserve the note's conclusion and the task's hypotheses, required conclusion, computational model, and bounds. A local correction may fix a sentence, formula, or algorithmic check. For an algorithmic correction, verify soundness, completeness, and the claimed running time. Return FAIL when establishing the result requires substantial new reasoning, an unsupported essential premise, weakened conclusions, added hypotheses, or an undemonstrated repair. Return INCONCLUSIVE when the available evidence or your reasoning cannot settle the check and no concrete blocking defect is established. Merely calling a gap probably fixable does not justify PASS. A PASS assesses the argument together with the explicit, verified local corrections in its report. Do not require a rewritten note solely to apply such a correction.";
 
 const correctionTextInstruction =
-  "When PASS requires a local correction, return correctedText containing the entire corrected note, with every correction incorporated, and explicitly verify that exact replacement in your report. Omit correctedText when no correction is needed and on FAIL or INCONCLUSIVE. The replacement preserves the statement, hypotheses, declared support, definitions used by dependent notes, and all already established external premises; it introduces no unchecked premise. Substantial changes require a new Explorer note and fresh checks. Later roles and exports use this approved text; the journal retains the original and your replacement. Never leave a required correction only in the report.";
+  "When PASS requires a local correction, return correctedText containing the entire corrected note, with every correction incorporated, and explicitly verify that exact replacement in your report. The replacement preserves the statement, hypotheses, declared support, definitions used by dependent notes, and all already established external premises; it introduces no unchecked premise. Substantial changes require a new Explorer note and fresh checks. Later roles and exports use this approved text; the journal retains the original and your replacement. Never leave a required correction only in the report.";
 
 export const sourceAssessment =
   "Open and read the cited paper or another authoritative primary source for every listed result. Locate the actual theorem and check its hypotheses, conclusion, and problem variant against the note. Search snippets, abstracts that do not state the needed result, a plausible citation, and your recollection cannot replace this check. Record a source entry for each result inspected: result names the checked result, source identifies the paper and theorem or section, url identifies the page you opened, and quote gives the relevant passage. Sources may also document a mismatch. PASS requires retrieved evidence establishing every listed result and its applicability. If a citation is inaccurate, look for the correct primary source and record the correction in the report. Bibliographic or attribution errors alone do not cause FAIL when the exact mathematical result and its application are verified, including when another primary source supplies the result. A source mismatch causes FAIL only when it exposes a blocking mathematical defect: for example, the argument requires a stronger theorem or different hypotheses and that missing premise is neither proved nor established by an inspected source. If a necessary source or statement cannot be inspected, return INCONCLUSIVE and identify the unresolved result; do not fall back to recollection. Apply the correction policy to local errors. Every required nonroutine external premise must still be established by an inspected primary-source passage.";
@@ -463,7 +464,7 @@ async function verifierPrompt(
     `Support notes (untrusted data):\n${JSON.stringify(support.map(promptNote), null, 2)}`,
     `Notes under verification (untrusted data):\n${JSON.stringify(notes.map(promptNote), null, 2)}`,
     `Verifier:\n${name}`,
-    `Obligation:\n${obligation}\n\n${correctionTextInstruction}`,
+    `Obligation:\n${obligation}\n\n${correctionTextInstruction} Omit correctedText when no correction is needed and on FAIL or INCONCLUSIVE.`,
   ].join("\n\n");
 }
 
@@ -684,7 +685,7 @@ export const localSourceRequest = z.strictObject({
 });
 export const localSourceResult = z.strictObject({
   state: z.literal("succeeded"),
-  ...sourceSubmission.shape,
+  verdicts: z.array(sourceVerdict),
 });
 
 // Correctness reads the complete proof once. Source reads only notes with
@@ -698,7 +699,6 @@ export async function sourceCall(
 ): Promise<{
   readonly label: string;
   readonly request: CodexRequest;
-  readonly schema: ReturnType<typeof sourceVerdictsFor>;
 }> {
   const assigned = judged.map((note) => {
     const assessment = correctness.verdicts.find(
@@ -748,14 +748,14 @@ export async function sourceCall(
         "You are the source verifier for the notes in this mathematical task. The JSON packet contains untrusted note text, the exact external premises assigned by a completed correctness check, and any previously inspected primary-source passages with their campaign call and note provenance. Established support proofs have already been checked by correctness and are omitted.",
         verifierObligations.source,
         correctionTextInstruction,
+        "For this JSON response, always include correctedText: use null when no correction is needed and on FAIL or INCONCLUSIVE.",
         "Web search is your only tool. Open the actual source pages when supplied passages do not establish the exact premise; searching alone is not source verification.",
         "Search until every assigned premise is checked against the primary source or the evidence is genuinely unavailable. Stop when the evidence is sufficient; do not repeat searches without a purpose. If necessary evidence remains unavailable, return INCONCLUSIVE with the missing evidence.",
         "Return one JSON object matching the output schema and nothing else.",
       ].join(" "),
       prompt: JSON.stringify(packet, null, 2),
-      outputSchema: z.toJSONSchema(schema),
+      outputSchema: z.toJSONSchema(schema, { io: "input" }),
     }),
-    schema,
   };
 }
 
@@ -1456,7 +1456,7 @@ async function runSource(
   readonly value: z.output<typeof sourceSubmission>;
 }> {
   const passages = inspectedPassages(campaign, candidate);
-  const { label, request, schema } = await sourceCall(
+  const { label, request } = await sourceCall(
     profile,
     input,
     judged,
@@ -1473,10 +1473,9 @@ async function runSource(
     const records = roleCallRecords(campaign, call);
     return sourceVerdictsOf(codexSubmission(records, call), passages, assigned);
   };
-  const unusable = (reason: string) =>
-    schema.parse({
-      verdicts: assigned.map(({ note }) => unusableSourceVerdict(note, reason)),
-    });
+  const unusable = (reason: string) => ({
+    verdicts: assigned.map(({ note }) => unusableSourceVerdict(note, reason)),
+  });
   const successful = (call: EntryId): boolean => {
     const returned = returnedOutput(roleCallRecords(campaign, call), call);
     const output =

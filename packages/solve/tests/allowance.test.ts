@@ -90,6 +90,7 @@ test("additional allowances preserve source evidence, failures, support, guidanc
             note: "n1",
             verdict: "PASS",
             report: "Primary source checked.",
+            correctedText: null,
             sources: [
               {
                 resultId: "n1#1",

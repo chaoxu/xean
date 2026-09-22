@@ -75,6 +75,7 @@ function sourceOf(notes: readonly string[], verdict = "PASS"): Reply {
         note,
         verdict,
         report: `source ${verdict.toLowerCase()}.`,
+        correctedText: null,
         sources:
           verdict === "PASS"
             ? [
@@ -710,6 +711,7 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
             note: "n1",
             verdict: "FAIL",
             report: "Smith 2020 states the bound for n > 2 only.",
+            correctedText: null,
             sources: [],
           },
         ],
@@ -766,6 +768,7 @@ test("a source PASS that confirms sources without searching is inconclusive", as
             note: "n1",
             verdict: "PASS",
             report: "confirmed",
+            correctedText: null,
             sources: [
               {
                 resultId: "n1#1",
