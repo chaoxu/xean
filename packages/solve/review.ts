@@ -1,7 +1,3 @@
-import { existsSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
-
-import { createCampaign, openCampaign } from "xean";
 import { z } from "zod";
 
 import {
@@ -17,7 +13,11 @@ import {
   sourceLocation,
   task,
 } from "./roles";
-import { codexCommand, withCampaignLock } from "./runtime";
+import {
+  codexCommand,
+  openConfiguredCampaign,
+  withCampaignLock,
+} from "./runtime";
 import {
   codexExec,
   codexRequest,
@@ -87,20 +87,12 @@ export async function review(
   });
   const config = { schemaVersion: 2, request: jsonSnapshot(request) };
   return withCampaignLock(value.campaignPath, async () => {
-    const campaign = existsSync(value.campaignPath)
-      ? openCampaign(value.campaignPath)
-      : createCampaign(value.campaignPath, "xean-review", config);
+    const campaign = openConfiguredCampaign(
+      value.campaignPath,
+      "xean-review",
+      config,
+    );
     try {
-      const declaration = campaign.record(1);
-      if (
-        declaration?.kind !== "campaign" ||
-        declaration.application !== "xean-review" ||
-        !isDeepStrictEqual(declaration.config, config)
-      ) {
-        throw new Error(
-          "review task, argument, profile, or verifier instructions disagree with the journal",
-        );
-      }
       const label = "xean-solve/review";
       let submission: ReturnType<typeof codexSubmission>;
       for (const call of matchingCalls(

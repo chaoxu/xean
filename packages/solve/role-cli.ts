@@ -1,14 +1,6 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
-import {
-  createCampaign,
-  openCampaign,
-  openReader,
-  type Campaign,
-  type Entry,
-  type Json,
-} from "xean";
+import { openCampaign, openReader, type Entry, type Json } from "xean";
 import { builtinPi, derivePiSpend } from "xean/pi";
 import { z } from "zod";
 import { inspectCoreCallSummaries } from "xean/observe";
@@ -44,6 +36,7 @@ import {
   createModelRuntime,
   codexCommand,
   modelRegistryPath,
+  openConfiguredCampaign,
   requireCredentials,
   withCampaignLock,
   withSignals,
@@ -76,24 +69,6 @@ export async function readSettings(path: string): Promise<SolveSettings> {
   return solveSettings.parse(await readJson(path));
 }
 
-function openCalls(path: string): Campaign {
-  if (!existsSync(path)) {
-    return createCampaign(path, applicationId, { kind: "calls" });
-  }
-  const campaign = openCampaign(path);
-  try {
-    const declaration = campaign.record(1);
-    assertApplication(declaration);
-    callsConfig.parse(
-      declaration?.kind === "campaign" ? declaration.config : undefined,
-    );
-    return campaign;
-  } catch (error) {
-    campaign.close();
-    throw error;
-  }
-}
-
 export interface InspectionOptions {
   readonly includeRequests?: boolean;
   readonly includeGuidance?: boolean;
@@ -113,26 +88,26 @@ export async function inspectCampaign(
 }
 
 /** Inspect one captured journal boundary, without reopening its database. */
-export async function inspectCampaignRecords(
+export function inspectCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions = {},
-): Promise<Json> {
-  return (await projectCampaignRecords(records, options, false)).inspection;
+): Json {
+  return projectCampaignRecords(records, options, false).inspection;
 }
 
 /** Share one workflow derivation between inspection and accepted-proof export. */
-export async function inspectAndExportCampaignRecords(
+export function inspectAndExportCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions = {},
-): Promise<{ inspection: Json; solution?: Uint8Array }> {
+): { inspection: Json; solution?: Uint8Array } {
   return projectCampaignRecords(records, options, true);
 }
 
-async function projectCampaignRecords(
+function projectCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions,
   includeSolution: boolean,
-): Promise<{ inspection: Json; solution?: Uint8Array }> {
+): { inspection: Json; solution?: Uint8Array } {
   assertApplication(records[0]);
   const declaration = records[0];
   const config = inspectionConfig.parse(
@@ -170,72 +145,59 @@ async function projectCampaignRecords(
           : undefined);
       return {
         ...facts,
-        ...(facts.settledAtMs === undefined
-          ? {}
-          : { elapsedMs: facts.settledAtMs - facts.startedAtMs }),
-        ...(verifier === undefined ? {} : { verifier }),
-        ...(outcome === undefined ? {} : { outcome }),
-        ...(pi?.error === undefined ? {} : { error: pi.error }),
-        ...(provider === undefined || provider.state === "succeeded"
-          ? {}
-          : { error: provider.error }),
-        ...(submission === undefined ? {} : { submission }),
-        ...(submissionError === undefined ? {} : { submissionError }),
-        ...(evidence.has(facts.call)
-          ? { evidence: evidence.get(facts.call) }
-          : {}),
-        ...(options.includeRequests === true ? { request: entry.request } : {}),
+        elapsedMs:
+          facts.settledAtMs === undefined
+            ? undefined
+            : facts.settledAtMs - facts.startedAtMs,
+        verifier,
+        outcome,
+        error:
+          provider && provider.state !== "succeeded"
+            ? provider.error
+            : (pi?.error ?? facts.error),
+        submission,
+        submissionError,
+        evidence: evidence.get(facts.call),
+        request: options.includeRequests ? entry.request : undefined,
       };
     });
   const snapshot =
-    config.kind === "workflow" ? await deriveWorkflow(records) : undefined;
+    config.kind === "workflow" ? deriveWorkflow(records) : undefined;
   const phase = snapshot?.phase;
   const report =
     phase?.kind === "accepted" || phase?.kind === "turn-limit"
       ? workflowResult(phase)
       : undefined;
   const spend = derivePiSpend(records);
-  const inspection = JSON.parse(
-    JSON.stringify({
-      ...(snapshot === undefined
-        ? {}
-        : {
-            task: snapshot.config.task,
-            maxTurns: snapshot.maxTurns,
-            allowances: snapshot.allowances,
-            phase: phase?.kind,
-            ...(phase?.kind === "overlap"
+  const inspection = jsonSnapshot({
+    ...(snapshot === undefined
+      ? {}
+      : {
+          task: snapshot.config.task,
+          maxTurns: snapshot.maxTurns,
+          allowances: snapshot.allowances,
+          phase: phase?.kind,
+          overlap:
+            phase?.kind === "overlap"
               ? {
-                  overlap: {
-                    after: phase.after,
-                    opened: phase.opened,
-                    explorerPending: phase.explorer !== undefined,
-                    verifierPending: phase.verifier !== undefined,
-                    acceptedNote: phase.accepted?.note.id,
-                  },
+                  after: phase.after,
+                  opened: phase.opened,
+                  explorerPending: phase.explorer !== undefined,
+                  verifierPending: phase.verifier !== undefined,
+                  acceptedNote: phase.accepted?.note.id,
                 }
-              : {}),
-            notes: snapshot.notes,
-            ...(report === undefined
-              ? {}
-              : { result: executionReport(report) }),
-          }),
-      calls,
-      spend: spend.summary,
-      accounting: campaignAccounting(records, spend),
-      ...(options.includeGuidance === true
-        ? { guidance: inspectGuidance(records) }
-        : {}),
-      ...(options.includeSubmissions === true
-        ? {
-            submissions: inspectSubmittedNotes(
-              records,
-              snapshot?.noteSubmissions,
-            ),
-          }
-        : {}),
-    }),
-  ) as Json;
+              : undefined,
+          notes: snapshot.notes,
+          result: report === undefined ? undefined : executionReport(report),
+        }),
+    calls,
+    spend: spend.summary,
+    accounting: campaignAccounting(records, spend),
+    guidance: options.includeGuidance ? inspectGuidance(records) : undefined,
+    submissions: options.includeSubmissions
+      ? inspectSubmittedNotes(records, snapshot?.noteSubmissions)
+      : undefined,
+  });
   return {
     inspection,
     ...(includeSolution && phase?.kind === "accepted"
@@ -313,11 +275,9 @@ export async function exportSolution(path: string): Promise<Uint8Array> {
   }
 }
 
-export async function exportSolutionRecords(
-  records: readonly Entry[],
-): Promise<Uint8Array> {
+export function exportSolutionRecords(records: readonly Entry[]): Uint8Array {
   assertApplication(records[0]);
-  const phase = (await deriveWorkflow(records)).phase;
+  const phase = deriveWorkflow(records).phase;
   if (phase.kind !== "accepted")
     throw new Error("workflow has no accepted solution");
   return solutionBytes(phase);
@@ -371,7 +331,9 @@ export async function runRoleCommand(
     () => controller.abort(),
     () =>
       withCampaignLock(campaignPath, async () => {
-        const campaign = openCalls(campaignPath);
+        const campaign = openConfiguredCampaign(campaignPath, applicationId, {
+          kind: "calls",
+        });
         try {
           const roles = createPiRoles(campaign, settings, {
             models,

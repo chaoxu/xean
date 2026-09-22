@@ -88,68 +88,42 @@ function eventObject(value: Json): Record<string, Json> {
   return value as Record<string, Json>;
 }
 
-type CodexStage = "start" | "thread" | "turn" | "complete";
-
-/**
- * Validates one complete Codex JSONL transcript. The live process is allowed
- * to finish naturally; the caller's abort signal remains the only cancellation
- * boundary.
- */
-class CodexJsonlParser {
-  #stage: CodexStage = "start";
-  #searches = 0;
-  #usage: CodexUsage | undefined;
-  #message: string | undefined;
-  #last: string | undefined;
-
-  get searches(): number {
-    return this.#searches;
-  }
-
-  acceptLine(line: string): void {
-    if (line.trim() === "") return;
-    this.accept(eventObject(z.json().parse(JSON.parse(line))));
-  }
-
-  private accept(event: Record<string, Json>): void {
+/** Validate one complete transcript; live cancellation belongs to the caller. */
+export function codexTranscript(stdout: string) {
+  const transitions = ["thread.started", "turn.started", "turn.completed"];
+  let stage = 0;
+  let searches = 0;
+  let usage: CodexUsage | undefined;
+  let message: string | undefined;
+  for (const line of stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    const event = eventObject(z.json().parse(JSON.parse(line)));
     const type = z.string().parse(event["type"]);
     if (
       type === "error" &&
       typeof event["message"] === "string" &&
       reconnectNotice.test(event["message"])
     )
-      return;
-    if (type === "thread.started") {
-      if (this.#stage !== "start")
-        throw new Error("thread.started out of order");
-      this.#stage = "thread";
-      return;
-    }
-    if (type === "turn.started") {
-      if (this.#stage !== "thread")
-        throw new Error("turn.started out of order");
-      this.#stage = "turn";
-      return;
-    }
-    if (type === "turn.completed") {
-      if (this.#stage !== "turn")
-        throw new Error("turn.completed out of order");
-      const raw = eventObject(event["usage"] ?? {});
-      this.#usage = codexUsage.parse({
-        input: raw["input_tokens"],
-        cacheRead: raw["cached_input_tokens"],
-        cacheWrite: raw["cache_write_input_tokens"],
-        output: raw["output_tokens"],
-        reasoning: raw["reasoning_output_tokens"],
-      });
-      this.#stage = "complete";
-      return;
+      continue;
+    if (transitions.includes(type)) {
+      if (type !== transitions[stage]) throw new Error(`${type} out of order`);
+      stage++;
+      if (type === "turn.completed") {
+        const raw = eventObject(event["usage"] ?? {});
+        usage = codexUsage.parse({
+          input: raw["input_tokens"],
+          cacheRead: raw["cached_input_tokens"],
+          cacheWrite: raw["cache_write_input_tokens"],
+          output: raw["output_tokens"],
+          reasoning: raw["reasoning_output_tokens"],
+        });
+      }
+      continue;
     }
     if (!["item.started", "item.updated", "item.completed"].includes(type)) {
       throw new Error(`Codex emitted forbidden event type: ${type}`);
     }
-    if (this.#stage !== "turn")
-      throw new Error(`${type} outside an active turn`);
+    if (stage !== 2) throw new Error(`${type} outside an active turn`);
     const item = eventObject(event["item"] ?? null);
     const itemType = z.string().parse(item["type"]);
     if (
@@ -157,47 +131,21 @@ class CodexJsonlParser {
       itemType === "error" &&
       item["message"] === compactionWarning
     ) {
-      return;
+      continue;
     }
     if (!["reasoning", "agent_message", "web_search"].includes(itemType)) {
       throw new Error(`Codex used forbidden item type: ${itemType}`);
     }
-    if (type !== "item.completed") return;
-    if (itemType === "web_search") this.#searches += 1;
-    this.#last = itemType;
-    if (itemType === "agent_message")
-      this.#message = nonblank.parse(item["text"]);
+    if (type !== "item.completed") continue;
+    if (itemType === "web_search") searches++;
+    message =
+      itemType === "agent_message" ? nonblank.parse(item["text"]) : undefined;
   }
-
-  result(): {
-    readonly message: string;
-    readonly searches: number;
-    readonly usage: CodexUsage;
-  } {
-    if (this.#stage !== "complete")
-      throw new Error("Codex emitted no complete turn");
-    if (this.#usage === undefined)
-      throw new Error("Codex emitted no completed usage");
-    if (this.#last !== "agent_message" || this.#message === undefined) {
-      throw new Error("Codex emitted no final completed agent message");
-    }
-    return {
-      message: this.#message,
-      searches: this.#searches,
-      usage: this.#usage,
-    };
-  }
-}
-
-/** The final agent message, the searches made, and the usage of one Codex run. */
-export function codexTranscript(stdout: string): {
-  readonly message: string;
-  readonly searches: number;
-  readonly usage: CodexUsage;
-} {
-  const parser = new CodexJsonlParser();
-  for (const line of stdout.split("\n")) parser.acceptLine(line);
-  return parser.result();
+  if (stage !== 3 || usage === undefined)
+    throw new Error("Codex emitted no complete turn");
+  if (message === undefined)
+    throw new Error("Codex emitted no final completed agent message");
+  return { message, searches, usage };
 }
 
 /** The provider outcome of a settled Codex call; shared by execution and inspection. */
@@ -688,34 +636,16 @@ export function codexExec(
       stdout = run.stdout;
       stderr = run.stderr;
       exitCode = run.exitCode;
-      if (run.cancelled) {
+      if (run.cancelled || run.error !== undefined || run.exitCode !== 0) {
         return {
-          state: "cancelled",
+          state: run.cancelled ? "cancelled" : "failed",
           codexVersion,
           stdout,
           stderr,
           exitCode,
-          error: "source verification cancelled",
-        };
-      }
-      if (run.error !== undefined) {
-        return {
-          state: "failed",
-          codexVersion,
-          stdout,
-          stderr,
-          exitCode,
-          error: run.error,
-        };
-      }
-      if (run.exitCode !== 0) {
-        return {
-          state: "failed",
-          codexVersion,
-          stdout,
-          stderr,
-          exitCode,
-          error: `Codex exited with status ${run.exitCode}`,
+          error: run.cancelled
+            ? "source verification cancelled"
+            : (run.error ?? `Codex exited with status ${run.exitCode}`),
         };
       }
       return { state: "succeeded", codexVersion, stdout, stderr };

@@ -21,6 +21,8 @@ The [kernel specification](../SPEC.md) defines stored evidence and call integrit
 
 Pi supplies exploration and mathematical verification. The Codex CLI supplies literature, external-source checking, and independent review. The solver imports Pi's model runtime through its narrow entrypoint. The packed-consumer and model-runtime tests already guard that boundary.
 
+Import solver schemas and types from their defining modules: `roles.ts` owns role data and `pi-roles.ts` exports `solveSettings` and `SolveSettings`. The CLI command table owns its argument validation and help signatures. Workflow, standalone roles, and independent review share declaration matching through `openConfiguredCampaign`; they keep their own execution and signal policies. Inspection and export over captured records are synchronous.
+
 ## Line counts
 
 ```sh

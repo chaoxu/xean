@@ -1,7 +1,5 @@
 import { existsSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
-
-import { createCampaign, openCampaign, type Campaign } from "xean";
+import { type Campaign } from "xean";
 import { builtinPi } from "xean/pi";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { z } from "zod";
@@ -13,18 +11,12 @@ import {
   RoleCallError,
   solveSettings,
   type PiRoleDependencies,
-  type SolveSettings,
 } from "./pi-roles";
-import {
-  applicationId,
-  assertApplication,
-  nonblank,
-  task,
-  workflowRecords,
-} from "./roles";
+import { applicationId, nonblank, task, workflowRecords } from "./roles";
 import { appendAllowance, positiveTurns, turnAllowances } from "./allowance";
 import {
   codexCommand,
+  openConfiguredCampaign,
   requireCredentials,
   selectModel,
   withCampaignLock,
@@ -34,16 +26,12 @@ import { requireCodex } from "./source";
 import {
   deriveWorkflow,
   runWorkflow,
-  workflowConfig,
   workflowConfiguration,
   workflowResult,
   type WorkflowConfig,
   type WorkflowResult,
   type WorkflowSnapshot,
 } from "./workflow";
-
-export const settings = solveSettings;
-export type Settings = SolveSettings;
 
 const runRequest = z
   .strictObject({
@@ -84,15 +72,12 @@ export async function init(input: z.input<typeof runRequest>) {
   });
   return withCampaignLock(request.campaignPath, async () => {
     const existing = existsSync(request.campaignPath);
-    const campaign = existing
-      ? openCampaign(request.campaignPath)
-      : createCampaign(request.campaignPath, applicationId, config);
+    const campaign = openConfiguredCampaign(
+      request.campaignPath,
+      applicationId,
+      config,
+    );
     try {
-      const declaration = campaign.record(1);
-      assertApplication(declaration);
-      const frozen = workflowConfig.parse(declaration.config);
-      if (!isDeepStrictEqual(frozen, config))
-        throw new Error("task or settings disagree with the workflow journal");
       await prepareAllowance(campaign, request.turns);
       return {
         application: applicationId,
@@ -143,12 +128,8 @@ async function drive(
   initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
 ): Promise<RunResult> {
   const roles = createPiRoles(campaign, config.settings, {
+    ...dependencies,
     models,
-    ...(dependencies.run === undefined ? {} : { run: dependencies.run }),
-    ...(dependencies.codex === undefined ? {} : { codex: dependencies.codex }),
-    ...(dependencies.signal === undefined
-      ? {}
-      : { signal: dependencies.signal }),
   });
   try {
     const pending = runWorkflow(campaign, roles, dependencies, initial);
@@ -186,21 +167,13 @@ export async function run(
   });
   return withCampaignLock(request.campaignPath, async () => {
     let campaign = existsSync(request.campaignPath)
-      ? openCampaign(request.campaignPath)
+      ? openConfiguredCampaign(request.campaignPath, applicationId, config)
       : undefined;
     let initial:
       | { readonly snapshot: WorkflowSnapshot; readonly through: number }
       | undefined;
     try {
       if (campaign !== undefined) {
-        const declaration = campaign.record(1);
-        assertApplication(declaration);
-        const frozen = workflowConfig.parse(declaration.config);
-        if (!isDeepStrictEqual(frozen, config)) {
-          throw new Error(
-            "task or settings disagree with the workflow journal",
-          );
-        }
         await prepareAllowance(campaign, request.turns, request.id);
         const through = campaign.lastSequence();
         const snapshot = deriveWorkflow(
@@ -251,7 +224,11 @@ export async function run(
         });
       }
       if (campaign === undefined) {
-        campaign = createCampaign(request.campaignPath, applicationId, config);
+        campaign = openConfiguredCampaign(
+          request.campaignPath,
+          applicationId,
+          config,
+        );
         await prepareAllowance(campaign, request.turns, request.id);
       }
       const pending = drive(campaign, config, dependencies, models, initial);

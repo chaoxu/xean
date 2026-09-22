@@ -21,10 +21,9 @@ const reasoningItem = z.looseObject({
   ),
 });
 
-function itemId(block: ThinkingContent): string | undefined {
-  if (block.thinkingSignature === undefined) return undefined;
+function itemId(signature: string): string | undefined {
   try {
-    const parsed = reasoningItem.safeParse(JSON.parse(block.thinkingSignature));
+    const parsed = reasoningItem.safeParse(JSON.parse(signature));
     return parsed.success ? parsed.data.id : undefined;
   } catch {
     return undefined;
@@ -34,22 +33,17 @@ function itemId(block: ThinkingContent): string | undefined {
 // Pi keeps signatures on failed messages, but its adapters omit those messages.
 // Only the model-input view changes here; the transcript retains the failure.
 export class ReasoningRecovery {
-  private readonly ids = new WeakMap<
-    ThinkingContent,
-    { readonly signature: string | undefined; readonly id: string | undefined }
-  >();
+  private readonly ids = new Map<string, string | undefined>();
   private readonly completed = new WeakMap<
     AssistantMessage,
     ThinkingContent[]
   >();
 
   private itemId(block: ThinkingContent): string | undefined {
-    const cached = this.ids.get(block);
-    if (cached !== undefined && cached.signature === block.thinkingSignature)
-      return cached.id;
-    const id = itemId(block);
-    this.ids.set(block, { signature: block.thinkingSignature, id });
-    return id;
+    const signature = block.thinkingSignature;
+    if (signature === undefined) return undefined;
+    if (!this.ids.has(signature)) this.ids.set(signature, itemId(signature));
+    return this.ids.get(signature);
   }
 
   observe(model: Model<Api>) {
@@ -68,9 +62,7 @@ export class ReasoningRecovery {
         if (id === undefined || ids.has(id)) return;
         ids.add(id);
         // Event.partial is mutable; snapshot at the completed-block event.
-        const snapshot = { ...block };
-        this.ids.set(snapshot, { signature: snapshot.thinkingSignature, id });
-        blocks.push(snapshot);
+        blocks.push({ ...block });
       },
       settle: (message: AssistantMessage) => {
         if (

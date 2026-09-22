@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createCampaign, type Campaign } from "xean";
 import { InMemoryCredentialStore, runPi, type PiRunOptions } from "xean/pi";
 
-import { modelRuntimeOptions } from "../solve";
+import { modelRegistryPath } from "../runtime";
 import { createModelRuntime } from "../runtime";
 
 const directories: string[] = [];
@@ -136,18 +136,16 @@ function runFixture(
 }
 
 test("custom model configuration is disabled unless explicitly selected", () => {
-  expect(modelRuntimeOptions({})).toEqual({ modelsPath: null });
+  expect(modelRegistryPath({})).toBeNull();
 });
 
 test("custom model configuration requires an absolute path", () => {
-  expect(
-    modelRuntimeOptions({ XEAN_MODELS_PATH: "/run/xean/models.json" }),
-  ).toEqual({
-    modelsPath: "/run/xean/models.json",
-  });
-  expect(() =>
-    modelRuntimeOptions({ XEAN_MODELS_PATH: "models.json" }),
-  ).toThrow("XEAN_MODELS_PATH must be absolute");
+  expect(modelRegistryPath({ XEAN_MODELS_PATH: "/run/xean/models.json" })).toBe(
+    "/run/xean/models.json",
+  );
+  expect(() => modelRegistryPath({ XEAN_MODELS_PATH: "models.json" })).toThrow(
+    "XEAN_MODELS_PATH must be absolute",
+  );
 });
 
 test("a missing explicit registry fails instead of selecting public models", async () => {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createCampaign } from "xean";
 
 import { applicationId, task as taskSchema } from "../roles";
-import { settings as settingsSchema } from "../runner";
+import { solveSettings as settingsSchema } from "../pi-roles";
 import { workflowConfiguration } from "../workflow";
 
 interface CliResult {

@@ -67,44 +67,24 @@ const piSubmissionGate = z.strictObject({
 });
 export type PiSubmissionGate = z.output<typeof piSubmissionGate>;
 
-export interface PiRunOptions {
+export type PiRunOptions = Readonly<
+  Omit<
+    z.input<typeof piRequest>,
+    "protocol" | "model" | "modelProfile" | "replayReasoning"
+  >
+> & {
   readonly models: PiModels;
   readonly model: Model<Api>;
   readonly label: string;
   readonly role?: string;
-  readonly system?: string;
-  readonly prompt: string;
-  readonly reasoning?: ThinkingLevel;
   readonly parent?: EntryId;
   readonly tools?: readonly Tool[];
-  /** Retryable provider errors; independent of output-length continuations. */
-  readonly maxRecoveries?: number;
-  /** Ordinary output-length continuations; omitted means no continuations. */
-  readonly maxLengthContinuations?: number;
-  readonly submissionGate?: PiSubmissionGate | undefined;
   readonly signal?: AbortSignal;
   readonly transport?: Transport;
-  readonly cacheKey?: string;
   /** False keeps completed reasoning out of later model input in this call. */
   readonly replayReasoning?: boolean;
-}
-
-type PiOutcomeBase = {
-  readonly transcript: readonly Json[];
-  readonly text: string;
 };
-
-type PiOutcome = PiOutcomeBase &
-  (
-    | { readonly state: "succeeded" }
-    | {
-        readonly state: "failed";
-        readonly error: string;
-        readonly providerRetryable: boolean;
-      }
-    | { readonly state: "cancelled"; readonly error: string }
-  );
-
+type PiOutcome = Readonly<z.output<typeof piStoredResult>>;
 export type PiResult = PiOutcome & { readonly call: EntryId };
 
 const piModel = z.strictObject({
@@ -114,23 +94,16 @@ const piModel = z.strictObject({
   baseUrl: z.string().optional(),
 });
 
-function modelRecord(model: Model<Api>): z.output<typeof piModel> {
-  return piModel.parse({
-    provider: model.provider,
-    id: model.id,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  });
-}
+const modelRecord = piModel.strip();
 
 function modelProfile(model: Model<Api>): Json {
   return jsonSnapshot({
     reasoning: model.reasoning,
-    thinkingLevelMap: jsonSnapshot(model.thinkingLevelMap ?? null),
+    thinkingLevelMap: model.thinkingLevelMap ?? null,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    samplingParams: jsonSnapshot(model.samplingParams ?? null),
-    compat: jsonSnapshot(model.compat ?? null),
+    samplingParams: model.samplingParams ?? null,
+    compat: model.compat ?? null,
   });
 }
 
@@ -409,29 +382,25 @@ function requestCompletion(
   final: AssistantMessage,
   httpStatus: number | undefined,
 ): z.output<typeof piRequestCompletion> {
-  return piRequestCompletion.parse({
-    protocol: "xean/pi-request-completion/v2",
-    parent,
-    operation: {
-      provider: model.provider,
-      requestedModel: model.id,
-      ...(final.responseModel === undefined
-        ? {}
-        : { servedModel: final.responseModel }),
-      api: model.api,
-      stopReason: completionStopReason(final.stopReason),
-      error: final.stopReason === "error" || final.stopReason === "aborted",
-      usage: assistantUsage(final),
-    },
-    ...(final.responseId === undefined ? {} : { responseId: final.responseId }),
-    ...(httpStatus === undefined ? {} : { httpStatus }),
-    ...(final.rawStopReason === undefined
-      ? {}
-      : { rawStopReason: final.rawStopReason }),
-    ...(final.errorMessage === undefined
-      ? {}
-      : { errorMessage: final.errorMessage }),
-  });
+  return piRequestCompletion.parse(
+    jsonSnapshot({
+      protocol: "xean/pi-request-completion/v2",
+      parent,
+      operation: {
+        provider: model.provider,
+        requestedModel: model.id,
+        servedModel: final.responseModel,
+        api: model.api,
+        stopReason: completionStopReason(final.stopReason),
+        error: final.stopReason === "error" || final.stopReason === "aborted",
+        usage: assistantUsage(final),
+      },
+      responseId: final.responseId,
+      httpStatus,
+      rawStopReason: final.rawStopReason,
+      errorMessage: final.errorMessage,
+    }),
+  );
 }
 
 export function summarizePiSpend(operations: readonly PiSpendOperation[]) {
@@ -773,7 +742,7 @@ function measuredStream(
             maxTokens: submissionContext(submissionGate, model, context)
               .maxTokens,
           };
-    const producer = (async () => {
+    const finished = (async () => {
       let hookCalls = 0;
       let checkpointed = false;
       let httpStatus: number | undefined;
@@ -814,7 +783,7 @@ function measuredStream(
                 request: jsonSnapshot({
                   protocol: "xean/pi-request/v1",
                   parent,
-                  model: modelRecord(requestModel),
+                  model: modelRecord.parse(requestModel),
                   payloadRef,
                 }),
               },
@@ -850,26 +819,17 @@ function measuredStream(
           );
         completion.resolve(requestCompletion(parent, model, final, httpStatus));
         await checkpoint;
-        return { final, terminal };
-      } catch (error) {
-        completion.reject(error);
-        await checkpoint?.catch(() => {});
-        throw error;
-      }
-    })();
-    // The agent can consume deltas immediately. Its terminal event/result are
-    // released only after the producer and durable completion settle.
-    const finished = producer.then(
-      ({ final, terminal }) => {
+        // Deltas forward immediately; terminal events wait for durable completion.
         if (terminal !== undefined) forwarded.push(terminal);
         forwarded.end(final);
         return final;
-      },
-      (error: unknown) => {
+      } catch (error) {
+        completion.reject(error);
+        await checkpoint?.catch(() => {});
         forwarded.end();
         throw error;
-      },
-    );
+      }
+    })();
     void finished.catch(() => {});
     forwarded.result = () => finished;
     return forwarded;
@@ -906,7 +866,6 @@ async function runPiBody(
       ? withoutReasoning(recovery.forModel(messages))
       : recovery.forModel(messages);
   try {
-    let turns = 0;
     let responses = 0;
     let errorRecoveries = 0;
     const gate = exact.submissionGate;
@@ -954,10 +913,9 @@ async function runPiBody(
               message.stopReason === "toolUse"
             )
               errorRecoveries = 0;
-            turns += 1;
             responses += 1;
             if (gate === undefined)
-              return turns >= 32 || message.stopReason === "length"
+              return responses >= 32 || message.stopReason === "length"
                 ? { action: "end" }
                 : undefined;
             if (responseLimitReached()) return { action: "end" };
@@ -1067,7 +1025,7 @@ async function runPiBody(
     let messages = await loop(exact.prompt, []);
     let lengthContinuations = 0;
     for (;;) {
-      if (gate === undefined && turns >= 32) break;
+      if (gate === undefined && responses >= 32) break;
       if (responseLimitReached()) break;
       const final = messages.findLast(
         (message): message is AssistantMessage => message.role === "assistant",
@@ -1127,29 +1085,16 @@ async function runPiBody(
 
 /** The frozen request shared by execution and model-free role fixtures. */
 export function piRequestFor(options: PiRunOptions) {
-  return piRequest.parse({
+  // Select durable fields before serializing: runtime registries and credentials
+  // are not JSON data and must never enter the request snapshot.
+  const request = piRequest.strip().parse({
+    ...options,
     protocol: "xean/pi-run/v4",
-    model: modelRecord(options.model),
+    model: modelRecord.parse(options.model),
     modelProfile: modelProfile(options.model),
-    ...(options.system === undefined ? {} : { system: options.system }),
-    prompt: options.prompt,
-    ...(options.reasoning === undefined
-      ? {}
-      : { reasoning: options.reasoning }),
-    ...(options.maxRecoveries === undefined
-      ? {}
-      : { maxRecoveries: options.maxRecoveries }),
-    ...(options.maxLengthContinuations === undefined
-      ? {}
-      : { maxLengthContinuations: options.maxLengthContinuations }),
-    ...(options.submissionGate === undefined
-      ? {}
-      : { submissionGate: options.submissionGate }),
-    ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-    ...(options.replayReasoning === false
-      ? { replayReasoning: false as const }
-      : {}),
+    replayReasoning: options.replayReasoning === false ? false : undefined,
   });
+  return piRequest.parse(jsonSnapshot(request));
 }
 
 export async function runPi(

@@ -202,6 +202,9 @@ interface Fold {
   readonly noteSubmissions: { call: EntryId; noteIds: string[] }[];
   cursor: EntryId;
   turns: number;
+  /** Pending work may expose saved notes beyond its last completed phase. */
+  through?: EntryId;
+  after?: EntryId;
 }
 
 function openFold(records: readonly Entry[]): Fold {
@@ -220,30 +223,6 @@ function openFold(records: readonly Entry[]): Fold {
     cursor: records[0]!.seq,
     turns: 0,
   };
-}
-
-function snapshot(
-  fold: Fold,
-  phase: WorkflowPhase,
-  notes: readonly Note[] = fold.projection.at(fold.cursor),
-  boundary: Pick<WorkflowSnapshot, "after"> = {},
-): WorkflowSnapshot {
-  return {
-    ...fold.base,
-    noteSubmissions: fold.noteSubmissions,
-    notes,
-    phase,
-    ...boundary,
-  };
-}
-
-function turnLimit(fold: Fold): WorkflowSnapshot {
-  const notes = fold.projection.at(fold.cursor);
-  return snapshot(
-    fold,
-    { kind: "turn-limit", turns: fold.turns, notes },
-    notes,
-  );
 }
 
 /** Frozen caller submissions at this boundary enter the note graph before the next coordinator. */
@@ -298,7 +277,7 @@ function explorerInputFor(
 
 /**
  * Replay one Explorer call from the cursor. Returns the pending explorer
- * snapshot, or advances past the settled call and reports whether it ended
+ * phase, or advances past the settled call and reports whether it ended
  * with an empty submission. The caller counts the turn.
  */
 function replayExplorerTurn(
@@ -306,9 +285,10 @@ function replayExplorerTurn(
   guidance: string,
   support: readonly string[],
   savedProjection?: Projection,
-): WorkflowSnapshot | { readonly emptySubmission: boolean } {
+): ExplorerPhase | { readonly emptySubmission: boolean } {
   const { records, base } = fold;
   let after = fold.cursor;
+  let through = fold.cursor;
   let known = fold.projection.at(fold.cursor);
   const selected = [...support];
   // Advice stays frozen for the turn. A fresh call after interruption
@@ -328,12 +308,9 @@ function replayExplorerTurn(
     );
     const call = firstCall(records, after, roleCall.label, roleCall);
     if (call === undefined) {
-      return snapshot(
-        fold,
-        { kind: "explorer", input: explorerRequest },
-        known,
-        { after: fold.cursor },
-      );
+      fold.after = fold.cursor;
+      fold.through = through;
+      return { kind: "explorer", input: explorerRequest };
     }
     const saved = readPiSubmission(records, call.seq, roleCall, true);
     // Saved notes become visible at the last tool call; the next phase
@@ -349,6 +326,7 @@ function replayExplorerTurn(
       }
       selected.push(...notes.map(({ id }) => id));
       known = fold.projection.at(saved.settled);
+      through = saved.settled;
     }
     if (saved?.completed !== undefined) {
       fold.cursor = saved.completed;
@@ -360,13 +338,13 @@ function replayExplorerTurn(
 
 /**
  * Replay the coordinator's verification list in window-fitting batches.
- * Returns the pending verifier or accepted snapshot, or undefined once every
+ * Returns the pending verifier or accepted phase, or undefined once every
  * batch is complete.
  */
 function replayVerification(
   fold: Fold,
   listed: readonly Verification[],
-): WorkflowSnapshot | undefined {
+): VerifierPhase | AcceptedPhase | undefined {
   const { records, base } = fold;
   let remaining = listed;
   while (remaining.length > 0) {
@@ -404,11 +382,7 @@ function replayVerification(
       jsonSnapshot(verifierRequest),
     );
     if (first === undefined)
-      return snapshot(
-        fold,
-        { kind: "verifier", input: verifierRequest },
-        filed,
-      );
+      return { kind: "verifier", input: verifierRequest };
     const verification = first.seq;
     const recorded = fold.verdicts.filter(
       (entry) => entry.verification === verification,
@@ -424,18 +398,14 @@ function replayVerification(
       .find((id) => accepted.includes(id));
     if (acceptedId !== undefined) {
       const notes = fold.projection.at(fold.cursor);
-      return snapshot(
-        fold,
-        {
-          kind: "accepted",
-          turns: fold.turns,
-          note: pick(notes, acceptedId),
-          notes,
-          verification,
-          closure: supportClosure([pick(notes, acceptedId)], notes),
-        },
+      return {
+        kind: "accepted",
+        turns: fold.turns,
+        note: pick(notes, acceptedId),
         notes,
-      );
+        verification,
+        closure: supportClosure([pick(notes, acceptedId)], notes),
+      };
     }
     if (
       !verificationComplete(
@@ -443,11 +413,11 @@ function replayVerification(
         recorded.map(({ verdict }) => verdict),
       )
     )
-      return snapshot(fold, {
+      return {
         kind: "verifier",
         input: verifierRequest,
         verification,
-      });
+      };
     // Completed entries leave the queue even when their verdict was not PASS.
     remaining = remaining.slice(verify.length);
   }
@@ -457,18 +427,10 @@ function replayVerification(
 const overlapJoinLabel = "xean-solve/overlap-join";
 
 /** Fork historical evidence without allowing either role's cursor to move the other. */
-function forkFold(fold: Fold, verdicts = fold.verdicts): Fold {
+function forkFold(fold: Fold, verdicts: Fold["verdicts"]): Fold {
   const projection = new Projection(verdicts);
   const notes = fold.projection.at(fold.cursor);
-  projection.add(
-    notes.map(({ id, text, support, verification }) => ({
-      id,
-      text,
-      support,
-      ...(verification === undefined ? {} : { verification }),
-    })),
-    fold.cursor,
-  );
+  projection.add(notes, fold.cursor);
   projection.file(
     notes.flatMap(({ id, summary }) =>
       summary === undefined ? [] : [{ note: id, summary }],
@@ -485,7 +447,7 @@ function replayOverlap(
     explorerGuidance: string;
     support: string[];
   },
-): WorkflowSnapshot | { readonly emptySubmission: boolean } {
+): OverlapPhase | AcceptedPhase | { readonly emptySubmission: boolean } {
   const after = fold.cursor;
   const advice = explorerGuidance(fold.records, after, action.explorerGuidance);
   const input = explorerInputFor(
@@ -506,8 +468,7 @@ function replayOverlap(
     boundaryLabels.overlap,
     request,
   );
-  if (opening === undefined)
-    return snapshot(fold, { kind: "overlap", after, request });
+  if (opening === undefined) return { kind: "overlap", after, request };
 
   const joined = firstCall(fold.records, opening.seq, overlapJoinLabel, {
     schemaVersion: 1,
@@ -521,39 +482,28 @@ function replayOverlap(
     fold,
     fold.verdicts.filter((entry) => entry.seq <= after),
   );
-  const verifier = forkFold(fold);
   // Caller notes enter only after the join. Explorer alone assigns new note IDs.
-  explorer.cursor = verifier.cursor = opening.seq;
+  const pendingVerifier = replayVerification(
+    { ...fold, records, cursor: opening.seq },
+    action.verify,
+  );
   const exploring = replayExplorerTurn(
-    { ...explorer, records },
+    { ...explorer, records, cursor: opening.seq },
     advice,
     action.support,
     fold.projection,
   );
-  const verifying = replayVerification({ ...verifier, records }, action.verify);
-  const pendingExplorer = "phase" in exploring ? exploring.phase : undefined;
-  const pendingVerifier = verifying?.phase;
-  if (pendingExplorer !== undefined && pendingExplorer.kind !== "explorer")
-    throw new Error("invalid overlap explorer phase");
-  if (
-    pendingVerifier !== undefined &&
-    pendingVerifier.kind !== "verifier" &&
-    pendingVerifier.kind !== "accepted"
-  )
-    throw new Error("invalid overlap verifier phase");
+  const pendingExplorer = "kind" in exploring ? exploring : undefined;
   const through = joined?.seq ?? records.at(-1)!.seq;
   const notes = fold.projection.at(through);
   if (joined !== undefined) {
     if (pendingVerifier?.kind === "accepted") {
-      return snapshot(
-        fold,
-        {
-          ...pendingVerifier,
-          notes,
-          note: pick(notes, pendingVerifier.note.id),
-        },
+      fold.through = through;
+      return {
+        ...pendingVerifier,
         notes,
-      );
+        note: pick(notes, pendingVerifier.note.id),
+      };
     }
     if (pendingExplorer !== undefined || pendingVerifier !== undefined)
       throw new Error("overlap joined before both roles completed");
@@ -563,51 +513,20 @@ function replayOverlap(
         "emptySubmission" in exploring && exploring.emptySubmission,
     };
   }
-  return snapshot(
-    fold,
-    {
-      kind: "overlap",
-      after,
-      request,
-      opened: opening.seq,
-      ...(pendingExplorer === undefined ? {} : { explorer: pendingExplorer }),
-      ...(pendingVerifier?.kind === "verifier"
-        ? { verifier: pendingVerifier }
-        : {}),
-      ...(pendingVerifier?.kind === "accepted"
-        ? { accepted: pendingVerifier }
-        : {}),
-    },
-    notes,
-  );
-}
-
-/**
- * Replay one coordinator call from the cursor. Returns the pending
- * coordinator snapshot, with the unfrozen submission boundary unless a
- * frozen one was just included, or the settled coordination after filing.
- */
-function replayCoordinator(
-  fold: Fold,
-  input: CoordinatorInput,
-  included: boolean,
-): WorkflowSnapshot | CoordinatorResult {
-  const coordinated = settledCall(
-    fold.records,
-    fold.cursor,
-    coordinatorCall(input),
-  );
-  if (coordinated === undefined) {
-    return snapshot(
-      fold,
-      { kind: "coordinator", input },
-      input.notes,
-      included ? {} : { after: fold.cursor },
-    );
-  }
-  fold.cursor = coordinated.settled;
-  fold.projection.file(coordinated.value.filings, fold.cursor);
-  return coordinated.value;
+  fold.through = through;
+  return {
+    kind: "overlap",
+    after,
+    request,
+    opened: opening.seq,
+    ...(pendingExplorer === undefined ? {} : { explorer: pendingExplorer }),
+    ...(pendingVerifier?.kind === "verifier"
+      ? { verifier: pendingVerifier }
+      : {}),
+    ...(pendingVerifier?.kind === "accepted"
+      ? { accepted: pendingVerifier }
+      : {}),
+  };
 }
 
 /** Whether discovery has run at or before this cursor, and whether any run returned a usable report. */
@@ -663,29 +582,35 @@ function settledLiteratureCall(
  * checks the whole list; later dispatches can check other ready notes or
  * extend completed checks without requiring more exploration.
  */
-export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
-  const fold = openFold(records);
-  const { base } = fold;
+function replay(fold: Fold): WorkflowPhase {
+  const { records, base } = fold;
   const settings = base.config.settings;
   let emptySubmission = false;
   for (;;) {
     const included = includeSubmitted(fold, fold.cursor);
-    if (fold.turns >= base.maxTurns) return turnLimit(fold);
     const notes = fold.projection.at(fold.cursor);
-    const coordinated = replayCoordinator(
-      fold,
-      coordinatorInput.parse({
-        task: base.config.task,
-        notes,
-        literatureStatus: literatureSearchStatus(records, fold.cursor),
-        coordinatorBehavior: settings.coordinatorBehavior,
-        ...(emptySubmission ? { emptySubmission: true } : {}),
-      }),
-      included,
+    if (fold.turns >= base.maxTurns)
+      return { kind: "turn-limit", turns: fold.turns, notes };
+    const input = coordinatorInput.parse({
+      task: base.config.task,
+      notes,
+      literatureStatus: literatureSearchStatus(records, fold.cursor),
+      coordinatorBehavior: settings.coordinatorBehavior,
+      ...(emptySubmission ? { emptySubmission: true } : {}),
+    });
+    const coordinated = settledCall<z.ZodType<CoordinatorResult>>(
+      records,
+      fold.cursor,
+      coordinatorCall(input),
     );
-    if ("phase" in coordinated) return coordinated;
+    if (coordinated === undefined) {
+      if (!included) fold.after = fold.cursor;
+      return { kind: "coordinator", input };
+    }
+    fold.cursor = coordinated.settled;
+    fold.projection.file(coordinated.value.filings, fold.cursor);
     emptySubmission = false;
-    const { action } = coordinated;
+    const { action } = coordinated.value;
     fold.turns += 1;
     if (action.role === "literature") {
       const input = literatureInput.parse({
@@ -698,11 +623,11 @@ export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
         literatureCall(input, settings.source),
       );
       if (settled === undefined)
-        return snapshot(fold, {
+        return {
           kind: "literature",
           input,
           after: fold.cursor,
-        });
+        };
       fold.cursor = settled;
     } else if (action.role === "explorer") {
       // A caller's submission while this phase waited returns to the
@@ -713,17 +638,29 @@ export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
         action.explorerGuidance,
         action.support,
       );
-      if ("phase" in turn) return turn;
+      if ("kind" in turn) return turn;
       emptySubmission = turn.emptySubmission;
     } else if ("explorerGuidance" in action) {
       const overlap = replayOverlap(fold, action);
-      if ("phase" in overlap) return overlap;
+      if ("kind" in overlap) return overlap;
       emptySubmission = overlap.emptySubmission;
     } else {
       const verification = replayVerification(fold, action.verify);
       if (verification !== undefined) return verification;
     }
   }
+}
+
+export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
+  const fold = openFold(records);
+  const phase = replay(fold);
+  return {
+    ...fold.base,
+    noteSubmissions: fold.noteSubmissions,
+    notes: fold.projection.at(fold.through ?? fold.cursor),
+    phase,
+    ...(fold.after === undefined ? {} : { after: fold.after }),
+  };
 }
 
 export function workflowResult(phase: WorkflowTerminal): WorkflowResult {
@@ -759,17 +696,9 @@ async function runOverlap(
     );
     return;
   }
-  const explorer = new AbortController();
-  const verifier = new AbortController();
-  const signals = {
-    explorer:
-      dependencies.signal === undefined
-        ? explorer.signal
-        : AbortSignal.any([explorer.signal, dependencies.signal]),
-    verifier:
-      dependencies.signal === undefined
-        ? verifier.signal
-        : AbortSignal.any([verifier.signal, dependencies.signal]),
+  const controllers = {
+    explorer: new AbortController(),
+    verifier: new AbortController(),
   };
   const current = (): OverlapPhase => {
     const { phase } = deriveWorkflow(workflowRecords(campaign));
@@ -777,41 +706,39 @@ async function runOverlap(
       throw new Error("overlap changed before join");
     return phase;
   };
-  const run = async (role: "explorer" | "verifier") => {
-    for (;;) {
-      const phase = current();
-      if (phase.accepted !== undefined) {
-        explorer.abort();
-        return;
-      }
-      const step = phase[role];
-      if (
-        step === undefined ||
-        signals[role].aborted ||
-        dependencies.pauseRequested?.()
-      )
-        return;
-      if (step.kind === "explorer")
-        await roles.explorer(step.input, signals.explorer);
-      else
-        await roles.verifier(step.input, step.verification, signals.verifier);
-      const next = current();
-      if (next.accepted !== undefined) explorer.abort();
-      // A replacement role that made no durable progress leaves a resumable phase.
-      if (isDeepStrictEqual(next[role], step)) return;
-    }
-  };
   let failure: unknown;
-  const guarded = async (role: "explorer" | "verifier") => {
+  const run = async (role: "explorer" | "verifier") => {
+    const signal = dependencies.signal
+      ? AbortSignal.any([controllers[role].signal, dependencies.signal])
+      : controllers[role].signal;
     try {
-      await run(role);
+      for (;;) {
+        const phase = current();
+        if (phase.accepted !== undefined) {
+          controllers.explorer.abort();
+          return;
+        }
+        const step = phase[role];
+        if (
+          step === undefined ||
+          signal.aborted ||
+          dependencies.pauseRequested?.()
+        )
+          return;
+        if (step.kind === "explorer") await roles.explorer(step.input, signal);
+        else await roles.verifier(step.input, step.verification, signal);
+        const next = current();
+        if (next.accepted !== undefined) controllers.explorer.abort();
+        // A replacement role that made no durable progress leaves a resumable phase.
+        if (isDeepStrictEqual(next[role], step)) return;
+      }
     } catch (error) {
       failure ??= error;
-      explorer.abort();
-      verifier.abort();
+      controllers.explorer.abort();
+      controllers.verifier.abort();
     }
   };
-  await Promise.allSettled([guarded("explorer"), guarded("verifier")]);
+  await Promise.all([run("explorer"), run("verifier")]);
   const phase = current();
   if (
     phase.accepted !== undefined ||

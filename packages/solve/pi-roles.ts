@@ -677,6 +677,7 @@ export function sourceCall(
 ): {
   readonly label: string;
   readonly request: CodexRequest;
+  readonly assigned: AssignedExternalResults;
 } {
   const assigned = judged.map((note) => {
     const assessment = correctness.verdicts.find(
@@ -717,6 +718,7 @@ export function sourceCall(
   });
   return {
     label: verifierLabels.source,
+    assigned,
     request: codexRequest.parse({
       protocol: "xean/codex-exec/v1",
       model: profile.model,
@@ -745,6 +747,18 @@ async function runCall<S extends z.ZodType>(
   verification?: EntryId,
   submissionTool?: Tool,
 ): Promise<{ readonly call: EntryId; readonly value: z.output<S> }> {
+  if (verification !== undefined) {
+    const prior = settled(
+      campaign.records(),
+      verification,
+      roleCall.label,
+      roleCall,
+      (call) =>
+        readPiSubmission(roleCallRecords(campaign, call), call, roleCall)
+          ?.value,
+    );
+    if (prior !== undefined) return prior;
+  }
   const model = selectModel(dependencies.models, {
     provider: profile.provider,
     modelId: profile.model,
@@ -873,9 +887,8 @@ export function createPiRoles(
       ).value;
     },
     async literature(inputValue, after = 0) {
-      const input = literatureInput.parse(inputValue);
       return (
-        await runLiterature(campaign, profiles.source, input, codex, after)
+        await runLiterature(campaign, profiles.source, inputValue, codex, after)
       ).value;
     },
     // Freeze the listed notes and support, then run their outstanding checks.
@@ -903,32 +916,10 @@ export function createPiRoles(
             async () => ({ state: "succeeded" }),
           )
         ).call;
-      let recordedThrough = 0;
-      const recordedVerdicts: Verdict[] = [];
-      const recorded = (): Verdict[] => {
-        for (const entry of campaign.records({
-          kinds: ["evidence"],
-          after: recordedThrough,
-        })) {
-          if (entry.kind !== "evidence") continue;
-          const owner = campaign.record(entry.call);
-          recordedThrough = entry.seq;
-          if (owner?.kind !== "call" || owner.parent !== verification) continue;
-          recordedVerdicts.push(
-            ...journalVerdicts([
-              campaign.record(verification)!,
-              owner,
-              ...campaign.records({
-                kinds: ["call-result"],
-                parent: owner.seq,
-                through: entry.seq,
-              }),
-              entry,
-            ]).map(({ verdict }) => verdict),
-          );
-        }
-        return verificationVerdicts(input, recordedVerdicts);
-      };
+      const recorded = () =>
+        journalVerdicts(campaign.records())
+          .filter((entry) => entry.verification === verification)
+          .map(({ verdict }) => verdict);
       const record = (
         call: EntryId,
         values: readonly Omit<Verdict, "verifier">[],
@@ -947,80 +938,77 @@ export function createPiRoles(
         });
       };
       for (const name of verifierNames) {
-        if (name === "reconstruction") {
-          for (;;) {
-            const have = recorded();
-            const next = missingVerdicts(
-              have,
-              name,
-              judgedBy(input, have, name),
-            )[0];
-            if (next === undefined) break;
-            const working = correctedVerifierInput(input, recordedVerdicts);
-            const { call, value } = await runReconstruction(
+        for (;;) {
+          const current = recorded();
+          const have = verificationVerdicts(input, current);
+          const judged = missingVerdicts(
+            have,
+            name,
+            judgedBy(input, have, name),
+          );
+          if (judged.length === 0) break;
+          const working = correctedVerifierInput(input, current);
+          if (name === "source") {
+            for (const { correctness, notes } of correctnessForSources(
               campaign,
-              profiles.reconstruction,
-              working,
-              pick(working.notes, next),
+              input,
+              judged,
+              verification,
+            )) {
+              const local = notes.filter(
+                (note) =>
+                  correctness.verdicts.find((value) => value.note === note)
+                    ?.externalResults.length === 0,
+              );
+              if (local.length > 0) {
+                const result = await runLocalSource(
+                  campaign,
+                  verification,
+                  correctness.call,
+                  local,
+                );
+                record(result.call, result.value.verdicts);
+              }
+              const remote = notes.filter((note) => !local.includes(note));
+              if (remote.length > 0) {
+                const result = await runSource(
+                  campaign,
+                  profiles.source,
+                  working,
+                  remote,
+                  correctness,
+                  { ...codex, ...(signal === undefined ? {} : { signal }) },
+                  verification,
+                );
+                record(result.call, result.value.verdicts);
+              }
+            }
+            break;
+          }
+          const run: RunVerifierCall = (roleCall) =>
+            runCall(
+              campaign,
+              profiles[name],
+              roleCall,
               verifierDependencies,
               verification,
             );
-            record(call, value.verdicts);
-            if (value.verdicts[0]!.verdict === "PASS") return recorded();
-          }
-          continue;
+          const { call, value } =
+            name === "reconstruction"
+              ? await runReconstruction(
+                  working,
+                  pick(working.notes, judged[0]!),
+                  run,
+                  campaign.lastSequence(),
+                )
+              : await run(verifierCall(name, working, judged));
+          record(call, value.verdicts);
+          if (name !== "reconstruction") break;
+          if (value.verdicts[0]!.verdict === "PASS")
+            return verificationVerdicts(input, recorded());
         }
-        const have = recorded();
-        const judged = missingVerdicts(have, name, judgedBy(input, have, name));
-        if (judged.length === 0) continue;
-        const working = correctedVerifierInput(input, recordedVerdicts);
-        if (name === "source") {
-          for (const { correctness, notes } of correctnessForSources(
-            campaign,
-            input,
-            judged,
-            verification,
-          )) {
-            const local = notes.filter(
-              (note) =>
-                correctness.verdicts.find((value) => value.note === note)
-                  ?.externalResults.length === 0,
-            );
-            if (local.length > 0) {
-              const result = await runLocalSource(
-                campaign,
-                verification,
-                correctness.call,
-                local,
-              );
-              record(result.call, result.value.verdicts);
-            }
-            const remote = notes.filter((note) => !local.includes(note));
-            if (remote.length > 0) {
-              const result = await runSource(
-                campaign,
-                profiles.source,
-                working,
-                remote,
-                correctness,
-                { ...codex, ...(signal === undefined ? {} : { signal }) },
-                verification,
-              );
-              record(result.call, result.value.verdicts);
-            }
-          }
-          continue;
-        }
-        const { call, value } = await settledOrRun(
-          campaign,
-          profiles[name],
-          verifierCall(name, working, judged),
-          verifierDependencies,
-          verification,
-        );
-        record(call, value.verdicts);
       }
-      return recorded();
+      return verificationVerdicts(input, recorded());
     },
   };
 }
@@ -1268,16 +1256,6 @@ async function runLocalSource(
       sources: [],
     })),
   });
-  return runSourceConclusion(campaign, verification, request, value);
-}
-
-/** A local conclusion settles successfully without claiming its provider call did. */
-async function runSourceConclusion(
-  campaign: Campaign,
-  verification: EntryId,
-  request: z.output<typeof localSourceRequest>,
-  value: z.output<typeof localSourceResult>,
-) {
   const prior = settled(
     campaign.records({ kinds: ["call"], labels: [verifierLabels.source] }),
     verification,
@@ -1402,67 +1380,27 @@ export function roleSubmission(
       });
 }
 
-/** Reuses the settled call for `roleCall` on this verification, or makes it. */
-async function settledOrRun<S extends z.ZodType>(
-  campaign: Campaign,
-  profile: PiRoleProfile,
-  roleCall: RoleCall<S>,
-  dependencies: PiRoleDependencies,
-  verification: EntryId,
-): Promise<{ readonly call: EntryId; readonly value: z.output<S> }> {
-  return (
-    settled(
-      campaign.records(),
-      verification,
-      roleCall.label,
-      roleCall,
-      (call) =>
-        readPiSubmission(roleCallRecords(campaign, call), call, roleCall)
-          ?.value,
-    ) ??
-    (await runCall(campaign, profile, roleCall, dependencies, verification))
-  );
-}
+type RunVerifierCall = <S extends z.ZodType>(
+  call: RoleCall<S>,
+) => Promise<{ readonly call: EntryId; readonly value: z.output<S> }>;
 
 async function runReconstruction(
-  campaign: Campaign,
-  profile: PiRoleProfile,
   input: VerifierInput,
   note: Note,
-  dependencies: PiRoleDependencies,
-  verification: EntryId,
+  run: RunVerifierCall,
+  boundary: EntryId,
 ): Promise<{
   readonly call: EntryId;
   readonly value: z.output<ReturnType<typeof reconstructionResultFor>>;
 }> {
-  const boundary = campaign.lastSequence();
-  let statement = (
-    await settledOrRun(
-      campaign,
-      profile,
-      statementCall(input, note),
-      dependencies,
-      verification,
-    )
-  ).value;
+  let statement = (await run(statementCall(input, note))).value;
   let previous: EntryId | undefined;
   let corrections = 0;
   for (;;) {
-    const proof = (
-      await settledOrRun(
-        campaign,
-        profile,
-        proofCall(input, note, statement, previous),
-        dependencies,
-        verification,
-      )
-    ).value.proof;
-    const result = await settledOrRun(
-      campaign,
-      profile,
+    const proof = (await run(proofCall(input, note, statement, previous))).value
+      .proof;
+    const result = await run(
       reconstructionCall(input, note, statement, proof, previous),
-      dependencies,
-      verification,
     );
     if (result.value.statement !== null) {
       statement = { statement: result.value.statement };
@@ -1493,23 +1431,13 @@ async function runSource(
   readonly value: z.output<typeof sourceSubmission>;
 }> {
   const passages = inspectedPassages(campaign, verification);
-  const { label, request } = sourceCall(
+  const { label, request, assigned } = sourceCall(
     profile,
     input,
     judged,
     correctness,
     passages,
   );
-  const assigned = judged.map((note) => ({
-    note,
-    externalResults: correctness.verdicts.find(
-      (assessment) => assessment.note === note,
-    )!.externalResults,
-  }));
-  const read = (call: EntryId) => {
-    const records = roleCallRecords(campaign, call);
-    return sourceVerdictsOf(codexSubmission(records, call), passages, assigned);
-  };
   const unusable = (reason: string) => ({
     verdicts: assigned.map(({ note }) => unusableSourceVerdict(note, reason)),
   });
@@ -1519,7 +1447,11 @@ async function runSource(
   const conclude = (call: EntryId) => {
     try {
       return (
-        read(call) ??
+        sourceVerdictsOf(
+          codexSubmission(roleCallRecords(campaign, call), call),
+          passages,
+          assigned,
+        ) ??
         unusable(
           "the source verdicts do not match the judged notes or the evidence schema.",
         )

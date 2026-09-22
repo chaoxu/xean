@@ -197,11 +197,11 @@ test("startup reuses its captured derivation only while the journal boundary mat
     snapshot: await deriveWorkflow(campaign.records()),
     through: campaign.lastSequence(),
   };
-  const original = Projection.prototype.at;
+  const original = campaign.records.bind(campaign);
   let derivations = 0;
-  Projection.prototype.at = function (seq) {
-    if (seq === 1) derivations += 1;
-    return original.call(this, seq);
+  campaign.records = function (options) {
+    derivations += 1;
+    return original(options);
   };
   const roles = createPiRoles(campaign, config.settings, dependencies([]));
   try {
@@ -232,7 +232,7 @@ test("startup reuses its captured derivation only while the journal boundary mat
     ).toBe("coordinator");
     expect(derivations).toBe(1);
   } finally {
-    Projection.prototype.at = original;
+    campaign.records = original;
     campaign.close();
   }
 });

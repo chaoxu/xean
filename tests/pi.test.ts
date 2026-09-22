@@ -22,6 +22,7 @@ import { createCampaign, defineTool, openReader, type Entry } from "../src";
 import {
   derivePiSpend,
   piRequest,
+  piRequestFor,
   piRequestAttempts,
   piRequestCompletion,
   piStoredResult,
@@ -36,6 +37,30 @@ import {
   inspectCoreCampaignSummary,
   inspectCoreCampaignSummaryRecords,
 } from "../src/observe";
+
+test("request snapshots select schema fields before touching runtime credentials", () => {
+  const models = {
+    streamSimple() {
+      throw new Error("request projection must not invoke the provider");
+    },
+    toJSON() {
+      throw new Error("runtime registries must not be serialized");
+    },
+  };
+  const request = piRequestFor({
+    models,
+    model: { ...model, headers: { authorization: "private-runtime-value" } },
+    label: "runtime-only",
+    prompt: "Frozen prompt",
+    maxRecoveries: 2,
+    replayReasoning: true,
+  });
+  expect(request).toMatchObject({ prompt: "Frozen prompt", maxRecoveries: 2 });
+  expect(request).not.toHaveProperty("replayReasoning");
+  expect(request).not.toHaveProperty("models");
+  expect(request).not.toHaveProperty("label");
+  expect(JSON.stringify(request)).not.toContain("private-runtime-value");
+});
 
 test("forwards provider events before completion and cleans the logical session", async () => {
   const store = campaign();

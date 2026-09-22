@@ -187,7 +187,7 @@ test("a full audit receives the entire argument and reuses only the exact comple
       { ...request, argument: request.argument + " Changed." },
       dependencies,
     ),
-  ).rejects.toThrow("disagree with the journal");
+  ).rejects.toThrow("configuration disagrees");
   expect(calls).toBe(1);
   const reader = openReader(request.campaignPath);
   try {

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 
 import { piProfileNames } from "../pi-roles";
-import { settings } from "../runner";
+import { solveSettings as settings } from "../pi-roles";
 import { task } from "../roles";
 import { workflowConfiguration } from "../workflow";
 import { builtinPi } from "xean/pi";

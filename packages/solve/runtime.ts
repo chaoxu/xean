@@ -1,7 +1,9 @@
 import { Database, SQLiteError } from "bun:sqlite";
-import { constants, realpathSync } from "node:fs";
+import { constants, existsSync, realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { createCampaign, openCampaign, type Json } from "xean";
 
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openAIResponsesApi, openAICodexResponsesApi } from "xean/pi";
@@ -9,6 +11,32 @@ import { openAIResponsesApi, openAICodexResponsesApi } from "xean/pi";
 export type SolveModels = Pick<ModelRuntime, "getModel" | "streamSimple"> & {
   readonly checkAuth?: (provider: string) => Promise<unknown>;
 };
+
+/** All solver entrypoints match the complete frozen declaration before reuse. */
+export function openConfiguredCampaign(
+  path: string,
+  application: string,
+  config: Json,
+) {
+  const campaign = existsSync(path)
+    ? openCampaign(path)
+    : createCampaign(path, application, config);
+  try {
+    const declaration = campaign.record(1);
+    if (
+      declaration?.kind !== "campaign" ||
+      declaration.application !== application ||
+      !isDeepStrictEqual(declaration.config, config)
+    )
+      throw new Error(
+        `${application}: requested configuration disagrees with the campaign journal`,
+      );
+    return campaign;
+  } catch (error) {
+    campaign.close();
+    throw error;
+  }
+}
 
 export async function createModelRuntime(
   options: Parameters<typeof ModelRuntime.create>[0],

@@ -470,7 +470,7 @@ test.each([
         },
       },
     ),
-  ).rejects.toThrow("task or settings disagree");
+  ).rejects.toThrow("configuration disagrees");
   expect(await Bun.file(path).arrayBuffer()).toEqual(before);
   expect(await init({ task, campaignPath: path, settings })).toMatchObject({
     created: false,
@@ -527,7 +527,7 @@ test("an unsupported workflow schema is rejected without changing the journal", 
         },
       },
     ),
-  ).rejects.toThrow("schemaVersion");
+  ).rejects.toThrow("configuration disagrees");
   expect(await Bun.file(path).arrayBuffer()).toEqual(before);
 });
 
