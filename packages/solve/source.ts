@@ -42,12 +42,6 @@ export const codexRequest = z.strictObject({
 });
 export type CodexRequest = z.output<typeof codexRequest>;
 
-const execution = {
-  codexVersion: z.string().min(1).optional(),
-  stdout: z.string(),
-  stderr: z.string(),
-  exitCode: z.number().int().nullable().optional(),
-};
 export const codexResult = z.discriminatedUnion("state", [
   z.strictObject({
     state: z.literal("succeeded"),
@@ -55,10 +49,12 @@ export const codexResult = z.discriminatedUnion("state", [
     stdout: z.string(),
     stderr: z.string(),
   }),
-  z.strictObject({ state: z.literal("failed"), ...execution, error: nonblank }),
   z.strictObject({
-    state: z.literal("cancelled"),
-    ...execution,
+    state: z.enum(["failed", "cancelled"]),
+    codexVersion: z.string().min(1).optional(),
+    stdout: z.string(),
+    stderr: z.string(),
+    exitCode: z.number().int().nullable().optional(),
     error: nonblank,
   }),
 ]);
@@ -322,7 +318,14 @@ const disabledFeatures = [
   "workspace_dependencies",
 ] as const;
 
-const fileCredentials = 'cli_auth_credentials_store="file"';
+const fileCredentials = { cli_auth_credentials_store: "file" };
+const configArguments = (
+  values: Readonly<Record<string, string | number | boolean>>,
+): string[] =>
+  Object.entries(values).flatMap(([key, value]) => [
+    "-c",
+    `${key}=${JSON.stringify(value)}`,
+  ]);
 
 const providerConnection = z.strictObject({
   name: nonblank,
@@ -548,7 +551,12 @@ export async function prepareCodex(
     if (requiresLogin) {
       if (!hasAuth) throw new Error(authFailure);
       await check(
-        [...providerArgs, "-c", fileCredentials, "login", "status"],
+        [
+          ...providerArgs,
+          ...configArguments(fileCredentials),
+          "login",
+          "status",
+        ],
         authFailure,
       );
     }
@@ -557,9 +565,6 @@ export async function prepareCodex(
   }
   return async (request, signal) => {
     let directory: string | undefined;
-    let stdout = "";
-    let stderr = "";
-    let exitCode: number | null | undefined;
     try {
       directory = await mkdtemp(join(tmpdir(), "xean-source-"));
       const { env, providerArgs } = await sourceEnvironment(
@@ -575,12 +580,22 @@ export async function prepareCodex(
           "-m",
           request.model,
           ...providerArgs,
-          "-c",
-          'web_search="live"',
-          ...disabledFeatures.flatMap((feature) => [
-            "-c",
-            `features.${feature}=false`,
-          ]),
+          ...configArguments({
+            web_search: "live",
+            ...Object.fromEntries(
+              disabledFeatures.map((feature) => [`features.${feature}`, false]),
+            ),
+            ...fileCredentials,
+            model_reasoning_effort: request.reasoning,
+            developer_instructions: request.developerInstructions,
+            "skills.include_instructions": false,
+            include_environment_context: false,
+            include_permissions_instructions: false,
+            include_apps_instructions: false,
+            include_collaboration_mode_instructions: false,
+            project_doc_max_bytes: 0,
+            "tools.update_plan.enabled": false,
+          }),
           "--ephemeral",
           "--ignore-user-config",
           "--ignore-rules",
@@ -593,26 +608,6 @@ export async function prepareCodex(
           "never",
           "--output-schema",
           schemaPath,
-          "-c",
-          fileCredentials,
-          "-c",
-          `model_reasoning_effort="${request.reasoning}"`,
-          "-c",
-          `developer_instructions=${JSON.stringify(request.developerInstructions)}`,
-          "-c",
-          "skills.include_instructions=false",
-          "-c",
-          "include_environment_context=false",
-          "-c",
-          "include_permissions_instructions=false",
-          "-c",
-          "include_apps_instructions=false",
-          "-c",
-          "include_collaboration_mode_instructions=false",
-          "-c",
-          "project_doc_max_bytes=0",
-          "-c",
-          "tools.update_plan.enabled=false",
           "-C",
           directory,
           "-",
@@ -624,9 +619,7 @@ export async function prepareCodex(
           ...(signal === undefined ? {} : { signal }),
         },
       );
-      stdout = run.stdout;
-      stderr = run.stderr;
-      exitCode = run.exitCode;
+      const { stdout, stderr, exitCode } = run;
       if (run.cancelled || run.error !== undefined || run.exitCode !== 0) {
         return {
           state: run.cancelled ? "cancelled" : "failed",
@@ -644,9 +637,8 @@ export async function prepareCodex(
       return {
         state: signal?.aborted ? "cancelled" : "failed",
         codexVersion,
-        stdout,
-        stderr,
-        ...(exitCode === undefined ? {} : { exitCode }),
+        stdout: "",
+        stderr: "",
         error: error instanceof Error ? error.message : String(error),
       };
     } finally {

@@ -169,22 +169,32 @@ async function expectReaped(directory: string) {
   expect(() => process.kill(pid, 0)).toThrow();
 }
 
-test("Codex execution returns the complete transcript with its search count", async () => {
-  const transcript = jsonl([
-    ...start,
-    search("s1"),
-    search("s2"),
-    final,
-    completed,
-  ]);
-  const setup = await fixture(
-    `process.stdout.write(${JSON.stringify(transcript)});`,
-  );
-  const result = await setup.exec(request);
-  expect(result.state).toBe("succeeded");
-  expect(result.stdout).toBe(transcript);
-  expect(codexTranscript(result.stdout).searches).toBe(2);
-});
+test.each([0, 7])(
+  "Codex execution preserves output after exit %s",
+  async (exitCode) => {
+    const transcript = jsonl([
+      ...start,
+      search("s1"),
+      search("s2"),
+      final,
+      completed,
+    ]);
+    const setup = await fixture(
+      `process.stdout.write(${JSON.stringify(transcript)}); process.stderr.write("diagnostic"); process.exitCode = ${exitCode};`,
+    );
+    const result = await setup.exec(request);
+    expect(result.state).toBe(exitCode === 0 ? "succeeded" : "failed");
+    expect(result.stdout).toBe(transcript);
+    expect(result.stderr).toBe("diagnostic");
+    if (exitCode === 0) expect(result).not.toHaveProperty("exitCode");
+    else
+      expect(result).toMatchObject({
+        exitCode,
+        error: "Codex exited with status 7",
+      });
+    expect(codexTranscript(result.stdout).searches).toBe(2);
+  },
+);
 
 test("caller cancellation drains output and reaps a process ignoring SIGTERM", async () => {
   const setup = await fixture(`
@@ -202,6 +212,7 @@ setInterval(() => {}, 1000);
   expect(result.state).toBe("cancelled");
   expect(result.stdout).toBe(jsonl(start) + "\n");
   expect(result.stderr).toBe("partial stderr\n");
+  expect(result).toMatchObject({ exitCode: null });
   await expectReaped(setup.directory);
 });
 
@@ -211,5 +222,6 @@ test("an already cancelled request starts no Codex execution", async () => {
   controller.abort();
   const result = await setup.exec(request, controller.signal);
   expect(result.state).toBe("cancelled");
+  expect(result).toMatchObject({ stdout: "", stderr: "", exitCode: null });
   expect(existsSync(join(setup.directory, "executed"))).toBe(false);
 });

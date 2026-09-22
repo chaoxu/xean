@@ -303,6 +303,8 @@ env_http_headers = { "x-usage-tag" = "XEAN_SOURCE_HEADER_0" }
     prompt: "This must fail before executing.",
   });
   expect(missing.state).toBe("failed");
+  expect(missing).toMatchObject({ stdout: "", stderr: "" });
+  expect(missing).not.toHaveProperty("exitCode");
   expect(await setup.captures()).toHaveLength(later.length);
   expectCleaned(captures);
   expectCleaned(later);
