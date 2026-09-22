@@ -18,12 +18,12 @@ export type {
   ToolDeclaration,
 } from "./schemas";
 
-export interface Tool {
+export interface Tool<S extends z.ZodType = z.ZodType> {
   readonly name: string;
   readonly description: string;
-  readonly input: z.ZodType;
+  readonly input: S;
   /** Every valid repetition after an interrupted phase must be harmless. */
-  run(input: unknown, context: ToolExecutionContext): Promise<unknown>;
+  run(input: z.output<S>, context: ToolExecutionContext): Promise<unknown>;
 }
 
 export interface ToolExecutionContext {
@@ -93,16 +93,7 @@ export interface Campaign extends Reader {
   ): Promise<CallReceipt>;
 }
 
-export interface ToolDefinition<S extends z.ZodType> {
-  readonly name: string;
-  readonly description: string;
-  readonly input: S;
-  run(input: z.output<S>, context: ToolExecutionContext): Promise<unknown>;
-}
-
-export function defineTool<S extends z.ZodType>(
-  definition: ToolDefinition<S>,
-): Tool {
+export function defineTool<S extends z.ZodType>(definition: Tool<S>): Tool {
   return {
     name: definition.name,
     description: definition.description,

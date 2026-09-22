@@ -64,19 +64,21 @@ const correctness = (
     })),
   },
 });
-const checked = (note: string, searched = true, sources = [source]): Reply => ({
+const checked = (
+  notes: string | string[],
+  searched = true,
+  sources = [source],
+): Reply => ({
   searched,
   codex: {
-    verdicts: [
-      {
-        note,
-        verdict: "PASS",
-        report:
-          "The exact source establishes the stated premise and applicability.",
-        correctedText: null,
-        sources: sources.map((value) => ({ ...value, resultId: `${note}#1` })),
-      },
-    ],
+    verdicts: (typeof notes === "string" ? [notes] : notes).map((note) => ({
+      note,
+      verdict: "PASS",
+      report:
+        "The exact source establishes the stated premise and applicability.",
+      correctedText: null,
+      sources: sources.map((value) => ({ ...value, resultId: `${note}#1` })),
+    })),
   },
 });
 const calls = (campaign: Campaign) =>
@@ -84,51 +86,74 @@ const calls = (campaign: Campaign) =>
     .records({ kinds: ["call"] })
     .filter((entry) => entry.kind === "call");
 
-test("mixed verification sends only notes with external premises and journals local PASS honestly", async () => {
+test("source grouping preserves origin and judged order while local conclusions avoid model calls", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, applicationId, { kind: "calls" });
-  const packet = input([
-    makeNote("n1"),
-    makeNote(
-      "n2",
-      "For every real x, x + 0 = x by the additive identity axiom.",
-    ),
-  ]);
   const drive = dependencies([
     correctness([
       { note: "n1", externalResults: [result] },
       { note: "n2", externalResults: [] },
+      { note: "n3", externalResults: [result] },
     ]),
-    checked("n1"),
+    correctness([{ note: "n4", externalResults: [result] }]),
+    checked("n4"),
+    checked(["n3", "n1"]),
   ]);
   try {
-    const verdicts = await createPiRoles(
-      campaign,
-      roleSettings(),
-      drive,
-    ).verifier(packet);
-    expect(verdicts).toHaveLength(4);
-    expect(drive.codexCalls).toHaveLength(1);
-    const prompt = JSON.parse(drive.codexCalls[0]!.prompt);
-    expect(prompt.notes.map(({ id }: { id: string }) => id)).toEqual(["n1"]);
-    expect(prompt.correctnessCall).toBe(
-      calls(campaign).find((call) => call.label.endsWith("/correctness"))!.seq,
+    const roles = createPiRoles(campaign, roleSettings(), drive);
+    const established: Note["verdicts"] = [];
+    for (const ids of [["n1", "n2", "n3"], ["n4"]]) {
+      const packet = input(ids.map((id) => makeNote(id)));
+      packet.verify.forEach((entry) => {
+        entry.verifiers = ["correctness"];
+      });
+      established.push(...(await roles.verifier(packet)));
+    }
+    const [first, second] = calls(campaign).filter(({ label }) =>
+      label.endsWith("/correctness"),
     );
-    const local = calls(campaign).find(
-      (call) => localSourceRequest.safeParse(call.request).success,
-    )!;
-    expect(local.request).toMatchObject({
-      notes: ["n2"],
-      correctnessCall: prompt.correctnessCall,
-    });
-    expect(local.parent).toBe(calls(campaign)[0]!.seq);
+    const packet = input(
+      ["n4", "n3", "n2", "n1"].map((id) => ({
+        ...makeNote(id),
+        verdicts: established.filter((value) => value.note === id),
+      })),
+    );
+    await roles.verifier(packet);
+    expect(
+      calls(campaign)
+        .filter(({ label }) => label.endsWith("/source"))
+        .map(({ request }) => {
+          const local = localSourceRequest.safeParse(request);
+          if (local.success)
+            return {
+              correctnessCall: local.data.correctnessCall,
+              notes: local.data.notes,
+            };
+          const remote = JSON.parse((request as { prompt: string }).prompt);
+          return {
+            correctnessCall: remote.correctnessCall,
+            notes: remote.notes.map(({ id }: { id: string }) => id),
+          };
+        }),
+    ).toEqual([
+      { correctnessCall: second!.seq, notes: ["n4"] },
+      { correctnessCall: first!.seq, notes: ["n2"] },
+      { correctnessCall: first!.seq, notes: ["n3", "n1"] },
+    ]);
     const inspection: any = await inspectCampaign(path);
     expect(
-      inspection.calls.find((call: any) => call.call === local.seq).submission,
+      inspection.calls.find(
+        (call: any) => call.submission?.verdicts?.[0]?.note === "n2",
+      ).submission,
     ).toMatchObject({
       verdicts: [{ note: "n2", verdict: "PASS", sources: [] }],
     });
-    expect(inspection.accounting.unpricedCalls).toHaveLength(1);
+    expect(inspection.accounting.unpricedCalls).toHaveLength(2);
+    const verification = calls(campaign).at(-1)!.parent!;
+    const receipts = campaign.records();
+    await roles.verifier(packet, verification);
+    expect(campaign.records()).toEqual(receipts);
+    expect(drive.codexCalls).toHaveLength(2);
   } finally {
     campaign.close();
   }

@@ -583,13 +583,10 @@ function correctnessForSources(
   input: VerifierInput,
   judged: readonly string[],
   verification: EntryId,
-): { correctness: CorrectnessAssessment; notes: string[] }[] {
+): CorrectnessAssessment[] {
   const records = campaign.records();
   const history = journalVerdicts(records);
-  const groups = new Map<
-    EntryId,
-    { correctness: CorrectnessAssessment; notes: string[] }
-  >();
+  const groups = new Map<EntryId, CorrectnessAssessment>();
   for (const id of judged) {
     const prior = history.findLast(
       (entry) =>
@@ -608,14 +605,13 @@ function correctnessForSources(
       );
     let group = groups.get(prior.call);
     if (group === undefined) {
-      group = { correctness: { call: prior.call, verdicts: [] }, notes: [] };
+      group = { call: prior.call, verdicts: [] };
       groups.set(prior.call, group);
     }
-    group.correctness.verdicts.push({
+    group.verdicts.push({
       ...prior.verdict,
       externalResults: prior.externalResults,
     });
-    group.notes.push(id);
   }
   return [...groups.values()];
 }
@@ -912,17 +908,16 @@ export function createPiRoles(
           if (judged.length === 0) break;
           const working = correctedVerifierInput(input, current);
           if (name === "source") {
-            for (const { correctness, notes } of correctnessForSources(
+            for (const correctness of correctnessForSources(
               campaign,
               input,
               judged,
               verification,
             )) {
-              const local = notes.filter(
-                (note) =>
-                  correctness.verdicts.find((value) => value.note === note)
-                    ?.externalResults.length === 0,
-              );
+              const local: string[] = [],
+                remote: string[] = [];
+              for (const { note, externalResults } of correctness.verdicts)
+                (externalResults.length === 0 ? local : remote).push(note);
               if (local.length > 0) {
                 const result = await runLocalSource(
                   campaign,
@@ -932,7 +927,6 @@ export function createPiRoles(
                 );
                 record(result.call, result.value.verdicts);
               }
-              const remote = notes.filter((note) => !local.includes(note));
               if (remote.length > 0) {
                 const result = await runSource(
                   campaign,
