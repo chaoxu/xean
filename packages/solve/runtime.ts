@@ -89,6 +89,21 @@ export async function requireCredentials(
   }
 }
 
+/** Install the caller's signal policy for one operation and always release it. */
+export async function withSignals<T>(
+  stop: () => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  try {
+    return await operation();
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
 function runnerLockPath(campaignPath: string): string {
   let canonicalPath: string;
   try {

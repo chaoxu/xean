@@ -14,7 +14,7 @@ const note = {
 
 test("publishes one workflow execution contract", () => {
   expect(executionContract).toEqual({
-    schemaVersion: 2,
+    schemaVersion: 3,
     application: "xean-solve",
     protocol: "workflow",
     run: {
@@ -22,7 +22,7 @@ test("publishes one workflow execution contract", () => {
       arguments: ["task", "campaign", "settings"],
       allowance: { turnsOption: "--turns", idOption: "--id", defaultTurns: 20 },
       report: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         outcomes: [
           "accepted",
           "turn-limit",
@@ -40,13 +40,13 @@ test("publishes one workflow execution contract", () => {
       turns: 1,
       note,
       notes: [note],
-      candidate: 7,
+      verification: 7,
     }),
   ).toMatchObject({
-    schemaVersion: 1,
+    schemaVersion: 2,
     application: "xean-solve",
     protocol: "workflow",
     outcome: "accepted",
-    candidate: 7,
+    verification: 7,
   });
 });

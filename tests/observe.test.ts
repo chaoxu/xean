@@ -27,14 +27,39 @@ afterEach(() => {
 });
 
 function campaignPath(): string {
-  const directory = mkdtempSync(join(tmpdir(), "xean-observe-v1-"));
+  const directory = mkdtempSync(join(tmpdir(), "xean-observe-v2-"));
   directories.push(directory);
   return join(directory, "campaign.db");
 }
 
+test("full observation exposes opaque application evidence without adding it to call summaries", async () => {
+  const campaign = createCampaign(campaignPath(), "test", {});
+  try {
+    const { call } = await campaign.call(
+      { label: "application/check", request: {} },
+      async () => ({ state: "succeeded" }),
+    );
+    const evidence = {
+      verdicts: [
+        { note: "n1", verdict: "PASS", report: "Application judgment." },
+      ],
+    };
+    campaign.recordEvidence(call, evidence);
+    expect(
+      inspectCoreCampaignRecords(campaign, campaign.records()).calls[0]
+        ?.evidence,
+    ).toEqual(evidence);
+    expect(inspectCoreCallSummaries(campaign.records())[0]).not.toHaveProperty(
+      "evidence",
+    );
+  } finally {
+    campaign.close();
+  }
+});
+
 function piRequest() {
   return {
-    protocol: "xean/pi-run/v3" as const,
+    protocol: "xean/pi-run/v4" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",
@@ -109,7 +134,6 @@ const firstUsage = {
 test("call summaries preserve full metadata at the captured boundary", async () => {
   const campaign = createCampaign(campaignPath(), "call-summary", null);
   try {
-    campaign.submitCandidate(new TextEncoder().encode("proof"), ["check"]);
     await campaign.call(
       { label: "measured", role: "explorer", request: piRequest() },
       async ({ call }) =>
@@ -158,7 +182,7 @@ const measured = (usage: typeof firstUsage) => ({
 });
 const message = (usage: typeof firstUsage) => ({ role: "assistant", usage });
 
-test("derives token buckets and prices reasoning per response", async () => {
+test("derives token buckets from request completions", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "changing-workflow", null);
   try {
@@ -181,8 +205,6 @@ test("derives token buckets and prices reasoning per response", async () => {
     cachedInputTokens: 2,
     reasoningOutputTokens: 3,
     nonReasoningOutputTokens: 7,
-    estimatedReasoningCostUsd: 4.8,
-    reasoningCostShareOfMeasuredCost: 0.24,
   };
   const observation = inspectCoreCampaign(path);
   expect(observation.spend.breakdown).toEqual(expected);
@@ -193,150 +215,51 @@ test("derives token buckets and prices reasoning per response", async () => {
   expect(inspectCoreCampaignSummary(path).spend.breakdown).toEqual(expected);
 });
 
-test("omits reasoning cost when measured retry usage is absent from transcript", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "changing-workflow", null);
-  try {
-    await campaign.call(
-      { label: "workflow/measured", request: piRequest() },
-      async ({ call }) =>
-        piResult(
-          campaign,
-          call,
-          [measured(firstUsage), measured(secondUsage)],
-          [message(firstUsage)],
-        ),
-    );
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path).spend.breakdown).toEqual({
-    freshInputTokens: 9,
-    cachedInputTokens: 2,
-    reasoningOutputTokens: 3,
-    nonReasoningOutputTokens: 7,
-  });
-});
-
-test("projects opaque application data, calls, candidates, and verdicts", async () => {
+test("projects call ownership without interpreting application evidence", async () => {
   const path = campaignPath();
   const config = { protocol: "rapid-v37", future: { value: true } };
   const campaign = createCampaign(path, "changing-workflow", config);
   try {
-    const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), [
-      "proof",
-    ]);
+    const parent = await campaign.call(
+      { label: "verification", request: { exact: "claim" } },
+      async () => null,
+    );
     const { call } = await campaign.call(
       {
         label: "proof",
         role: "proof-auditor",
-        candidate,
+        parent: parent.call,
         request: { custom: true },
       },
       async () => ({ state: "succeeded" }),
     );
-    campaign.recordVerdict(call, "PASS", { checked: "directly" });
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path)).toMatchObject({
-    schema: "xean.core-observation/v1",
-    application: "changing-workflow",
-    applicationConfig: config,
-    calls: [
-      {
-        label: "proof",
-        role: "proof-auditor",
-        settlement: "returned",
-        candidateId: 2,
-        tools: [],
-      },
-    ],
-    candidates: [
-      {
-        id: 2,
-        requiredVerifiers: ["proof"],
-        material: { bytes: 1, encoding: "utf8", text: "x" },
-        status: { verified: true, missing: [], failed: [] },
-        verdicts: [
-          {
-            call: 3,
-            verifier: "proof",
-            verdict: "PASS",
-            evidence: { checked: "directly" },
-          },
-        ],
-      },
-    ],
-  });
-});
-
-test("captured observation boundaries do not reread later calls or verdicts", async () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "captured-boundary", { opaque: true });
-  let forbiddenReads = 0;
-  const forbidden = (): never => {
-    forbiddenReads += 1;
-    throw new Error("captured projection must not reread journal or payload");
-  };
-  const materialReads: number[] = [];
-  const reader: Reader = {
-    records: forbidden,
-    record: forbidden,
-    lastSequence: forbidden,
-    payload: forbidden,
-    material(seq) {
-      materialReads.push(seq);
-      return campaign.material(seq);
-    },
-    close: forbidden,
-  };
-  try {
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("captured proof"),
-      ["proof"],
-    );
-    const { call } = await campaign.call(
-      { label: "proof", candidate, request: null },
-      async () => ({ state: "succeeded" }),
-    );
-    const through = campaign.lastSequence();
-    const records = campaign.records({ through });
-    const before = inspectCoreCampaignRecords(reader, records);
-    const summary = inspectCoreCampaignSummaryRecords(records);
-    expect(before.lastSeq).toBe(through);
-    expect(before.calls.map((value) => value.id)).toEqual([call]);
-    expect(before.candidates[0]!.status.verified).toBe(false);
-    expect(before.candidates[0]!.material).toMatchObject({
-      text: "captured proof",
+    campaign.recordEvidence(call, { verdict: "PASS", checked: "directly" });
+    const records = campaign.records();
+    const before = inspectCoreCampaignRecords(campaign, records);
+    expect(before).toMatchObject({
+      schema: "xean.core-observation/v2",
+      application: "changing-workflow",
+      applicationConfig: config,
+      calls: [
+        {
+          call: parent.call,
+          label: "verification",
+          state: "returned",
+          tools: [],
+        },
+        {
+          call,
+          label: "proof",
+          role: "proof-auditor",
+          state: "returned",
+          parent: parent.call,
+          tools: [],
+        },
+      ],
     });
-    expect(summary).toMatchObject({
-      lastSeq: through,
-      callCount: 1,
-      candidateCount: 1,
-      verifiedCandidateCount: 0,
-    });
-
-    campaign.recordVerdict(call, "PASS", { checked: "after capture" });
-    campaign.submitCandidate(new TextEncoder().encode("later proof"), [
-      "later",
-    ]);
+    expect(before).not.toHaveProperty("candidates");
     await campaign.call({ label: "later", request: null }, async () => null);
-
-    expect(campaign.lastSequence()).toBeGreaterThan(through);
-    expect(inspectCoreCampaignRecords(reader, records)).toEqual(before);
-    expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
-    expect(materialReads).toEqual([candidate, candidate]);
-    expect(forbiddenReads).toBe(0);
-    const current = inspectCoreCampaignSummary(path);
-    expect(current).toMatchObject({
-      callCount: 2,
-      candidateCount: 2,
-      verifiedCandidateCount: 1,
-    });
-    expect(current.lastSeq).toBeGreaterThan(summary.lastSeq);
+    expect(inspectCoreCampaignRecords(campaign, records)).toEqual(before);
   } finally {
     campaign.close();
   }
@@ -365,23 +288,22 @@ test("a captured pending call stays pending after its result is appended", async
     record: forbidden,
     lastSequence: forbidden,
     payload: forbidden,
-    material: forbidden,
     close: forbidden,
   };
   try {
     const records = campaign.records({ through: campaign.lastSequence() });
     const summary = inspectCoreCampaignSummaryRecords(records);
     expect(summary.callsWithoutResult?.count).toBe(1);
-    expect(
-      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
-    ).toBe("unsettled");
+    expect(inspectCoreCampaignRecords(reader, records).calls[0]!.state).toBe(
+      "unsettled",
+    );
     finish();
     await pending;
     expect(campaign.lastSequence()).toBeGreaterThan(summary.lastSeq);
     expect(inspectCoreCampaignSummaryRecords(records)).toEqual(summary);
-    expect(
-      inspectCoreCampaignRecords(reader, records).calls[0]!.settlement,
-    ).toBe("unsettled");
+    expect(inspectCoreCampaignRecords(reader, records).calls[0]!.state).toBe(
+      "unsettled",
+    );
     expect(forbiddenReads).toBe(0);
     const latest = inspectCoreCampaignSummaryRecords(campaign.records());
     expect(latest).not.toHaveProperty("callsWithoutResult");
@@ -393,29 +315,10 @@ test("a captured pending call stays pending after its result is appended", async
   }
 });
 
-test("preserves non-UTF-8 candidate bytes without invented text", () => {
-  const path = campaignPath();
-  const campaign = createCampaign(path, "binary-workflow", null);
-  try {
-    campaign.submitCandidate(new Uint8Array([0xff]), ["proof"]);
-  } finally {
-    campaign.close();
-  }
-
-  expect(inspectCoreCampaign(path).candidates[0]!.material).toEqual({
-    bytes: 1,
-    encoding: "base64",
-    base64: "/w==",
-  });
-});
-
-test("summarizes without response, evidence, operation, or material payloads", async () => {
+test("summarizes without response or operation payloads", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, "changing-workflow", { opaque: true });
   try {
-    campaign.submitCandidate(new TextEncoder().encode("large material"), [
-      "proof",
-    ]);
     await campaign.call(
       { label: "workflow/call", request: { opaque: true } },
       async () => ({ response: "large response" }),
@@ -426,13 +329,10 @@ test("summarizes without response, evidence, operation, or material payloads", a
 
   const summary = inspectCoreCampaignSummary(path);
   expect(summary).toMatchObject({
-    schema: "xean.core-observation-summary/v1",
+    schema: "xean.core-observation-summary/v2",
     application: "changing-workflow",
     callCount: 1,
-    candidateCount: 1,
-    verifiedCandidateCount: 0,
   });
-  expect(JSON.stringify(summary)).not.toContain("large material");
   expect(JSON.stringify(summary)).not.toContain("large response");
   expect(summary).not.toHaveProperty("applicationConfig");
 });
@@ -521,7 +421,7 @@ test("reports an unsettled Pi call as unaccounted", async () => {
     expect(inspectCoreCampaign(path)).toMatchObject({
       calls: [
         {
-          settlement: "unsettled",
+          state: "unsettled",
           pi: { accounting: { state: "unaccounted" } },
         },
       ],
@@ -802,41 +702,34 @@ test.each([
   },
 );
 
-test.each([
-  { role: "assistant", usage: null },
-  { role: "assistant", usage: { ...firstUsage, reasoning: -1 } },
-  {
-    role: "assistant",
-    usage: { ...firstUsage, cost: { ...firstUsage.cost, output: -1 } },
-  },
-  { role: "assistant", usage: { ...firstUsage, reasoning: 6 } },
-])(
-  "invalid assistant usage preserves unavailable reasoning cost: %j",
-  async (invalid) => {
-    const campaign = createCampaign(campaignPath(), "invalid-usage", null);
-    try {
-      await campaign.call(
-        { label: "measured", request: piRequest() },
-        async ({ call }) =>
-          piResult(
-            campaign,
-            call,
-            [measured(firstUsage)],
-            [message(firstUsage), invalid],
-          ),
-      );
-      const records = campaign.records();
-      const full = inspectCoreCampaignRecords(campaign, records);
-      const summary = inspectCoreCampaignSummaryRecords(records);
-      expect(full.calls[0]?.pi?.accounting.state).toBe("available");
-      expect(full.spend.breakdown?.estimatedReasoningCostUsd).toBeUndefined();
-      expect(summary.spend).toEqual({
-        ...full.spend,
-        unsupportedCalls: 0,
-        unaccountedCalls: 0,
-      });
-    } finally {
-      campaign.close();
-    }
-  },
-);
+test("request accounting ignores transcript usage snapshots", async () => {
+  const campaign = createCampaign(campaignPath(), "request-accounting", null);
+  try {
+    await campaign.call(
+      { label: "measured", request: piRequest() },
+      async ({ call }) =>
+        piResult(
+          campaign,
+          call,
+          [measured(firstUsage)],
+          [{ role: "assistant", usage: { invalid: true } }],
+        ),
+    );
+    const records = campaign.records();
+    const full = inspectCoreCampaignRecords(campaign, records);
+    expect(full.calls[0]?.pi?.accounting.state).toBe("available");
+    expect(full.spend.breakdown).toEqual({
+      freshInputTokens: 9,
+      cachedInputTokens: 2,
+      reasoningOutputTokens: 3,
+      nonReasoningOutputTokens: 2,
+    });
+    expect(inspectCoreCampaignSummaryRecords(records).spend).toEqual({
+      ...full.spend,
+      unsupportedCalls: 0,
+      unaccountedCalls: 0,
+    });
+  } finally {
+    campaign.close();
+  }
+});

@@ -77,15 +77,18 @@ function script(replies: Record<string, readonly Reply[]>) {
 const coordinate = (all = false): Reply => ({
   submission: {
     filings: [{ note: "n1", summary: "Lemma L." }],
-    explorerGuidance: "Develop another argument using L while it is checked.",
-    support: ["n1"],
-    verify: [
-      {
-        note: "n1",
-        verifiers: all ? [...verifierNames] : ["correctness", "source"],
-      },
-    ],
-    action: { role: "verifier" },
+
+    action: {
+      role: "verifier",
+      explorerGuidance: "Develop another argument using L while it is checked.",
+      support: ["n1"],
+      verify: [
+        {
+          note: "n1",
+          verifiers: all ? [...verifierNames] : ["correctness", "source"],
+        },
+      ],
+    },
   },
 });
 
@@ -639,13 +642,16 @@ test("two overlap dispatches rejoin the coordinator and drain multiple verificat
         note,
         summary: `Statement of ${note}.`,
       })),
-      explorerGuidance: `Develop the next step from ${support.join(", ")}.`,
-      support,
-      verify: ids.map((note) => ({
-        note,
-        verifiers: ["correctness", "source"],
-      })),
-      action: { role: "verifier" },
+
+      action: {
+        role: "verifier",
+        explorerGuidance: `Develop the next step from ${support.join(", ")}.`,
+        support,
+        verify: ids.map((note) => ({
+          note,
+          verifiers: ["correctness", "source"],
+        })),
+      },
     },
   });
   const drive = script({
@@ -720,7 +726,7 @@ test("two overlap dispatches rejoin the coordinator and drain multiple verificat
       ({ label }) => label === verifierLabels.correctness,
     );
     expect(checks).toHaveLength(4);
-    expect(new Set(checks.map(({ candidate }) => candidate)).size).toBe(4);
+    expect(new Set(checks.map(({ parent }) => parent)).size).toBe(4);
     const noCalls = script({});
     expect(
       await runWorkflow(

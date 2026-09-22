@@ -2,7 +2,6 @@ import { Database, SQLiteError } from "bun:sqlite";
 import { closeSync, constants, existsSync, openSync, rmSync } from "node:fs";
 import { lstatSync, readSync } from "node:fs";
 import { basename } from "node:path";
-import { isUint8Array } from "node:util/types";
 import { z } from "zod";
 
 import {
@@ -13,7 +12,7 @@ import {
 } from "./schemas";
 import type { Entry, EntryDraft, EntryId, Json, RecordQuery } from "./types";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const APPLICATION_ID = 0x7865616e; // SQLite product identity: ASCII "xean".
 const ENTRY_KIND_SQL = Object.values(ENTRY_KINDS)
   .map((kind) => `'${kind}'`)
@@ -26,12 +25,11 @@ const SCHEMA = `
     body TEXT NOT NULL CHECK(json_valid(body) AND json_type(body) = 'object'),
     label TEXT GENERATED ALWAYS AS (json_extract(body, '$.label')) STORED,
     call_id INTEGER GENERATED ALWAYS AS (json_extract(body, '$.call')) STORED,
-    parent_id INTEGER GENERATED ALWAYS AS (json_extract(body, '$.parent')) STORED,
-    material BLOB CHECK((kind = 'candidate') = (material IS NOT NULL))
+    parent_id INTEGER GENERATED ALWAYS AS (json_extract(body, '$.parent')) STORED
   ) STRICT;
   CREATE UNIQUE INDEX one_campaign ON entries(kind) WHERE kind = 'campaign';
   CREATE UNIQUE INDEX one_result ON entries(json_extract(body, '$.parent')) WHERE kind IN ('call-result', 'tool-result');
-  CREATE UNIQUE INDEX one_verdict_call ON entries(json_extract(body, '$.call')) WHERE kind = 'verdict';
+  CREATE UNIQUE INDEX one_evidence_call ON entries(call_id) WHERE kind = 'evidence';
   CREATE INDEX entries_kind_seq ON entries(kind, seq);
   CREATE INDEX entries_label_seq ON entries(label, seq);
   CREATE INDEX entries_call_seq ON entries(call_id, seq);
@@ -53,9 +51,6 @@ interface EntryRow {
   readonly atMs: number | bigint;
   readonly kind: string;
   readonly body: string;
-}
-interface MaterialRow {
-  readonly material: Uint8Array;
 }
 const payloadDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const digest = (text: string): string =>
@@ -84,11 +79,6 @@ function parsedRow(row: EntryRow): Entry {
 function configure(database: Database): void {
   database.run("PRAGMA synchronous = FULL");
   database.run("PRAGMA journal_mode = DELETE");
-}
-
-function copyBytes(value: Uint8Array): Uint8Array {
-  if (!isUint8Array(value)) throw new TypeError("candidate must be Uint8Array");
-  return new Uint8Array(value);
 }
 
 function validatePath(path: string): void {
@@ -226,17 +216,16 @@ export class Journal {
     }
   }
 
-  append(draft: EntryDraft, material?: Uint8Array): Entry {
+  append(draft: EntryDraft): Entry {
     const atMs = Date.now();
     const checked = entrySchema.parse({ ...draft, seq: 1, atMs });
     const body: Record<string, unknown> = { ...checked };
     delete body.kind;
     delete body.seq;
     delete body.atMs;
-    const storedMaterial = material === undefined ? null : copyBytes(material);
     const result = this.#database.run(
-      "INSERT INTO entries(at_ms, kind, body, material) VALUES (?, ?, ?, ?)",
-      [atMs, checked.kind, JSON.stringify(body), storedMaterial],
+      "INSERT INTO entries(at_ms, kind, body) VALUES (?, ?, ?)",
+      [atMs, checked.kind, JSON.stringify(body)],
     );
     return {
       ...checked,
@@ -337,17 +326,6 @@ export class Journal {
     if (row === null) throw new Error(`payload not found: ${hash}`);
     if (digest(row.body) !== hash) throw new Error("payload digest mismatch");
     return JSON.parse(row.body) as Json;
-  }
-
-  material(value: EntryId): Uint8Array {
-    const candidate = entryId.parse(value);
-    const row = this.#database
-      .query<MaterialRow, [EntryId]>(
-        "SELECT material FROM entries WHERE kind = 'candidate' AND seq = ?",
-      )
-      .get(candidate);
-    if (row === null) throw new Error(`candidate not found: ${candidate}`);
-    return copyBytes(row.material);
   }
 
   close(): void {

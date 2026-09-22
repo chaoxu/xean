@@ -3,15 +3,13 @@ import { z } from "zod";
 import {
   createCampaign,
   defineTool,
-  deriveCandidateStatus,
   openCampaign,
   returnedToolSubmission,
-  verdictSchema,
 } from "../../src";
 import type { Campaign, Entry, EntryId, Json } from "../../src";
 
 // Reference coordinator for recovery testing. It implements the resume
-// contract from docs/design.md over the kernel: every session derives the
+// contract over the kernel: every session derives the
 // next unresolved phase from the journal alone, reconciles committed work
 // without new model calls, and treats calls without results as unresolved.
 
@@ -30,7 +28,7 @@ const phaseOutput = z.strictObject({
 });
 
 const verdictSubmission = z.strictObject({
-  verdict: verdictSchema,
+  verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
   evidence: z.string(),
 });
 const submitVerdict = defineTool({
@@ -67,9 +65,9 @@ export function countingModel(): ScriptedModel & { calls: number } {
 
 export type Action =
   | { readonly kind: "explore"; readonly round: number }
-  | { readonly kind: "submit-candidate" }
+  | { readonly kind: "open-verification" }
   | { readonly kind: "verify"; readonly verifier: string }
-  | { readonly kind: "record-verdict"; readonly verifier: string }
+  | { readonly kind: "record-evidence"; readonly verifier: string }
   | { readonly kind: "done" };
 
 function successfulCalls(
@@ -113,39 +111,52 @@ function exploredEvidence(
   return evidence;
 }
 
-function verdictedCalls(records: readonly Entry[]): ReadonlySet<EntryId> {
+function evidencedCalls(records: readonly Entry[]): ReadonlySet<EntryId> {
   return new Set(
-    records.flatMap((entry) => (entry.kind === "verdict" ? [entry.call] : [])),
+    records.flatMap((entry) => (entry.kind === "evidence" ? [entry.call] : [])),
   );
 }
 
 export function deriveNextAction(records: readonly Entry[]): Action {
-  const candidate = records.find((entry) => entry.kind === "candidate");
-  if (candidate === undefined) {
+  const opening = records.find(
+    (entry) => entry.kind === "call" && entry.label === "verification/v1",
+  );
+  if (opening === undefined) {
     const evidence = exploredEvidence(records);
     for (let round = 1; round <= ROUNDS; round += 1) {
       if (!evidence.has(round)) return { kind: "explore", round };
     }
-    return { kind: "submit-candidate" };
+    return { kind: "open-verification" };
   }
-  const status = deriveCandidateStatus(records, candidate.seq);
-  if (status.verified) return { kind: "done" };
+  const completed = new Set(
+    records.flatMap((entry) => {
+      if (entry.kind !== "evidence") return [];
+      const call = records.find((value) => value.seq === entry.call);
+      return call?.kind === "call" &&
+        call.parent === opening.seq &&
+        verdictSubmission.parse(entry.evidence).verdict === "PASS"
+        ? [call.label]
+        : [];
+    }),
+  );
+  if (VERIFIERS.every((verifier) => completed.has(verifier)))
+    return { kind: "done" };
   const successes = successfulCalls(records);
-  const verdicted = verdictedCalls(records);
+  const evidenced = evidencedCalls(records);
   for (const verifier of VERIFIERS) {
-    if (!status.missing.includes(verifier)) continue;
+    if (completed.has(verifier)) continue;
     const unreconciled = [...successes.values()].find(
       (call) =>
         call.label === verifier &&
-        call.candidate === candidate.seq &&
-        !verdicted.has(call.seq),
+        call.parent === opening.seq &&
+        !evidenced.has(call.seq),
     );
     if (unreconciled !== undefined) {
-      return { kind: "record-verdict", verifier };
+      return { kind: "record-evidence", verifier };
     }
     return { kind: "verify", verifier };
   }
-  throw new Error("candidate is unverified with no missing verifier");
+  throw new Error("opening is unverified with no missing verifier");
 }
 
 async function performAction(
@@ -167,34 +178,34 @@ async function performAction(
       );
       return;
     }
-    case "submit-candidate": {
+    case "open-verification": {
       const evidence = exploredEvidence(campaign.records());
       const lines = Array.from({ length: ROUNDS }, (_, index) => {
         const value = evidence.get(index + 1);
         if (value === undefined) throw new Error("missing committed evidence");
         return value;
       });
-      campaign.submitCandidate(new TextEncoder().encode(lines.join("\n")), [
-        ...VERIFIERS,
-      ]);
+      await campaign.call(
+        { label: "verification/v1", request: lines.join("\n") },
+        async () => ({ state: "succeeded" }),
+      );
       return;
     }
     case "verify": {
-      const candidate = campaign
+      const opening = campaign
         .records()
-        .find((entry) => entry.kind === "candidate");
-      if (candidate === undefined) throw new Error("verify without candidate");
-      const material = new TextDecoder().decode(
-        campaign.material(candidate.seq),
-      );
+        .find(
+          (entry) => entry.kind === "call" && entry.label === "verification/v1",
+        );
+      if (opening?.kind !== "call") throw new Error("verify without opening");
+      const material = z.string().parse(opening.request);
       await campaign.call(
         {
           label: action.verifier,
-          candidate: candidate.seq,
+          parent: opening.seq,
           request: {
             protocol: "recovery/verify/v1",
             verifier: action.verifier,
-            candidate: candidate.seq,
           },
           tools: [submitVerdict],
         },
@@ -207,17 +218,19 @@ async function performAction(
       );
       return;
     }
-    case "record-verdict": {
+    case "record-evidence": {
       const records = campaign.records();
-      const candidate = records.find((entry) => entry.kind === "candidate");
-      if (candidate === undefined) throw new Error("verdict without candidate");
+      const opening = records.find(
+        (entry) => entry.kind === "call" && entry.label === "verification/v1",
+      );
+      if (opening === undefined) throw new Error("verdict without opening");
       const successes = successfulCalls(records);
-      const verdicted = verdictedCalls(records);
+      const evidenced = evidencedCalls(records);
       const call = [...successes.values()].find(
         (value) =>
           value.label === action.verifier &&
-          value.candidate === candidate.seq &&
-          !verdicted.has(value.seq),
+          value.parent === opening.seq &&
+          !evidenced.has(value.seq),
       );
       if (call === undefined) throw new Error("no verifier call to reconcile");
       const submission = returnedToolSubmission(
@@ -226,7 +239,7 @@ async function performAction(
         submitVerdict.name,
       );
       const report = verdictSubmission.parse(submission.input);
-      campaign.recordVerdict(call.seq, report.verdict, report.evidence);
+      campaign.recordEvidence(call.seq, report);
       return;
     }
     case "done":

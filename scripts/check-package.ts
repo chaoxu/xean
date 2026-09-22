@@ -77,10 +77,9 @@ try {
     join(consumer, "index.ts"),
     `import { isDeepStrictEqual } from "node:util";
 import {
-  createCampaign, defineTool, deriveCandidateStatus,
-  openCampaign, openReader, returnedToolSubmission, verdictSchema,
+  createCampaign, defineTool,
+  openCampaign, openReader, returnedToolSubmission,
   type CallReceipt, type Campaign, type Entry, type Json, type RecordQuery,
-  type Verdict,
 } from "xean";
 import {
   builtinPi, derivePiSpend,
@@ -92,16 +91,14 @@ import {
 import {
   inspectCoreCampaign, inspectCoreCampaignSummary,
   inspectCoreCallSummaries,
-  type CoreCallSummaryV1, type CoreCampaignObservationV1, type CoreCampaignSummaryV1,
+  type CoreCallSummaryV2, type CoreCampaignObservationV2, type CoreCampaignSummaryV2,
 } from "xean/observe";
 import { z } from "zod";
 
 const campaign = createCampaign("consumer.db", "packed-consumer", null);
 try {
-  const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), ["v1"]);
-  deriveCandidateStatus(campaign.records(), candidate);
   derivePiSpend(campaign.records());
-  piRequest.parse({ protocol: "xean/pi-run/v3", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
+  piRequest.parse({ protocol: "xean/pi-run/v4", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
   piStoredResult.parse({ state: "succeeded", text: "x", transcript: [] });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), async run() { return null; } });
@@ -154,12 +151,18 @@ try {
   if (probe.state !== "failed" || spend.logicalProviderRequests !== 1 ||
     !("measuredUsage" in spend) || spend.measuredUsage.reasoning !== 3)
     throw new Error("Packed consumer did not receive the patched native Pi provider");
+  const checked = await campaign.call({ label: "check", parent: probe.call, request: "claim" },
+    async () => ({ state: "succeeded" }));
+  const evidence = campaign.recordEvidence(checked.call, { verdict: "PASS" });
+  if (campaign.record(evidence)?.kind !== "evidence" ||
+    !campaign.records({ kinds: ["call"], parent: probe.call }).some(entry => entry.seq === checked.call))
+    throw new Error("Packed consumer did not preserve call ownership and evidence");
 } finally { campaign.close(); }
-void [verdictSchema, openCampaign, openReader,
+void [openCampaign, openReader,
   returnedToolSubmission, piReasoning, piRequestAttempts, runPi];
 void (undefined as unknown as CallReceipt | Campaign | Entry | Json | RecordQuery |
-  Verdict | PiResult | PiSpend | CoreCallSummaryV1 | CoreCampaignObservationV1 |
-  CoreCampaignSummaryV1);
+  PiResult | PiSpend | CoreCallSummaryV2 | CoreCampaignObservationV2 |
+  CoreCampaignSummaryV2);
 void [inspectCoreCampaign, inspectCoreCampaignSummary];
 `,
   );

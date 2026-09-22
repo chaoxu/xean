@@ -122,8 +122,11 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
     {
       submission: {
         filings: [{ note: "n1", summary: "A claimed proof." }],
-        verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+        },
       },
     },
     {
@@ -364,10 +367,12 @@ test.each([false, true])(
           filings: saveFirst
             ? [{ note: "n1", summary: "Earlier partial work." }]
             : [],
-          explorerGuidance: guidance,
-          support: saveFirst ? ["n1"] : [],
-          verify: [],
-          action: { role: "explorer" },
+
+          action: {
+            role: "explorer",
+            explorerGuidance: guidance,
+            support: saveFirst ? ["n1"] : [],
+          },
         },
       },
       {
@@ -386,10 +391,12 @@ test.each([false, true])(
           filings: [
             { note: nextId, summary: "A counting argument with a gap." },
           ],
-          explorerGuidance: "Resolve the remaining gap.",
-          support: [],
-          verify: [],
-          action: { role: "explorer" },
+
+          action: {
+            role: "explorer",
+            explorerGuidance: "Resolve the remaining gap.",
+            support: [],
+          },
         },
       },
       { submission: { notes: [], solution: false } },
@@ -478,7 +485,7 @@ test("omitted response budget is saved explicitly and matches its explicit defau
   try {
     expect(campaign.record(1)).toMatchObject({
       config: {
-        schemaVersion: 31,
+        schemaVersion: 32,
         settings: { maxExplorerResponses: 4 },
       },
     });
@@ -555,10 +562,12 @@ test.each([1, 3])(
             note: `n${index + 1}`,
             summary: note.text,
           })),
-          explorerGuidance: "Continue.",
-          support: [],
-          verify: [],
-          action: { role: "explorer" },
+
+          action: {
+            role: "explorer",
+            explorerGuidance: "Continue.",
+            support: [],
+          },
         },
       },
       { submission: { notes: [], solution: false } },
@@ -719,10 +728,12 @@ test("every saved submission reaches the coordinator, including early proofs bef
           note,
           summary: "Partial work.",
         })),
-        explorerGuidance: "Continue.",
-        support: [],
-        verify: [],
-        action: { role: "explorer" },
+
+        action: {
+          role: "explorer",
+          explorerGuidance: "Continue.",
+          support: [],
+        },
       },
     },
     { submission: { notes: [], solution: false } },

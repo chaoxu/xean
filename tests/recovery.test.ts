@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-import { deriveCandidateStatus, openReader } from "../src";
+import { openReader } from "../src";
 import type { Entry } from "../src";
 import {
   countingModel,
@@ -37,9 +37,7 @@ function verifiedProjection(path: string): readonly string[] {
   const reader = openReader(path);
   try {
     const records = reader.records();
-    const candidate = records.find((entry) => entry.kind === "candidate");
-    expect(candidate).toBeDefined();
-    expect(deriveCandidateStatus(records, candidate!.seq).verified).toBe(true);
+    expect(deriveNextAction(records)).toEqual({ kind: "done" });
     return projection(records);
   } finally {
     reader.close();
@@ -106,19 +104,22 @@ describe("campaign recovery", () => {
     );
   });
 
-  test("a repeated verdict for the same call is rejected durably", async () => {
+  test("a repeated evidence for the same call is rejected durably", async () => {
     const path = temporaryPath();
     await runSession(startCampaign(path), countingModel());
     const campaign = resumeCampaign(path);
     try {
       const records = campaign.records();
-      const verdict = records.find((entry) => entry.kind === "verdict");
+      const verdict = records.find((entry) => entry.kind === "evidence");
       expect(verdict).toBeDefined();
       const before = records.length;
       // A buggy or racing coordinator that replays a settled verdict must be
       // stopped by the journal itself, not by coordinator discipline.
       expect(() =>
-        campaign.recordVerdict(verdict!.call, "FAIL", "replayed verdict"),
+        campaign.recordEvidence(verdict!.call, {
+          verdict: "FAIL",
+          evidence: "replayed verdict",
+        }),
       ).toThrow(/UNIQUE|constraint/i);
       expect(campaign.records()).toHaveLength(before);
     } finally {
@@ -152,7 +153,7 @@ describe("campaign recovery", () => {
     const model = countingModel();
     const resumed = await runSession(resumeCampaign(path), model);
     expect(resumed.interrupted).toBe(false);
-    // Round one is committed and not repeated; round two, the candidate, and
+    // Round one is committed and not repeated; round two, the verification opening, and
     // both verifications remain.
     expect(model.calls).toBe(3);
 
@@ -172,8 +173,7 @@ describe("campaign recovery", () => {
       );
       // The interrupted call stays in the journal with an unknown outcome.
       expect(unsettled).toHaveLength(1);
-      const candidate = all.find((entry) => entry.kind === "candidate");
-      expect(deriveCandidateStatus(all, candidate!.seq).verified).toBe(true);
+      expect(deriveNextAction(all)).toEqual({ kind: "done" });
     } finally {
       records.close();
     }
@@ -215,7 +215,7 @@ describe("campaign recovery", () => {
         (entry) => entry.kind === "call" && entry.label === "audit/v1",
       );
       expect(audits).toHaveLength(2);
-      const verdicts = all.filter((entry) => entry.kind === "verdict");
+      const verdicts = all.filter((entry) => entry.kind === "evidence");
       // Exactly one verdict per verifier; the torn call never gains one.
       expect(verdicts).toHaveLength(2);
       const verdictCalls = new Set(verdicts.map((entry) => entry.call));
@@ -228,8 +228,7 @@ describe("campaign recovery", () => {
         ),
       );
       expect(verdictCalls.has(settledAudit!.seq)).toBe(true);
-      const candidate = all.find((entry) => entry.kind === "candidate");
-      expect(deriveCandidateStatus(all, candidate!.seq).verified).toBe(true);
+      expect(deriveNextAction(all)).toEqual({ kind: "done" });
     } finally {
       records.close();
     }

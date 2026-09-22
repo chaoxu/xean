@@ -1,7 +1,7 @@
 import type { Campaign, Entry, EntryId } from "xean";
 import { z } from "zod";
 
-import { boundaryLabels, inbox } from "./inbox";
+import { inbox } from "./inbox";
 import { nonblank, roleLabels } from "./roles";
 
 const guidanceRequest = z.strictObject({
@@ -9,17 +9,7 @@ const guidanceRequest = z.strictObject({
   id: nonblank,
   text: nonblank,
 });
-const guidance = inbox({
-  receiptLabel: "xean-solve/guidance",
-  receiptSchema: guidanceRequest,
-  boundaryLabel: boundaryLabels.guidance,
-  startedLabels: [
-    boundaryLabels.overlap,
-    roleLabels.explorer,
-    roleLabels.coordinator,
-    boundaryLabels.notes,
-  ],
-});
+const guidance = inbox("guidance", guidanceRequest);
 
 export async function appendGuidance(
   path: string,

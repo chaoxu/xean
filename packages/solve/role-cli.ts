@@ -9,8 +9,9 @@ import {
   type Entry,
   type Json,
 } from "xean";
-import { builtinPi, derivePiSpend, piRequest, piResultRecord } from "xean/pi";
+import { builtinPi, derivePiSpend } from "xean/pi";
 import { z } from "zod";
+import { inspectCoreCallSummaries } from "xean/observe";
 
 import { campaignAccounting } from "./accounting";
 import { appendGuidance, inspectGuidance } from "./guidance";
@@ -18,36 +19,22 @@ import { appendSubmittedNotes, inspectSubmittedNotes } from "./notes";
 import { executionReport } from "./execution-contract";
 import {
   createPiRoles,
+  roleSubmission,
   piProviders,
   solveSettings,
   localSourceRequest,
-  localSourceResult,
   type SolveSettings,
 } from "./pi-roles";
 import {
   applicationId,
   assertApplication,
   coordinatorInput,
-  coordinatorResult,
-  correctnessVerdicts,
   explorerInput,
-  explorerResult,
   literatureInput,
-  literatureReport,
   jsonSnapshot,
   roleFromLabel,
-  returnedOutput,
   roleNames,
-  proof,
-  reconstructionCalls,
-  reconstructionResult,
-  roleTools,
-  sourceSubmission,
-  statement,
-  succeededSubmission,
-  savedExplorerSubmission,
   submittedNotes,
-  verdicts,
   verifierFromLabel,
   verifierInput,
   workflowRecords,
@@ -59,14 +46,10 @@ import {
   modelRegistryPath,
   requireCredentials,
   withCampaignLock,
+  withSignals,
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
-import {
-  codexRequest,
-  codexResult,
-  codexSubmission,
-  requireCodex,
-} from "./source";
+import { codexRequest, codexOutcome, requireCodex } from "./source";
 import {
   deriveWorkflow,
   workflowConfig,
@@ -111,107 +94,6 @@ function openCalls(path: string): Campaign {
   }
 }
 
-function visibleSubmission(
-  records: readonly Entry[],
-  call: Extract<Entry, { readonly kind: "call" }>,
-  role: RoleName,
-): Json | undefined {
-  const verifier = verifierFromLabel(call.label);
-  try {
-    if (role === "literature") {
-      const submission = codexSubmission(records, call.seq);
-      return submission === undefined
-        ? undefined
-        : jsonSnapshot({
-            ...literatureReport.parse(submission.input),
-            usage: submission.usage,
-          });
-    }
-    if (verifier === "source") {
-      if (localSourceRequest.safeParse(call.request).success) {
-        const output = returnedOutput(records, call.seq);
-        if (output === undefined) return undefined;
-        return jsonSnapshot({
-          verifier,
-          ...localSourceResult.parse(output.output),
-        });
-      }
-      if (codexRequest.safeParse(call.request).success) {
-        const submission = codexSubmission(records, call.seq);
-        if (submission === undefined) return undefined;
-        return jsonSnapshot({
-          verifier,
-          ...sourceSubmission.parse(submission.input),
-          usage: submission.usage,
-        });
-      }
-      return undefined;
-    }
-    for (const [name, schema] of [
-      ["statement", statement],
-      ["proof", proof],
-    ] as const) {
-      if (call.label !== reconstructionCalls[name].label) continue;
-      const submission = succeededSubmission(
-        records,
-        call.seq,
-        reconstructionCalls[name].tool,
-      );
-      return submission === undefined
-        ? undefined
-        : schema.parse(submission.input);
-    }
-    const submission =
-      role === "explorer"
-        ? savedExplorerSubmission(records, call.seq)
-        : succeededSubmission(records, call.seq, roleTools[role]);
-    if (submission === undefined) return undefined;
-    if (role === "explorer") {
-      return explorerResult.parse(submission.input);
-    }
-    if (role === "coordinator") {
-      return jsonSnapshot(coordinatorResult.parse(submission.input));
-    }
-    if (verifier === undefined) return undefined;
-    if (verifier === "reconstruction") {
-      return jsonSnapshot({
-        verifier,
-        ...reconstructionResult.parse(submission.input),
-      });
-    }
-    if (verifier === "correctness") {
-      return jsonSnapshot({
-        verifier,
-        ...correctnessVerdicts.parse(submission.input),
-      });
-    }
-    return jsonSnapshot({ verifier, ...verdicts.parse(submission.input) });
-  } catch {
-    return undefined;
-  }
-}
-
-/** Kernel settlement and provider execution outcome are separate facts. */
-function callDiagnostic(
-  call: Extract<Entry, { readonly kind: "call" }>,
-  result: Extract<Entry, { readonly kind: "call-result" }> | undefined,
-) {
-  if (result === undefined) return {};
-  if (result.state === "threw") return { error: result.error };
-  const parsed = piRequest.safeParse(call.request).success
-    ? piResultRecord.safeParse(result.output)
-    : localSourceRequest.safeParse(call.request).success
-      ? localSourceResult.safeParse(result.output)
-      : codexRequest.safeParse(call.request).success
-        ? codexResult.safeParse(result.output)
-        : undefined;
-  if (!parsed?.success) return {};
-  return {
-    outcome: parsed.data.state,
-    ...(parsed.data.state === "succeeded" ? {} : { error: parsed.data.error }),
-  };
-}
-
 export interface InspectionOptions {
   readonly includeRequests?: boolean;
   readonly includeGuidance?: boolean;
@@ -242,56 +124,66 @@ export async function inspectCampaignRecords(
 export async function inspectAndExportCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions = {},
-): Promise<{ inspection: Json; candidate?: Uint8Array }> {
+): Promise<{ inspection: Json; solution?: Uint8Array }> {
   return projectCampaignRecords(records, options, true);
 }
 
 async function projectCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions,
-  includeCandidate: boolean,
-): Promise<{ inspection: Json; candidate?: Uint8Array }> {
+  includeSolution: boolean,
+): Promise<{ inspection: Json; solution?: Uint8Array }> {
   assertApplication(records[0]);
   const declaration = records[0];
   const config = inspectionConfig.parse(
     declaration?.kind === "campaign" ? declaration.config : undefined,
   );
-  const results = new Map(
-    records
-      .filter((entry) => entry.kind === "call-result")
-      .map((entry) => [entry.parent, entry]),
+  const entries = new Map(records.map((entry) => [entry.seq, entry]));
+  const evidence = new Map(
+    records.flatMap((entry) =>
+      entry.kind === "evidence" ? [[entry.call, entry.evidence] as const] : [],
+    ),
   );
-  const calls = records
-    .filter(
-      (entry): entry is Extract<Entry, { readonly kind: "call" }> =>
-        entry.kind === "call" && roleFromLabel(entry.label) !== undefined,
-    )
-    .map((entry) => {
-      const role = roleFromLabel(entry.label)!;
+  const calls = inspectCoreCallSummaries(records)
+    .filter(({ label }) => roleFromLabel(label) !== undefined)
+    .map(({ pi, tools: _tools, ...facts }) => {
+      const entry = entries.get(facts.call)!;
+      if (entry.kind !== "call") throw new Error(`missing call ${facts.call}`);
       const verifier = verifierFromLabel(entry.label);
-      const result = results.get(entry.seq);
-      const visible =
-        entry.role === role
-          ? visibleSubmission(records, entry, role)
-          : undefined;
+      const provider = codexRequest.safeParse(entry.request).success
+        ? codexOutcome(records, facts.call)
+        : undefined;
+      let submission: Json | undefined;
+      let submissionError: string | undefined;
+      try {
+        submission = roleSubmission(records, entry);
+      } catch (error) {
+        submissionError =
+          error instanceof Error ? error.message : String(error);
+      }
+      const outcome =
+        pi?.outcome ??
+        provider?.state ??
+        (facts.state === "returned" &&
+        localSourceRequest.safeParse(entry.request).success
+          ? "succeeded"
+          : undefined);
       return {
-        call: entry.seq,
-        role,
-        label: entry.label,
+        ...facts,
+        ...(facts.settledAtMs === undefined
+          ? {}
+          : { elapsedMs: facts.settledAtMs - facts.startedAtMs }),
         ...(verifier === undefined ? {} : { verifier }),
-        ...(entry.candidate === undefined
+        ...(outcome === undefined ? {} : { outcome }),
+        ...(pi?.error === undefined ? {} : { error: pi.error }),
+        ...(provider === undefined || provider.state === "succeeded"
           ? {}
-          : { candidate: entry.candidate }),
-        startedAtMs: entry.atMs,
-        ...(result === undefined
-          ? {}
-          : {
-              settledAtMs: result.atMs,
-              elapsedMs: result.atMs - entry.atMs,
-              state: result.state,
-            }),
-        ...callDiagnostic(entry, result),
-        ...(visible === undefined ? {} : { submission: visible }),
+          : { error: provider.error }),
+        ...(submission === undefined ? {} : { submission }),
+        ...(submissionError === undefined ? {} : { submissionError }),
+        ...(evidence.has(facts.call)
+          ? { evidence: evidence.get(facts.call) }
+          : {}),
         ...(options.includeRequests === true ? { request: entry.request } : {}),
       };
     });
@@ -346,8 +238,8 @@ async function projectCampaignRecords(
   ) as Json;
   return {
     inspection,
-    ...(includeCandidate && phase?.kind === "accepted"
-      ? { candidate: candidateBytes(phase) }
+    ...(includeSolution && phase?.kind === "accepted"
+      ? { solution: solutionBytes(phase) }
       : {}),
   };
 }
@@ -412,26 +304,26 @@ export async function submitNotes(
 }
 
 /** The accepted note preceded by its transitive support, in id order. */
-export async function exportCandidate(path: string): Promise<Uint8Array> {
+export async function exportSolution(path: string): Promise<Uint8Array> {
   const reader = openReader(path);
   try {
-    return await exportCandidateRecords(workflowRecords(reader));
+    return await exportSolutionRecords(workflowRecords(reader));
   } finally {
     reader.close();
   }
 }
 
-export async function exportCandidateRecords(
+export async function exportSolutionRecords(
   records: readonly Entry[],
 ): Promise<Uint8Array> {
   assertApplication(records[0]);
   const phase = (await deriveWorkflow(records)).phase;
   if (phase.kind !== "accepted")
-    throw new Error("workflow has no accepted candidate");
-  return candidateBytes(phase);
+    throw new Error("workflow has no accepted solution");
+  return solutionBytes(phase);
 }
 
-function candidateBytes(
+function solutionBytes(
   phase: Extract<WorkflowPhase, { kind: "accepted" }>,
 ): Uint8Array {
   const text = [...phase.closure, phase.note.id]
@@ -460,7 +352,7 @@ export async function runRoleCommand(
   if (command === "explorer") explorerInput.parse(input);
   else if (command === "coordinator") coordinatorInput.parse(input);
   else if (command === "literature") literatureInput.parse(input);
-  else await verifierInput.parseAsync(input);
+  else verifierInput.parse(input);
   const runtime =
     command === "literature"
       ? undefined
@@ -475,24 +367,20 @@ export async function runRoleCommand(
   const models =
     runtime === undefined ? builtinPi() : withSerialToolCalls(runtime);
   const controller = new AbortController();
-  const stop = () => controller.abort();
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  try {
-    return await withCampaignLock(campaignPath, async () => {
-      const campaign = openCalls(campaignPath);
-      try {
-        const roles = createPiRoles(campaign, settings, {
-          models,
-          signal: controller.signal,
-        });
-        return jsonSnapshot(await roles[command](input as never));
-      } finally {
-        campaign.close();
-      }
-    });
-  } finally {
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
-  }
+  return withSignals(
+    () => controller.abort(),
+    () =>
+      withCampaignLock(campaignPath, async () => {
+        const campaign = openCalls(campaignPath);
+        try {
+          const roles = createPiRoles(campaign, settings, {
+            models,
+            signal: controller.signal,
+          });
+          return jsonSnapshot(await roles[command](input as never));
+        } finally {
+          campaign.close();
+        }
+      }),
+  );
 }

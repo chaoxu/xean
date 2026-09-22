@@ -16,7 +16,7 @@ import {
   type Note,
   type VerifierInput,
 } from "../roles";
-import { inspectCampaign } from "../role-cli";
+import { inspectCampaign, inspectCampaignRecords } from "../role-cli";
 import {
   campaignPath,
   cleanupCampaigns,
@@ -147,7 +147,7 @@ test("mixed verification sends only notes with external premises and journals lo
       notes: ["n2"],
       correctnessCall: prompt.correctnessCall,
     });
-    expect(local.candidate).toBe(calls(campaign)[0]!.candidate);
+    expect(local.parent).toBe(calls(campaign)[0]!.seq);
     const inspection: any = await inspectCampaign(path);
     expect(
       inspection.calls.find((call: any) => call.call === local.seq).submission,
@@ -369,11 +369,11 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
     }),
   };
   try {
-    const originalRecordVerdict = campaign.recordVerdict.bind(campaign) as (
+    const originalRecordEvidence = campaign.recordEvidence.bind(campaign) as (
       ...args: any[]
     ) => unknown;
     let interrupted = false;
-    (campaign as any).recordVerdict = (...args: any[]) => {
+    (campaign as any).recordEvidence = (...args: any[]) => {
       const entry = campaign.record(args[0]);
       if (
         !interrupted &&
@@ -383,16 +383,16 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
         interrupted = true;
         throw new Error("simulated interruption before source verdict");
       }
-      return originalRecordVerdict(...args);
+      return originalRecordEvidence(...args);
     };
     await expect(
       createPiRoles(campaign, roleSettings(), first).verifier(packet),
     ).rejects.toThrow("simulated interruption");
-    (campaign as any).recordVerdict = originalRecordVerdict;
-    const candidate = calls(campaign).find((call) =>
+    (campaign as any).recordEvidence = originalRecordEvidence;
+    const verification = calls(campaign).find((call) =>
       call.label.endsWith("/correctness"),
-    )?.candidate;
-    if (candidate === undefined) throw new Error("missing candidate");
+    )?.parent;
+    if (verification === undefined) throw new Error("missing verification");
 
     let replacements = 0;
     const second = {
@@ -406,7 +406,7 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
       campaign,
       roleSettings(),
       second,
-    ).verifier(packet, candidate);
+    ).verifier(packet, verification);
     expect(verdicts).toContainEqual(
       expect.objectContaining({
         note: "n1",
@@ -454,6 +454,14 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
           verdict: "INCONCLUSIVE",
         }),
       );
+      const inspection = (await inspectCampaignRecords(
+        campaign.records(),
+      )) as any;
+      const sourceCall = inspection.calls.findLast(
+        (call: any) => call.verifier === "source",
+      );
+      expect(sourceCall.submission.verdicts[0].verdict).toBe("PASS");
+      expect(sourceCall.evidence.verdicts[0].verdict).toBe("INCONCLUSIVE");
     } finally {
       campaign.close();
     }

@@ -375,91 +375,145 @@ const verification = z
   );
 export type Verification = z.output<typeof verification>;
 
+/** The result of the visible checks on one note. */
+function checkEvidence(verdicts: readonly Verdict[]) {
+  const passed = new Set<VerifierName>(),
+    failed = new Set<VerifierName>();
+  for (const { verifier, verdict } of verdicts) {
+    if (verdict === "PASS") passed.add(verifier);
+    if (verdict === "FAIL") failed.add(verifier);
+  }
+  return {
+    passed,
+    failed,
+    dead: [...failed].some((name) => name !== "requirements"),
+  };
+}
+
 /** Outstanding checks in a requested prefix; an inconclusive check may be retried. */
 export function pendingVerifiers(
   note: Pick<Note, "dead" | "verdicts">,
   requested: readonly VerifierName[],
 ): VerifierName[] {
-  if (
-    note.dead ||
-    note.verdicts.some(
-      ({ verifier, verdict }) =>
-        verdict === "FAIL" && requested.includes(verifier),
-    )
-  )
-    return [];
-  return requested.filter(
-    (name) =>
-      !note.verdicts.some(
-        ({ verifier, verdict }) => verifier === name && verdict === "PASS",
-      ),
-  );
+  const evidence = checkEvidence(note.verdicts);
+  return note.dead ||
+    evidence.dead ||
+    requested.some((name) => evidence.failed.has(name))
+    ? []
+    : requested.filter((name) => !evidence.passed.has(name));
 }
 
-/** The coordinator's choice of the role that runs next. */
-export const coordinatorAction = z.discriminatedUnion("role", [
-  z.strictObject({ role: z.literal("explorer") }),
-  z.strictObject({ role: z.literal("literature"), request: nonblank }),
-  z.strictObject({ role: z.literal("verifier") }),
+type EvidenceNote = Pick<Note, "id" | "support"> &
+  Partial<Pick<Note, "verification" | "verified" | "dead">>;
+
+/** Reduce exactly the supplied evidence; callers choose its journal/stage prefix. */
+export function noteEvidence(
+  notes: readonly EvidenceNote[],
+  verdicts: readonly Verdict[],
+  supportChecks: readonly VerifierName[] = verifierNames.slice(0, 2),
+) {
+  const reports = new Map<string, Verdict[]>();
+  for (const verdict of verdicts) {
+    const history = reports.get(verdict.note) ?? [];
+    history.push(verdict);
+    reports.set(verdict.note, history);
+  }
+  const result = new Map<
+    string,
+    ReturnType<typeof checkEvidence> & {
+      verdicts: Verdict[];
+      verified: boolean;
+      accepted: boolean;
+      supportPassed: boolean;
+    }
+  >();
+  // Support precedes its note. One pass handles shared and deep support alike.
+  for (const note of [...notes].sort((a, b) => byId(a.id, b.id))) {
+    const verdicts = reports.get(note.id) ?? [];
+    const checks = checkEvidence(verdicts);
+    const support = note.support.map((id) => result.get(id));
+    const dead =
+      note.dead === true || checks.dead || support.some((value) => value?.dead);
+    const verified =
+      !dead &&
+      (note.verified === true ||
+        note.verification !== undefined ||
+        (checks.passed.has("correctness") && checks.passed.has("source"))) &&
+      support.every((value) => value?.verified);
+    result.set(note.id, {
+      ...checks,
+      verdicts,
+      dead,
+      verified,
+      accepted:
+        verified && verifierNames.every((name) => checks.passed.has(name)),
+      supportPassed: support.every(
+        (value) =>
+          value !== undefined &&
+          (value.verified ||
+            (supportChecks.every((name) => value.passed.has(name)) &&
+              value.supportPassed)),
+      ),
+    });
+  }
+  return result;
+}
+
+/** Coordinator scheduling uses the same note evidence as verification and projection. */
+export function verificationReadiness(notes: readonly Note[]) {
+  const evidence = noteEvidence(
+    notes,
+    notes.flatMap(({ verdicts }) => verdicts),
+  );
+  const ready = notes.filter((note) => {
+    const value = evidence.get(note.id)!;
+    return (
+      !value.dead && note.support.every((id) => evidence.get(id)?.verified)
+    );
+  });
+  return {
+    readyUnchecked: ready
+      .filter(
+        (note) =>
+          !evidence.get(note.id)!.verified && note.verdicts.length === 0,
+      )
+      .map(({ id }) => id),
+    verificationAvailable: ready.some(
+      (note) => pendingVerifiers(note, verifierNames).length > 0,
+    ),
+  };
+}
+
+const explorerAction = z.strictObject({
+  role: z.literal("explorer"),
+  explorerGuidance: nonblank,
+  support: z.array(noteId),
+});
+const literatureAction = z.strictObject({
+  role: z.literal("literature"),
+  request: nonblank,
+});
+const verifierAction = z.strictObject({
+  role: z.literal("verifier"),
+  verify: z.array(verification).min(1),
+});
+const overlapAction = verifierAction.extend({
+  explorerGuidance: nonblank,
+  support: z.array(noteId),
+});
+/** Each action owns exactly the payload its dispatched roles need. */
+export const coordinatorAction = z.union([
+  explorerAction,
+  literatureAction,
+  verifierAction,
+  overlapAction,
 ]);
 export type CoordinatorAction = z.output<typeof coordinatorAction>;
 const actionRoles = ["explorer", "literature", "verifier"] as const;
-
-export const coordinatorResult = z
-  .strictObject({
-    filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
-    // A verifier action includes both fields whenever overlap is enabled.
-    explorerGuidance: nonblank.optional(),
-    support: z.array(noteId).optional(),
-    verify: z.array(verification),
-    action: coordinatorAction,
-  })
-  .superRefine((value, ctx) => {
-    if (
-      value.action.role === "explorer" &&
-      value.explorerGuidance === undefined
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "an explorer action must provide explorer guidance",
-        path: ["explorerGuidance"],
-      });
-    }
-    if (value.action.role === "explorer" && value.support === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        message: "an explorer action must provide support",
-        path: ["support"],
-      });
-    }
-    if (value.action.role === "literature") {
-      if (value.explorerGuidance !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "literature actions must omit explorer guidance",
-          path: ["explorerGuidance"],
-        });
-      }
-      if (value.support !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "literature actions must omit support",
-          path: ["support"],
-        });
-      }
-    }
-    if (
-      value.action.role === "verifier" &&
-      (value.explorerGuidance === undefined) !== (value.support === undefined)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "a verifier action must provide both explorer guidance and support or omit both",
-        path: ["explorerGuidance"],
-      });
-    }
-  });
+export const coordinatorResult = z.strictObject({
+  filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
+  action: coordinatorAction,
+});
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
 /**
@@ -472,7 +526,13 @@ export type CoordinatorResult = z.output<typeof coordinatorResult>;
 export function coordinatorResultFor(
   notes: readonly Pick<
     Note,
-    "id" | "summary" | "support" | "verified" | "dead" | "verdicts"
+    | "id"
+    | "summary"
+    | "support"
+    | "verified"
+    | "dead"
+    | "verdicts"
+    | "verification"
   >[],
   allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
   requiredVerification: readonly string[] = [],
@@ -482,22 +542,20 @@ export function coordinatorResultFor(
   const withoutSummary = new Set(
     notes.filter(({ summary }) => summary === undefined).map(({ id }) => id),
   );
-  const verified = new Set(
-    notes.filter(({ verified }) => verified).map(({ id }) => id),
+  const evidence = noteEvidence(
+    notes,
+    notes.flatMap(({ verdicts }) => verdicts),
   );
-  return coordinatorResult.superRefine((value, ctx) => {
-    if (
-      value.action.role === "verifier" &&
-      (value.explorerGuidance !== undefined) !== overlap
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: overlap
-          ? "overlap requires explorer guidance and support on every verifier action"
-          : "concurrent Explorer requires overlap enabled",
-        path: ["explorerGuidance"],
-      });
-    }
+  const verified = new Set(
+    notes.filter(({ id }) => evidence.get(id)!.verified).map(({ id }) => id),
+  );
+  const action = z.discriminatedUnion("role", [
+    explorerAction,
+    literatureAction,
+    overlap ? overlapAction : verifierAction,
+  ]);
+  return coordinatorResult.extend({ action }).superRefine((value, ctx) => {
+    const verify = value.action.role === "verifier" ? value.action.verify : [];
     if (!allowedActions.includes(value.action.role)) {
       ctx.addIssue({
         code: "custom",
@@ -505,73 +563,59 @@ export function coordinatorResultFor(
         path: ["action"],
       });
     }
-    if (value.action.role === "verifier" && value.verify.length === 0) {
-      ctx.addIssue({
-        code: "custom",
-        message: "a verifier action must list a note to verify",
-        path: ["verify"],
-      });
-    }
-    if (value.action.role !== "verifier" && value.verify.length > 0) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "an explorer or literature action cannot carry a verification list",
-        path: ["verify"],
-      });
-    }
-    const listed = new Set(value.verify.map(({ note }) => note));
+    const listed = new Set(verify.map(({ note }) => note));
     const missing = requiredVerification.filter((id) => !listed.has(id));
     if (missing.length > 0) {
       ctx.addIssue({
         code: "custom",
         message: `the coordinator behavior requires verifying every unverified live note without a verdict over verified support; missing: ${missing.join(", ")}`,
-        path: ["verify"],
+        path: ["action", "verify"],
       });
     }
-    const filed = new Set<string>();
-    for (const [index, filing] of value.filings.entries()) {
-      if (!withoutSummary.has(filing.note) || filed.has(filing.note)) {
-        ctx.addIssue({
-          code: "custom",
-          message: "each note without a summary must be filed exactly once",
-          path: ["filings", index, "note"],
-        });
-      }
-      filed.add(filing.note);
-    }
-    if (filed.size !== withoutSummary.size) {
+    distinctKnown(
+      withoutSummary,
+      value.filings.map(({ note }) => note),
+      ctx,
+      ["filings"],
+      "each note without a summary must be filed exactly once",
+    );
+    if (value.filings.length !== withoutSummary.size) {
       ctx.addIssue({
         code: "custom",
         message: `all ${withoutSummary.size} notes without a summary must be filed`,
         path: ["filings"],
       });
     }
-    distinctKnown(known, value.support ?? [], ctx, ["support"]);
     distinctKnown(
       known,
-      value.verify.map(({ note }) => note),
+      "support" in value.action ? value.action.support : [],
       ctx,
-      ["verify"],
+      ["action", "support"],
+    );
+    distinctKnown(
+      known,
+      verify.map(({ note }) => note),
+      ctx,
+      ["action", "verify"],
     );
     // A note is verified only over verified support: every note in its
     // support is verified already or listed earlier with the source
     // verifier, so it is verified in the same verification first.
     const listedWithSource = new Set<string>();
-    for (const [index, entry] of value.verify.entries()) {
+    for (const [index, entry] of verify.entries()) {
       const target = notes.find(({ id }) => id === entry.note);
       if (target === undefined) continue;
-      if (target.dead) {
+      if (evidence.get(target.id)!.dead) {
         ctx.addIssue({
           code: "custom",
           message: "a dead note is not verified again",
-          path: ["verify", index, "note"],
+          path: ["action", "verify", index, "note"],
         });
       } else if (pendingVerifiers(target, entry.verifiers).length === 0) {
         ctx.addIssue({
           code: "custom",
           message: "a verification must request an outstanding reachable check",
-          path: ["verify", index, "verifiers"],
+          path: ["action", "verify", index, "verifiers"],
         });
       }
       if (
@@ -583,7 +627,7 @@ export function coordinatorResultFor(
           code: "custom",
           message:
             "a note is verified only after every note in its support is verified or listed earlier with the source verifier",
-          path: ["verify", index, "note"],
+          path: ["action", "verify", index, "note"],
         });
       }
       if (entry.verifiers.includes("source")) {
@@ -600,7 +644,7 @@ export const verifierInput = z
     notes: z.array(note),
     support: z.array(note),
   })
-  .superRefine(async (value, ctx) => {
+  .superRefine((value, ctx) => {
     const listed = value.verify.map(({ note }) => note);
     if (new Set(listed).size !== listed.length) {
       ctx.addIssue({
@@ -618,10 +662,7 @@ export const verifierInput = z
     }
     let closure: string[];
     try {
-      closure = await supportClosure(value.notes, [
-        ...value.notes,
-        ...value.support,
-      ]);
+      closure = supportClosure(value.notes, [...value.notes, ...value.support]);
     } catch (error) {
       ctx.addIssue({
         code: "custom",
@@ -655,7 +696,7 @@ const verifierIndex = (name: VerifierName): number =>
 
 /**
  * The notes one verifier judges in a verification, in the order listed,
- * given the verdicts recorded on its candidate: the notes that asked for it,
+ * given the verdicts recorded in its verification: the notes that asked for it,
  * passed every verifier before it, and are not dead in the verification. A
  * note is dead in the verification when correctness, source, or
  * reconstruction failed it or a note in its support, listed or handed over in
@@ -672,78 +713,36 @@ export function judgedBy(
   const position = new Map(
     input.verify.map(({ note }, index) => [note, index]),
   );
-  const known = new Map(
-    [...input.notes, ...input.support].map((note) => [note.id, note]),
-  );
+  const known = [...input.notes, ...input.support];
   const judged: string[] = [];
-  const passes = new Set<string>();
-  const failures = new Set<string>();
-  const deadMemo = new Map<string, boolean>();
-  const supportMemo = new Map<string, boolean>();
-  let evidenceReady = false;
+  let evidence: ReturnType<typeof noteEvidence> | undefined;
   for (const [index, entry] of input.verify.entries()) {
     if (!entry.verifiers.includes(verifier)) continue;
-    // Ordinary verifiers share one evidence view for the entire list.
-    // Reconstruction also sees earlier notes' reconstruction verdicts.
-    if (!evidenceReady || verifier === "reconstruction") {
-      passes.clear();
-      failures.clear();
-      deadMemo.clear();
-      supportMemo.clear();
-      const prior = recorded.filter(
+    // Ordinary checks see earlier verifier stages; reconstruction additionally
+    // sees earlier listed notes' reconstruction results, never later ones.
+    if (evidence === undefined || verifier === "reconstruction") {
+      const visible = recorded.filter(
         (value) =>
           verifierIndex(value.verifier) < verifierIndex(verifier) ||
           (verifier === "reconstruction" &&
             value.verifier === "reconstruction" &&
             (position.get(value.note) ?? Number.POSITIVE_INFINITY) < index),
       );
-      for (const value of prior) {
-        if (value.verdict === "PASS")
-          passes.add(`${value.note}/${value.verifier}`);
-        if (value.verifier !== "requirements" && value.verdict === "FAIL")
-          failures.add(value.note);
-      }
-      evidenceReady = true;
-    }
-    const passed = (id: string, name: VerifierName): boolean =>
-      passes.has(`${id}/${name}`);
-    const dead = (id: string): boolean => {
-      const saved = deadMemo.get(id);
-      if (saved !== undefined) return saved;
-      const result =
-        failures.has(id) || (known.get(id)?.support ?? []).some(dead);
-      deadMemo.set(id, result);
-      return result;
-    };
-    const supportPassed = (id: string): boolean => {
-      const saved = supportMemo.get(id);
-      if (saved !== undefined) return saved;
-      const result = (known.get(id)?.support ?? []).every(
-        (support) =>
-          known.get(support)?.verified === true ||
-          (verifierNames
-            .slice(0, Math.min(verifierIndex(verifier), 2))
-            .every((name) => passed(support, name)) &&
-            supportPassed(support)),
+      evidence = noteEvidence(
+        known,
+        visible,
+        verifierNames.slice(0, Math.min(verifierIndex(verifier), 2)),
       );
-      supportMemo.set(id, result);
-      return result;
-    };
-    if (deadMemo.size === 0) {
-      for (const id of [...known.keys()].sort(byId)) {
-        dead(id);
-        supportPassed(id);
-      }
     }
+    const value = evidence.get(entry.note)!;
     if (
+      !value.dead &&
+      value.supportPassed &&
       verifierNames
         .slice(0, verifierIndex(verifier))
-        .every((name) => passed(entry.note, name)) &&
-      !dead(entry.note) &&
-      supportPassed(entry.note)
-    ) {
+        .every((name) => value.passed.has(name))
+    )
       judged.push(entry.note);
-    }
   }
   return judged;
 }
@@ -798,7 +797,7 @@ export function correctedVerifierInput(
   };
 }
 
-/** Checks without a verdict within one candidate. */
+/** Checks without a verdict within one verification. */
 export function missingVerdicts(
   recorded: readonly Verdict[],
   name: VerifierName,
@@ -815,7 +814,7 @@ function verdictsOver<
   T extends z.ZodType<Pick<Verdict, "note" | "verdict" | "correctedText">>,
 >(entry: T, judged: readonly string[]) {
   const expected = [...judged].sort(byId).join(",");
-  // Keep the provider schema stable across candidates. The runtime still
+  // Keep the provider schema stable across verifications. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
   return z
     .strictObject({ verdicts: z.array(entry) })
@@ -987,38 +986,19 @@ export function sourceVerdictsFor(
 
 export type VerifierResult = readonly Verdict[];
 
-export function candidateMaterial(input: VerifierInput): Uint8Array {
-  const text = [...input.notes, ...input.support]
-    .map(({ id, text }) => `--- ${id} ---\n\n${text}`)
-    .join("\n\n");
-  return new TextEncoder().encode(text);
-}
-
 /** A local call freezes a verification before its first outstanding check. */
 export const verificationLabel = `${applicationId}/verification`;
 
 export interface JournalVerdict {
   readonly seq: EntryId;
-  readonly candidate: EntryId;
+  readonly verification: EntryId;
   readonly verdict: Verdict;
 }
 
-// The kernel records one verdict per call, on the candidate. A verifier call
-// judges one or several notes, so its kernel verdict is the verdict on the
-// candidate, PASS only when every note it judged passed, and its evidence
-// lists the verdict of each note. The projection reads the evidence.
+// Each verifier call admits note-level evidence under its frozen verification.
 const verdictEvidence = verdicts.extend({
   verdicts: verdicts.shape.verdicts.min(1),
 });
-export function candidateVerdict(
-  values: readonly Pick<Verdict, "verdict">[],
-): Verdict["verdict"] {
-  if (values.every(({ verdict }) => verdict === "PASS")) return "PASS";
-  return values.some(({ verdict }) => verdict === "FAIL")
-    ? "FAIL"
-    : "INCONCLUSIVE";
-}
-
 export function journalVerdicts(
   records: readonly Entry[],
 ): readonly JournalVerdict[] {
@@ -1029,24 +1009,28 @@ export function journalVerdicts(
   );
   const verdicts: JournalVerdict[] = [];
   for (const entry of records) {
-    if (entry.kind !== "verdict") continue;
+    if (entry.kind !== "evidence") continue;
     const call = calls.get(entry.call);
     const verifier =
       call?.kind === "call" ? verifierFromLabel(call.label) : undefined;
     if (call?.kind !== "call" || verifier === undefined) continue;
     const parsed = verdictEvidence.safeParse(entry.evidence);
+    const result = succeededOutput(records, call.seq);
     if (
       !parsed.success ||
-      call.candidate === undefined ||
-      !parsed.data.verdicts.every(validCorrection) ||
-      candidateVerdict(parsed.data.verdicts) !== entry.verdict
+      result === undefined ||
+      result.settled >= entry.seq ||
+      call.role !== "verifier" ||
+      call.parent === undefined ||
+      calls.get(call.parent)?.label !== verificationLabel ||
+      !parsed.data.verdicts.every(validCorrection)
     ) {
       throw new Error(`malformed verdict ${entry.seq}`);
     }
     for (const value of parsed.data.verdicts) {
       verdicts.push({
         seq: entry.seq,
-        candidate: call.candidate,
+        verification: call.parent,
         verdict: { verifier, ...value },
       });
     }
@@ -1064,6 +1048,17 @@ export function returnedOutput(
   );
   return result?.kind === "call-result" && result.state === "returned"
     ? { settled: result.seq, output: result.output }
+    : undefined;
+}
+
+/** A returned solver role result whose execution succeeded. */
+export function succeededOutput(records: readonly Entry[], call: EntryId) {
+  const returned = returnedOutput(records, call);
+  return returned !== undefined &&
+    typeof returned.output === "object" &&
+    returned.output !== null &&
+    (returned.output as { readonly state?: Json }).state === "succeeded"
+    ? returned
     : undefined;
 }
 
@@ -1110,15 +1105,8 @@ export function succeededSubmission(
   tool: string,
   savedExplorer?: ReturnType<typeof savedExplorerSubmission>,
 ): { readonly settled: EntryId; readonly input: Json } | undefined {
-  const returned = returnedOutput(records, call);
-  if (
-    returned === undefined ||
-    typeof returned.output !== "object" ||
-    returned.output === null ||
-    (returned.output as { readonly state?: Json }).state !== "succeeded"
-  ) {
-    return undefined;
-  }
+  const returned = succeededOutput(records, call);
+  if (returned === undefined) return undefined;
   try {
     if (tool === roleTools.explorer) {
       const saved = savedExplorer ?? savedExplorerSubmission(records, call);
@@ -1149,7 +1137,7 @@ export interface Roles {
   ) => Promise<LiteratureReport>;
   readonly verifier: (
     input: VerifierInput,
-    candidate?: EntryId,
+    verification?: EntryId,
     signal?: AbortSignal,
   ) => Promise<VerifierResult>;
 }

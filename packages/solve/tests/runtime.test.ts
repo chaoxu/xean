@@ -132,8 +132,11 @@ test("run honors an injected source executor instead of invoking the CLI", async
       {
         submission: {
           filings: [{ note: "n1", summary: "P holds." }],
-          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
-          action: { role: "verifier" },
+
+          action: {
+            role: "verifier",
+            verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+          },
         },
       },
       {
@@ -178,7 +181,7 @@ test("run honors an injected source executor instead of invoking the CLI", async
     expect(await inspectCampaign(path)).toMatchObject({
       phase: "turn-limit",
       result: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         application: "xean-solve",
         protocol: "workflow",
         outcome: "turn-limit",

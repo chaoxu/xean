@@ -4,3 +4,4 @@ bun.lock
 *.db*
 runs/
 .playwright-cli/
+.claude/

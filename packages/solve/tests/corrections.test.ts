@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { openCampaign } from "xean";
 
 import { createPiRoles, sourceVerdictsOf } from "../pi-roles";
-import { exportCandidateRecords } from "../role-cli";
+import { exportSolutionRecords } from "../role-cli";
 import {
   correctnessVerdictsFor,
   reconstructionResultFor,
@@ -37,8 +37,10 @@ const configuration = () =>
 const verify = (verifiers: readonly VerifierName[], file = false): Reply => ({
   submission: {
     filings: file ? [{ note: "n1", summary: "P holds." }] : [],
-    verify: [{ note: "n1", verifiers: [...verifiers] }],
-    action: { role: "verifier" },
+    action: {
+      role: "verifier",
+      verify: [{ note: "n1", verifiers: [...verifiers] }],
+    },
   },
 });
 const finish: readonly Reply[] = [
@@ -111,7 +113,7 @@ test("a correctness correction reaches later checks and export without rewriting
     ).toMatchObject({
       request: { notes: [{ text: original }] },
     });
-    const artifact = await exportCandidateRecords(records);
+    const artifact = await exportSolutionRecords(records);
     expect(new TextDecoder().decode(artifact)).toBe(
       `--- n1 ---\n\n${corrected}`,
     );
@@ -126,7 +128,7 @@ test("a correctness correction reaches later checks and export without rewriting
     ).toEqual(phase);
     expect(noCalls.allCalls).toHaveLength(0);
     expect(campaign.records()).toEqual(records);
-    expect(await exportCandidateRecords(campaign.records())).toEqual(artifact);
+    expect(await exportSolutionRecords(campaign.records())).toEqual(artifact);
   } finally {
     campaign.close();
   }
@@ -236,7 +238,7 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
       ),
     ).toEqual([...verifierNames]);
     const records = campaign.records();
-    const artifact = await exportCandidateRecords(records);
+    const artifact = await exportSolutionRecords(records);
     expect(new TextDecoder().decode(artifact)).toBe(`--- n1 ---\n\n${sourced}`);
     campaign.close();
     campaign = openCampaign(path);
@@ -249,7 +251,7 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
     ).toEqual(phase);
     expect(noCalls.allCalls).toHaveLength(0);
     expect(campaign.records()).toEqual(records);
-    expect(await exportCandidateRecords(campaign.records())).toEqual(artifact);
+    expect(await exportSolutionRecords(campaign.records())).toEqual(artifact);
   } finally {
     campaign.close();
   }

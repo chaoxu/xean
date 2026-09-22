@@ -6,7 +6,6 @@ import {
   type EntryId,
   type Json,
   type ToolDeclaration,
-  type Verdict,
 } from "./schemas";
 
 export type {
@@ -15,7 +14,6 @@ export type {
   EntryId,
   Json,
   ToolDeclaration,
-  Verdict,
 } from "./schemas";
 
 export interface Tool {
@@ -54,19 +52,11 @@ export interface AuditedTool extends ToolDeclaration {
   execute(input: unknown, source?: string): Promise<Json>;
 }
 
-export interface CandidateStatus {
-  readonly verified: boolean;
-  readonly missing: readonly string[];
-  readonly failed: readonly string[];
-  readonly passes: readonly EntryId[];
-}
-
 export interface Reader {
   records(options?: RecordQuery): readonly Entry[];
   record(seq: EntryId): Entry | undefined;
   lastSequence(): number;
   payload(digest: string): Json;
-  material(candidate: EntryId): Uint8Array;
   close(): void;
 }
 
@@ -84,7 +74,7 @@ export interface RecordQuery {
 export interface CallOptions {
   readonly label: string;
   readonly role?: string;
-  readonly candidate?: EntryId;
+  readonly parent?: EntryId;
   readonly request: Json;
   readonly tools?: readonly Tool[];
   readonly signal?: AbortSignal;
@@ -105,11 +95,7 @@ export interface CallReceipt {
 export interface Campaign extends Reader {
   storePayload(value: Json): string;
   storePayloadJson(encoded: string): string;
-  submitCandidate(
-    material: Uint8Array,
-    requiredVerifiers: readonly string[],
-  ): EntryId;
-  recordVerdict(call: EntryId, verdict: Verdict, evidence: Json): EntryId;
+  recordEvidence(call: EntryId, evidence: Json): EntryId;
   call(
     options: CallOptions,
     runner: (context: CallContext) => Promise<unknown>,

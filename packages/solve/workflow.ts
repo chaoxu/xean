@@ -1,6 +1,5 @@
 import type { Campaign, Entry, EntryId, Json } from "xean";
 import { isDeepStrictEqual } from "node:util";
-import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { Projection } from "./projection";
@@ -20,7 +19,7 @@ import {
   literatureNotesId,
   literatureOutcome,
   matchingCalls,
-  RoleCallError,
+  readPiSubmission,
   solveSettings,
   type CallEntry,
   type RoleCall,
@@ -33,8 +32,6 @@ import {
   jsonSnapshot,
   noteIdAfter,
   pick,
-  succeededSubmission,
-  savedExplorerSubmission,
   task,
   verificationComplete,
   verificationLabel,
@@ -43,6 +40,7 @@ import {
   literatureInput,
   workflowRecords,
   type CoordinatorInput,
+  type CoordinatorAction,
   type CoordinatorResult,
   type ExplorerInput,
   type LiteratureInput,
@@ -54,7 +52,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 31;
+export const workflowSchemaVersion = 32;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -68,7 +66,7 @@ type AcceptedPhase = {
   readonly turns: number;
   readonly note: Note;
   readonly notes: readonly Note[];
-  readonly candidate: EntryId;
+  readonly verification: EntryId;
   /** The accepted note's transitive support, in id order. */
   readonly closure: readonly string[];
 };
@@ -86,7 +84,7 @@ type ExplorerPhase = {
 type VerifierPhase = {
   readonly kind: "verifier";
   readonly input: VerifierInput;
-  readonly candidate?: EntryId;
+  readonly verification?: EntryId;
 };
 type OverlapPhase = {
   readonly kind: "overlap";
@@ -154,15 +152,8 @@ function settledCall<S extends z.ZodType>(
   roleCall: RoleCall<S>,
 ): { readonly settled: EntryId; readonly value: z.output<S> } | undefined {
   for (const call of matchingCalls(records, after, roleCall.label, roleCall)) {
-    const submission = succeededSubmission(records, call.seq, roleCall.tool);
-    if (submission === undefined) continue;
-    const parsed = roleCall.schema.safeParse(submission.input);
-    if (!parsed.success) {
-      throw new Error(
-        `malformed ${roleCall.role} submission in call ${call.seq}`,
-      );
-    }
-    return { settled: submission.settled, value: parsed.data };
+    const submission = readPiSubmission(records, call.seq, roleCall);
+    if (submission !== undefined) return submission;
   }
   return undefined;
 }
@@ -172,11 +163,11 @@ function settledCall<S extends z.ZodType>(
  * texts fit the window, and always its first entry. Texts shared by several
  * notes are read once, so they count once.
  */
-export async function verificationPrefix(
+export function verificationPrefix(
   verify: readonly Verification[],
   notes: readonly Note[],
   window: number,
-): Promise<Verification[]> {
+): Verification[] {
   const read = new Set<string>();
   let reading = 0;
   let taken = 0;
@@ -188,7 +179,7 @@ export async function verificationPrefix(
       note.support.every((id) => read.has(id) && byId(id, note.id) < 0);
     const added = [
       note.id,
-      ...(closed ? [] : await supportClosure([note], notes)),
+      ...(closed ? [] : supportClosure([note], notes)),
     ].filter((id) => !read.has(id));
     const cost = added.reduce(
       (sum, id) => sum + pick(notes, id).text.length,
@@ -281,12 +272,12 @@ function includeSubmitted(fold: Fold, after: EntryId): boolean {
   return true;
 }
 
-async function explorerInputFor(
+function explorerInputFor(
   task: Task,
   known: readonly Note[],
   selected: readonly string[],
   advice: string,
-): Promise<ExplorerInput> {
+): ExplorerInput {
   return explorerInput.parse({
     task,
     explorerGuidance: advice,
@@ -294,10 +285,10 @@ async function explorerInputFor(
     support: [
       ...new Set([
         ...selected,
-        ...(await supportClosure(
+        ...supportClosure(
           selected.map((id) => pick(known, id)),
           known,
-        )),
+        ),
       ]),
     ]
       .sort(byId)
@@ -310,12 +301,12 @@ async function explorerInputFor(
  * snapshot, or advances past the settled call and reports whether it ended
  * with an empty submission. The caller counts the turn.
  */
-async function replayExplorerTurn(
+function replayExplorerTurn(
   fold: Fold,
   guidance: string,
   support: readonly string[],
   savedProjection?: Projection,
-): Promise<WorkflowSnapshot | { readonly emptySubmission: boolean }> {
+): WorkflowSnapshot | { readonly emptySubmission: boolean } {
   const { records, base } = fold;
   let after = fold.cursor;
   let known = fold.projection.at(fold.cursor);
@@ -324,7 +315,7 @@ async function replayExplorerTurn(
   // also receives every note already saved by this turn, in full.
   const advice = explorerGuidance(records, fold.cursor, guidance);
   for (;;) {
-    const explorerRequest = await explorerInputFor(
+    const explorerRequest = explorerInputFor(
       base.config.task,
       known,
       selected,
@@ -344,18 +335,11 @@ async function replayExplorerTurn(
         { after: fold.cursor },
       );
     }
-    const saved = savedExplorerSubmission(records, call.seq);
-    const completed = succeededSubmission(
-      records,
-      call.seq,
-      roleCall.tool,
-      saved,
-    );
+    const saved = readPiSubmission(records, call.seq, roleCall, true);
     // Saved notes become visible at the last tool call; the next phase
     // starts only at the outer call-result, which can occur later.
     if (saved !== undefined) {
-      const value = roleCall.schema.parse(saved.input);
-      const notes = value.notes.map((entry, position) => ({
+      const notes = saved.value.notes.map((entry, position) => ({
         id: noteIdAfter(known.length, position),
         ...entry,
       }));
@@ -366,8 +350,8 @@ async function replayExplorerTurn(
       selected.push(...notes.map(({ id }) => id));
       known = fold.projection.at(saved.settled);
     }
-    if (completed !== undefined) {
-      fold.cursor = completed.settled;
+    if (saved?.completed !== undefined) {
+      fold.cursor = saved.completed;
       return { emptySubmission: saved?.emptySubmission === true };
     }
     after = call.seq;
@@ -379,10 +363,10 @@ async function replayExplorerTurn(
  * Returns the pending verifier or accepted snapshot, or undefined once every
  * batch is complete.
  */
-async function replayVerification(
+function replayVerification(
   fold: Fold,
   listed: readonly Verification[],
-): Promise<WorkflowSnapshot | undefined> {
+): WorkflowSnapshot | undefined {
   const { records, base } = fold;
   let remaining = listed;
   while (remaining.length > 0) {
@@ -400,19 +384,17 @@ async function replayVerification(
       return true;
     });
     if (remaining.length === 0) break;
-    const verify = await verificationPrefix(
+    const verify = verificationPrefix(
       remaining,
       filed,
       base.config.settings.window,
     );
     const listedNotes = verify.map(({ note }) => pick(filed, note));
-    const verifierRequest = await verifierInput.parseAsync({
+    const verifierRequest = verifierInput.parse({
       task: base.config.task,
       verify,
       notes: listedNotes,
-      support: (await supportClosure(listedNotes, filed)).map((id) =>
-        pick(filed, id),
-      ),
+      support: supportClosure(listedNotes, filed).map((id) => pick(filed, id)),
     });
     // The local opening freezes the exact input even when earlier checks are reused.
     const first = firstCall(
@@ -427,11 +409,9 @@ async function replayVerification(
         { kind: "verifier", input: verifierRequest },
         filed,
       );
-    const candidate = first.candidate;
-    if (candidate === undefined)
-      throw new Error(`verifier call ${first.seq} is not bound to a candidate`);
+    const verification = first.seq;
     const recorded = fold.verdicts.filter(
-      (entry) => entry.candidate === candidate,
+      (entry) => entry.verification === verification,
     );
     fold.cursor = Math.max(
       fold.cursor,
@@ -451,8 +431,8 @@ async function replayVerification(
           turns: fold.turns,
           note: pick(notes, acceptedId),
           notes,
-          candidate,
-          closure: await supportClosure([pick(notes, acceptedId)], notes),
+          verification,
+          closure: supportClosure([pick(notes, acceptedId)], notes),
         },
         notes,
       );
@@ -466,7 +446,7 @@ async function replayVerification(
       return snapshot(fold, {
         kind: "verifier",
         input: verifierRequest,
-        candidate,
+        verification,
       });
     // Completed entries leave the queue even when their verdict was not PASS.
     remaining = remaining.slice(verify.length);
@@ -499,27 +479,26 @@ function forkFold(fold: Fold, verdicts = fold.verdicts): Fold {
 }
 
 /** Replay the bounded pair within its durable opening and join. */
-async function replayOverlap(
+function replayOverlap(
   fold: Fold,
-  coordinated: CoordinatorResult,
-): Promise<WorkflowSnapshot | { readonly emptySubmission: boolean }> {
+  action: Extract<CoordinatorAction, { role: "verifier" }> & {
+    explorerGuidance: string;
+    support: string[];
+  },
+): WorkflowSnapshot | { readonly emptySubmission: boolean } {
   const after = fold.cursor;
-  const advice = explorerGuidance(
-    fold.records,
-    after,
-    coordinated.explorerGuidance!,
-  );
-  const input = await explorerInputFor(
+  const advice = explorerGuidance(fold.records, after, action.explorerGuidance);
+  const input = explorerInputFor(
     fold.base.config.task,
     fold.projection.at(after),
-    coordinated.support!,
+    action.support,
     advice,
   );
   const request = jsonSnapshot({
     schemaVersion: 1,
     after,
     explorer: input,
-    verify: coordinated.verify,
+    verify: action.verify,
   });
   const opening = firstCall(
     fold.records,
@@ -545,16 +524,13 @@ async function replayOverlap(
   const verifier = forkFold(fold);
   // Caller notes enter only after the join. Explorer alone assigns new note IDs.
   explorer.cursor = verifier.cursor = opening.seq;
-  const exploring = await replayExplorerTurn(
+  const exploring = replayExplorerTurn(
     { ...explorer, records },
     advice,
-    coordinated.support!,
+    action.support,
     fold.projection,
   );
-  const verifying = await replayVerification(
-    { ...verifier, records },
-    coordinated.verify,
-  );
+  const verifying = replayVerification({ ...verifier, records }, action.verify);
   const pendingExplorer = "phase" in exploring ? exploring.phase : undefined;
   const pendingVerifier = verifying?.phase;
   if (pendingExplorer !== undefined && pendingExplorer.kind !== "explorer")
@@ -687,9 +663,7 @@ function settledLiteratureCall(
  * checks the whole list; later dispatches can check other ready notes or
  * extend completed checks without requiring more exploration.
  */
-export async function deriveWorkflow(
-  records: readonly Entry[],
-): Promise<WorkflowSnapshot> {
+export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
   const fold = openFold(records);
   const { base } = fold;
   const settings = base.config.settings;
@@ -734,22 +708,19 @@ export async function deriveWorkflow(
       // A caller's submission while this phase waited returns to the
       // coordinator with the new notes.
       if (includeSubmitted(fold, fold.cursor)) continue;
-      const turn = await replayExplorerTurn(
+      const turn = replayExplorerTurn(
         fold,
-        // coordinatorResultFor requires these fields for Explorer actions;
-        // the assertions keep that action-specific contract local to this
-        // branch while verifier/literature results may omit them.
-        coordinated.explorerGuidance!,
-        coordinated.support!,
+        action.explorerGuidance,
+        action.support,
       );
       if ("phase" in turn) return turn;
       emptySubmission = turn.emptySubmission;
-    } else if (coordinated.explorerGuidance !== undefined) {
-      const overlap = await replayOverlap(fold, coordinated);
+    } else if ("explorerGuidance" in action) {
+      const overlap = replayOverlap(fold, action);
       if ("phase" in overlap) return overlap;
       emptySubmission = overlap.emptySubmission;
     } else {
-      const verification = await replayVerification(fold, coordinated.verify);
+      const verification = replayVerification(fold, action.verify);
       if (verification !== undefined) return verification;
     }
   }
@@ -779,7 +750,7 @@ async function runOverlap(
 ): Promise<void> {
   if (initial.opened === undefined) {
     await freezeExplorerGuidance(campaign, initial.after);
-    const { phase } = await deriveWorkflow(workflowRecords(campaign));
+    const { phase } = deriveWorkflow(workflowRecords(campaign));
     if (phase.kind !== "overlap" || phase.after !== initial.after)
       throw new Error("overlap boundary changed");
     await campaign.call(
@@ -800,16 +771,15 @@ async function runOverlap(
         ? verifier.signal
         : AbortSignal.any([verifier.signal, dependencies.signal]),
   };
-  const current = async (): Promise<OverlapPhase> => {
-    const { phase } = await deriveWorkflow(workflowRecords(campaign));
+  const current = (): OverlapPhase => {
+    const { phase } = deriveWorkflow(workflowRecords(campaign));
     if (phase.kind !== "overlap" || phase.opened !== initial.opened)
       throw new Error("overlap changed before join");
     return phase;
   };
   const run = async (role: "explorer" | "verifier") => {
-    let recoveries = 0;
     for (;;) {
-      const phase = await current();
+      const phase = current();
       if (phase.accepted !== undefined) {
         explorer.abort();
         return;
@@ -821,30 +791,11 @@ async function runOverlap(
         dependencies.pauseRequested?.()
       )
         return;
-      try {
-        if (step.kind === "explorer")
-          await roles.explorer(step.input, signals.explorer);
-        else await roles.verifier(step.input, step.candidate, signals.verifier);
-        recoveries = 0;
-      } catch (error) {
-        if (
-          !(error instanceof RoleCallError) ||
-          !error.retryable ||
-          recoveries >= 3 ||
-          signals[role].aborted
-        )
-          throw error;
-        recoveries += 1;
-        if (dependencies.pauseRequested?.()) return;
-        dependencies.status?.(
-          `${role}: retrying with a fresh call (${recoveries}/3)`,
-        );
-        await delay(1000 * 2 ** (recoveries - 1), undefined, {
-          signal: signals[role],
-        });
-        continue;
-      }
-      const next = await current();
+      if (step.kind === "explorer")
+        await roles.explorer(step.input, signals.explorer);
+      else
+        await roles.verifier(step.input, step.verification, signals.verifier);
+      const next = current();
       if (next.accepted !== undefined) explorer.abort();
       // A replacement role that made no durable progress leaves a resumable phase.
       if (isDeepStrictEqual(next[role], step)) return;
@@ -861,7 +812,7 @@ async function runOverlap(
     }
   };
   await Promise.allSettled([guarded("explorer"), guarded("verifier")]);
-  const phase = await current();
+  const phase = current();
   if (
     phase.accepted !== undefined ||
     (phase.explorer === undefined && phase.verifier === undefined)
@@ -888,10 +839,9 @@ export async function runWorkflow(
   let snapshot =
     initial !== undefined && campaign.lastSequence() === initial.through
       ? initial.snapshot
-      : await deriveWorkflow(workflowRecords(campaign));
+      : deriveWorkflow(workflowRecords(campaign));
   initial = undefined;
   let phase = snapshot.phase;
-  let errorRecoveries = 0;
   for (;;) {
     if (phase.kind === "accepted" || phase.kind === "turn-limit") {
       return phase;
@@ -902,55 +852,31 @@ export async function runWorkflow(
       snapshot.after !== undefined &&
       (await freezeSubmittedNotes(campaign, snapshot.after))
     ) {
-      snapshot = await deriveWorkflow(workflowRecords(campaign));
+      snapshot = deriveWorkflow(workflowRecords(campaign));
       phase = snapshot.phase;
       continue;
     }
     dependencies.status?.(phase.kind);
     const verifying = phase.kind === "verifier" ? phase.input : undefined;
     const overlapping = phase.kind === "overlap" ? phase : undefined;
-    try {
-      if (phase.kind === "overlap") {
-        await runOverlap(campaign, roles, phase, dependencies);
-      } else if (phase.kind === "explorer") {
-        if (await freezeExplorerGuidance(campaign, snapshot.after!)) {
-          snapshot = await deriveWorkflow(workflowRecords(campaign));
-          phase = snapshot.phase;
-          if (phase.kind !== "explorer")
-            throw new Error("explorer boundary changed");
-        }
-        await roles.explorer(phase.input);
-      } else if (phase.kind === "coordinator") {
-        await roles.coordinator(phase.input);
-      } else if (phase.kind === "literature") {
-        await roles.literature(phase.input, phase.after);
-      } else {
-        await roles.verifier(phase.input, phase.candidate);
+    if (phase.kind === "overlap") {
+      await runOverlap(campaign, roles, phase, dependencies);
+    } else if (phase.kind === "explorer") {
+      if (await freezeExplorerGuidance(campaign, snapshot.after!)) {
+        snapshot = deriveWorkflow(workflowRecords(campaign));
+        phase = snapshot.phase;
+        if (phase.kind !== "explorer")
+          throw new Error("explorer boundary changed");
       }
-      errorRecoveries = 0;
-    } catch (error) {
-      if (
-        overlapping !== undefined ||
-        !(error instanceof RoleCallError) ||
-        !error.retryable ||
-        errorRecoveries >= 3 ||
-        dependencies.signal?.aborted
-      )
-        throw error;
-      errorRecoveries += 1;
-      snapshot = await deriveWorkflow(workflowRecords(campaign));
-      phase = snapshot.phase;
-      if (!dependencies.pauseRequested?.()) {
-        dependencies.status?.(
-          `${phase.kind}: retrying with a fresh call (${errorRecoveries}/3)`,
-        );
-        await delay(1000 * 2 ** (errorRecoveries - 1), undefined, {
-          signal: dependencies.signal,
-        });
-      }
-      continue;
+      await roles.explorer(phase.input);
+    } else if (phase.kind === "coordinator") {
+      await roles.coordinator(phase.input);
+    } else if (phase.kind === "literature") {
+      await roles.literature(phase.input, phase.after);
+    } else {
+      await roles.verifier(phase.input, phase.verification);
     }
-    snapshot = await deriveWorkflow(workflowRecords(campaign));
+    snapshot = deriveWorkflow(workflowRecords(campaign));
     phase = snapshot.phase;
     if (
       verifying !== undefined &&

@@ -18,13 +18,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { streamSimple as streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 
-import {
-  createCampaign,
-  defineTool,
-  deriveCandidateStatus,
-  openReader,
-  type Entry,
-} from "../src";
+import { createCampaign, defineTool, openReader, type Entry } from "../src";
 import {
   derivePiSpend,
   piRequest,
@@ -40,6 +34,7 @@ import {
 import {
   inspectCoreCampaign,
   inspectCoreCampaignSummary,
+  inspectCoreCampaignSummaryRecords,
 } from "../src/observe";
 
 test("forwards provider events before completion and cleans the logical session", async () => {
@@ -330,7 +325,7 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "xean/pi-run/v3",
+        protocol: "xean/pi-run/v4",
         model,
         modelProfile: null,
         prompt: "test",
@@ -380,7 +375,6 @@ function spendEntries(
         call: 2,
         textRef: "a".repeat(64),
         transcriptRef: "b".repeat(64),
-        assistantUsage: [],
       },
     },
   ];
@@ -1405,6 +1399,24 @@ describe("thin Pi runner", () => {
     );
   });
 
+  test("accounting rejects a stored result bound to a different call", () => {
+    const entries = spendEntries(null).map((entry) =>
+      entry.kind === "call-result" &&
+      entry.state === "returned" &&
+      entry.parent === 2
+        ? {
+            ...entry,
+            output: { ...(entry.output as { call: number }), call: 99 },
+          }
+        : entry,
+    );
+    expect(() => derivePiSpend(entries)).toThrow("invalid Pi result call 2");
+    expect(inspectCoreCampaignSummaryRecords(entries).spend).toMatchObject({
+      unsupportedCalls: 1,
+      unaccountedCalls: 0,
+    });
+  });
+
   test("does not mistake an ordinary model-shaped request for a Pi call", () => {
     const entries = spendEntries(null)
       .filter((entry) => entry.seq !== 3 && entry.seq !== 4)
@@ -1439,9 +1451,9 @@ describe("thin Pi runner", () => {
   test("runs a fresh Pi loop and stores its native transcript", async () => {
     const store = campaign();
     const requests: (SimpleStreamOptions | undefined)[] = [];
-    const candidate = store.submitCandidate(
-      new TextEncoder().encode("answer"),
-      ["answer/v1"],
+    const { call: parent } = await store.call(
+      { label: "verification", request: { text: "answer" } },
+      async () => null,
     );
     const result = await runPi(store, {
       models: models(
@@ -1450,7 +1462,7 @@ describe("thin Pi runner", () => {
       ),
       model,
       label: "answer/v1",
-      candidate,
+      parent,
       system: "Answer exactly.",
       prompt: "Question",
       reasoning: "max",
@@ -1461,16 +1473,17 @@ describe("thin Pi runner", () => {
     const records = store.records();
     expect(records.map((entry) => entry.kind)).toEqual([
       "campaign",
-      "candidate",
+      "call",
+      "call-result",
       "call",
       "call",
       "call-result",
       "call-result",
     ]);
-    const call = records.find((entry) => entry.kind === "call");
+    const call = records.find((entry) => entry.seq === result.call);
     expect(call).toMatchObject({
       seq: result.call,
-      candidate,
+      parent,
       request: { reasoning: "max" },
     });
     if (call?.kind !== "call") throw new Error("missing Pi call");
@@ -1868,7 +1881,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "xean/pi-run/v3",
+          protocol: "xean/pi-run/v4",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",
@@ -2042,7 +2055,7 @@ describe("thin Pi runner", () => {
     ]);
     expect(
       store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { protocol: "xean/pi-run/v3" } });
+    ).toMatchObject({ request: { protocol: "xean/pi-run/v4" } });
   });
 
   test("does not accept a terminal tool result after cancellation", async () => {
@@ -2599,9 +2612,7 @@ describe("thin Pi runner", () => {
 
   test("does not accept a mixed terminal tool batch at the turn cap", async () => {
     const store = campaign();
-    const candidate = store.submitCandidate(new TextEncoder().encode("claim"), [
-      "audit/v1",
-    ]);
+
     const invalid = (id: string) => ({
       type: "toolCall" as const,
       id,
@@ -2629,17 +2640,10 @@ describe("thin Pi runner", () => {
       models: models(replies),
       model,
       label: "audit/v1",
-      candidate,
       prompt: "Audit",
       tools: [submitVerdict],
     });
     expect(result.state).toBe("failed");
-    expect(() => store.recordVerdict(result.call, "PASS", null)).toThrow(
-      "fresh successful verifier call",
-    );
-    expect(deriveCandidateStatus(store.records(), candidate).verified).toBe(
-      false,
-    );
   });
 
   test("keeps interrupted text when a continuation uses tools", async () => {
@@ -2813,9 +2817,9 @@ test.each(["succeeded", "failed", "cancelled"] as const)(
         async ({ call }) => storePiResult(store, { call, ...body }),
       );
       expect(JSON.stringify(receipt.output).length).toBeLessThan(1000);
-      expect(piResultRecord.parse(receipt.output).assistantUsage).toEqual([
-        null,
-      ]);
+      expect(piResultRecord.parse(receipt.output)).not.toHaveProperty(
+        "assistantUsage",
+      );
       expect(readPiResult(receipt.output, store)).toEqual({
         call: receipt.call,
         ...body,

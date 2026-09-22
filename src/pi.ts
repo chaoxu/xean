@@ -75,7 +75,7 @@ export interface PiRunOptions {
   readonly system?: string;
   readonly prompt: string;
   readonly reasoning?: ThinkingLevel;
-  readonly candidate?: EntryId;
+  readonly parent?: EntryId;
   readonly tools?: readonly Tool[];
   /** Retryable provider errors; independent of output-length continuations. */
   readonly maxRecoveries?: number;
@@ -135,7 +135,7 @@ function modelProfile(model: Model<Api>): Json {
 }
 
 export const piRequest = z.strictObject({
-  protocol: z.literal("xean/pi-run/v3"),
+  protocol: z.literal("xean/pi-run/v4"),
   model: piModel,
   modelProfile: json,
   system: z.string().optional(),
@@ -266,22 +266,6 @@ export function piRequestAttempts(
 }
 
 const nonnegative = z.number().finite().nonnegative();
-const assistantUsageRecord = z.object({
-  input: nonnegative,
-  output: nonnegative,
-  cacheRead: nonnegative,
-  cacheWrite: nonnegative,
-  totalTokens: nonnegative,
-  reasoning: nonnegative.optional(),
-  cost: z.object({
-    input: nonnegative,
-    output: nonnegative,
-    cacheRead: nonnegative,
-    cacheWrite: nonnegative,
-    total: nonnegative,
-  }),
-});
-
 function resultSchema<T extends z.ZodRawShape>(fields: T) {
   return z.discriminatedUnion("state", [
     z.strictObject({ ...fields, state: z.literal("succeeded") }),
@@ -308,7 +292,6 @@ export const piResultRecord = resultSchema({
   call: entryId,
   textRef: z.string().regex(/^[a-f0-9]{64}$/),
   transcriptRef: z.string().regex(/^[a-f0-9]{64}$/),
-  assistantUsage: z.array(assistantUsageRecord.nullable()).readonly(),
 });
 
 export function storePiResult(
@@ -316,22 +299,8 @@ export function storePiResult(
   value: PiResult,
 ): z.output<typeof piResultRecord> {
   const { transcript, text, ...metadata } = value;
-  const assistantUsage = transcript.flatMap((message) => {
-    if (
-      typeof message !== "object" ||
-      message === null ||
-      Array.isArray(message) ||
-      (message as { readonly [key: string]: Json }).role !== "assistant"
-    )
-      return [];
-    const parsed = assistantUsageRecord.safeParse(
-      (message as { readonly [key: string]: Json }).usage,
-    );
-    return [parsed.success ? parsed.data : null];
-  });
   return piResultRecord.parse({
     ...metadata,
-    assistantUsage,
     textRef: campaign.storePayloadJson(JSON.stringify(text)),
     transcriptRef: campaign.storePayloadJson(JSON.stringify(transcript)),
   });
@@ -342,13 +311,8 @@ export function readPiResult(
   output: unknown,
   reader: Pick<Reader, "payload">,
 ): PiResult {
-  const {
-    call,
-    textRef,
-    transcriptRef,
-    assistantUsage: _,
-    ...metadata
-  } = piResultRecord.parse(output);
+  const { call, textRef, transcriptRef, ...metadata } =
+    piResultRecord.parse(output);
   return {
     call,
     ...piStoredResult.parse({
@@ -529,50 +493,93 @@ export function derivePiCallOperations(
   });
 }
 
-export function derivePiSpend(entries: readonly Entry[]) {
-  const calls = entries.filter(
-    (item): item is Extract<Entry, { kind: "call" }> =>
-      item.kind === "call" && parsePiRequest(item.request) !== undefined,
-  );
+type PiCallAccounting = {
+  readonly call: Extract<Entry, { kind: "call" }>;
+  readonly attempts: readonly PiRequestAttempt[];
+  readonly settled: boolean;
+} & (
+  | {
+      readonly state: "available";
+      readonly stored: z.output<typeof piResultRecord> | undefined;
+      readonly operations: readonly PiSpendOperation[];
+      readonly spend: PiSpendSummary;
+    }
+  | { readonly state: "unaccounted" }
+  | { readonly state: "unsupported"; readonly error: unknown }
+);
+
+/** Shared accounting interpretation; readers decide how unsupported records are presented. */
+export function derivePiAccounting(entries: readonly Entry[]) {
   const results = new Map(
     entries
-      .filter((item) => item.kind === "call-result")
-      .map((item) => [item.parent, item]),
+      .filter((entry) => entry.kind === "call-result")
+      .map((entry) => [entry.parent, entry]),
   );
+  const attempts = piRequestAttempts(entries);
   const attemptsByParent = new Map<EntryId, PiRequestAttempt[]>();
-  for (const attempt of piRequestAttempts(entries)) {
-    const attempts = attemptsByParent.get(attempt.parent) ?? [];
-    attempts.push(attempt);
-    attemptsByParent.set(attempt.parent, attempts);
+  for (const attempt of attempts) {
+    const values = attemptsByParent.get(attempt.parent) ?? [];
+    values.push(attempt);
+    attemptsByParent.set(attempt.parent, values);
   }
-  const accounted: (PiSpendSummary & {
-    call: EntryId;
-    operations: PiSpendOperation[];
-  })[] = [];
-  const unaccountedCalls: EntryId[] = [];
-  for (const call of calls) {
+  const calls: PiCallAccounting[] = [];
+  for (const call of entries) {
+    if (call.kind !== "call" || parsePiRequest(call.request) === undefined)
+      continue;
     const result = results.get(call.seq);
-    const stored =
-      result?.state === "returned"
-        ? piResultRecord.parse(result.output)
-        : undefined;
-    const operations = derivePiCallOperations(
-      call.seq,
-      attemptsByParent.get(call.seq) ?? [],
-      results,
-    );
-    if (stored === undefined) {
-      unaccountedCalls.push(call.seq);
-      if (operations.length === 0) continue;
+    const base = {
+      call,
+      attempts: attemptsByParent.get(call.seq) ?? [],
+      settled: result?.state === "returned",
+    };
+    try {
+      const stored =
+        result?.state === "returned"
+          ? piResultRecord.parse(result.output)
+          : undefined;
+      if (stored !== undefined && stored.call !== call.seq)
+        throw new Error(`invalid Pi result call ${call.seq}`);
+      const operations = derivePiCallOperations(
+        call.seq,
+        base.attempts,
+        results,
+      );
+      calls.push(
+        stored === undefined && operations.length === 0
+          ? { ...base, state: "unaccounted" }
+          : {
+              ...base,
+              state: "available",
+              stored,
+              operations,
+              spend: summarizePiSpend(operations),
+            },
+      );
+    } catch (error) {
+      calls.push({ ...base, state: "unsupported", error });
     }
-    accounted.push({
-      call: call.seq,
-      operations,
-      ...summarizePiSpend(operations),
-    });
   }
-  const potentialRequests = [...attemptsByParent.values()].flatMap((attempts) =>
-    attempts.flatMap((attempt) =>
+  return {
+    calls,
+    attempts,
+    byCall: new Map(calls.map((value) => [value.call.seq, value])),
+  };
+}
+
+export function derivePiSpend(entries: readonly Entry[]) {
+  const accounting = derivePiAccounting(entries);
+  const calls = accounting.calls.flatMap((value) => {
+    if (value.state === "unsupported") throw value.error;
+    return value.state === "available"
+      ? [{ call: value.call.seq, operations: value.operations, ...value.spend }]
+      : [];
+  });
+  return {
+    calls,
+    unaccountedCalls: accounting.calls
+      .filter((value) => !value.settled)
+      .map(({ call }) => call.seq),
+    potentialRequests: accounting.attempts.flatMap((attempt) =>
       attempt.state === "unsettled"
         ? [
             {
@@ -583,14 +590,7 @@ export function derivePiSpend(entries: readonly Entry[]) {
           ]
         : [],
     ),
-  );
-  return {
-    calls: accounted,
-    unaccountedCalls,
-    potentialRequests,
-    summary: summarizePiSpend(
-      accounted.flatMap(({ operations }) => operations),
-    ),
+    summary: summarizePiSpend(calls.flatMap(({ operations }) => operations)),
   };
 }
 
@@ -1125,15 +1125,10 @@ async function runPiBody(
   }
 }
 
-export async function runPi(
-  campaign: Campaign,
-  options: PiRunOptions,
-): Promise<PiResult> {
-  if (typeof options.models?.streamSimple !== "function") {
-    throw new TypeError("Pi models must provide streamSimple");
-  }
-  const request = piRequest.parse({
-    protocol: "xean/pi-run/v3",
+/** The frozen request shared by execution and model-free role fixtures. */
+export function piRequestFor(options: PiRunOptions) {
+  return piRequest.parse({
+    protocol: "xean/pi-run/v4",
     model: modelRecord(options.model),
     modelProfile: modelProfile(options.model),
     ...(options.system === undefined ? {} : { system: options.system }),
@@ -1155,6 +1150,16 @@ export async function runPi(
       ? { replayReasoning: false as const }
       : {}),
   });
+}
+
+export async function runPi(
+  campaign: Campaign,
+  options: PiRunOptions,
+): Promise<PiResult> {
+  if (typeof options.models?.streamSimple !== "function") {
+    throw new TypeError("Pi models must provide streamSimple");
+  }
+  const request = piRequestFor(options);
   if (request.submissionGate !== undefined) {
     if (options.tools?.length !== 1)
       throw new TypeError("Pi submission gate requires one terminal tool");
@@ -1165,9 +1170,7 @@ export async function runPi(
     {
       label: options.label,
       ...(options.role === undefined ? {} : { role: options.role }),
-      ...(options.candidate === undefined
-        ? {}
-        : { candidate: options.candidate }),
+      ...(options.parent === undefined ? {} : { parent: options.parent }),
       request: jsonSnapshot(request),
       ...(options.tools === undefined ? {} : { tools: options.tools }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),

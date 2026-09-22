@@ -10,7 +10,7 @@ export const workflowOutcomes = [
 ] as const;
 
 export const executionContract = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   application: applicationId,
   protocol: workflowProtocol,
   run: {
@@ -18,7 +18,7 @@ export const executionContract = {
     arguments: ["task", "campaign", "settings"],
     allowance: { turnsOption: "--turns", idOption: "--id", defaultTurns: 20 },
     report: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       outcomes: workflowOutcomes,
       terminalOutcomes: ["accepted", "turn-limit"],
     },

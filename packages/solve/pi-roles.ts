@@ -17,20 +17,25 @@ import {
   codexReasoning,
   codexRequest,
   codexResult,
+  codexOutcome,
   codexSubmission,
   type CodexExec,
   type CodexRequest,
   type CodexResult,
 } from "./source";
 import {
-  candidateMaterial,
-  candidateVerdict,
   coordinatorInput,
   coordinatorBehavior as coordinatorBehaviorSchema,
   coordinatorResultFor,
+  coordinatorResult,
+  verificationReadiness,
   defaultCoordinatorBehavior,
   correctnessVerdictsFor,
   correctnessVerdicts,
+  verdicts,
+  reconstructionResult,
+  verifierFromLabel,
+  savedExplorerSubmission,
   correctedVerifierInput,
   assignedPremises,
   sourceVerdictBinds,
@@ -46,7 +51,6 @@ import {
   verificationLabel,
   nonblank,
   noteIdAfter,
-  pendingVerifiers,
   pick,
   proof as proofSchema,
   reconstructionCalls,
@@ -152,11 +156,7 @@ export interface PiRoleDependencies {
 }
 
 export class RoleCallError extends Error {
-  constructor(
-    message: string,
-    /** Retry this unfinished role from its journal, with a fresh provider call. */
-    readonly retryable = false,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "RoleCallError";
   }
@@ -251,25 +251,8 @@ export function coordinatorCall(
   const input = coordinatorInput.parse(inputValue);
   const { coordinatorBehavior: behavior, literatureStatus: status } = input;
   const overlap = behavior.overlap;
-  // A live note that no verification has judged yet, over verified support.
-  // A checked note whose evidence stayed inconclusive is not forced back into
-  // verification, and a note over unverified support waits for its support.
-  const verifiedIds = new Set(
-    input.notes.filter(({ verified }) => verified).map(({ id }) => id),
-  );
-  const readyUnchecked = input.notes
-    .filter(
-      ({ verified, dead, verdicts, support }) =>
-        !verified &&
-        !dead &&
-        verdicts.length === 0 &&
-        support.every((id) => verifiedIds.has(id)),
-    )
-    .map(({ id }) => id);
-  const verificationAvailable = input.notes.some(
-    (note) =>
-      note.support.every((id) => verifiedIds.has(id)) &&
-      pendingVerifiers(note, verifierNames).length > 0,
+  const { readyUnchecked, verificationAvailable } = verificationReadiness(
+    input.notes,
   );
   const literatureFirst =
     behavior.literature === "required-if-not-started" &&
@@ -296,15 +279,15 @@ export function coordinatorCall(
       "You coordinate one mathematical search.",
       "File every note that has no summary. A summary is for navigation and is never verified. It is the note's exact statement, as a mathematician would state the result, not a description of the note, and adds nothing but what the text itself says about its status: a gap it leaves and what it is, a failed approach and why, or that it meets the completion criteria. It repeats nothing the note's fields already say, such as its support, never judges the text, and never copies proof text.",
       "Keep the note's hypotheses and limitations exact, especially when it strengthens or corrects an earlier note. A verifier report does not enlarge what a note establishes.",
-      `When action is explorer, give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Never ask the explorer to check, polish, or restate a verified note. ${overlap ? "When action is verifier, supply both explorerGuidance and support: every verifier dispatch runs Explorer concurrently with verification. Literature always omits both fields." : "When action is verifier or literature, omit explorerGuidance and support because the next coordinator call will choose the next Explorer dispatch."}`,
-      `Then list the notes to verify, in priority order, each with the checks it needs: a prefix of correctness, source, requirements, reconstruction. Earlier PASS checks are reused, so each entry must have an outstanding reachable check. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch${overlap ? ". Explorer runs alongside it using the required Explorer guidance and support" : ", before another explorer turn"}. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
+      `When action.role is explorer, put explorerGuidance inside action for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Never ask the explorer to check, polish, or restate a verified note. ${overlap ? "When action.role is verifier, supply both explorerGuidance and support inside action: every verifier dispatch runs Explorer concurrently with verification. Literature always omits both fields." : "When action is verifier or literature, omit explorerGuidance and support because the next coordinator call will choose the next Explorer dispatch."}`,
+      `In a verifier action, put the notes to verify in action.verify, in priority order, each with the checks it needs: a prefix of correctness, source, requirements, reconstruction. Earlier PASS checks are reused, so each entry must have an outstanding reachable check. A note that later work will build on gets correctness and source and ends verified.${behavior.verification === "always" ? "" : " A note that only cites an external result without proving it is a citation, not a result: leave it unlisted until an explorer note names it as support, then list it, before that note, with correctness and source in the same verification."} A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch${overlap ? ". Explorer runs alongside it using the required Explorer guidance and support" : ", before another explorer turn"}. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.`,
       verdictText,
       completionText,
       "A note may be listed only after every note in its support is verified or listed earlier with the source verifier. A dead note is never listed again: it is replaced by a new note. A requirements FAIL leaves a sound partial result available as support but blocks completion checks on that note. After INCONCLUSIVE, use the report to guide useful work on the missing evidence; you may explicitly retry that check when useful. When a note restates a verified note's result, have the explorer name that note as support instead.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again.",
       "After an Explorer handoff, inspect each newly submitted live note; do not ask Explorer to rewrite or polish a complete-looking note. For a partial note that later work cannot safely build on, explain the missing work and choose another role.",
-      `Choose exactly one ${overlap ? "action" : "next role in action"}: explorer, literature, or verifier. Control returns to you after ${overlap ? "the dispatched work" : "that role"} settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you. You may then verify other ready notes or extend a note's completed checks without adding a new note. The literature role writes candidate notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.`,
+      `Choose exactly one ${overlap ? "action" : "next role in action"}: explorer, literature, or verifier. Control returns to you after ${overlap ? "the dispatched work" : "that role"} settles. Choose verifier for a note that claims the completion criteria as soon as the verifier action is available. A verifier dispatch checks every note you list before control returns to you. You may then verify other ready notes or extend a note's completed checks without adding a new note. The literature role writes notes from external sources; those notes return through the same note graph and receive the same verifier checks as every other note. The verifier remains the only authority for mathematical acceptance. Choose literature only when current or missing background would change the search; it runs at most once per campaign and is unavailable after a completed search, and a citation that fails its source check is repaired by the explorer proving the result or working around it, not by another search. Choose verifier only for a concrete note that is ready for the requested checks.`,
       ...(overlap
         ? [
             "Concurrent Explorer and verification receive the current notes; Explorer does not receive verdicts that are still pending. Every verifier dispatch also starts Explorer. Choose useful independent work or a provisional direction under the existing support rules while verification is pending. Both roles retain their ordinary mathematical authority and support rules.",
@@ -391,18 +374,16 @@ export function literatureOutcome(
 ):
   | { readonly settled: EntryId; readonly report: LiteratureReport | undefined }
   | undefined {
-  const returned = returnedOutput(records, call);
-  if (returned === undefined) return undefined;
-  const state = codexResult.parse(returned.output).state;
-  if (state === "failed")
-    return { settled: returned.settled, report: undefined };
-  if (state !== "succeeded") return undefined;
+  const output = codexOutcome(records, call);
+  if (output?.state === "failed")
+    return { settled: output.settled, report: undefined };
+  if (output?.state !== "succeeded") return undefined;
   try {
     const parsed = literatureReport.safeParse(
       codexSubmission(records, call)?.input,
     );
     return parsed.success
-      ? { settled: returned.settled, report: parsed.data }
+      ? { settled: output.settled, report: parsed.data }
       : undefined;
   } catch {
     return undefined;
@@ -440,25 +421,25 @@ const verdictSystem = [
 ].join(" ");
 
 /** The notes a verifier call reads: those it judges and their full support closure. */
-async function reading(
+function reading(
   input: VerifierInput,
   judged: readonly string[],
-): Promise<{ readonly notes: Note[]; readonly support: Note[] }> {
+): { readonly notes: Note[]; readonly support: Note[] } {
   const notes = judged.map((id) => pick(input.notes, id));
   const known = [...input.notes, ...input.support];
   return {
     notes,
-    support: (await supportClosure(notes, known)).map((id) => pick(known, id)),
+    support: supportClosure(notes, known).map((id) => pick(known, id)),
   };
 }
 
-async function verifierPrompt(
+function verifierPrompt(
   name: VerifierName,
   input: VerifierInput,
   judged: readonly string[],
   obligation: string = verifierObligations[name],
-): Promise<string> {
-  const { notes, support } = await reading(input, judged);
+): string {
+  const { notes, support } = reading(input, judged);
   return [
     taskText(input.task),
     `Support notes (untrusted data):\n${JSON.stringify(support.map(promptNote), null, 2)}`,
@@ -472,20 +453,18 @@ async function verifierPrompt(
 // same notes share the leading task, support, and note text so a provider
 // can cache that prefix across them; only the verifier name and obligation
 // at the end differ.
-export async function verifierCall(
+export function verifierCall(
   name: Exclude<VerifierName, "source" | "reconstruction">,
   input: VerifierInput,
   judged: readonly string[],
-): Promise<
-  RoleCall<
-    ReturnType<typeof verdictsFor> | ReturnType<typeof correctnessVerdictsFor>
-  >
+): RoleCall<
+  ReturnType<typeof verdictsFor> | ReturnType<typeof correctnessVerdictsFor>
 > {
   return {
     role: "verifier",
     label: verifierLabels[name],
     system: verdictSystem,
-    prompt: await verifierPrompt(name, input, judged),
+    prompt: verifierPrompt(name, input, judged),
     tool: roleTools.verifier,
     description:
       "Return this verifier's verdict on each note under verification",
@@ -500,11 +479,11 @@ export async function verifierCall(
 // what the note establishes; the second proves the statement from the
 // support notes alone, never seeing the note's text; the third compares the
 // note's text with that proof and records the verdict.
-export async function statementCall(
+export function statementCall(
   input: VerifierInput,
   note: Note,
-): Promise<RoleCall<typeof statementSchema>> {
-  const { support } = await reading(input, [note.id]);
+): RoleCall<typeof statementSchema> {
+  const { support } = reading(input, [note.id]);
   return {
     role: "verifier",
     label: reconstructionCalls.statement.label,
@@ -525,13 +504,13 @@ export async function statementCall(
   };
 }
 
-export async function proofCall(
+export function proofCall(
   input: VerifierInput,
   note: Note,
   value: Statement,
   previous?: EntryId,
-): Promise<RoleCall<typeof proofSchema>> {
-  const { support } = await reading(input, [note.id]);
+): RoleCall<typeof proofSchema> {
+  const { support } = reading(input, [note.id]);
   return {
     role: "verifier",
     label: reconstructionCalls.proof.label,
@@ -555,19 +534,19 @@ export async function proofCall(
   };
 }
 
-export async function reconstructionCall(
+export function reconstructionCall(
   input: VerifierInput,
   note: Note,
   value: Statement,
   proof: string,
   previous?: EntryId,
-): Promise<RoleCall<ReturnType<typeof reconstructionResultFor>>> {
+): RoleCall<ReturnType<typeof reconstructionResultFor>> {
   return {
     role: "verifier",
     label: verifierLabels.reconstruction,
     system: verdictSystem,
     prompt: [
-      await verifierPrompt("reconstruction", input, [note.id], undefined),
+      verifierPrompt("reconstruction", input, [note.id], undefined),
       `Statement (untrusted data):\n${value.statement}`,
       `Proof (untrusted data):\n${proof}`,
       ...(previous === undefined
@@ -609,7 +588,7 @@ function correctnessForSources(
   campaign: Campaign,
   input: VerifierInput,
   judged: readonly string[],
-  candidate: EntryId,
+  verification: EntryId,
 ): { correctness: CorrectnessAssessment; notes: string[] }[] {
   const records = campaign.records();
   const history = journalVerdicts(records);
@@ -623,25 +602,24 @@ function correctnessForSources(
         entry.verdict.note === id &&
         entry.verdict.verifier === "correctness" &&
         entry.verdict.verdict === "PASS" &&
-        (entry.candidate === candidate ||
-          (entry.candidate < candidate &&
+        (entry.verification === verification ||
+          (entry.verification < verification &&
             pick(input.notes, id).verdicts.some((verdict) =>
               isDeepStrictEqual(verdict, entry.verdict),
             ))),
     );
     const receipt =
       prior === undefined ? undefined : campaign.record(prior.seq);
-    if (receipt?.kind !== "verdict")
+    if (receipt?.kind !== "evidence")
       throw new RoleCallError(
         "source requires a recorded correctness PASS with its external premises",
       );
     let group = groups.get(receipt.call);
     if (group === undefined) {
-      const saved = succeededSubmission(
-        records,
-        receipt.call,
-        roleTools.verifier,
-      );
+      const saved = readPiSubmission(records, receipt.call, {
+        tool: roleTools.verifier,
+        schema: correctnessVerdicts,
+      });
       if (saved === undefined)
         throw new RoleCallError(
           "source requires the completed correctness submission",
@@ -649,7 +627,7 @@ function correctnessForSources(
       group = {
         correctness: {
           call: receipt.call,
-          ...correctnessVerdicts.parse(saved.input),
+          ...saved.value,
         },
         notes: [],
       };
@@ -690,16 +668,16 @@ export const localSourceResult = z.strictObject({
 
 // Correctness reads the complete proof once. Source reads only notes with
 // external premises and exact previously inspected passages, never support proofs.
-export async function sourceCall(
+export function sourceCall(
   profile: z.output<typeof codexProfile>,
   input: VerifierInput,
   judged: readonly string[],
   correctness: CorrectnessAssessment,
   passages: readonly InspectedPassage[] = [],
-): Promise<{
+): {
   readonly label: string;
   readonly request: CodexRequest;
-}> {
+} {
   const assigned = judged.map((note) => {
     const assessment = correctness.verdicts.find(
       (value) => value.note === note,
@@ -764,7 +742,7 @@ async function runCall<S extends z.ZodType>(
   profile: PiRoleProfile,
   roleCall: RoleCall<S>,
   dependencies: PiRoleDependencies,
-  candidate?: EntryId,
+  verification?: EntryId,
   submissionTool?: Tool,
 ): Promise<{ readonly call: EntryId; readonly value: z.output<S> }> {
   const model = selectModel(dependencies.models, {
@@ -799,55 +777,23 @@ async function runCall<S extends z.ZodType>(
     cacheKey: createHash("sha256")
       .update(`${roleLabels[roleCall.role]}\n${roleCall.system}`)
       .digest("hex"),
-    ...(candidate === undefined ? {} : { candidate }),
+    ...(verification === undefined ? {} : { parent: verification }),
     ...(dependencies.signal === undefined
       ? {}
       : { signal: dependencies.signal }),
   });
-  if (result.state !== "succeeded") {
-    const transcript = result.transcript.flatMap((message) => {
-      if (
-        typeof message !== "object" ||
-        message === null ||
-        Array.isArray(message)
-      )
-        return [];
-      return [message as { readonly [key: string]: Json }];
-    });
-    const assistant = transcript.filter(
-      (message) => message.role === "assistant",
-    );
-    // A provider can lose a continuation even when it cannot retry that same
-    // request. Rebuild the role through the workflow instead of replaying its
-    // provider state or tool effects. Initial failures and tool/schema failures
-    // do not establish a recoverable continuation.
-    const retryable =
-      result.state === "failed" &&
-      assistant.at(-1)?.stopReason === "error" &&
-      !transcript.some(
-        (message) => message.role === "toolResult" && message.isError === true,
-      ) &&
-      assistant
-        .slice(0, -1)
-        .some((message) =>
-          ["stop", "toolUse", "length"].includes(String(message.stopReason)),
-        );
-    throw new RoleCallError(
-      `${roleCall.role} failed: ${result.error}`,
-      retryable,
-    );
-  }
-  const submission = succeededSubmission(
+  if (result.state !== "succeeded")
+    throw new RoleCallError(`${roleCall.role} failed: ${result.error}`);
+  const submission = readPiSubmission(
     roleCallRecords(campaign, result.call),
     result.call,
-    roleCall.tool,
+    roleCall,
   );
-  if (submission === undefined) {
+  if (submission === undefined)
     throw new RoleCallError(
       `${roleCall.role} returned no ${roleCall.tool} submission`,
     );
-  }
-  return { call: result.call, value: roleCall.schema.parse(submission.input) };
+  return { call: result.call, value: submission.value };
 }
 
 export function createPiRoles(
@@ -932,61 +878,66 @@ export function createPiRoles(
         await runLiterature(campaign, profiles.source, input, codex, after)
       ).value;
     },
-    // One verification: one candidate for the listed notes and their
-    // support, then the verifiers in order, each on the notes it judges next.
+    // Freeze the listed notes and support, then run their outstanding checks.
     // Correctness and requirements judge their notes in one model call each.
     // Source records local conclusions and checks the external premises.
     // Reconstruction runs its three calls per note. Each completed check records one
-    // kernel verdict listing the verdict of every note it judged, and a call
+    // evidence receipt listing the verdict of every note it judged, and a call
     // that already has one is not recorded again, so a verification resumes
     // where it stopped.
-    async verifier(inputValue, candidateValue, signal = dependencies.signal) {
+    async verifier(
+      inputValue,
+      verificationValue,
+      signal = dependencies.signal,
+    ) {
       const verifierDependencies = {
         ...dependencies,
         ...(signal === undefined ? {} : { signal }),
       };
-      const input = await verifierInput.parseAsync(inputValue);
-      const candidate =
-        candidateValue ??
-        campaign.submitCandidate(
-          candidateMaterial(input),
-          [...new Set(input.verify.flatMap(({ verifiers }) => verifiers))].map(
-            (name) => verifierLabels[name],
-          ),
-        );
-      if (candidateValue === undefined) {
-        await campaign.call(
-          { label: verificationLabel, candidate, request: jsonSnapshot(input) },
-          async () => ({ state: "succeeded" }),
-        );
-      }
+      const input = verifierInput.parse(inputValue);
+      const verification =
+        verificationValue ??
+        (
+          await campaign.call(
+            { label: verificationLabel, request: jsonSnapshot(input) },
+            async () => ({ state: "succeeded" }),
+          )
+        ).call;
       let recordedThrough = 0;
-      const candidateVerdicts: Verdict[] = [];
+      const recordedVerdicts: Verdict[] = [];
       const recorded = (): Verdict[] => {
         for (const entry of campaign.records({
-          kinds: ["verdict"],
+          kinds: ["evidence"],
           after: recordedThrough,
         })) {
-          if (entry.kind !== "verdict") continue;
+          if (entry.kind !== "evidence") continue;
           const owner = campaign.record(entry.call);
-          candidateVerdicts.push(
-            ...journalVerdicts([...(owner ? [owner] : []), entry])
-              .filter((value) => value.candidate === candidate)
-              .map(({ verdict }) => verdict),
-          );
           recordedThrough = entry.seq;
+          if (owner?.kind !== "call" || owner.parent !== verification) continue;
+          recordedVerdicts.push(
+            ...journalVerdicts([
+              campaign.record(verification)!,
+              owner,
+              ...campaign.records({
+                kinds: ["call-result"],
+                parent: owner.seq,
+                through: entry.seq,
+              }),
+              entry,
+            ]).map(({ verdict }) => verdict),
+          );
         }
-        return verificationVerdicts(input, candidateVerdicts);
+        return verificationVerdicts(input, recordedVerdicts);
       };
       const record = (
         call: EntryId,
         values: readonly Omit<Verdict, "verifier">[],
       ): void => {
         const already = campaign
-          .records({ kinds: ["verdict"], call })
-          .some((entry) => entry.kind === "verdict" && entry.call === call);
+          .records({ kinds: ["evidence"], call })
+          .some((entry) => entry.kind === "evidence" && entry.call === call);
         if (already) return;
-        campaign.recordVerdict(call, candidateVerdict(values), {
+        campaign.recordEvidence(call, {
           verdicts: values.map(({ note, verdict, report, correctedText }) => ({
             note,
             verdict,
@@ -1005,14 +956,14 @@ export function createPiRoles(
               judgedBy(input, have, name),
             )[0];
             if (next === undefined) break;
-            const working = correctedVerifierInput(input, candidateVerdicts);
+            const working = correctedVerifierInput(input, recordedVerdicts);
             const { call, value } = await runReconstruction(
               campaign,
               profiles.reconstruction,
               working,
               pick(working.notes, next),
               verifierDependencies,
-              candidate,
+              verification,
             );
             record(call, value.verdicts);
             if (value.verdicts[0]!.verdict === "PASS") return recorded();
@@ -1022,13 +973,13 @@ export function createPiRoles(
         const have = recorded();
         const judged = missingVerdicts(have, name, judgedBy(input, have, name));
         if (judged.length === 0) continue;
-        const working = correctedVerifierInput(input, candidateVerdicts);
+        const working = correctedVerifierInput(input, recordedVerdicts);
         if (name === "source") {
           for (const { correctness, notes } of correctnessForSources(
             campaign,
             input,
             judged,
-            candidate,
+            verification,
           )) {
             const local = notes.filter(
               (note) =>
@@ -1038,7 +989,7 @@ export function createPiRoles(
             if (local.length > 0) {
               const result = await runLocalSource(
                 campaign,
-                candidate,
+                verification,
                 correctness.call,
                 local,
               );
@@ -1053,7 +1004,7 @@ export function createPiRoles(
                 remote,
                 correctness,
                 { ...codex, ...(signal === undefined ? {} : { signal }) },
-                candidate,
+                verification,
               );
               record(result.call, result.value.verdicts);
             }
@@ -1063,9 +1014,9 @@ export function createPiRoles(
         const { call, value } = await settledOrRun(
           campaign,
           profiles[name],
-          await verifierCall(name, working, judged),
+          verifierCall(name, working, judged),
           verifierDependencies,
-          candidate,
+          verification,
         );
         record(call, value.verdicts);
       }
@@ -1075,14 +1026,14 @@ export function createPiRoles(
 }
 
 /**
- * The settled call of one label on this candidate whose journaled request
+ * The settled call of one label on this verification whose journaled request
  * equals `request` and whose submission `read` accepts, else undefined. A
  * missing or invalid submission is not reused. Errors reading a matching
  * journal entry propagate so corruption cannot become a paid cache miss.
  */
 function settled<T>(
   records: readonly Entry[],
-  candidate: EntryId,
+  verification: EntryId,
   label: string,
   request: Json | RoleCall<z.ZodType>,
   read: (call: EntryId) => T | undefined,
@@ -1090,12 +1041,14 @@ function settled<T>(
   for (const entry of records) {
     if (
       entry.kind !== "call" ||
-      entry.candidate !== candidate ||
+      entry.parent !== verification ||
       entry.label !== label ||
       !sameRequest(entry.request, request)
     ) {
       continue;
     }
+    if (entry.role !== roleFromLabel(label))
+      throw new Error(`call ${entry.seq} role disagrees with its label`);
     const value = read(entry.seq);
     if (value !== undefined) return { call: entry.seq, value };
   }
@@ -1136,11 +1089,12 @@ export function* matchingCalls(
   after: EntryId,
   label: string,
   request: Json | RoleCall<z.ZodType>,
+  role: string | undefined = roleFromLabel(label),
 ): Generator<CallEntry, undefined> {
   for (const entry of records) {
     if (entry.kind !== "call" || entry.seq <= after || entry.label !== label)
       continue;
-    if (!sameRequest(entry.request, request)) {
+    if (entry.role !== role || !sameRequest(entry.request, request)) {
       throw new Error(
         `call ${entry.seq} does not match the derived ${roleFromLabel(label) ?? label} request`,
       );
@@ -1159,7 +1113,7 @@ async function codexCall(
   call: {
     readonly label: string;
     readonly role: RoleName;
-    readonly candidate?: EntryId;
+    readonly parent?: EntryId;
   },
   request: Json | CodexRequest,
   exec: CodexExec,
@@ -1246,7 +1200,9 @@ function inspectedPassages(
       if (verdict.verifier !== "source" || verdict.verdict !== "PASS")
         return [];
       const entry = campaign.record(seq);
-      return entry?.kind === "verdict" ? [`${entry.call}/${verdict.note}`] : [];
+      return entry?.kind === "evidence"
+        ? [`${entry.call}/${verdict.note}`]
+        : [];
     }),
   );
   const passages: InspectedPassage[] = [];
@@ -1294,7 +1250,7 @@ function inspectedPassages(
 
 async function runLocalSource(
   campaign: Campaign,
-  candidate: EntryId,
+  verification: EntryId,
   correctnessCall: EntryId,
   notes: readonly string[],
 ) {
@@ -1312,19 +1268,19 @@ async function runLocalSource(
       sources: [],
     })),
   });
-  return runSourceConclusion(campaign, candidate, request, value);
+  return runSourceConclusion(campaign, verification, request, value);
 }
 
 /** A local conclusion settles successfully without claiming its provider call did. */
 async function runSourceConclusion(
   campaign: Campaign,
-  candidate: EntryId,
+  verification: EntryId,
   request: z.output<typeof localSourceRequest>,
   value: z.output<typeof localSourceResult>,
 ) {
   const prior = settled(
     campaign.records({ kinds: ["call"], labels: [verifierLabels.source] }),
-    candidate,
+    verification,
     verifierLabels.source,
     jsonSnapshot(request),
     (call) => {
@@ -1339,7 +1295,7 @@ async function runSourceConclusion(
     {
       label: verifierLabels.source,
       role: "verifier",
-      candidate,
+      parent: verification,
       request: jsonSnapshot(request),
     },
     async () => value,
@@ -1347,43 +1303,124 @@ async function runSourceConclusion(
   return { call: receipt.call, value };
 }
 
-/** The settled Pi call on this candidate for `roleCall`, when its submission parses. */
-function settledSubmission<S extends z.ZodType>(
-  campaign: Campaign,
-  candidate: EntryId,
-  roleCall: RoleCall<S>,
-): { readonly call: EntryId; readonly value: z.output<S> } | undefined {
-  return settled(
-    campaign.records({ kinds: ["call"], labels: [roleCall.label] }),
-    candidate,
-    roleCall.label,
-    roleCall,
-    (call) => {
-      const submission = succeededSubmission(
-        roleCallRecords(campaign, call),
-        call,
-        roleCall.tool,
-      );
-      const parsed =
-        submission === undefined
-          ? undefined
-          : roleCall.schema.safeParse(submission.input);
-      return parsed?.success === true ? parsed.data : undefined;
-    },
-  );
+/** Decode a Pi submission once for execution, replay, and inspection. Explorer's
+ * durable partial submission is visible only when explicitly requested. */
+export function readPiSubmission<S extends z.ZodType>(
+  records: readonly Entry[],
+  call: EntryId,
+  roleCall: Pick<RoleCall<S>, "tool" | "schema">,
+  partialExplorer = false,
+):
+  | {
+      readonly settled: EntryId;
+      readonly value: z.output<S>;
+      readonly emptySubmission?: boolean;
+      readonly completed?: EntryId;
+    }
+  | undefined {
+  const partial = partialExplorer && roleCall.tool === roleTools.explorer;
+  const saved = partial ? savedExplorerSubmission(records, call) : undefined;
+  const completed = succeededSubmission(records, call, roleCall.tool, saved);
+  const submission = partial ? saved : completed;
+  return submission === undefined
+    ? undefined
+    : {
+        settled: submission.settled,
+        value: roleCall.schema.parse(submission.input),
+        ...(saved !== undefined
+          ? { emptySubmission: saved.emptySubmission }
+          : {}),
+        ...(completed !== undefined ? { completed: completed.settled } : {}),
+      };
 }
 
-/** Reuses the settled call for `roleCall` on this candidate, or makes it. */
+/** The same role contracts used for invocation, rendered from their saved result. */
+export function roleSubmission(
+  records: readonly Entry[],
+  call: CallEntry,
+): Json | undefined {
+  const role = roleFromLabel(call.label);
+  if (role === undefined) return undefined;
+  if (call.role !== role)
+    throw new Error(`call ${call.seq} role disagrees with its label`);
+  const verifier = verifierFromLabel(call.label);
+  if (role === "literature" || verifier === "source") {
+    if (
+      verifier === "source" &&
+      localSourceRequest.safeParse(call.request).success
+    ) {
+      const output = returnedOutput(records, call.seq);
+      return output === undefined
+        ? undefined
+        : jsonSnapshot({ verifier, ...localSourceResult.parse(output.output) });
+    }
+    const submission = codexSubmission(records, call.seq);
+    return submission === undefined
+      ? undefined
+      : jsonSnapshot({
+          ...(verifier === undefined ? {} : { verifier }),
+          ...(role === "literature"
+            ? literatureReport
+            : sourceSubmission
+          ).parse(submission.input),
+          usage: submission.usage,
+        });
+  }
+  const reconstruction = Object.entries(reconstructionCalls).find(
+    ([, value]) => value.label === call.label,
+  );
+  const schema =
+    reconstruction?.[0] === "statement"
+      ? statementSchema
+      : reconstruction?.[0] === "proof"
+        ? proofSchema
+        : role === "explorer"
+          ? explorerResult
+          : role === "coordinator"
+            ? coordinatorResult
+            : verifier === "correctness"
+              ? correctnessVerdicts
+              : verifier === "reconstruction"
+                ? reconstructionResult
+                : verdicts;
+  const value = readPiSubmission(
+    records,
+    call.seq,
+    {
+      tool: reconstruction?.[1].tool ?? roleTools[role],
+      schema,
+    },
+    true,
+  )?.value;
+  return value === undefined
+    ? undefined
+    : jsonSnapshot({
+        ...(verifier === undefined || reconstruction !== undefined
+          ? {}
+          : { verifier }),
+        ...value,
+      });
+}
+
+/** Reuses the settled call for `roleCall` on this verification, or makes it. */
 async function settledOrRun<S extends z.ZodType>(
   campaign: Campaign,
   profile: PiRoleProfile,
   roleCall: RoleCall<S>,
   dependencies: PiRoleDependencies,
-  candidate: EntryId,
+  verification: EntryId,
 ): Promise<{ readonly call: EntryId; readonly value: z.output<S> }> {
   return (
-    settledSubmission(campaign, candidate, roleCall) ??
-    (await runCall(campaign, profile, roleCall, dependencies, candidate))
+    settled(
+      campaign.records(),
+      verification,
+      roleCall.label,
+      roleCall,
+      (call) =>
+        readPiSubmission(roleCallRecords(campaign, call), call, roleCall)
+          ?.value,
+    ) ??
+    (await runCall(campaign, profile, roleCall, dependencies, verification))
   );
 }
 
@@ -1393,7 +1430,7 @@ async function runReconstruction(
   input: VerifierInput,
   note: Note,
   dependencies: PiRoleDependencies,
-  candidate: EntryId,
+  verification: EntryId,
 ): Promise<{
   readonly call: EntryId;
   readonly value: z.output<ReturnType<typeof reconstructionResultFor>>;
@@ -1403,9 +1440,9 @@ async function runReconstruction(
     await settledOrRun(
       campaign,
       profile,
-      await statementCall(input, note),
+      statementCall(input, note),
       dependencies,
-      candidate,
+      verification,
     )
   ).value;
   let previous: EntryId | undefined;
@@ -1415,17 +1452,17 @@ async function runReconstruction(
       await settledOrRun(
         campaign,
         profile,
-        await proofCall(input, note, statement, previous),
+        proofCall(input, note, statement, previous),
         dependencies,
-        candidate,
+        verification,
       )
     ).value.proof;
     const result = await settledOrRun(
       campaign,
       profile,
-      await reconstructionCall(input, note, statement, proof, previous),
+      reconstructionCall(input, note, statement, proof, previous),
       dependencies,
-      candidate,
+      verification,
     );
     if (result.value.statement !== null) {
       statement = { statement: result.value.statement };
@@ -1450,13 +1487,13 @@ async function runSource(
   judged: readonly string[],
   correctness: CorrectnessAssessment,
   dependencies: CodexDependencies,
-  candidate: EntryId,
+  verification: EntryId,
 ): Promise<{
   readonly call: EntryId;
   readonly value: z.output<typeof sourceSubmission>;
 }> {
-  const passages = inspectedPassages(campaign, candidate);
-  const { label, request } = await sourceCall(
+  const passages = inspectedPassages(campaign, verification);
+  const { label, request } = sourceCall(
     profile,
     input,
     judged,
@@ -1476,14 +1513,6 @@ async function runSource(
   const unusable = (reason: string) => ({
     verdicts: assigned.map(({ note }) => unusableSourceVerdict(note, reason)),
   });
-  const successful = (call: EntryId): boolean => {
-    const returned = returnedOutput(roleCallRecords(campaign, call), call);
-    const output =
-      returned === undefined
-        ? undefined
-        : codexResult.safeParse(returned.output);
-    return output?.success === true && output.data.state === "succeeded";
-  };
   // A successful call whose response is unusable says nothing about the
   // mathematics: keep the call, record INCONCLUSIVE with the assigned
   // premises unchanged, and admit no returned evidence for reuse.
@@ -1503,15 +1532,18 @@ async function runSource(
   };
   const prior = settled(
     campaign.records({ kinds: ["call"], labels: [label] }),
-    candidate,
+    verification,
     label,
     request,
-    (call) => (successful(call) ? conclude(call) : undefined),
+    (call) =>
+      codexOutcome(roleCallRecords(campaign, call), call)?.state === "succeeded"
+        ? conclude(call)
+        : undefined,
   );
   if (prior !== undefined) return prior;
   const { call, output } = await codexCall(
     campaign,
-    { label, role: "verifier", candidate },
+    { label, role: "verifier", parent: verification },
     request,
     dependencies.codex,
     dependencies.signal,

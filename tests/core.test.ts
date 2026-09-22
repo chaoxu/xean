@@ -7,7 +7,6 @@ import { z } from "zod";
 import {
   createCampaign,
   defineTool,
-  deriveCandidateStatus,
   openReader,
   returnedToolSubmission,
   type ToolExecutionContext,
@@ -27,124 +26,9 @@ afterEach(() => {
   }
 });
 
-async function pass(
-  campaign: ReturnType<typeof createCampaign>,
-  candidate: ReturnType<typeof campaign.submitCandidate>,
-  verifier: string,
-): Promise<number> {
-  const call = await campaign.call(
-    { label: verifier, candidate, request: {} },
-    async ({ request }) => ({ state: "succeeded", checked: request }),
-  );
-  return campaign.recordVerdict(call.call, "PASS", {
-    reason: "checked",
-  });
-}
-
 describe("small kernel", () => {
-  test("persists exact candidate material for a fresh reader", () => {
-    const path = database();
-    const campaign = createCampaign(path, "test", { version: 1 });
-    const material = new TextEncoder().encode("proof");
-    Object.defineProperty(material, Symbol.iterator, {
-      value: function* () {
-        yield 0;
-      },
-    });
-    Object.defineProperty(material, "byteLength", { value: 8 });
-    const candidate = campaign.submitCandidate(material, ["audit/v1"]);
-    for (const invalid of ["proof", [1, 2, 3], { 0: 1, length: 1 }]) {
-      expect(() =>
-        campaign.submitCandidate(invalid as never, ["audit/v1"]),
-      ).toThrow("Uint8Array");
-    }
-    material.fill(0);
-    campaign.close();
-
-    const reader = openReader(path);
-    const candidateRecord = reader
-      .records()
-      .find((entry) => entry.kind === "candidate");
-    expect(candidateRecord?.seq).toBe(candidate);
-    expect(
-      reader.records().filter((entry) => entry.kind === "candidate"),
-    ).toHaveLength(1);
-    const stored = reader.material(candidate);
-    expect(new TextDecoder().decode(stored)).toBe("proof");
-    stored.fill(0);
-    const ownIterator = Object.getOwnPropertyDescriptor(
-      Uint8Array.prototype,
-      Symbol.iterator,
-    );
-    try {
-      Object.defineProperty(Uint8Array.prototype, Symbol.iterator, {
-        configurable: true,
-        value: function* () {
-          yield 0;
-        },
-      });
-      const reread = reader.material(candidate);
-      expect([reread[0], reread[1], reread[2], reread[3], reread[4]]).toEqual([
-        112, 114, 111, 111, 102,
-      ]);
-    } finally {
-      if (ownIterator === undefined) {
-        delete (Uint8Array.prototype as { [Symbol.iterator]?: unknown })[
-          Symbol.iterator
-        ];
-      } else {
-        Object.defineProperty(
-          Uint8Array.prototype,
-          Symbol.iterator,
-          ownIterator,
-        );
-      }
-    }
-    reader.close();
-  });
-
-  test("derives verification from fresh successful verdicts", async () => {
-    const campaign = createCampaign(database(), "test", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1", "compare/v1"],
-    );
-    expect(deriveCandidateStatus(campaign.records(), candidate)).toEqual({
-      verified: false,
-      missing: ["audit/v1", "compare/v1"],
-      failed: [],
-      passes: [],
-    });
-
-    const passSequences = [
-      await pass(campaign, candidate, "audit/v1"),
-      await pass(campaign, candidate, "compare/v1"),
-    ];
-    expect(deriveCandidateStatus(campaign.records(), candidate)).toEqual({
-      verified: true,
-      missing: [],
-      failed: [],
-      passes: passSequences,
-    });
-
-    const late = await campaign.call(
-      { label: "audit/v1", candidate, request: {} },
-      async () => ({ state: "succeeded", result: "late counterexample" }),
-    );
-    campaign.recordVerdict(late.call, "FAIL", null);
-    expect(deriveCandidateStatus(campaign.records(), candidate)).toMatchObject({
-      verified: false,
-      missing: [],
-      failed: ["audit/v1"],
-    });
-  });
-
   test("projects one returned tool submission without constraining its output", async () => {
     const campaign = createCampaign(database(), "test", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1"],
-    );
     const submit = defineTool({
       name: "submit_verdict",
       description: "Submit a verdict",
@@ -159,7 +43,6 @@ describe("small kernel", () => {
     const audit = await campaign.call(
       {
         label: "audit/v1",
-        candidate,
         request: null,
         tools: [submit],
       },
@@ -187,18 +70,13 @@ describe("small kernel", () => {
         evidence: z.json(),
       })
       .parse(projected.input);
-    campaign.recordVerdict(audit.call, report.verdict, report.evidence);
-    expect(deriveCandidateStatus(campaign.records(), candidate).verified).toBe(
-      true,
-    );
+    const evidence = campaign.recordEvidence(audit.call, report);
+    expect(campaign.record(evidence)).toMatchObject({ evidence: report });
+    campaign.close();
   });
 
   test("rejects missing, duplicate, and thrown tool submissions", async () => {
     const campaign = createCampaign(database(), "test", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1"],
-    );
     const submit = defineTool({
       name: "submit_verdict",
       description: "Submit a verdict",
@@ -208,7 +86,7 @@ describe("small kernel", () => {
       },
     });
     const empty = await campaign.call(
-      { label: "audit/v1", candidate, request: null, tools: [submit] },
+      { label: "audit/v1", request: null, tools: [submit] },
       async () => ({ state: "succeeded" }),
     );
     expect(() =>
@@ -217,7 +95,6 @@ describe("small kernel", () => {
     const duplicate = await campaign.call(
       {
         label: "audit/v1",
-        candidate,
         request: null,
         tools: [submit],
       },
@@ -241,7 +118,6 @@ describe("small kernel", () => {
       campaign.call(
         {
           label: "audit/v1",
-          candidate,
           request: null,
           tools: [throwing],
         },
@@ -256,97 +132,88 @@ describe("small kernel", () => {
     ).toThrow("returned tool result");
   });
 
-  test("rejects a call that guessed a future candidate sequence", async () => {
+  test("rejects missing or non-call parents before writing", async () => {
     const campaign = createCampaign(database(), "test", null);
-    const call = await campaign.call(
-      { label: "audit/v1", candidate: 4, request: {} },
+    for (const parent of [1, 2, 999]) {
+      await expect(
+        campaign.call({ label: "child", parent, request: null }, async () => {
+          throw new Error("must not run");
+        }),
+      ).rejects.toThrow("earlier call");
+      expect(campaign.records()).toHaveLength(1);
+    }
+    const opening = await campaign.call(
+      { label: "opening", request: "claim" },
+      async () => null,
+    );
+    const child = await campaign.call(
+      { label: "child", parent: opening.call, request: null },
       async () => ({ state: "succeeded" }),
     );
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1"],
-    );
-    expect(candidate).toBe(4);
-    expect(() => campaign.recordVerdict(call.call, "PASS", null)).toThrow(
-      "fresh successful",
-    );
+    expect(campaign.record(child.call)).toMatchObject({ parent: opening.call });
+    campaign.close();
   });
 
-  test("rejects verdicts from failed protocol results and reused calls", async () => {
-    const campaign = createCampaign(database(), "test", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1", "compare/v1"],
-    );
-    const failed = await campaign.call(
-      { label: "audit/v1", candidate, request: {} },
-      async () => ({ state: "failed", error: "provider failed" }),
-    );
-    expect(() => campaign.recordVerdict(failed.call, "PASS", null)).toThrow(
-      "fresh successful",
-    );
-
-    const passed = await campaign.call(
-      { label: "audit/v1", candidate, request: {} },
-      async () => ({ state: "succeeded" }),
-    );
-    campaign.recordVerdict(passed.call, "PASS", null);
-    expect(() => campaign.recordVerdict(passed.call, "PASS", null)).toThrow();
-  });
-
-  test("keeps candidates unverified on missing or failed verification", async () => {
-    const campaign = createCampaign(database(), "test", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit/v1", "compare/v1"],
-    );
-    const failed = await campaign.call(
-      { label: "audit/v1", candidate, request: {} },
-      async () => ({ state: "succeeded", result: "counterexample" }),
-    );
-    campaign.recordVerdict(failed.call, "FAIL", null);
-    await pass(campaign, candidate, "compare/v1");
-    expect(deriveCandidateStatus(campaign.records(), candidate)).toMatchObject({
-      verified: false,
-      missing: ["audit/v1"],
-      failed: ["audit/v1"],
-    });
-  });
-
-  test("keeps identical submissions and their verifier calls independent", async () => {
-    const campaign = createCampaign(database(), "test", null);
-    const material = new TextEncoder().encode("claim");
-    const first = campaign.submitCandidate(material, ["audit/v1"]);
-    const second = campaign.submitCandidate(material, ["audit/v1"]);
-    expect(second).not.toBe(first);
-    await pass(campaign, first, "audit/v1");
-    expect(deriveCandidateStatus(campaign.records(), first).verified).toBe(
+  test("evidence accepts any returned JSON but rejects missing, unsettled, thrown, and reused calls", async () => {
+    const path = database();
+    const campaign = createCampaign(path, "test", null);
+    for (const output of [
+      null,
       true,
+      7,
+      "complete",
+      [],
+      {},
+      { state: "complete" },
+      { state: "failed" },
+      { state: "cancelled" },
+    ]) {
+      const call = await campaign.call(
+        { label: "audit", request: null },
+        async () => output,
+      );
+      const evidence = campaign.recordEvidence(call.call, output);
+      expect(campaign.record(evidence)).toMatchObject({ evidence: output });
+    }
+    for (const call of [1, 999]) {
+      expect(() => campaign.recordEvidence(call, null)).toThrow(
+        "returned call",
+      );
+    }
+    await expect(
+      campaign.call({ label: "thrown", request: null }, async ({ call }) => {
+        expect(() => campaign.recordEvidence(call, null)).toThrow(
+          "returned call",
+        );
+        throw new Error("interrupted");
+      }),
+    ).rejects.toThrow("interrupted");
+    const thrown = campaign.records({
+      kinds: ["call"],
+      labels: ["thrown"],
+    })[0]!;
+    expect(() => campaign.recordEvidence(thrown.seq, null)).toThrow(
+      "returned call",
     );
-    expect(deriveCandidateStatus(campaign.records(), second).verified).toBe(
-      false,
-    );
-
-    const wrongVerifier = await campaign.call(
-      { label: "other/v1", candidate: second, request: {} },
+    const passed = await campaign.call(
+      { label: "audit", request: null },
       async () => ({ state: "succeeded" }),
     );
+    const receipt = campaign.recordEvidence(passed.call, {
+      verdict: "PASS",
+      reason: "checked",
+    });
     expect(() =>
-      campaign.recordVerdict(wrongVerifier.call, "PASS", null),
-    ).toThrow("fresh successful");
-  });
-
-  test("normalizes verifier sets", () => {
-    const campaign = createCampaign(database(), "test", null);
-    const material = new TextEncoder().encode("claim");
-    const candidate = campaign.submitCandidate(material, [
-      "compare/v1",
-      "audit/v1",
-      "compare/v1",
-    ]);
-    expect(
-      deriveCandidateStatus(campaign.records(), candidate).missing,
-    ).toEqual(["audit/v1", "compare/v1"]);
+      campaign.recordEvidence(passed.call, { verdict: "FAIL" }),
+    ).toThrow();
+    campaign.close();
+    const reader = openReader(path);
+    expect(reader.record(receipt)).toMatchObject({
+      kind: "evidence",
+      call: passed.call,
+      evidence: { verdict: "PASS", reason: "checked" },
+    });
+    reader.close();
   });
 
   test("records calls and tool effects before returning", async () => {

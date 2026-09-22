@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Campaign, Entry, EntryId } from "xean";
 import { z } from "zod";
 
-import { jsonSnapshot } from "./roles";
+import { jsonSnapshot, roleLabels } from "./roles";
 
 // An inbox holds caller input, guidance or submitted notes, in the campaign
 // until a boundary freezes it into the next role input. Its calls are local:
@@ -15,25 +15,22 @@ import { jsonSnapshot } from "./roles";
 /** The boundaries that freeze submitted notes into the next coordinator input and guidance into the next Explorer input. */
 export const boundaryLabels = {
   overlap: "xean-solve/overlap",
-  notes: "xean-solve/coordinator-notes",
-  guidance: "xean-solve/explorer-guidance",
+  inbox: "xean-solve/inbox-boundary",
 } as const;
 
 const boundaryRequest = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
+  channel: z.enum(["notes", "guidance"]),
   after: z.number().int().positive(),
   through: z.number().int().positive(),
 });
 
-export function inbox<R extends { readonly id: string }>(options: {
-  readonly receiptLabel: string;
-  /** The receipt request: `schemaVersion`, `id`, and the payload. */
-  readonly receiptSchema: z.ZodType<R>;
-  readonly boundaryLabel: string;
-  /** Labels of calls that, started after a boundary, make freezing there too late. */
-  readonly startedLabels: readonly string[];
-}) {
-  const { receiptLabel, receiptSchema, boundaryLabel, startedLabels } = options;
+export function inbox<R extends { readonly id: string }>(
+  channel: z.output<typeof boundaryRequest>["channel"],
+  receiptSchema: z.ZodType<R>,
+) {
+  const receiptLabel = `xean-solve/${channel}`;
+  const boundaryLabel = boundaryLabels.inbox;
   type Receipt = R & { readonly call: EntryId; readonly atMs: number };
 
   /** The call request is the durable receipt, including without its call-result. */
@@ -59,6 +56,7 @@ export function inbox<R extends { readonly id: string }>(options: {
     return records.flatMap((entry) => {
       if (entry.kind !== "call" || entry.label !== boundaryLabel) return [];
       const request = boundaryRequest.parse(entry.request);
+      if (request.channel !== channel) return [];
       if (
         seen.has(request.after) ||
         request.after >= entry.seq ||
@@ -174,7 +172,13 @@ export function inbox<R extends { readonly id: string }>(options: {
     const through = campaign.lastSequence();
     const records = campaign.records({
       kinds: ["call"],
-      labels: [receiptLabel, boundaryLabel, ...startedLabels],
+      labels: [
+        receiptLabel,
+        boundaryLabel,
+        boundaryLabels.overlap,
+        roleLabels.explorer,
+        roleLabels.coordinator,
+      ],
       through,
     });
     const consumedThrough = boundaries(records).at(-1)?.through ?? 0;
@@ -189,7 +193,10 @@ export function inbox<R extends { readonly id: string }>(options: {
     )
       return false;
     await campaign.call(
-      { label: boundaryLabel, request: { schemaVersion: 1, after, through } },
+      {
+        label: boundaryLabel,
+        request: { schemaVersion: 2, channel, after, through },
+      },
       async () => null,
     );
     return true;

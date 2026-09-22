@@ -90,8 +90,11 @@ const start: readonly Reply[] = [
   {
     submission: {
       filings: [{ note: "n1", summary: "P holds." }],
-      verify: [{ note: "n1", verifiers: [...verifierNames] }],
-      action: { role: "verifier" },
+
+      action: {
+        role: "verifier",
+        verify: [{ note: "n1", verifiers: [...verifierNames] }],
+      },
     },
   },
 ];
@@ -170,7 +173,13 @@ test.each([...verifierNames])(
         },
       );
       expect(
-        campaign.records().filter((entry) => entry.kind === "candidate"),
+        campaign
+          .records()
+          .filter(
+            (entry) =>
+              entry.kind === "call" &&
+              entry.label === "xean-solve/verification",
+          ),
       ).toHaveLength(1);
     } finally {
       campaign.close();
@@ -228,8 +237,11 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
         filings: [
           { note: "n2", summary: "P holds by a self-contained proof." },
         ],
-        verify: [{ note: "n2", verifiers: [...verifierNames] }],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [{ note: "n2", verifiers: [...verifierNames] }],
+        },
       },
     },
     { submission: { verdicts: [{ ...verdict("n2"), externalResults: [] }] } },
@@ -249,12 +261,17 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   expect(resumed.allCalls[1]?.label).toBe("xean-solve/explorer");
   expect(resumed.allCalls[1]?.prompt).toContain("Check inconclusive.");
   expect(
-    campaign.records().filter((entry) => entry.kind === "candidate"),
+    campaign
+      .records()
+      .filter(
+        (entry) =>
+          entry.kind === "call" && entry.label === "xean-solve/verification",
+      ),
   ).toHaveLength(2);
   campaign.close();
   expect(await inspectCampaign(path)).toMatchObject({
     result: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       outcome: "accepted",
       turns: 4,
       note: { id: "n2" },
@@ -289,7 +306,7 @@ test("an inconclusive native source check respects the turn limit", async () => 
   campaign.close();
 
   expect(await inspectCampaign(path)).toMatchObject({
-    result: { schemaVersion: 1, outcome: "turn-limit", turns: 2 },
+    result: { schemaVersion: 2, outcome: "turn-limit", turns: 2 },
   });
 });
 
@@ -328,10 +345,15 @@ test("a corrected reconstruction statement preserves the note and all successful
   expect(drive.allCalls[9]?.prompt).toContain("The precise proposition P.");
   expect(drive.allCalls[9]?.prompt).not.toContain("ORIGINAL_PROOF");
   expect(
-    campaign.records().filter((entry) => entry.kind === "candidate"),
+    campaign
+      .records()
+      .filter(
+        (entry) =>
+          entry.kind === "call" && entry.label === "xean-solve/verification",
+      ),
   ).toHaveLength(1);
   expect(
-    campaign.records().filter((entry) => entry.kind === "verdict"),
+    campaign.records().filter((entry) => entry.kind === "evidence"),
   ).toHaveLength(4);
   const noCalls = dependencies([]);
   await runWorkflow(
@@ -419,11 +441,14 @@ test("resuming an interrupted verification preserves inconclusive and successful
           { note: "n1", summary: "L holds." },
           { note: "n2", summary: "P holds." },
         ],
-        verify: [
-          { note: "n1", verifiers: ["correctness", "source"] },
-          { note: "n2", verifiers: [...verifierNames] },
-        ],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [
+            { note: "n1", verifiers: ["correctness", "source"] },
+            { note: "n2", verifiers: [...verifierNames] },
+          ],
+        },
       },
     },
     {
@@ -445,9 +470,12 @@ test("resuming an interrupted verification preserves inconclusive and successful
   expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
     "verifier",
   );
-  const candidates = campaign
+  const verifications = campaign
     .records()
-    .filter((entry) => entry.kind === "candidate");
+    .filter(
+      (entry) =>
+        entry.kind === "call" && entry.label === "xean-solve/verification",
+    );
   campaign.close();
   expect(await inspectCampaign(path)).not.toHaveProperty("result");
 
@@ -471,8 +499,13 @@ test("resuming an interrupted verification preserves inconclusive and successful
   expect(resumed.allCalls[0]?.label).toBe(verifierLabels.source);
   expect(resumed.allCalls[0]?.prompt).not.toContain('"id": "n2"');
   expect(
-    campaign.records().filter((entry) => entry.kind === "candidate"),
-  ).toEqual(candidates);
+    campaign
+      .records()
+      .filter(
+        (entry) =>
+          entry.kind === "call" && entry.label === "xean-solve/verification",
+      ),
+  ).toEqual(verifications);
   campaign.close();
 });
 
@@ -500,11 +533,14 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
           { note: "n1", summary: "Lemma." },
           { note: "n2", summary: "P holds." },
         ],
-        verify: [
-          { note: "n1", verifiers: [...verifierNames] },
-          { note: "n2", verifiers: [...verifierNames] },
-        ],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [
+            { note: "n1", verifiers: [...verifierNames] },
+            { note: "n2", verifiers: [...verifierNames] },
+          ],
+        },
       },
     },
     {
@@ -553,7 +589,7 @@ test("repeated statement corrections stop automatic retries and remain resumable
     dead: false,
   });
   expect(
-    campaign.records().filter((entry) => entry.kind === "verdict"),
+    campaign.records().filter((entry) => entry.kind === "evidence"),
   ).toHaveLength(3);
   campaign.close();
 
@@ -591,11 +627,14 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
           { note: "n1", summary: "L holds." },
           { note: "n2", summary: "P holds." },
         ],
-        verify: [
-          { note: "n1", verifiers: ["correctness", "source"] },
-          { note: "n2", verifiers: [...verifierNames] },
-        ],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [
+            { note: "n1", verifiers: ["correctness", "source"] },
+            { note: "n2", verifiers: [...verifierNames] },
+          ],
+        },
       },
     },
     {

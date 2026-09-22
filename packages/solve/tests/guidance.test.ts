@@ -43,10 +43,12 @@ function coordinate(index: number): Reply {
       filings: [
         { note: `n${index - 1}`, summary: `Partial result ${index - 1}.` },
       ],
-      explorerGuidance: "Prove the remaining case.",
-      support: [],
-      verify: [],
-      action: { role: "explorer" },
+
+      action: {
+        role: "explorer",
+        explorerGuidance: "Prove the remaining case.",
+        support: [],
+      },
     },
   };
 }
@@ -242,10 +244,12 @@ test("a note submitted after guidance is frozen waits for the coordinator after 
           { note: "n1", summary: "Partial result 1." },
           { note: "n2", summary: "The submitted lemma." },
         ],
-        explorerGuidance: "Prove the remaining case.",
-        support: [],
-        verify: [],
-        action: { role: "explorer" },
+
+        action: {
+          role: "explorer",
+          explorerGuidance: "Prove the remaining case.",
+          support: [],
+        },
       },
     },
     explore(2),
@@ -369,7 +373,7 @@ test("a run without external advice adds no guidance calls", async () => {
   const { path, request } = await setup(1);
   const drive = dependencies(turn(1));
   const start = records(path)[0];
-  expect(start).toMatchObject({ config: { schemaVersion: 31 } });
+  expect(start).toMatchObject({ config: { schemaVersion: 32 } });
   const baseline = await inspectCampaign(path);
   expect(baseline).not.toHaveProperty("guidance");
   await run(request, drive);

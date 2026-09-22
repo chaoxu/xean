@@ -40,19 +40,23 @@ const all: Verification["verifiers"] = [
 ];
 
 const coordination = (
-  action: CoordinatorAction,
+  action:
+    | { role: "explorer" | "verifier" }
+    | Extract<CoordinatorAction, { role: "literature" }>,
   verify: Verification[] = [],
   filings: { note: string; summary: string }[] = [],
 ) => ({
   filings,
-  ...(action.role === "explorer"
-    ? {
-        explorerGuidance: "Choose the next useful mathematical step.",
-        support: [],
-      }
-    : {}),
-  verify,
-  action,
+  action:
+    action.role === "explorer"
+      ? {
+          ...action,
+          explorerGuidance: "Choose the next useful mathematical step.",
+          support: [],
+        }
+      : action.role === "verifier"
+        ? { ...action, verify }
+        : action,
 });
 
 const passes = [
@@ -255,21 +259,13 @@ test("a repeated literature request after a failed search runs a fresh call, and
     literatureStatus: "completed",
     coordinatorBehavior: settings.coordinatorBehavior,
   });
-  const base = {
-    filings: [],
-    explorerGuidance: "Explore.",
-    support: [],
-    verify: [],
-  };
   expect(
-    completed.schema.safeParse({
-      ...base,
-      action: { role: "literature", request: "Again." },
-    }).success,
+    completed.schema.safeParse(
+      coordination({ role: "literature", request: "Again." }),
+    ).success,
   ).toBe(false);
   expect(
-    completed.schema.safeParse({ ...base, action: { role: "explorer" } })
-      .success,
+    completed.schema.safeParse(coordination({ role: "explorer" })).success,
   ).toBe(true);
 });
 
@@ -379,7 +375,7 @@ test("an allowance extends a campaign by whole turns", async () => {
   }
 });
 
-test("a failed literature call settles without candidates and reports inconclusive", async () => {
+test("a failed literature call settles without verifications and reports inconclusive", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
@@ -481,7 +477,12 @@ test("a coordinator verifier action drains its list in window batches before the
       "xean-solve/verifier/correctness",
       "xean-solve/verifier/correctness",
     ]);
-    expect(campaign.records({ kinds: ["candidate"] })).toHaveLength(2);
+    expect(
+      campaign.records({
+        kinds: ["call"],
+        labels: ["xean-solve/verification"],
+      }),
+    ).toHaveLength(2);
     expect(
       phase.kind === "turn-limit" &&
         phase.notes.map(({ id, verified }) => [id, verified]),
@@ -827,62 +828,34 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
   }
 });
 
-test("a coordinator result requires a typed action and a nonempty verifier list", () => {
+test("coordinator actions own exactly their required payload", () => {
   const call = coordinatorCall({
     task,
     notes: [],
     coordinatorBehavior: { literature: "optional", verification: "decide" },
   });
-  const base = {
-    filings: [],
-    explorerGuidance: "Choose the next useful mathematical step.",
-    support: [],
-    verify: [],
-  };
-  expect(call.schema.safeParse(base).success).toBe(false);
-  expect(
-    call.schema.safeParse({ ...base, action: { role: "verifier" } }).success,
-  ).toBe(false);
-  expect(
-    call.schema.safeParse({ ...base, action: { role: "explorer" } }).success,
-  ).toBe(true);
-  expect(
-    call.schema.safeParse({
-      ...base,
-      action: { role: "explorer" },
-      verify: [{ note: "n1", verifiers: ["correctness"] }],
-    }).success,
-  ).toBe(false);
-  expect(
-    call.schema.safeParse({
-      filings: [],
-      verify: [],
-      action: { role: "literature", request: "Search." },
-    }).success,
-  ).toBe(true);
-  expect(
-    call.schema.safeParse({
-      filings: [],
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
-  ).toBe(false);
-  expect(
-    call.schema.safeParse({
-      filings: [],
-      explorerGuidance: "Explore.",
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
-  ).toBe(false);
-  expect(
-    call.schema.safeParse({
-      filings: [],
+  for (const action of [
+    { role: "explorer", explorerGuidance: "Explore.", support: [] },
+    { role: "literature", request: "Search." },
+  ])
+    expect(call.schema.safeParse({ filings: [], action }).success).toBe(true);
+  for (const action of [
+    { role: "verifier" },
+    { role: "verifier", verify: [] },
+    { role: "explorer" },
+    { role: "explorer", explorerGuidance: "Explore." },
+    { role: "explorer", explorerGuidance: "Explore.", support: [], verify: [] },
+    {
+      role: "literature",
+      request: "Search.",
       explorerGuidance: "Discarded.",
       support: [],
-      verify: [],
-      action: { role: "literature", request: "Search." },
-    }).success,
+    },
+  ])
+    expect(call.schema.safeParse({ filings: [], action }).success).toBe(false);
+  expect(
+    call.schema.safeParse({ ...coordination({ role: "explorer" }), verify: [] })
+      .success,
   ).toBe(false);
 });
 
@@ -913,20 +886,12 @@ test("new campaigns disable literature unless their policy opts in", () => {
   expect(
     call.schema.safeParse({
       filings: [],
-      explorerGuidance: "Explore the task.",
-      support: [],
-      verify: [],
       action: { role: "literature", request: "Search." },
     }).success,
   ).toBe(false);
 });
 
 test("structured coordinator policies constrain optional literature and verification dispatch", () => {
-  const base = {
-    filings: [],
-    explorerGuidance: "Continue.",
-    support: [],
-  };
   const literatureFirst = coordinatorCall({
     task,
     notes: [],
@@ -937,16 +902,12 @@ test("structured coordinator policies constrain optional literature and verifica
     },
   });
   expect(
-    literatureFirst.schema.safeParse({
-      ...base,
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
+    literatureFirst.schema.safeParse(coordination({ role: "explorer" }))
+      .success,
   ).toBe(false);
   expect(
     literatureFirst.schema.safeParse({
       filings: [],
-      verify: [],
       action: { role: "literature", request: "Search." },
     }).success,
   ).toBe(true);
@@ -981,39 +942,38 @@ test("structured coordinator policies constrain optional literature and verifica
   });
   const checks: Verification["verifiers"] = ["correctness", "source"];
   expect(
-    alwaysVerify.schema.safeParse({
-      ...base,
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
+    alwaysVerify.schema.safeParse(coordination({ role: "explorer" })).success,
   ).toBe(false);
   // Every live note without a verdict over verified support must be listed.
   expect(
     alwaysVerify.schema.safeParse({
       filings: [],
-      verify: [{ note: "n1", verifiers: all }],
-      action: { role: "verifier" },
+      action: { role: "verifier", verify: [{ note: "n1", verifiers: all }] },
     }).success,
   ).toBe(false);
   expect(
     alwaysVerify.schema.safeParse({
       filings: [],
-      verify: [
-        { note: "n1", verifiers: checks },
-        { note: "n3", verifiers: checks },
-      ],
-      action: { role: "verifier" },
+      action: {
+        role: "verifier",
+        verify: [
+          { note: "n1", verifiers: checks },
+          { note: "n3", verifiers: checks },
+        ],
+      },
     }).success,
   ).toBe(true);
   expect(
     alwaysVerify.schema.safeParse({
       filings: [],
-      verify: [
-        { note: "n1", verifiers: checks },
-        { note: "n2", verifiers: checks },
-        { note: "n3", verifiers: checks },
-      ],
-      action: { role: "verifier" },
+      action: {
+        role: "verifier",
+        verify: [
+          { note: "n1", verifiers: checks },
+          { note: "n2", verifiers: checks },
+          { note: "n3", verifiers: checks },
+        ],
+      },
     }).success,
   ).toBe(true);
   // n1 was checked and stayed inconclusive, so it is not forced again; n2
@@ -1038,11 +998,8 @@ test("structured coordinator policies constrain optional literature and verifica
     coordinatorBehavior: { literature: "never", verification: "always" },
   });
   expect(
-    inconclusiveSupport.schema.safeParse({
-      ...base,
-      verify: [],
-      action: { role: "explorer" },
-    }).success,
+    inconclusiveSupport.schema.safeParse(coordination({ role: "explorer" }))
+      .success,
   ).toBe(true);
 });
 

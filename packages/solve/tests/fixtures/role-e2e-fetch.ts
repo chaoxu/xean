@@ -80,10 +80,12 @@ function submissionFor(tool: string, request: string): unknown {
     if (note === undefined) {
       return {
         filings: [],
-        explorerGuidance: "Write a complete proof.",
-        support: [],
-        verify: [],
-        action: { role: "explorer" },
+
+        action: {
+          role: "explorer",
+          explorerGuidance: "Write a complete proof.",
+          support: [],
+        },
       };
     }
     return {
@@ -91,18 +93,21 @@ function submissionFor(tool: string, request: string): unknown {
         note: id,
         summary: `Summary of ${id}`,
       })),
-      verify: [
-        {
-          note,
-          verifiers: [
-            "correctness",
-            "source",
-            "requirements",
-            "reconstruction",
-          ],
-        },
-      ],
-      action: { role: "verifier" },
+
+      action: {
+        role: "verifier",
+        verify: [
+          {
+            note,
+            verifiers: [
+              "correctness",
+              "source",
+              "requirements",
+              "reconstruction",
+            ],
+          },
+        ],
+      },
     };
   }
   if (tool === "submit_statement") {

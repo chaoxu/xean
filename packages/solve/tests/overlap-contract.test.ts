@@ -23,13 +23,18 @@ const note = {
 };
 const serial: CoordinatorResult = {
   filings: [],
-  verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
-  action: { role: "verifier" },
+  action: {
+    role: "verifier",
+    verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+  },
 };
 const concurrent = {
   ...serial,
-  explorerGuidance: "Explore an independent route toward P.",
-  support: [],
+  action: {
+    ...serial.action,
+    explorerGuidance: "Explore an independent route toward P.",
+    support: [],
+  },
 };
 
 function call(overlap?: boolean, verification: "decide" | "always" = "decide") {
@@ -72,14 +77,23 @@ test.each(["decide", "always"] as const)(
     expect(request.schema.parse(concurrent)).toEqual(concurrent);
     expect(request.schema.safeParse(serial).success).toBe(false);
     for (const incomplete of [
-      { ...serial, explorerGuidance: concurrent.explorerGuidance },
-      { ...serial, support: [] },
+      {
+        ...serial,
+        action: {
+          ...serial.action,
+          explorerGuidance: concurrent.action.explorerGuidance,
+        },
+      },
+      { ...serial, action: { ...serial.action, support: [] } },
     ]) {
       expect(coordinatorResult.safeParse(incomplete).success).toBe(false);
       expect(request.schema.safeParse(incomplete).success).toBe(false);
     }
     expect(
-      request.schema.safeParse({ ...concurrent, support: ["n99"] }).success,
+      request.schema.safeParse({
+        ...concurrent,
+        action: { ...concurrent.action, support: ["n99"] },
+      }).success,
     ).toBe(false);
   },
 );
@@ -87,15 +101,17 @@ test.each(["decide", "always"] as const)(
 test("literature stays serial and can run before mandatory overlap", () => {
   const literature = {
     filings: [],
-    verify: [],
     action: { role: "literature", request: "Find background for P." },
   };
   expect(call(true).schema.safeParse(literature).success).toBe(true);
   expect(
     call(true).schema.safeParse({
       ...literature,
-      explorerGuidance: concurrent.explorerGuidance,
-      support: [],
+      action: {
+        ...literature.action,
+        explorerGuidance: concurrent.action.explorerGuidance,
+        support: [],
+      },
     }).success,
   ).toBe(false);
   const forced = coordinatorCall({
@@ -116,7 +132,7 @@ test("overlap prompts require concurrent work under both verification modes", ()
     const enabled = call(true, verification);
     expect(enabled.prompt).toContain('"overlap": true');
     expect(enabled.system).toContain(
-      "When action is verifier, supply both explorerGuidance and support",
+      "When action.role is verifier, supply both explorerGuidance and support inside action",
     );
     expect(enabled.system).toContain(
       "Every verifier dispatch also starts Explorer",
@@ -131,7 +147,7 @@ test("overlap prompts require concurrent work under both verification modes", ()
   }
   for (const request of [call(false), call(false, "always")]) {
     expect(request.system).toContain(
-      "When action is verifier or literature, omit explorerGuidance and support",
+      "omit explorerGuidance and support because the next coordinator call",
     );
     expect(request.system).not.toContain("run Explorer concurrently");
   }

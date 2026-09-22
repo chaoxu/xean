@@ -65,48 +65,39 @@ const input = {
 };
 
 test("verification requires the complete dependency chain while preserving the direct support edges", async () => {
-  expect(await verifierInput.parseAsync(input)).toEqual(input);
-  expect(await supportClosure([target], all)).toEqual(["n1", "n2"]);
+  expect(verifierInput.parse(input)).toEqual(input);
+  expect(supportClosure([target], all)).toEqual(["n1", "n2"]);
   expect(target.support).toEqual(["n2"]);
   expect(
-    (await verifierInput.safeParseAsync({ ...input, support: [inherited] }))
-      .success,
+    verifierInput.safeParse({ ...input, support: [inherited] }).success,
   ).toBe(false);
   expect(
-    (
-      await verifierInput.safeParseAsync({
-        ...input,
-        support: [first, inherited, unrelated],
-      })
-    ).success,
+    verifierInput.safeParse({
+      ...input,
+      support: [first, inherited, unrelated],
+    }).success,
   ).toBe(false);
   expect(
-    (
-      await verifierInput.safeParseAsync({
-        ...input,
-        support: [inherited, first],
-      })
-    ).success,
+    verifierInput.safeParse({
+      ...input,
+      support: [inherited, first],
+    }).success,
   ).toBe(false);
 });
 
-test("cycles and duplicate notes cannot leak a candidate through reconstruction support", async () => {
+test("cycles and duplicate notes cannot leak target text through reconstruction support", async () => {
   const cycle = { ...first, support: ["n3"] };
   expect(
-    (
-      await verifierInput.safeParseAsync({
-        ...input,
-        support: [cycle, inherited],
-      })
-    ).success,
+    verifierInput.safeParse({
+      ...input,
+      support: [cycle, inherited],
+    }).success,
   ).toBe(false);
   expect(
-    (
-      await verifierInput.safeParseAsync({
-        ...input,
-        support: [first, first, inherited],
-      })
-    ).success,
+    verifierInput.safeParse({
+      ...input,
+      support: [first, first, inherited],
+    }).success,
   ).toBe(false);
 });
 
@@ -115,13 +106,9 @@ test("support closure combines roots, shares ancestors, and sorts numeric ids", 
   const left = note("n10", "Left result.", ["n9"]);
   const right = note("n11", "Right result.", ["n9", "n2"]);
   const known = [first, inherited, unrelated, shared, left, right];
-  expect(await supportClosure([right, left], known)).toEqual([
-    "n1",
-    "n2",
-    "n9",
-  ]);
-  expect(await supportClosure([], known)).toEqual([]);
-  await expect(supportClosure([target], [target])).rejects.toThrow(
+  expect(supportClosure([right, left], known)).toEqual(["n1", "n2", "n9"]);
+  expect(supportClosure([], known)).toEqual([]);
+  expect(() => supportClosure([target], [target])).toThrow(
     "missing support note n2",
   );
 });
@@ -208,10 +195,11 @@ test("workflow construction and per-call selection both retain ancestors across 
         : {
             submission: {
               filings: [],
-              explorerGuidance: "Complete coverage.",
-              support: [previous],
-              verify: [],
-              action: { role: "explorer" },
+              action: {
+                role: "explorer",
+                explorerGuidance: "Complete coverage.",
+                support: [previous],
+              },
             },
           },
       {
@@ -223,8 +211,10 @@ test("workflow construction and per-call selection both retain ancestors across 
       {
         submission: {
           filings: [{ note: n.id, summary: n.summary! }],
-          verify: [{ note: n.id, verifiers: ["correctness", "source"] }],
-          action: { role: "verifier" },
+          action: {
+            role: "verifier",
+            verify: [{ note: n.id, verifiers: ["correctness", "source"] }],
+          },
         },
       },
       {

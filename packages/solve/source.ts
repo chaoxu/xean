@@ -200,6 +200,16 @@ export function codexTranscript(stdout: string): {
   return parser.result();
 }
 
+/** The provider outcome of a settled Codex call; shared by execution and inspection. */
+export function codexOutcome(records: readonly Entry[], call: EntryId) {
+  const returned = returnedOutput(records, call);
+  if (returned === undefined) return undefined;
+  const parsed = codexResult.safeParse(returned.output);
+  return parsed.success
+    ? { settled: returned.settled, ...parsed.data }
+    : undefined;
+}
+
 /** The parsed final message of a succeeded Codex call, with its searches and usage. Throws on a malformed transcript. */
 export function codexSubmission(
   records: readonly Entry[],
@@ -212,13 +222,11 @@ export function codexSubmission(
       readonly usage: CodexUsage;
     }
   | undefined {
-  const returned = returnedOutput(records, call);
-  if (returned === undefined) return undefined;
-  const output = codexResult.safeParse(returned.output);
-  if (!output.success || output.data.state !== "succeeded") return undefined;
-  const transcript = codexTranscript(output.data.stdout);
+  const output = codexOutcome(records, call);
+  if (output?.state !== "succeeded") return undefined;
+  const transcript = codexTranscript(output.stdout);
   return {
-    settled: returned.settled,
+    settled: output.settled,
     input: z.json().parse(JSON.parse(transcript.message)),
     searches: transcript.searches,
     usage: transcript.usage,

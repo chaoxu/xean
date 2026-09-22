@@ -68,7 +68,7 @@ async function observedRewrite(
   return options.onPayload!(payload, model);
 }
 
-test("openai platform payloads require one serial terminal tool", async () => {
+test("openai platform payloads serialize terminal tools", async () => {
   expect(
     await observedRewrite(platformModel, { model: "m", tools: [{}] }),
   ).toEqual({

@@ -78,7 +78,7 @@ test("support closure visits shared ancestors once without storing all root clos
       return i === 0 ? [] : ["n" + i, ...(i > 1 ? ["n" + (i - 1)] : [])];
     },
   }));
-  expect(await supportClosure([known.at(-1)!], known)).toEqual(
+  expect(supportClosure([known.at(-1)!], known)).toEqual(
     known.slice(0, -1).map(({ id }) => id),
   );
   expect(reads).toBe(count);
@@ -93,7 +93,7 @@ test("the verification window validates only notes it reads", async () => {
   expect(await verificationPrefix(verify, known, 1)).toEqual(
     verify.slice(0, 1),
   );
-  await expect(verificationPrefix(verify, known, 1000)).rejects.toThrow(
+  expect(() => verificationPrefix(verify, known, 1000)).toThrow(
     "missing support note n3",
   );
 });
@@ -141,13 +141,13 @@ test.each([
 ])(
   "verification prefix still rejects $error",
   async ({ known, verify, error }) => {
-    await expect(
+    expect(() =>
       verificationPrefix(
         verify.map((note) => ({ note, verifiers: ["source"] })),
         known,
         100_000,
       ),
-    ).rejects.toThrow(error);
+    ).toThrow(error);
   },
 );
 
@@ -159,7 +159,7 @@ test.each([true, false])(
       verified,
     }));
     const last = known.at(-1)!;
-    const input = await verifierInput.parseAsync({
+    const input = verifierInput.parse({
       task: { problem: "Prove P.", completionCriteria: "A complete proof." },
       verify: [{ note: last.id, verifiers: ["correctness", "source"] }],
       notes: [last],

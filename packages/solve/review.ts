@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import {
   codexProfile,
+  matchingCalls,
   correctionAssessment,
   sourceAssessment,
 } from "./pi-roles";
@@ -102,19 +103,13 @@ export async function review(
       }
       const label = "xean-solve/review";
       let submission: ReturnType<typeof codexSubmission>;
-      for (const call of campaign.records({
-        kinds: ["call"],
-        labels: [label],
-      })) {
-        if (
-          call.kind !== "call" ||
-          call.role !== "verifier" ||
-          !isDeepStrictEqual(call.request, config.request)
-        ) {
-          throw new Error(
-            `review call ${call.seq} does not match the declared review request and role`,
-          );
-        }
+      for (const call of matchingCalls(
+        campaign.records({ kinds: ["call"], labels: [label] }),
+        0,
+        label,
+        config.request,
+        "verifier",
+      )) {
         // A malformed response is an operational failure, not a completed
         // audit. An explicit retry keeps it and makes one fresh call.
         try {

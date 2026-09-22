@@ -11,12 +11,10 @@ export type Json =
 export const entryId = z.number().int().positive();
 export type EntryId = z.output<typeof entryId>;
 export const json = z.json() as z.ZodType<Json>;
-export const verdict = z.enum(["PASS", "FAIL", "INCONCLUSIVE"]);
 
 export const ENTRY_KINDS = {
   campaign: "campaign",
-  candidate: "candidate",
-  verdict: "verdict",
+  evidence: "evidence",
   call: "call",
   toolCall: "tool-call",
   callResult: "call-result",
@@ -64,14 +62,8 @@ export const entry = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     ...base,
-    kind: z.literal(ENTRY_KINDS.candidate),
-    requiredVerifiers: z.array(z.string().min(1)).min(1).readonly(),
-  }),
-  z.strictObject({
-    ...base,
-    kind: z.literal(ENTRY_KINDS.verdict),
+    kind: z.literal(ENTRY_KINDS.evidence),
     call: entryId,
-    verdict,
     evidence: json,
   }),
   z.strictObject({
@@ -79,7 +71,7 @@ export const entry = z.discriminatedUnion("kind", [
     kind: z.literal(ENTRY_KINDS.call),
     label: z.string().min(1),
     role: z.string().min(1).optional(),
-    candidate: entryId.optional(),
+    parent: entryId.optional(),
     request: json,
     tools: z.array(tool).readonly(),
   }),
@@ -102,7 +94,6 @@ export type EntryDraft = Entry extends infer E
     : never
   : never;
 export type ToolDeclaration = z.output<typeof tool>;
-export type Verdict = z.output<typeof verdict>;
 
 export function copyJson(value: unknown): Json {
   return json.parse(value);

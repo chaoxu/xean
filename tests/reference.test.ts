@@ -12,7 +12,7 @@ afterEach(() => {
   directory = undefined;
 });
 
-test("scripted deterministic verifier records one candidate", async () => {
+test("scripted deterministic verifier records application-owned evidence", async () => {
   directory = mkdtempSync(join(tmpdir(), "xean-reference-"));
   const report = await runScriptedVerifier(join(directory, "campaign.db"));
   expect(report).toMatchObject({ verdict: "PASS", verified: true });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { Journal } from "./db";
-import { copyJson, entryId, verdict as verdictSchema } from "./schemas";
+import { copyJson, entryId } from "./schemas";
 import type {
   AuditedTool,
   CallContext,
@@ -14,7 +14,6 @@ import type {
   Reader,
   RecordQuery,
   Tool,
-  Verdict,
 } from "./types";
 import { toolDeclarations } from "./types";
 
@@ -31,10 +30,6 @@ interface CallState {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function names(values: readonly string[]): readonly string[] {
-  return [...new Set(z.array(z.string().min(1)).min(1).parse(values))].sort();
 }
 
 class CampaignReader implements Reader {
@@ -56,10 +51,6 @@ class CampaignReader implements Reader {
     return this.journal.payload(digest);
   }
 
-  material(candidate: EntryId): Uint8Array {
-    return this.journal.material(candidate);
-  }
-
   close(): void {
     this.journal.close();
   }
@@ -76,50 +67,21 @@ class CampaignWriter extends CampaignReader implements Campaign {
     return this.journal.storePayloadJson(encoded);
   }
 
-  submitCandidate(
-    material: Uint8Array,
-    requiredVerifiers: readonly string[],
-  ): EntryId {
-    const required = names(requiredVerifiers);
-    return this.journal.append(
-      {
-        kind: "candidate",
-        requiredVerifiers: required,
-      },
-      material,
-    ).seq;
-  }
-
-  recordVerdict(
-    callValue: EntryId,
-    verdictValue: Verdict,
-    evidenceValue: Json,
-  ): EntryId {
+  recordEvidence(callValue: EntryId, evidence: Json): EntryId {
     const call = entryId.parse(callValue);
-    const verdict = verdictSchema.parse(verdictValue);
     const start = this.record(call);
-    const candidate = start?.kind === "call" ? start.candidate : undefined;
-    const declaration =
-      candidate === undefined ? undefined : this.record(candidate);
     const result = this.records({ kinds: ["call-result"], parent: call })[0];
     if (
       start?.kind !== "call" ||
-      candidate === undefined ||
-      declaration?.kind !== "candidate" ||
-      start.seq <= declaration.seq ||
-      !declaration.requiredVerifiers.includes(start.label) ||
       result?.kind !== "call-result" ||
-      result.state !== "returned" ||
-      !isObject(result.output) ||
-      result.output.state !== "succeeded"
+      result.state !== "returned"
     ) {
-      throw new Error("verdict requires a fresh successful verifier call");
+      throw new Error("evidence requires a returned call");
     }
     return this.journal.append({
-      kind: "verdict",
+      kind: "evidence",
       call,
-      verdict,
-      evidence: evidenceValue,
+      evidence,
     }).seq;
   }
 
@@ -132,10 +94,11 @@ class CampaignWriter extends CampaignReader implements Campaign {
       options.role === undefined
         ? undefined
         : z.string().min(1).parse(options.role);
-    const candidate =
-      options.candidate === undefined
-        ? undefined
-        : entryId.parse(options.candidate);
+    const parent =
+      options.parent === undefined ? undefined : entryId.parse(options.parent);
+    if (parent !== undefined && this.record(parent)?.kind !== "call") {
+      throw new Error("call parent must reference an earlier call");
+    }
     const signal = options.signal ?? new AbortController().signal;
     const prepared = this.prepareTools(options.tools ?? []);
     const state: CallState = { pending: new Set(), accepting: true };
@@ -143,7 +106,7 @@ class CampaignWriter extends CampaignReader implements Campaign {
       kind: "call",
       label,
       ...(role === undefined ? {} : { role }),
-      ...(candidate === undefined ? {} : { candidate }),
+      ...(parent === undefined ? {} : { parent }),
       request: options.request,
       tools: prepared.map(({ declaration }) => declaration),
     });
@@ -268,10 +231,6 @@ class CampaignWriter extends CampaignReader implements Campaign {
     if (this.#activeCalls > 0) throw new Error("campaign has active calls");
     super.close();
   }
-}
-
-function isObject(value: Json): value is { readonly [key: string]: Json } {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function createCampaign(

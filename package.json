@@ -27,11 +27,14 @@
     "format:check": "prettier --check . --ignore-path .prettierignore",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./tests ./packages/solve/tests --path-ignore-patterns='runs/**'",
+    "test:kernel": "bun test ./tests --path-ignore-patterns='runs/**'",
+    "test:solve": "bun test ./packages/solve/tests --path-ignore-patterns='runs/**'",
     "pack:check": "bun scripts/check-package.ts",
-    "e2e:roles": "bun test packages/solve/tests/role-cli-e2e.test.ts",
+    "e2e:roles": "bun test ./packages/solve/tests/role-cli-e2e.test.ts --path-ignore-patterns='runs/**'",
+    "lines": "bun scripts/lines.ts",
     "debug": "bun ../xean-lab/src/cli.ts debug --xean-root .",
-    "check": "bun run format:check && bun run typecheck && bun run test && bun run pack:check && bun packages/solve/solve.ts --help",
-    "check:all": "bun run check"
+    "check:fast": "bun run format:check && bun run typecheck && bun run test",
+    "check": "bun run check:fast && bun run pack:check && bun packages/solve/solve.ts --help"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.87.0",

@@ -9,9 +9,9 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | campaign | One SQLite database holding one journal, opened as a writer or a reader. Its first entry is the declaration. |
 | declaration | The campaign's first entry: application id and config. The solver's config carries `kind` and `schemaVersion`. |
 | journal | The append-only entry sequence in a campaign. Every entry has `seq` and `atMs`. |
-| entry | One journal record: campaign, candidate, verdict, call, tool-call, call-result, tool-result. |
-| call | One journaled invocation: label, optional role, optional candidate, exact request, declared tools. |
-| call summary | A call's timing, settlement, tool identities, Pi outcomes, checkpoints, and accounting, derived from captured entries without response text, transcript attachments, or candidate material. It validates metadata, not attachment bytes. |
+| entry | One journal record: campaign, evidence, call, tool-call, call-result, tool-result. |
+| call | One journaled invocation: label, optional role, optional parent call, exact request, declared tools. |
+| call summary | A call's identity (`call`), optional `parent`, timing, settlement `state`, tool identities, Pi outcomes, checkpoints, and accounting, derived from captured entries without response text or transcript attachments. It validates metadata, not attachment bytes. |
 | settled | A call whose call-result is written. `inspect` reports `settledAtMs`, `elapsedMs`, and the call-result state. |
 | state | The state of a call-result, `returned` or `threw`, or of a Pi or Codex call, `succeeded`, `failed`, or `cancelled`. Never the workflow phase. |
 | label | The string naming a call. |
@@ -19,10 +19,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | request | The exact JSON input of a call. For a Pi call it holds the model, the system prompt, and the prompt. For a Codex call it holds the model, reasoning, search, developer instructions, prompt, and output schema. |
 | payload | A JSON value stored immutably by content digest for a provider request or Pi result attachment. Identical payloads share one row. Versioned call records explicitly reference payloads. Ordinary entry JSON never expands a reference implicitly. |
 | tool, submission | A model-callable tool, and the structured value the model passed to it. The solver's Pi submit tools are `submit_notes`, `submit_coordination`, `submit_verdict`, `submit_statement`, and `submit_proof`. A Codex literature, source, or independent-review call submits its final JSON message. A caller's submission through `submit` is a local journaled request containing text notes, with no model call. |
-| candidate | An entry holding material and the labels of its required verifiers. The solver submits one per verification, for the notes it verifies and their support. |
-| material | The bytes attached to a candidate. |
-| verdict | `PASS`, `FAIL`, or `INCONCLUSIVE` with evidence, recorded against a call bound to a candidate, one per call. A solver verifier call's kernel verdict is `PASS` only when every note it judged passed, and its evidence lists the verdict of each note. |
-| verified | For a candidate, the kernel status in which every required verifier recorded `PASS`; the solver reads it as evidence and decides nothing by it. For a note, the projection's flag: correctness and source have passed it or it carries external verification, every note in its support is verified, and it is not dead. |
+| evidence | One application-owned JSON receipt bound to a successfully returned call. The kernel enforces call binding and uniqueness; the application validates its meaning. A solver receipt lists admitted note verdicts. |
 | transcript | The provider messages of a settled call. A Pi call-result references its saved transcript through `transcriptRef`. A Codex call's transcript is its JSONL output. |
 | spend | The accounting derived from durable request completions: request counts, request errors, measured usage in tokens, and estimated cost. A Codex call's usage is on its submission. |
 | first request | The first provider operation within one logical Pi call. |
@@ -42,6 +39,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | completion criteria | The task's statement of what an accepted note must do. Only the requirements verifier judges a note against them, so a task that would accept a counterexample says so here. |
 | note | `id`, `summary`, `text`, `support`, `verdicts`, `verified`, `dead`, and optional external `verification`. Immutable: a change is a new note. Numbered `n1`, `n2`, and so on in the order notes enter the workflow. One self-contained text: a result with its proof, a partial result with its gaps stated, or a failed approach with the reason. Its writer decides the split and says in the text when it meets the completion criteria. |
 | external verification | A caller-supplied note's optional `verification: {source, report}`: the caller explicitly establishes a result, naming the reviewer or caller in `source` and the basis in `report`. This field is separate from the source verifier's evidence. |
+| verified | A note's projected flag: correctness and source have passed it or it carries external verification, every note in its support is verified, and it is not dead. |
 | summary | The coordinator's navigation text for a note: the note's exact statement as a mathematician would state the result, not a description of the note, plus only what the text itself says about its status, a gap, a failed approach, or a claim to meet the completion criteria. Never verified, never a judgment of the text. |
 | text | The mathematics supplied by Explorer or a caller in a note, stored exactly. Validation does not infer dependencies from its prose or notation. |
 | dead | A note that correctness, source, or reconstruction failed, or whose support contains a dead note, so it can never be verified. Derived by the projection from the verdicts and the support edges; nothing is stored. An `INCONCLUSIVE` or a requirements `FAIL` is not death. |
@@ -60,7 +58,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | support graph | Note IDs and their support edges. The traversal in `support.ts` computes their transitive closure. It carries no verification authority. |
 | filing | The coordinator's pairing of a note id with a summary. |
 | verify | The coordinator's ordered list of notes to verify, each with the verifiers to run: a prefix of the verifier order. |
-| verification | One candidate and the verifier calls on it: the longest prefix of the coordinator's `verify` list whose note and support texts fit the window, always its first entry. |
+| verification | A local opening that freezes the notes and requested checks for the longest prefix of the coordinator action's `verify` list fitting the window, always its first entry. Its call ID is the `parent` of the verifier calls and the `verification` field in the accepted result. |
 | window | The settings cap on the characters of note texts and their complete support closure that one verification reads, shared texts counted once. The first listed note is always taken with its full closure, even when that alone exceeds the window. |
 | verifier | The role, and each of `correctness`, `source`, `requirements`, `reconstruction`, which run in that order. |
 | independent review | A separate full Codex audit of the exact task and complete argument, including all supporting proofs and citations, without trusting internal solver verdicts. Its request, transcript, and verdict are recorded in a separate review journal. |
@@ -76,7 +74,8 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | allowance | A journaled authorization for a positive number of turns, identified by an id and the previously spent `afterTurns`, outside the frozen task and settings. The sum is the effective `maxTurns`. |
 | phase | Where the fold stands: the role to call next (`explorer`, `coordinator`, `literature`, or `verifier`), an `overlap` with unfinished concurrent work, or the terminal kind `accepted` or `turn-limit`. |
 | outcome | A run's ending: `accepted`, `turn-limit`, `paused`, `call-failure`, `interrupted`. |
-| result | A run's outcome with its data. Terminal results carry the turns, notes, and for `accepted` the note and candidate. Resumable results carry the phase as `at` and an optional reason. `inspect.result` is derived from the journal for terminal phases. |
+| result | A run's outcome with its data. Terminal results carry the turns, notes, and for `accepted` the note and verification ID. Resumable results carry the phase as `at` and an optional reason. `inspect.result` is derived from the journal for terminal phases. |
+| export | The accepted note and its complete corrected support closure as UTF-8 text. The `exportSolution` API and `solution` byte field expose this argument; the CLI command is `export`. |
 | fold | `deriveWorkflow`: the derivation of notes and phase from the journal, matching each role call by its derived request. It builds the projection and asks it which notes exist at a journal sequence, which are accepted, and for a note's closure. |
 | projection | `Projection`: the fold's in-memory maps of notes, summaries, support, and verdicts, rebuilt from the journal on every derivation and never persisted. It alone derives verified, dead, and accepted. |
 | schema version | The number identifying a persisted contract's current format and meaning. Older formats are unsupported. |
@@ -84,7 +83,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | settings | One profile for the explorer, one for the coordinator, one per verifier, role response and context budgets, `window`, and the frozen `coordinatorBehavior` policy. Fixed for the campaign. |
 | coordinator behavior | The frozen campaign policy supplied in each coordinator prompt: a `literature` mode, a `verification` mode, `overlap` defaulting to false, and optional `instructions`. |
 | guidance | Fallible advice for the next Explorer turn, carried in its `explorerGuidance` string: the coordinator's recommendation joined with external advice appended by `guide`. |
-| inbox | Caller input waiting in the campaign until a boundary freezes it into the next role input: guidance for the next Explorer turn and submitted notes for the next coordinator. Each inbox has a receipt label and a boundary label. |
+| inbox | Caller input waiting in the campaign until a boundary freezes it into the next role input: guidance for the next Explorer turn and submitted notes for the next coordinator. A shared boundary records the channel and the receipt range, preserving each channel's intake time. |
 | profile | A Pi profile selects a provider, model, and reasoning level. A Codex profile is `{model, reasoning}`, used by source verification, literature, and independent review. |
 | run, inspect, export | The commands that start or resume a campaign, derive its phase and result, and emit the accepted note with its transitive support. |
 | guide | The command that appends guidance to an existing workflow campaign. |

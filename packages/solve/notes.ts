@@ -1,7 +1,7 @@
 import type { Campaign, Entry } from "xean";
 import { z } from "zod";
 
-import { boundaryLabels, inbox } from "./inbox";
+import { inbox } from "./inbox";
 import { nonblank, roleLabels, submittedNotes } from "./roles";
 
 const requestSchema = z.strictObject({
@@ -9,17 +9,7 @@ const requestSchema = z.strictObject({
   id: nonblank,
   notes: submittedNotes.shape.notes,
 });
-const notes = inbox({
-  receiptLabel: "xean-solve/notes",
-  receiptSchema: requestSchema,
-  boundaryLabel: boundaryLabels.notes,
-  startedLabels: [
-    boundaryLabels.overlap,
-    roleLabels.explorer,
-    roleLabels.coordinator,
-    boundaryLabels.guidance,
-  ],
-});
+const notes = inbox("notes", requestSchema);
 
 export function hasSubmittedNotes(
   records: readonly Entry[],

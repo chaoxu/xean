@@ -93,10 +93,8 @@ export function dispatchExplorer(
   return {
     submission: {
       filings: [],
-      explorerGuidance,
-      support: [],
-      verify: [],
-      action: { role: "explorer" },
+
+      action: { role: "explorer", explorerGuidance, support: [] },
     },
   };
 }
@@ -213,9 +211,7 @@ async function respond(
       label: options.label,
       ...(options.role === undefined ? {} : { role: options.role }),
       request: fakePiRequest(options),
-      ...(options.candidate === undefined
-        ? {}
-        : { candidate: options.candidate }),
+      ...(options.parent === undefined ? {} : { parent: options.parent }),
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     },
     async ({ call, tools }) => {

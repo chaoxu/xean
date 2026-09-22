@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 
 import { executionContract, executionReport } from "./execution-contract";
 import {
-  exportCandidate,
+  exportSolution,
   guideCampaign,
   inspectCampaign,
   isRoleCommand,
@@ -26,6 +26,7 @@ import { codexProfile } from "./pi-roles";
 import {
   createModelRuntime,
   modelRegistryPath,
+  withSignals,
   type SolveModels,
 } from "./runtime";
 
@@ -99,25 +100,22 @@ async function main(args: readonly string[]): Promise<void> {
     if (positionals.length !== 4 || Object.keys(parsed.values).length !== 0)
       throw new Error(usage);
     const controller = new AbortController();
-    const stop = () => controller.abort();
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
-    try {
-      writeJson(
-        await review(
-          {
-            task: task.parse(await readJson(positionals[0]!)),
-            argument: await readFile(positionals[1]!, "utf8"),
-            campaignPath: positionals[2]!,
-            profile: codexProfile.parse(await readJson(positionals[3]!)),
-          },
-          { signal: controller.signal },
-        ),
-      );
-    } finally {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-    }
+    await withSignals(
+      () => controller.abort(),
+      async () => {
+        writeJson(
+          await review(
+            {
+              task: task.parse(await readJson(positionals[0]!)),
+              argument: await readFile(positionals[1]!, "utf8"),
+              campaignPath: positionals[2]!,
+              profile: codexProfile.parse(await readJson(positionals[3]!)),
+            },
+            { signal: controller.signal },
+          ),
+        );
+      },
+    );
     return;
   }
   if (parsed.values["include-guidance"] === true && command !== "inspect")
@@ -182,7 +180,7 @@ async function main(args: readonly string[]): Promise<void> {
     ) {
       throw new Error(usage);
     }
-    process.stdout.write(await exportCandidate(positionals[0]!));
+    process.stdout.write(await exportSolution(positionals[0]!));
     return;
   }
   if (
@@ -220,9 +218,7 @@ async function main(args: readonly string[]): Promise<void> {
       controller.abort();
     }
   };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  try {
+  await withSignals(stop, async () => {
     const result = await run(request, {
       models: () => createModelRuntime(modelRuntimeOptions(process.env)),
       signal: controller.signal,
@@ -232,10 +228,7 @@ async function main(args: readonly string[]): Promise<void> {
     writeJson(executionReport(result));
     if (result.outcome === "interrupted") process.exitCode = 130;
     if (result.outcome === "call-failure") process.exitCode = 1;
-  } finally {
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
-  }
+  });
 }
 
 function writeJson(value: unknown): void {

@@ -5,10 +5,10 @@ export const byId = (left: string, right: string): number =>
   Number(left.slice(1)) - Number(right.slice(1));
 
 /** The transitive support outside the roots, visiting shared ancestors once. */
-export async function supportClosure(
+export function supportClosure(
   notes: readonly Pick<Note, "id" | "support">[],
   known: readonly Pick<Note, "id" | "support">[],
-): Promise<string[]> {
+): string[] {
   const byName = new Map(known.map((note) => [note.id, note]));
   if (byName.size !== known.length)
     throw new Error("duplicate note in support closure");

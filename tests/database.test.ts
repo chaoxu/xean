@@ -33,11 +33,11 @@ afterEach(() => {
 });
 
 describe("campaign database", () => {
-  test("creates schema two with an explicit Xean SQLite identity", () => {
+  test("creates schema three with an explicit Xean SQLite identity", () => {
     const path = temporaryPath();
     createCampaign(path, "test", null).close();
     const header = readFileSync(path);
-    expect(header.readUInt32BE(60)).toBe(2);
+    expect(header.readUInt32BE(60)).toBe(3);
     expect(header.readUInt32BE(68)).toBe(0x7865616e);
     const reader = openReader(path);
     expect(reader.records()).toHaveLength(1);
@@ -210,15 +210,11 @@ describe("campaign database", () => {
     reader.close();
   });
 
-  test("recordVerdict reads only its candidate, call, and result", async () => {
+  test("recordEvidence reads only its call and result", async () => {
     const path = temporaryPath(),
-      campaign = createCampaign(path, "targeted-verdict", null);
-    const candidate = campaign.submitCandidate(
-      new TextEncoder().encode("claim"),
-      ["audit"],
-    );
+      campaign = createCampaign(path, "targeted-evidence", null);
     const call = await campaign.call(
-      { label: "audit", candidate, request: null },
+      { label: "audit", request: null },
       async () => ({ state: "succeeded" }),
     );
     const db = new Database(path, { readwrite: true });
@@ -233,11 +229,11 @@ describe("campaign database", () => {
       }),
     ]);
     db.close();
-    const verdict = campaign.recordVerdict(call.call, "PASS", null);
-    expect(campaign.record(verdict)).toMatchObject({
-      kind: "verdict",
+    const evidence = campaign.recordEvidence(call.call, { verdict: "PASS" });
+    expect(campaign.record(evidence)).toMatchObject({
+      kind: "evidence",
       call: call.call,
-      verdict: "PASS",
+      evidence: { verdict: "PASS" },
     });
     expect(() => campaign.records()).toThrow();
     campaign.close();
@@ -369,15 +365,14 @@ describe("campaign database", () => {
     }
   });
 
-  test("database triggers reject record and material mutation", () => {
+  test("database triggers reject record mutation", () => {
     const path = temporaryPath();
     const campaign = createCampaign(path, "test", null);
-    campaign.submitCandidate(new TextEncoder().encode("claim"), ["audit/v1"]);
     campaign.close();
     const database = new Database(path, { create: false, readwrite: true });
-    expect(() =>
-      database.run("UPDATE entries SET material = material"),
-    ).toThrow("entries are append-only");
+    expect(() => database.run("UPDATE entries SET body = body")).toThrow(
+      "entries are append-only",
+    );
     expect(() => database.run("DELETE FROM entries")).toThrow(
       "entries are append-only",
     );
@@ -388,12 +383,12 @@ describe("campaign database", () => {
     const path = temporaryPath();
     const database = new Database(path, { create: true });
     database.run("PRAGMA application_id = 2019909998");
-    database.run("PRAGMA user_version = 3");
+    database.run("PRAGMA user_version = 4");
     database.close(true);
-    expect(() => openReader(path)).toThrow("unsupported campaign schema: 3");
+    expect(() => openReader(path)).toThrow("unsupported campaign schema: 4");
   });
 
-  test.each([0, 1, 8, 999])(
+  test.each([0, 1, 2, 8, 999])(
     "refuses schema %i without changing its files",
     (version) => {
       const path = temporaryPath();

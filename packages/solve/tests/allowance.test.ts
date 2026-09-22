@@ -58,11 +58,14 @@ test("additional allowances preserve source evidence, failures, support, guidanc
           { note: "n1", summary: "A useful lemma." },
           { note: "n2", summary: "A possible route." },
         ],
-        verify: [
-          { note: "n1", verifiers: ["correctness", "source"] },
-          { note: "n2", verifiers: ["correctness", "source"] },
-        ],
-        action: { role: "verifier" },
+
+        action: {
+          role: "verifier",
+          verify: [
+            { note: "n1", verifiers: ["correctness", "source"] },
+            { note: "n2", verifiers: ["correctness", "source"] },
+          ],
+        },
       },
     },
     {
@@ -126,10 +129,12 @@ test("additional allowances preserve source evidence, failures, support, guidanc
     {
       submission: {
         filings: [{ note: "n3", summary: "Consequence of the lemma." }],
-        support: ["n1", "n3"],
-        verify: [],
-        explorerGuidance: "Use these two notes.",
-        action: { role: "explorer" },
+
+        action: {
+          role: "explorer",
+          support: ["n1", "n3"],
+          explorerGuidance: "Use these two notes.",
+        },
       },
     },
     {

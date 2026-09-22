@@ -1,55 +1,36 @@
 import { z } from "zod";
 
-import {
-  createCampaign,
-  deriveCandidateStatus,
-  openReader,
-  type EntryId,
-  type Verdict,
-} from "xean";
+import { createCampaign, openReader, type EntryId } from "xean";
 
-const verifier = "scripted-fixture/v1";
 const fixture = "Every finite tree has one fewer edge than vertices.";
 const scriptedReceipt = z.strictObject({
   state: z.literal("succeeded"),
   matchesFixture: z.boolean(),
 });
+const evidence = z.strictObject({ verdict: z.enum(["PASS", "FAIL"]) });
 
-export interface ScriptedReport {
-  readonly candidate: EntryId;
-  readonly verdict: Verdict;
+export async function runScriptedVerifier(path: string): Promise<{
+  readonly call: EntryId;
+  readonly verdict: z.output<typeof evidence>["verdict"];
   readonly verified: boolean;
-}
-
-export async function runScriptedVerifier(
-  path: string,
-): Promise<ScriptedReport> {
+}> {
   const campaign = createCampaign(path, "scripted-verifier-example", {
-    revision: 1,
+    revision: 2,
   });
-  let verdict: Verdict;
-  let candidate: EntryId;
+  let call: EntryId;
+  let receipt: EntryId;
   try {
-    const material = new TextEncoder().encode(fixture);
-    candidate = campaign.submitCandidate(material, [verifier]);
-    const call = await campaign.call(
-      {
-        label: verifier,
-        candidate,
-        request: {
-          expected: fixture,
-        },
-      },
-      async () => ({
+    const result = await campaign.call(
+      { label: "scripted-fixture/v1", request: fixture },
+      async ({ request }) => ({
         state: "succeeded",
-        matchesFixture:
-          new TextDecoder().decode(campaign.material(candidate)) === fixture,
+        matchesFixture: request === fixture,
       }),
     );
-    const receipt = scriptedReceipt.parse(call.output);
-    verdict = receipt.matchesFixture ? "PASS" : "FAIL";
-    campaign.recordVerdict(call.call, verdict, {
-      matchesFixture: receipt.matchesFixture,
+    call = result.call;
+    const checked = scriptedReceipt.parse(result.output);
+    receipt = campaign.recordEvidence(call, {
+      verdict: checked.matchesFixture ? "PASS" : "FAIL",
     });
   } finally {
     campaign.close();
@@ -57,11 +38,11 @@ export async function runScriptedVerifier(
 
   const reader = openReader(path);
   try {
-    return {
-      candidate,
-      verdict,
-      verified: deriveCandidateStatus(reader.records(), candidate).verified,
-    };
+    const entry = reader.record(receipt);
+    if (entry?.kind !== "evidence") throw new Error("missing evidence");
+    const { verdict } = evidence.parse(entry.evidence);
+    // This example's acceptance rule belongs to the application.
+    return { call, verdict, verified: verdict === "PASS" };
   } finally {
     reader.close();
   }

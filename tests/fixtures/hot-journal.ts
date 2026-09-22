@@ -10,14 +10,14 @@ const database = new Database(path, { create: false, readwrite: true });
 database.run("PRAGMA cache_size = 10");
 database.run("PRAGMA cache_spill = ON");
 database.run("BEGIN IMMEDIATE");
-database.run(
-  "INSERT INTO entries(at_ms, kind, body, material) VALUES (?, ?, ?, ?)",
-  [
-    Date.now(),
-    "candidate",
-    JSON.stringify({ requiredVerifiers: ["audit/v1"] }),
-    new Uint8Array(2 * 1024 * 1024),
-  ],
-);
+database.run("INSERT INTO entries(at_ms, kind, body) VALUES (?, ?, ?)", [
+  Date.now(),
+  "call",
+  JSON.stringify({
+    label: "uncommitted",
+    request: "x".repeat(2 * 1024 * 1024),
+    tools: [],
+  }),
+]);
 writeFileSync(marker, "ready");
 setInterval(() => {}, 1_000);

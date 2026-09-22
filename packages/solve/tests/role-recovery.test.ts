@@ -26,7 +26,7 @@ const failure: Reply = {
   ],
 };
 
-test("a failed provider continuation starts a fresh Explorer call with saved notes and frozen guidance", async () => {
+test("explicit resume after provider failure preserves saved notes and frozen guidance", async () => {
   const path = campaignPath();
   const first = { text: "A saved lemma.", support: [] };
   const next = { text: "A consequence of n1.", support: ["n1"] };
@@ -43,18 +43,18 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
     },
     { submission: { notes: [next], solution: true } },
   ]);
-  const result = await run(
-    {
-      task,
-      campaignPath: path,
-      settings: {
-        ...roleSettings(),
-        maxExplorerResponses: 4,
-      },
-      turns: 1,
-    },
-    drive,
-  );
+  const request = {
+    task,
+    campaignPath: path,
+    settings: { ...roleSettings(), maxExplorerResponses: 4 },
+    turns: 1,
+  };
+  expect(await run(request, drive)).toMatchObject({
+    outcome: "call-failure",
+    at: "explorer",
+  });
+  expect(drive.calls).toHaveLength(2);
+  const result = await run(request, drive);
   expect(result).toMatchObject({ outcome: "turn-limit", turns: 1 });
   expect(drive.calls.map((call) => call.role)).toEqual([
     "coordinator",
@@ -75,20 +75,8 @@ test("a failed provider continuation starts a fresh Explorer call with saved not
   expect(inspection.calls[2].outcome).toBe("succeeded");
 });
 
-test("fresh role retries are bounded even when every continuation fails", async () => {
-  const drive = dependencies([
-    dispatchExplorer(),
-    ...Array.from({ length: 4 }, () => failure),
-  ]);
-  const result = await run(
-    { task, campaignPath: campaignPath(), settings: roleSettings() },
-    drive,
-  );
-  expect(result).toMatchObject({ outcome: "call-failure", at: "explorer" });
-  expect(drive.calls).toHaveLength(5);
-}, 15_000);
-
 test.each([
+  { name: "a provider continuation failure", reply: failure },
   {
     name: "an initial provider failure",
     reply: {
@@ -126,40 +114,5 @@ test.each([
     drive,
   );
   expect(result.outcome).toBe("call-failure");
-  expect(drive.calls).toHaveLength(1);
-});
-
-test("operator cancellation interrupts retry backoff before a new role call", async () => {
-  const controller = new AbortController();
-  const drive = dependencies([failure]);
-  const result = await run(
-    { task, campaignPath: campaignPath(), settings: roleSettings() },
-    {
-      ...drive,
-      signal: controller.signal,
-      status(message) {
-        if (message.includes("fresh call")) controller.abort();
-      },
-    },
-  );
-  expect(result.outcome).toBe("interrupted");
-  expect(drive.calls).toHaveLength(1);
-});
-
-test("operator pause preserves a failed role without dispatching its retry", async () => {
-  let pause = false;
-  const drive = dependencies([
-    {
-      ...failure,
-      onStarted: async () => {
-        pause = true;
-      },
-    },
-  ]);
-  const result = await run(
-    { task, campaignPath: campaignPath(), settings: roleSettings() },
-    { ...drive, pauseRequested: () => pause },
-  );
-  expect(result).toMatchObject({ outcome: "paused", at: "coordinator" });
   expect(drive.calls).toHaveLength(1);
 });

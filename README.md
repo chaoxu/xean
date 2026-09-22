@@ -1,6 +1,6 @@
 # xean
 
-`xean` (pronounced “zine”) is a Bun and TypeScript toolkit for mathematical exploration with durable evidence. A campaign is a SQLite journal that records the task, model calls, tool activity, candidate material, verdicts, request checkpoints, and provider accounting. The journal lets an application inspect progress, add notes or guidance, and continue work after an interruption.
+`xean` (pronounced “zine”) is a Bun and TypeScript toolkit for mathematical exploration with durable evidence. A campaign is a SQLite journal that records the task, model calls, tool activity, evidence, request checkpoints, and provider accounting. The journal lets an application inspect progress, add notes or guidance, and continue work after an interruption.
 
 The product family has clear boundaries:
 
@@ -11,7 +11,7 @@ The product family has clear boundaries:
 | `xean-lab` | Experiment execution and provenance |
 | `xean-observe` | Read-only HTTP observation and rendering |
 
-The kernel records facts and enforces journal, call, tool, candidate, verdict, and accounting contracts. The model chooses mathematical methods. Applications provide context, tools, budgets, verification policy, publication, and filesystem boundaries. A complete mathematical result requires independent verification of the candidate and its supporting work.
+The kernel records facts and enforces journal, call, tool, evidence, and accounting contracts. The model chooses mathematical methods. Applications own verification and acceptance, context, tools, budgets, publication, and filesystem boundaries. A complete mathematical result requires independent verification of the argument and its supporting work.
 
 ## Install and run
 
@@ -78,7 +78,7 @@ The [inbox rules](packages/solve/docs/role-runner.md#inbox) state when notes and
 
 ## Build an application
 
-The kernel API supports append-only campaigns, exact candidate bytes, structured tools, Pi calls, request checkpoints, result attachments, and derived verification status. Start with [`docs/application-author.md`](docs/application-author.md). The normative contract is [`SPEC.md`](SPEC.md). [`docs/philosophy.md`](docs/philosophy.md) explains the division of responsibility, and [`docs/terms.md`](docs/terms.md) defines the vocabulary.
+The kernel API supports append-only campaigns, parent-bound calls, structured tools, Pi calls, request checkpoints, result attachments, and application-owned evidence. Start with [`docs/application-author.md`](docs/application-author.md). The normative contract is [`SPEC.md`](SPEC.md). [`docs/philosophy.md`](docs/philosophy.md) explains the division of responsibility, and [`docs/terms.md`](docs/terms.md) defines the vocabulary.
 
 The deterministic verifier example is [`examples/scripted-verifier.ts`](examples/scripted-verifier.ts). [`examples/pi-smoke.ts`](examples/pi-smoke.ts) exercises an LLM verdict through Pi.
 
@@ -94,11 +94,11 @@ bun packages/solve/solve.ts review task.json argument.md review.db packages/solv
 
 ```sh
 bun install --frozen-lockfile
-bun run check:all
-bun run e2e:roles
+bun run check:fast
+bun run check
 ```
 
-Run logs, measurements, reviews, and research material belong in ignored `runs/` artifacts. The MIT license is in [`LICENSE`](LICENSE).
+`check:fast` runs formatting, types, and offline tests. `check` also verifies the packed consumer and CLI. See the [development guide](docs/development.md) for focused tests, architecture boundaries, and reproducible line counts. Run logs, measurements, reviews, and research material belong in ignored `runs/` artifacts. The MIT license is in [`LICENSE`](LICENSE).
 
 ## Cite
 

@@ -16,7 +16,7 @@ import {
   type Verification,
 } from "../roles";
 import {
-  exportCandidate,
+  exportSolution,
   inspectCampaign,
   inspectAndExportCampaignRecords,
 } from "../role-cli";
@@ -129,14 +129,14 @@ function coordination(
   const verify = options.verify ?? [{ note: filed.at(-1)!, verifiers: all }];
   return {
     filings: filed.map((note) => ({ note, summary: `Summary of ${note}.` })),
-    ...(verify.length > 0
-      ? {}
-      : {
-          explorerGuidance: `Continue from ${filed.at(-1)}.`,
-          support: options.read ?? [filed.at(-1)!],
-        }),
-    verify,
-    action: { role: verify.length > 0 ? "verifier" : "explorer" },
+    action:
+      verify.length > 0
+        ? { role: "verifier", verify }
+        : {
+            role: "explorer",
+            explorerGuidance: `Continue from ${filed.at(-1)}.`,
+            support: options.read ?? [filed.at(-1)!],
+          },
   };
 }
 
@@ -255,7 +255,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     expect(verifier.system).toBe(correctness.system);
     expect(verifier.cacheKey).toBe(correctness.cacheKey);
     expect(verifier.prompt.startsWith(prefix)).toBe(true);
-    expect(verifier.candidate).toBe(phase.candidate);
+    expect(verifier.parent).toBe(phase.verification);
   }
   expect(correctness.prompt).toContain(
     "Verifier:\ncorrectness\n\nObligation:\nJudge whether each note establishes its stated result",
@@ -274,19 +274,19 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     }[];
     readonly result: {
       readonly schemaVersion: number;
-      readonly candidate: number;
+      readonly verification: number;
       readonly note: { readonly text: string };
     };
     readonly calls: readonly {
       readonly role: string;
       readonly verifier?: string;
-      readonly candidate?: number;
+      readonly parent?: number;
       readonly submission?: unknown;
     }[];
   };
   expect(inspection.phase).toBe("accepted");
-  expect(inspection.result.schemaVersion).toBe(1);
-  expect(inspection.result.candidate).toBe(phase.candidate);
+  expect(inspection.result.schemaVersion).toBe(2);
+  expect(inspection.result.verification).toBe(phase.verification);
   expect(inspection.result.note.text).toBe(good.text);
   expect(inspection.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(inspection.notes[0]?.verdicts).toHaveLength(4);
@@ -316,7 +316,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   expect(inspection.calls[2]?.submission).toEqual(coordination("n1"));
   expect(inspection.calls[3]).toMatchObject({
     verifier: "correctness",
-    candidate: phase.candidate,
+    parent: phase.verification,
     submission: {
       verdicts: [
         { note: "n1", verdict: "PASS", externalResults: externalResults("n1") },
@@ -325,7 +325,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   });
   expect(inspection.calls[4]).toMatchObject({
     verifier: "source",
-    candidate: phase.candidate,
+    parent: phase.verification,
     submission: {
       verdicts: [
         { note: "n1", verdict: "PASS", sources: [{ resultId: "n1#1" }] },
@@ -337,7 +337,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     verifier: "reconstruction",
     submission: { verdicts: [{ verdict: "PASS" }] },
   });
-  expect(new TextDecoder().decode(await exportCandidate(path))).toBe(
+  expect(new TextDecoder().decode(await exportSolution(path))).toBe(
     `--- n1 ---\n\n${good.text}`,
   );
   const reader = openReader(path);
@@ -352,7 +352,7 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   try {
     const combined = await inspectAndExportCampaignRecords(captured);
     expect(combined.inspection as unknown).toEqual(inspection);
-    expect(new TextDecoder().decode(combined.candidate)).toBe(
+    expect(new TextDecoder().decode(combined.solution)).toBe(
       `--- n1 ---\n\n${good.text}`,
     );
     expect(derivations).toBe(1);
@@ -462,7 +462,7 @@ test("one verification judges several notes, kills the failed one, and accepts o
   expect(drive.calls[8]?.prompt).not.toContain("P from L, wrong.");
   expect(drive.calls[8]?.prompt).toContain(`"text": "P from L."`);
   campaign.close();
-  expect(new TextDecoder().decode(await exportCandidate(path))).toBe(
+  expect(new TextDecoder().decode(await exportSolution(path))).toBe(
     `--- n1 ---\n\nLemma L.\n\n--- n3 ---\n\nP from L.`,
   );
 });
@@ -571,7 +571,7 @@ test("resume reconstructs the next role from the journal", async () => {
   campaign.close();
 });
 
-test("provider continuation recovery preserves completed verifier checks and the candidate", async () => {
+test("explicit resume after a provider continuation failure preserves completed verifier checks", async () => {
   const workflow = config();
   const campaign = await createWorkflowCampaign(campaignPath(), workflow, 4);
   const drive = dependencies([
@@ -591,6 +591,11 @@ test("provider continuation recovery preserves completed verifier checks and the
     ...passes("n1").slice(2),
   ]);
   try {
+    const roles = createPiRoles(campaign, workflow.settings, drive);
+    await expect(runWorkflow(campaign, roles)).rejects.toThrow(
+      "Provider continuation unavailable.",
+    );
+    expect(drive.calls).toHaveLength(5);
     const phase = await runWorkflow(
       campaign,
       createPiRoles(campaign, workflow.settings, drive),
@@ -599,20 +604,25 @@ test("provider continuation recovery preserves completed verifier checks and the
     expect(drive.codexCalls).toHaveLength(1);
     expect(drive.calls[4]!.label).toBe(verifierLabels.requirements);
     expect(drive.calls[5]!.label).toBe(verifierLabels.requirements);
-    expect(drive.calls[5]!.candidate).toBe(drive.calls[4]!.candidate);
+    expect(drive.calls[5]!.parent).toBe(drive.calls[4]!.parent);
     expect(drive.calls[5]!.prompt).toBe(drive.calls[4]!.prompt);
     expect(
-      campaign.records().filter((entry) => entry.kind === "candidate"),
+      campaign
+        .records()
+        .filter(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/verification",
+        ),
     ).toHaveLength(1);
     expect(
-      campaign.records().filter((entry) => entry.kind === "verdict"),
+      campaign.records().filter((entry) => entry.kind === "evidence"),
     ).toHaveLength(4);
   } finally {
     campaign.close();
   }
 });
 
-test("a verification that fails mid-way resumes on the same candidate", async () => {
+test("a verification that fails mid-way resumes on the same verification", async () => {
   const path = campaignPath();
   const workflow = config();
   let campaign = await createWorkflowCampaign(path, workflow, 4);
@@ -630,7 +640,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   const paused = await phaseOf(campaign);
   expect(paused.kind).toBe("verifier");
   if (paused.kind !== "verifier") throw new Error("expected verifier");
-  expect(paused.candidate).toBe(first.calls[4]!.candidate!);
+  expect(paused.verification).toBe(first.calls[4]!.parent!);
   campaign.close();
 
   campaign = openCampaign(path);
@@ -641,7 +651,7 @@ test("a verification that fails mid-way resumes on the same candidate", async ()
   );
   expect(phase.kind).toBe("accepted");
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
-  expect(phase.candidate).toBe(paused.candidate!);
+  expect(phase.verification).toBe(paused.verification!);
   expect(rest.calls.map(({ label }) => label)).toEqual([
     "xean-solve/verifier/requirements",
     "xean-solve/verifier/reconstruction/statement",
@@ -668,7 +678,7 @@ test("a journal written by other prompts is refused", async () => {
     task: { ...task, problem: "Prove some other Q." },
     notes: [],
   });
-  await expect(deriveWorkflow(campaign.records())).rejects.toThrow(
+  expect(() => deriveWorkflow(campaign.records())).toThrow(
     "does not match the derived coordinator request",
   );
   campaign.close();
@@ -745,8 +755,8 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   expect(
     coordinatorResultFor(phase.notes).safeParse({
       filings: [{ note: "n2", summary: "P." }],
-      verify: [{ note: "n1", verifiers: all }],
-      action: { role: "verifier" },
+
+      action: { role: "verifier", verify: [{ note: "n1", verifiers: all }] },
     }).success,
   ).toBe(false);
   campaign.close();
@@ -949,10 +959,17 @@ test("coordination files every note without a summary and lists live notes over 
     filings: [{ note: "n2", summary: "new" }],
   };
   // The action follows the list: a verifier dispatch for a nonempty list.
-  const accepts = (value: Record<string, unknown> & { verify: unknown[] }) =>
+  const accepts = ({
+    filings,
+    verify,
+    ...explorer
+  }: Record<string, unknown> & { verify: unknown[] }) =>
     schema.safeParse({
-      ...value,
-      action: { role: value.verify.length > 0 ? "verifier" : "explorer" },
+      filings,
+      action:
+        verify.length > 0
+          ? { role: "verifier", verify }
+          : { role: "explorer", ...explorer },
     }).success;
   expect(
     accepts({ filings: [], explorerGuidance: "Go.", support: [], verify: [] }),
@@ -1268,11 +1285,14 @@ test("drains requested verification batches at the turn cap and stops at the fir
     verifierNames.map((name) => `${name}:PASS`),
     [],
   ]);
-  const candidates = campaign
+  const verifications = campaign
     .records()
-    .filter((entry) => entry.kind === "candidate");
-  expect(candidates).toHaveLength(3);
-  expect(phase.candidate).toBe(candidates[2]!.seq);
+    .filter(
+      (entry) =>
+        entry.kind === "call" && entry.label === "xean-solve/verification",
+    );
+  expect(verifications).toHaveLength(3);
+  expect(phase.verification).toBe(verifications[2]!.seq);
   expect(drive.calls.filter(({ role }) => role === "explorer")).toHaveLength(1);
   expect(drive.calls.filter(({ role }) => role === "coordinator")).toHaveLength(
     2,
@@ -1282,7 +1302,7 @@ test("drains requested verification batches at the turn cap and stops at the fir
   expect(await runWorkflow(campaign, roles)).toEqual(phase);
   expect(campaign.records()).toHaveLength(settledCount);
   campaign.close();
-  expect(new TextDecoder().decode(await exportCandidate(path))).toContain(
+  expect(new TextDecoder().decode(await exportSolution(path))).toContain(
     "Complete proof of P from M.",
   );
 });
@@ -1350,14 +1370,19 @@ test.each([
     expect(phase.notes[1]!.verdicts).toEqual([]);
     expect(phase.notes[2]!.verdicts).toEqual([]);
     expect(
-      campaign.records().filter((entry) => entry.kind === "candidate"),
+      campaign
+        .records()
+        .filter(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/verification",
+        ),
     ).toHaveLength(2);
     expect(drive.codexCalls).toHaveLength(verifier === "source" ? 2 : 1);
     campaign.close();
   },
 );
 
-test("an interrupted later verification batch resumes on its own candidate without replaying the first batch", async () => {
+test("an interrupted later verification batch resumes on its own verification without replaying the first batch", async () => {
   const path = campaignPath();
   const workflow = workflowConfiguration({
     task,
@@ -1398,11 +1423,14 @@ test("an interrupted later verification batch resumes on its own candidate witho
     input: { verify: [{ note: "n2", verifiers: all }] },
   });
   if (paused.kind !== "verifier") throw new Error("expected verifier");
-  const candidates = campaign
+  const verifications = campaign
     .records()
-    .filter((entry) => entry.kind === "candidate");
-  expect(candidates).toHaveLength(2);
-  expect(paused.candidate).toBe(candidates[1]!.seq);
+    .filter(
+      (entry) =>
+        entry.kind === "call" && entry.label === "xean-solve/verification",
+    );
+  expect(verifications).toHaveLength(2);
+  expect(paused.verification).toBe(verifications[1]!.seq);
   campaign.close();
 
   campaign = openCampaign(path);
@@ -1414,7 +1442,7 @@ test("an interrupted later verification batch resumes on its own candidate witho
   expect(phase).toMatchObject({
     kind: "accepted",
     turns: 2,
-    candidate: paused.candidate,
+    verification: paused.verification,
     note: { id: "n2" },
   });
   expect(rest.codexCalls).toHaveLength(0);
@@ -1425,7 +1453,12 @@ test("an interrupted later verification batch resumes on its own candidate witho
     "xean-solve/verifier/reconstruction",
   ]);
   expect(
-    campaign.records().filter((entry) => entry.kind === "candidate"),
+    campaign
+      .records()
+      .filter(
+        (entry) =>
+          entry.kind === "call" && entry.label === "xean-solve/verification",
+      ),
   ).toHaveLength(2);
   campaign.close();
 });

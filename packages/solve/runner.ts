@@ -127,7 +127,7 @@ async function prepareAllowance(
     return;
   }
   if (id === undefined) throw new Error("adding turns requires a new --id");
-  const snapshot = await deriveWorkflow(records);
+  const snapshot = deriveWorkflow(records);
   if (snapshot.phase.kind !== "turn-limit")
     throw new Error(
       "only a campaign at its turn limit can receive another allowance",
@@ -161,7 +161,7 @@ async function drive(
   } catch (error) {
     let at: string;
     try {
-      at = (await deriveWorkflow(workflowRecords(campaign))).phase.kind;
+      at = deriveWorkflow(workflowRecords(campaign)).phase.kind;
     } catch {
       throw error;
     }
@@ -203,7 +203,7 @@ export async function run(
         }
         await prepareAllowance(campaign, request.turns, request.id);
         const through = campaign.lastSequence();
-        const snapshot = await deriveWorkflow(
+        const snapshot = deriveWorkflow(
           campaign.records({ excludeLabels: ["xean/pi-request"], through }),
         );
         initial = { snapshot, through };

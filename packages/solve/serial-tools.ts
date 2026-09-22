@@ -33,8 +33,8 @@ function hoistInstructions(request: Record<string, unknown>): void {
 }
 
 /**
- * Pi's simple stream lacks required/serial tools, Codex output caps, the
- * instructions shape, and the transport choice. Apply these controls before
+ * Pi's provider-neutral tool choice supports only auto/none. Apply required
+ * terminal tools, serial generation, output limits, and instructions before
  * checkpointing; Pi owns cached transport.
  */
 export function withSerialToolCalls(models: SolveModels): SolveModels {
@@ -59,11 +59,7 @@ export function withSerialToolCalls(models: SolveModels): SolveModels {
           const request: Record<string, unknown> = { ...payload };
           if ("tools" in payload || "parallel_tool_calls" in payload)
             request.parallel_tool_calls = false;
-          if (
-            "tools" in payload &&
-            Array.isArray(payload.tools) &&
-            payload.tools.length
-          )
+          if (Array.isArray(request.tools) && request.tools.length > 0)
             request.tool_choice = "required";
           if (
             model.api === "openai-codex-responses" &&

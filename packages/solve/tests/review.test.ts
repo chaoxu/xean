@@ -256,7 +256,7 @@ test.each(["request", "role"])(
           throw new Error("must reject without another model call");
         },
       }),
-    ).rejects.toThrow("does not match the declared review request and role");
+    ).rejects.toThrow("does not match the derived xean-solve/review request");
     expect(calls).toBe(1);
   },
 );

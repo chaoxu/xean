@@ -1,37 +1,10 @@
 import type { Campaign, EntryId, Json } from "xean";
-import type { PiMeasuredUsage, PiRunOptions } from "xean/pi";
+import { piRequestFor, type PiMeasuredUsage, type PiRunOptions } from "xean/pi";
 
 type Outcome = "succeeded" | "failed" | "cancelled";
 
 export function fakePiRequest(options: PiRunOptions): Json {
-  const request = {
-    protocol: "xean/pi-run/v3",
-    model: {
-      provider: options.model.provider,
-      id: options.model.id,
-      api: options.model.api,
-      baseUrl: options.model.baseUrl,
-    },
-    modelProfile: {
-      reasoning: options.model.reasoning,
-      thinkingLevelMap: options.model.thinkingLevelMap ?? null,
-      contextWindow: options.model.contextWindow,
-      maxTokens: options.model.maxTokens,
-      samplingParams: options.model.samplingParams ?? null,
-      compat: options.model.compat ?? null,
-    },
-    system: options.system,
-    prompt: options.prompt,
-    reasoning: options.reasoning,
-    submissionGate: options.submissionGate,
-    maxRecoveries: options.maxRecoveries,
-    maxLengthContinuations: options.maxLengthContinuations,
-    cacheKey: options.cacheKey,
-    replayReasoning: options.replayReasoning === false ? false : undefined,
-  };
-  // The round-trip drops undefined-valued fields, matching the
-  // omit-when-absent shape of real journaled requests.
-  return JSON.parse(JSON.stringify(request)) as Json;
+  return JSON.parse(JSON.stringify(piRequestFor(options))) as Json;
 }
 
 /** Append one request checkpoint and its completion under a Pi call. */

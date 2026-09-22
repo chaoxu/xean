@@ -77,14 +77,14 @@ function coordinate(
   return {
     submission: {
       filings: ids.map((note) => ({ note, summary: `Statement of ${note}.` })),
-      ...(verify.length === 0
-        ? {
-            explorerGuidance: "Prove the remaining implication.",
-            support,
-          }
-        : {}),
-      verify,
-      action: { role: verify.length > 0 ? "verifier" : "explorer" },
+      action:
+        verify.length > 0
+          ? { role: "verifier", verify }
+          : {
+              role: "explorer",
+              explorerGuidance: "Prove the remaining implication.",
+              support,
+            },
     },
   };
 }
@@ -281,13 +281,13 @@ test("invalid local support is rejected before appending a submission", async ()
 
 test("init creates a declaration and allowance without resolving test-only providers", async () => {
   const { path, request } = await setup();
-  expect(workflowSchemaVersion).toBe(31);
+  expect(workflowSchemaVersion).toBe(32);
   const before = records(path);
   expect(before).toHaveLength(3);
   expect(before[0]).toMatchObject({
     kind: "campaign",
     application: "xean-solve",
-    config: { schemaVersion: 31, task },
+    config: { schemaVersion: 32, task },
   });
   await init(request);
   expect(records(path)).toEqual(before);
@@ -306,7 +306,7 @@ test("unchecked initial notes reach coordinator and verification before the firs
     "initial-lemma",
   );
   const before = records(path);
-  expect(before.some((entry) => entry.kind === "verdict")).toBe(false);
+  expect(before.some((entry) => entry.kind === "evidence")).toBe(false);
   expect((await inspect(path)).submissions).toBeUndefined();
   expect((await inspect(path, true)).submissions).toHaveLength(1);
   const drive = dependencies([
@@ -467,7 +467,7 @@ test("external verification establishes support without inventing verdicts or ac
     verification: attestation,
   });
   expect((await inspect(path)).phase).not.toBe("accepted");
-  expect(records(path).some((entry) => entry.kind === "verdict")).toBe(false);
+  expect(records(path).some((entry) => entry.kind === "evidence")).toBe(false);
 
   const drive = dependencies([
     {
