@@ -11,16 +11,16 @@ import { byId, supportClosure } from "./support";
 import {
   literatureOutcome,
   callsAfter,
-  readPiSubmission,
-  solveSettings,
+  readRoleSubmission,
+  assertRoleInput,
   type CallEntry,
-} from "./pi-roles";
+} from "./role-records";
+import { solveSettings } from "./pi-roles";
 import {
   assertApplication,
   coordinatorInput,
   coordinatorResultFor,
   explorerResultFor,
-  roleTools,
   explorerInput,
   journalVerdicts,
   jsonSnapshot,
@@ -40,13 +40,13 @@ import {
   type LiteratureInput,
   type LiteratureStatus,
   type Note,
-  type Roles,
+  type RoleHost,
   type Task,
   type Verification,
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 35;
+export const workflowSchemaVersion = 36;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -304,16 +304,17 @@ function replayExplorerTurn(
       fold.through = through;
       return { kind: "explorer", input: explorerRequest, parent: fold.owner };
     }
+    assertRoleInput(call, explorerRequest);
     const submission = {
       call: call.seq,
       noteIds: [] as string[],
       support: explorerRequest.support.map((note) => note.id),
     };
     fold.noteSubmissions.push(submission);
-    const saved = readPiSubmission(
+    const saved = readRoleSubmission(
       records,
       call.seq,
-      { tool: roleTools.explorer, schema: explorerResultFor(known) },
+      { schema: explorerResultFor(known) },
       true,
     );
     // Saved notes become visible at the last tool call; the next phase
@@ -563,8 +564,8 @@ function replay(fold: Fold): WorkflowPhase {
       roleLabels.coordinator,
       fold.owner,
     )) {
-      const saved = readPiSubmission(records, call.seq, {
-        tool: roleTools.coordinator,
+      assertRoleInput(call, input);
+      const saved = readRoleSubmission(records, call.seq, {
         schema: coordinatorResultFor(input),
       });
       if (saved !== undefined) {
@@ -594,6 +595,7 @@ function replay(fold: Fold): WorkflowPhase {
         roleLabels.literature,
         fold.owner,
       )) {
+        assertRoleInput(call, input);
         literatureStatus = "inconclusive";
         const outcome = literatureOutcome(records, call.seq);
         if (outcome !== undefined) {
@@ -674,7 +676,7 @@ type RolePhase = Exclude<WorkflowPhase, WorkflowTerminal | OverlapPhase>;
 /** Serial and overlapping dispatches use the same owned calls and completion loop. */
 export async function runWorkflow(
   campaign: Campaign,
-  roles: Roles,
+  roles: RoleHost,
   dependencies: WorkflowDependencies = {},
   initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
 ): Promise<WorkflowPhase> {

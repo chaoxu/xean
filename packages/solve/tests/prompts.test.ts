@@ -132,7 +132,11 @@ test("role prompts omit resolved uncertainty and PASS reports without changing e
     coordinatorCall({ task, notes: [evidence] }),
     verifierCall("correctness", input, ["n2"]),
     statementCall(input, target),
-    proofCall(input, target, { statement: "P holds." }),
+    proofCall({
+      task,
+      support: [evidence],
+      statement: { statement: "P holds." },
+    }),
   ];
   for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");

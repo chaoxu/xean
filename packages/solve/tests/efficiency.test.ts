@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createPiRoles } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import { notesInbox } from "../notes";
 import { submitNotes } from "../role-cli";
 import { judgedBy, verifierInput, type Note } from "../roles";
@@ -161,7 +161,7 @@ test("startup discards its captured phase after the journal changes", async () =
     await notesInbox.freeze(campaign, initial.snapshot.after!);
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, dependencies([])),
+      createRoleHost(campaign, config.settings, dependencies([])),
       { pauseRequested: () => true },
       initial,
     );
@@ -193,7 +193,7 @@ test("Explorer notes are visible before settlement and survive missing tool rece
   try {
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
       { pauseRequested: () => drive.calls.length === 2 },
     );
     const records = campaign.records();

@@ -363,6 +363,9 @@ test("invalid guidance fails without creating a campaign or changing its records
   await expect(guideCampaign(missing, first)).rejects.toThrow("does not exist");
   expect(existsSync(missing)).toBe(false);
   const calls = join(dirname(path), "roles.db");
-  createCampaign(calls, applicationId, { kind: "calls" }).close();
+  createCampaign(calls, applicationId, {
+    kind: "calls",
+    schemaVersion: 1,
+  }).close();
   await expect(guideCampaign(calls, first)).rejects.toThrow();
 });

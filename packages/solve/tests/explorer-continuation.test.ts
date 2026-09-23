@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { openCampaign } from "xean";
+import { openCampaign, type Tool } from "xean";
 
-import { createPiRoles, explorerCall, solveSettings } from "../pi-roles";
+import { explorerCall, solveSettings } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import {
@@ -106,7 +107,7 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
   try {
     const result = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
     );
     expect(result.kind).toBe("turn-limit");
     expect(drive.calls[1]?.submissionGate).toEqual({
@@ -204,7 +205,7 @@ test.each([false, true])(
     try {
       const result = await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, drive),
+        createRoleHost(campaign, config.settings, drive),
       );
       expect(result.kind).toBe("turn-limit");
       if (result.kind !== "turn-limit") throw new Error("expected turn limit");
@@ -239,7 +240,7 @@ test.each([false, true])(
       const before = campaign.records();
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, dependencies([])),
+        createRoleHost(campaign, config.settings, dependencies([])),
       );
       expect(campaign.records()).toEqual(before);
     } finally {
@@ -347,7 +348,7 @@ test.each([1, 3])(
     try {
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, drive),
+        createRoleHost(campaign, config.settings, drive),
       );
       expect(drive.calls[1]?.submissionGate?.contextBudgetTokens).toBe(80_000);
       expect(drive.calls[1]?.submissionGate?.maxResponses).toBe(
@@ -373,7 +374,7 @@ test.each([1, 3])(
       const before = campaign.records();
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, dependencies([])),
+        createRoleHost(campaign, config.settings, dependencies([])),
       );
       expect(campaign.records()).toEqual(before);
     } finally {
@@ -392,6 +393,12 @@ test("every saved submission reaches the coordinator, including early proofs bef
     },
   });
   const campaign = await createWorkflowCampaign(path, config, 2);
+  let hostSubmission: Tool | undefined;
+  const call = campaign.call.bind(campaign);
+  campaign.call = (options, runner) => {
+    if (options.role === "explorer") hostSubmission = options.tools?.[0];
+    return call(options, runner);
+  };
   const first = {
     text: "An early detailed lemma, including its complete argument.",
     support: [],
@@ -456,7 +463,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
         if (firstCall?.kind !== "tool-call")
           throw new Error("missing saved submission");
         expect(
-          await drive.calls[1]!.tools![0]!.run(firstCall.input, {
+          await hostSubmission!.run(firstCall.input, {
             call: firstCall.call,
             toolCall: firstCall.seq,
             signal: new AbortController().signal,
@@ -491,7 +498,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
   try {
     const result = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
     );
     expect(result.kind).toBe("turn-limit");
     const inspection: any = await inspectCampaign(path, {
@@ -519,7 +526,7 @@ test("every saved submission reaches the coordinator, including early proofs bef
     const before = campaign.records();
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, dependencies([])),
+      createRoleHost(campaign, config.settings, dependencies([])),
     );
     expect(campaign.records()).toEqual(before);
   } finally {
@@ -572,7 +579,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
   ]);
   try {
     await expect(
-      runWorkflow(campaign, createPiRoles(campaign, config.settings, initial)),
+      runWorkflow(campaign, createRoleHost(campaign, config.settings, initial)),
     ).rejects.toThrow("transport failed");
     const inspection: any = await inspectCampaign(path);
     expect(inspection.calls[1]).toMatchObject({
@@ -597,7 +604,7 @@ test("saved notes survive a lost receipt and a failed Explorer call, retaining I
   try {
     const result = await runWorkflow(
       reopened,
-      createPiRoles(reopened, config.settings, rest),
+      createRoleHost(reopened, config.settings, rest),
     );
     expect(result).toMatchObject({
       kind: "turn-limit",

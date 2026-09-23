@@ -3,10 +3,10 @@ import { z } from "zod";
 
 import {
   codexProfile,
-  callsAfter,
   correctionAssessment,
   sourceAssessment,
 } from "./pi-roles";
+import { callsAfter } from "./role-records";
 import {
   jsonSnapshot,
   nonblank,

@@ -14,28 +14,31 @@ import {
 
 afterEach(cleanupCampaigns);
 
-test("an unknown late verifier model fails before creating a campaign or making a call", async () => {
-  const path = campaignPath();
-  const drive = dependencies([]);
-  const settings = roleSettings();
-  settings.reconstruction = {
-    ...settings.reconstruction,
-    model: "missing-model",
-  };
-  await expect(
-    run(
-      {
-        task: { problem: "P", completionCriteria: "Prove P" },
-        campaignPath: path,
-        settings,
-      },
-      drive,
-    ),
-  ).rejects.toThrow("reconstruction: unknown Pi model: test/missing-model");
-  expect(existsSync(path)).toBe(false);
-  expect(drive.calls).toHaveLength(0);
-  expect(drive.codexCalls).toHaveLength(0);
-});
+test.each([undefined, {}])(
+  "an unknown late verifier model fails before creating a campaign or making a call (roles=%j)",
+  async (roles) => {
+    const path = campaignPath();
+    const drive = dependencies([]);
+    const settings = roleSettings();
+    settings.reconstruction = {
+      ...settings.reconstruction,
+      model: "missing-model",
+    };
+    await expect(
+      run(
+        {
+          task: { problem: "P", completionCriteria: "Prove P" },
+          campaignPath: path,
+          settings,
+        },
+        { ...drive, ...(roles === undefined ? {} : { roles }) },
+      ),
+    ).rejects.toThrow("reconstruction: unknown Pi model: test/missing-model");
+    expect(existsSync(path)).toBe(false);
+    expect(drive.calls).toHaveLength(0);
+    expect(drive.codexCalls).toHaveLength(0);
+  },
+);
 
 test("missing provider credentials fail before exploration and campaign creation", async () => {
   const path = campaignPath();

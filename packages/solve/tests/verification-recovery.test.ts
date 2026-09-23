@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { openCampaign } from "xean";
 
-import { createPiRoles } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import {
   reconstructionResultFor,
   verifierLabels,
@@ -146,7 +146,7 @@ test.each([...verifierNames])(
       expect(
         await runWorkflow(
           campaign,
-          createPiRoles(campaign, configuration.settings, drive),
+          createRoleHost(campaign, configuration.settings, drive),
         ),
       ).toMatchObject({ kind: "turn-limit", turns: 3 });
       expect(drive.allCalls).toHaveLength(replies.length);
@@ -198,7 +198,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, first),
+      createRoleHost(campaign, configuration.settings, first),
       {
         pauseRequested: () => first.allCalls.length === 5,
       },
@@ -252,7 +252,7 @@ test("reopening after an inconclusive source check lets Explorer supply a new pr
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, resumed),
+      createRoleHost(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 4, note: { id: "n2" } });
   expect(resumed.allCalls[0]?.label).toBe("xean-solve/coordinator");
@@ -291,7 +291,7 @@ test("reopening after a corrected proof settled reuses it and retries only the f
   await expect(
     runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, first),
+      createRoleHost(campaign, configuration.settings, first),
     ),
   ).rejects.toThrow("interrupted verifier");
   expect(first.allCalls.at(-2)?.prompt).toContain("The precise proposition P.");
@@ -313,7 +313,7 @@ test("reopening after a corrected proof settled reuses it and retries only the f
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, resumed),
+      createRoleHost(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 2, note: { id: "n1", text } });
   expect(resumed.allCalls.map(({ label }) => label)).toEqual([
@@ -383,7 +383,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
   await expect(
     runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, first),
+      createRoleHost(campaign, configuration.settings, first),
     ),
   ).rejects.toThrow("provider disconnected");
   expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
@@ -403,7 +403,7 @@ test("resuming an interrupted verification preserves inconclusive and successful
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, resumed),
+      createRoleHost(campaign, configuration.settings, resumed),
       {
         pauseRequested: () => resumed.allCalls.length === 1,
       },
@@ -480,7 +480,7 @@ test("an accepted answer ends the workflow even when an unrelated note is unreso
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, drive),
+      createRoleHost(campaign, configuration.settings, drive),
     ),
   ).toMatchObject({ kind: "accepted", note: { id: "n2" } });
   expect(drive.allCalls).toHaveLength(9);
@@ -500,7 +500,7 @@ test("repeated statement corrections stop automatic retries and remain resumable
   await expect(
     runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, first),
+      createRoleHost(campaign, configuration.settings, first),
     ),
   ).rejects.toThrow("statement");
   expect((await deriveWorkflow(campaign.records())).notes[0]).toMatchObject({
@@ -517,7 +517,7 @@ test("repeated statement corrections stop automatic retries and remain resumable
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, resumed),
+      createRoleHost(campaign, configuration.settings, resumed),
     ),
   ).toMatchObject({ kind: "accepted", turns: 2 });
   expect(resumed.allCalls).toHaveLength(2);
@@ -568,7 +568,7 @@ test("an inconclusive supporting lemma leaves its dependent note unverified at t
   expect(
     await runWorkflow(
       campaign,
-      createPiRoles(campaign, configuration.settings, first),
+      createRoleHost(campaign, configuration.settings, first),
     ),
   ).toMatchObject({ kind: "turn-limit", turns: 2 });
   expect(

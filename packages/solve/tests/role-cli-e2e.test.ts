@@ -102,7 +102,7 @@ test("CLI initializes, guides, runs, resumes, inspects, and exports one workflow
   expect(inspection.guidance[0].calls).toHaveLength(1);
   for (const call of inspection.calls) {
     if (call.call === inspection.guidance[0].calls[0])
-      expect(call.request.prompt).toContain(guidance);
+      expect(call.request.input.explorerGuidance).toContain(guidance);
     else expect(JSON.stringify(call.request)).not.toContain(guidance);
   }
   const contract = JSON.parse((await cli(directory, "contract")).stdout);

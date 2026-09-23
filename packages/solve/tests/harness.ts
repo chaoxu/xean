@@ -15,6 +15,7 @@ import {
   applicationId,
   defaultCoordinatorBehavior,
   literatureReport,
+  roleFromLabel,
 } from "../roles";
 import type { WorkflowConfig } from "../workflow";
 import { storePiResult, type PiResult, type PiRunOptions } from "xean/pi";
@@ -133,10 +134,16 @@ export function dependencies(replies: readonly Reply[]) {
     allCalls,
     codexCalls,
     async run(campaign: Campaign, options: PiRunOptions): Promise<PiResult> {
-      calls.push(options);
+      const label = options.label.replace("xean-solve/model/", "xean-solve/");
+      const role = roleFromLabel(label);
+      calls.push({
+        ...options,
+        label,
+        ...(role === undefined ? {} : { role }),
+      });
       allCalls.push({
-        label: options.label,
-        ...(options.role === undefined ? {} : { role: options.role }),
+        label,
+        ...(role === undefined ? {} : { role }),
         system: options.system ?? "",
         prompt: options.prompt,
       });

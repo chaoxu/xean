@@ -249,7 +249,7 @@ export async function codexCall(
   campaign: Campaign,
   call: {
     readonly label: string;
-    readonly role: RoleName;
+    readonly role?: RoleName;
     readonly parent?: EntryId;
   },
   request: Json | CodexRequest,

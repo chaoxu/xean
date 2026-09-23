@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, defineTool, openReader } from "xean";
 
-import { createPiRoles } from "../pi-roles";
-import { storeCodexResult } from "../source";
-import { inspectCampaign } from "../role-cli";
+import { createRoleHost, modelCallLabel } from "../role-host";
+import { codexOutcome } from "../source";
+import { inspectCampaign, inspectCampaignSnapshot } from "../role-cli";
 import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
+import { run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
 import {
   createWorkflowCampaign,
@@ -19,6 +20,8 @@ afterEach(cleanupCampaigns);
 
 test.each([
   { kind: "workflow", schemaVersion: 0 },
+  { kind: "calls" },
+  { kind: "calls", schemaVersion: 0 },
   { kind: "calls", unknown: true },
   { kind: "unknown" },
 ])(
@@ -34,7 +37,10 @@ test.each([
 
 test("inspection does not interpret a Pi submission as source verification", async () => {
   const path = campaignPath();
-  const campaign = createCampaign(path, applicationId, { kind: "calls" });
+  const campaign = createCampaign(path, applicationId, {
+    kind: "calls",
+    schemaVersion: 1,
+  });
   const drive = dependencies([
     {
       submission: {
@@ -55,8 +61,7 @@ test("inspection does not interpret a Pi submission as source verification", asy
     await drive.run(campaign, {
       models: drive.models,
       model,
-      label: verifierLabels.source,
-      role: "verifier",
+      label: modelCallLabel(verifierLabels.source),
       prompt: "Unsupported Pi source request.",
       transport: "sse",
       tools: [
@@ -71,11 +76,8 @@ test("inspection does not interpret a Pi submission as source verification", asy
       ],
     });
     const report: any = await inspectCampaign(path);
-    expect(report.calls[0]).toMatchObject({
-      verifier: "source",
-      state: "returned",
-    });
-    expect(report.calls[0]).not.toHaveProperty("submission");
+    expect(report.calls).toEqual([]);
+    expect(report.spend.logicalProviderRequests).toBe(1);
   } finally {
     campaign.close();
   }
@@ -98,9 +100,13 @@ test("inspection derives every field from one captured journal prefix", async ()
         },
       },
     ]);
-    await runWorkflow(fixture, createPiRoles(fixture, config.settings, drive), {
-      pauseRequested: () => drive.calls.length === 2,
-    });
+    await runWorkflow(
+      fixture,
+      createRoleHost(fixture, config.settings, drive),
+      {
+        pauseRequested: () => drive.calls.length === 2,
+      },
+    );
   } finally {
     fixture.close();
   }
@@ -139,7 +145,7 @@ test("inspection derives every field from one captured journal prefix", async ()
   });
 });
 
-test("inspection distinguishes a returned Pi failure from success and leaves retries unresolved", async () => {
+test("inspection distinguishes logical role failure from model settlement and leaves retries unresolved", async () => {
   const config = workflowConfiguration({
     task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
     settings: roleSettings(),
@@ -149,7 +155,7 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
   const input = { task: config.task, notes: [] };
   try {
     await expect(
-      createPiRoles(
+      createRoleHost(
         campaign,
         config.settings,
         dependencies([{ state: "failed", error: "incomplete.max_messages" }]),
@@ -170,15 +176,21 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
       calls: [
         {
           role: "coordinator",
-          state: "returned",
+          state: "threw",
           outcome: "failed",
-          error: "incomplete.max_messages",
+          error: "coordinator failed: incomplete.max_messages",
         },
       ],
     });
     expect(failed).not.toHaveProperty("result");
+    expect(
+      inspectCampaignSnapshot(before).coreCalls.find((call) => call.pi)?.pi,
+    ).toMatchObject({
+      outcome: "failed",
+      error: "incomplete.max_messages",
+    });
     expect(campaign.records()).toEqual(before);
-    await createPiRoles(
+    await createRoleHost(
       campaign,
       config.settings,
       dependencies([
@@ -217,45 +229,76 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
 });
 
 test.each(["failed", "cancelled"] as const)(
-  "inspection exposes a returned Codex %s outcome without its raw output",
+  "inspection preserves a Codex %s child under its failed source role without raw output",
   async (state) => {
     const path = campaignPath(),
-      campaign = createCampaign(path, applicationId, { kind: "calls" });
+      campaign = createCampaign(path, applicationId, {
+        kind: "calls",
+        schemaVersion: 1,
+      });
     const error = `Codex ${state}`;
     try {
-      await campaign.call(
-        {
-          label: verifierLabels.source,
-          role: "verifier",
-          request: {
-            protocol: "xean/codex-exec/v1",
-            model: "fixture",
-            reasoning: "low",
-            search: true,
-            developerInstructions: "Check the source.",
-            prompt: "A failed source call.",
-            outputSchema: {},
-          },
-        },
-        async () =>
-          storeCodexResult(campaign, {
-            state,
-            error,
-            stdout: "PRIVATE_CODEX_STDOUT",
-            stderr: "PRIVATE_CODEX_STDERR",
-          }),
-      );
-      const inspection = await inspectCampaign(path);
-      expect(inspection).toMatchObject({
-        calls: [
+      const host = createRoleHost(campaign, roleSettings(), {
+        ...dependencies([
           {
-            role: "verifier",
-            verifier: "source",
-            state: "returned",
-            outcome: state,
-            error,
+            submission: {
+              verdicts: [
+                {
+                  note: "n1",
+                  verdict: "PASS",
+                  report: "Valid conditional on the source.",
+                  externalResults: ["The cited theorem establishes P."],
+                },
+              ],
+            },
           },
-        ],
+        ]),
+        codex: async () => ({
+          state,
+          error,
+          stdout: "PRIVATE_CODEX_STDOUT",
+          stderr: "PRIVATE_CODEX_STDERR",
+        }),
+      });
+      await expect(
+        host.verifier({
+          task: { problem: "P", completionCriteria: "Prove P" },
+          notes: [
+            {
+              id: "n1",
+              text: "P follows from the cited theorem.",
+              support: [],
+              verdicts: [],
+              verified: false,
+              dead: false,
+            },
+          ],
+          support: [],
+          verify: [{ note: "n1", verifiers: ["correctness", "source"] }],
+        }),
+      ).rejects.toThrow(error);
+      const inspection: any = await inspectCampaign(path);
+      const source = inspection.calls.find(
+        (call: any) => call.verifier === "source",
+      );
+      expect(source).toMatchObject({
+        role: "verifier",
+        verifier: "source",
+        state: "threw",
+        outcome: "failed",
+        error: `verifier failed: ${error}`,
+      });
+      expect(source.modelCalls).toHaveLength(1);
+      expect(
+        codexOutcome(campaign.records(), source.modelCalls[0]),
+      ).toMatchObject({ state, error });
+      expect(
+        inspectCampaignSnapshot(campaign.records()).coreCalls.find(
+          (call) => call.call === source.modelCalls[0],
+        ),
+      ).toMatchObject({
+        state: "returned",
+        parent: source.call,
       });
       expect(JSON.stringify(inspection)).not.toContain("PRIVATE_CODEX_");
       expect(inspection).not.toHaveProperty("result");
@@ -265,12 +308,15 @@ test.each(["failed", "cancelled"] as const)(
   },
 );
 
-test("inspection exposes Pi cancellation and a thrown local call without inventing a provider outcome", async () => {
+test("inspection retains cancelled Pi children and separates local failures with no model call", async () => {
   const path = campaignPath(),
-    campaign = createCampaign(path, applicationId, { kind: "calls" });
+    campaign = createCampaign(path, applicationId, {
+      kind: "calls",
+      schemaVersion: 1,
+    });
   try {
     await expect(
-      createPiRoles(
+      createRoleHost(
         campaign,
         roleSettings(),
         dependencies([{ state: "cancelled", error: "Operator interruption" }]),
@@ -282,29 +328,79 @@ test("inspection exposes Pi cancellation and a thrown local call without inventi
       }),
     ).rejects.toThrow("Operator interruption");
     await expect(
-      campaign.call(
-        {
-          label: "xean-solve/coordinator",
-          role: "coordinator",
-          request: null,
-        },
-        async () => {
+      createRoleHost(campaign, roleSettings(), dependencies([]), {
+        coordinator: async () => {
           throw new Error("Local setup failed");
         },
-      ),
+      }).coordinator({
+        task: { problem: "P", completionCriteria: "Prove P" },
+        notes: [],
+      }),
     ).rejects.toThrow("Local setup failed");
     const report: any = await inspectCampaign(path);
     expect(report.calls[0]).toMatchObject({
-      state: "returned",
-      outcome: "cancelled",
-      error: "Operator interruption",
+      state: "threw",
+      outcome: "failed",
+      error: "explorer failed: Operator interruption",
     });
     expect(report.calls[1]).toMatchObject({
       state: "threw",
+      outcome: "failed",
       error: "Local setup failed",
+      modelCalls: [],
     });
-    expect(report.calls[1]).not.toHaveProperty("outcome");
+    expect(
+      inspectCampaignSnapshot(campaign.records()).coreCalls.find(
+        (call) => call.pi,
+      )?.pi,
+    ).toMatchObject({
+      outcome: "cancelled",
+      error: "Operator interruption",
+    });
   } finally {
     campaign.close();
+  }
+});
+
+test("operator cancellation reaches model execution and reports an interrupted resumable run", async () => {
+  const path = campaignPath();
+  const controller = new AbortController();
+  const drive = dependencies([
+    {
+      state: "cancelled",
+      error: "Operator interruption",
+      onStarted: async () => {
+        controller.abort();
+      },
+    },
+  ]);
+  expect(
+    await run(
+      {
+        task: { problem: "P", completionCriteria: "Prove P" },
+        campaignPath: path,
+        settings: roleSettings(),
+      },
+      { ...drive, signal: controller.signal },
+    ),
+  ).toMatchObject({
+    outcome: "interrupted",
+    at: "coordinator",
+    reason: "operator interruption",
+  });
+  expect(drive.calls[0]?.signal?.aborted).toBe(true);
+  const reader = openReader(path);
+  try {
+    const snapshot = inspectCampaignSnapshot(reader.records());
+    expect(snapshot.inspection).toMatchObject({
+      phase: "coordinator",
+      calls: [{ state: "threw", outcome: "failed" }],
+    });
+    expect(snapshot.coreCalls.find((call) => call.pi)?.pi?.outcome).toBe(
+      "cancelled",
+    );
+    expect(snapshot.inspection).not.toHaveProperty("result");
+  } finally {
+    reader.close();
   }
 });

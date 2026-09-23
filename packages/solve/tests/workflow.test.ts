@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { openCampaign, openReader, type Campaign } from "xean";
 
-import { createPiRoles } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import {
   coordinatorInput,
   coordinatorResultFor,
@@ -73,7 +73,7 @@ test.each(["coordinator", "literature"] as const)(
         },
       },
     ]);
-    const roles = createPiRoles(campaign, settings, {
+    const roles = createRoleHost(campaign, settings, {
       ...drive,
       run: (campaign, options) =>
         role === "coordinator"
@@ -224,12 +224,12 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   ]);
   let accepted;
   try {
-    const roles = createPiRoles(campaign, workflow.settings, drive);
+    const roles = createRoleHost(campaign, workflow.settings, drive);
     const phase = await runWorkflow(campaign, roles);
     const transportChanged = campaign.records().map((entry) => {
       if (
         entry.kind !== "call" ||
-        entry.role === undefined ||
+        !entry.label?.startsWith("xean-solve/model/") ||
         typeof entry.request !== "object" ||
         entry.request === null ||
         Array.isArray(entry.request)
@@ -278,11 +278,15 @@ test("the durable workflow accepts a note every verifier passed", async () => {
     expect(drive.calls[1]).toMatchObject({ replayReasoning: false });
     expect(drive.calls[0]).not.toHaveProperty("replayReasoning");
     for (const call of drive.calls.filter(({ role }) => role === "verifier"))
-      expect(call.parent).toBe(phase.verification);
+      expect(campaign.record(call.parent!)).toMatchObject({
+        parent: phase.verification,
+        role: "verifier",
+      });
     const settled = campaign.records();
     expect(
       settled.find(
-        (entry) => entry.kind === "call" && entry.role === "explorer",
+        (entry) =>
+          entry.kind === "call" && entry.label === "xean-solve/model/explorer",
       ),
     ).toMatchObject({ request: { replayReasoning: false } });
     expect(await runWorkflow(campaign, roles)).toEqual(phase);
@@ -317,8 +321,8 @@ test("the durable workflow accepts a note every verifier passed", async () => {
       verdicts: [
         { note: "n1", verdict: "PASS", sources: [{ resultId: "n1#1" }] },
       ],
-      usage: { input: 10 },
     },
+    accounting: { codex: [{ usage: { input: 10 } }] },
   });
   expect(
     calls.findLast(({ verifier }) => verifier === "reconstruction"),
@@ -401,7 +405,7 @@ test("one verification judges several notes, kills the failed one, and accepts o
   ]);
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, drive),
+    createRoleHost(campaign, workflow.settings, drive),
   );
   expect(phase).toMatchObject({ kind: "accepted", turns: 4 });
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -487,7 +491,7 @@ test("a listed note whose support failed in the same verification is skipped, an
   ]);
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, drive),
+    createRoleHost(campaign, workflow.settings, drive),
   );
   expect(phase).toMatchObject({ kind: "turn-limit", turns: 2 });
   if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
@@ -526,7 +530,7 @@ test("resume reconstructs the next role from the journal", async () => {
   ]);
   const paused = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, first),
+    createRoleHost(campaign, workflow.settings, first),
     { pauseRequested: () => first.calls.length >= 2 },
   );
   expect(paused.kind).toBe("coordinator");
@@ -540,7 +544,7 @@ test("resume reconstructs the next role from the journal", async () => {
   ]);
   const completed = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, rest),
+    createRoleHost(campaign, workflow.settings, rest),
   );
   expect(completed.kind).toBe("accepted");
   expect(rest.calls).toHaveLength(6);
@@ -567,19 +571,22 @@ test("a verification that fails mid-way resumes on the same verification", async
     },
   ]);
   await expect(
-    runWorkflow(campaign, createPiRoles(campaign, workflow.settings, first)),
+    runWorkflow(campaign, createRoleHost(campaign, workflow.settings, first)),
   ).rejects.toThrow("provider down");
   const paused = await phaseOf(campaign);
   expect(paused.kind).toBe("verifier");
   if (paused.kind !== "verifier") throw new Error("expected verifier");
-  expect(paused.verification).toBe(first.calls[4]!.parent!);
+  expect(campaign.record(first.calls[4]!.parent!)).toMatchObject({
+    parent: paused.verification,
+    label: verifierLabels.requirements,
+  });
   campaign.close();
 
   campaign = openCampaign(path);
   const rest = dependencies(passes("n1").slice(2));
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, rest),
+    createRoleHost(campaign, workflow.settings, rest),
   );
   expect(phase.kind).toBe("accepted");
   if (phase.kind !== "accepted") throw new Error("expected acceptance");
@@ -606,7 +613,7 @@ test("workflow calls require their recorded owner", async () => {
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([dispatchExplorer()]);
-  const roles = createPiRoles(campaign, workflow.settings, drive);
+  const roles = createRoleHost(campaign, workflow.settings, drive);
   await expect(roles.coordinator({ task, notes: [] })).rejects.toThrow(
     "parent call",
   );
@@ -655,7 +662,7 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
   ]);
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, drive),
+    createRoleHost(campaign, workflow.settings, drive),
   );
   expect(phase).toMatchObject({ kind: "turn-limit", turns: 3 });
   if (phase.kind !== "turn-limit") throw new Error("expected turn limit");
@@ -958,7 +965,7 @@ test("drains requested verification batches at the turn cap and stops at the fir
     sourceOf(["n2"]),
     ...passes("n3"),
   ]);
-  const roles = createPiRoles(campaign, workflow.settings, drive);
+  const roles = createRoleHost(campaign, workflow.settings, drive);
   const phase = await runWorkflow(campaign, roles);
   expect(phase).toMatchObject({
     kind: "accepted",
@@ -1038,7 +1045,7 @@ test.each([
     ]);
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, workflow.settings, drive),
+      createRoleHost(campaign, workflow.settings, drive),
     );
     expect(phase).toMatchObject({
       kind: "accepted",
@@ -1102,7 +1109,7 @@ test("an interrupted later verification batch resumes on its own verification wi
     { state: "failed", error: "provider down in second batch" },
   ]);
   await expect(
-    runWorkflow(campaign, createPiRoles(campaign, workflow.settings, first)),
+    runWorkflow(campaign, createRoleHost(campaign, workflow.settings, first)),
   ).rejects.toThrow("provider down in second batch");
   const paused = await phaseOf(campaign);
   expect(paused).toMatchObject({
@@ -1124,7 +1131,7 @@ test("an interrupted later verification batch resumes on its own verification wi
   const rest = dependencies(passes("n2").slice(2));
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, rest),
+    createRoleHost(campaign, workflow.settings, rest),
   );
   expect(phase).toMatchObject({
     kind: "accepted",
@@ -1183,7 +1190,7 @@ test("later batches can use verified support that failed task completion", async
   ]);
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, drive),
+    createRoleHost(campaign, workflow.settings, drive),
   );
   expect(phase).toMatchObject({
     kind: "accepted",
@@ -1231,7 +1238,7 @@ test("the next coordinator starts only after all requested partial-result batche
   ]);
   const phase = await runWorkflow(
     campaign,
-    createPiRoles(campaign, workflow.settings, drive),
+    createRoleHost(campaign, workflow.settings, drive),
     { pauseRequested: () => drive.calls.length === 5 },
   );
   expect(phase.kind).toBe("coordinator");

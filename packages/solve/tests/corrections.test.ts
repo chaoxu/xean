@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { openCampaign } from "xean";
 
-import { createPiRoles, sourceVerdictsOf } from "../pi-roles";
+import { sourceVerdictsOf } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import { exportSolutionRecords } from "../role-cli";
 import {
   correctnessVerdictsFor,
@@ -74,7 +75,7 @@ test("a correctness correction reaches later checks and export without rewriting
   try {
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
     );
     expect(phase).toMatchObject({
       kind: "accepted",
@@ -123,7 +124,7 @@ test("a correctness correction reaches later checks and export without rewriting
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, noCalls),
+        createRoleHost(campaign, config.settings, noCalls),
       ),
     ).toEqual(phase);
     expect(noCalls.allCalls).toHaveLength(0);
@@ -167,7 +168,7 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, first),
+        createRoleHost(campaign, config.settings, first),
         {
           pauseRequested: () => first.allCalls.length === 4,
         },
@@ -193,7 +194,7 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
     ]);
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, rest),
+      createRoleHost(campaign, config.settings, rest),
     );
     expect(phase).toMatchObject({
       kind: "accepted",
@@ -253,7 +254,7 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, noCalls),
+        createRoleHost(campaign, config.settings, noCalls),
       ),
     ).toEqual(phase);
     expect(noCalls.allCalls).toHaveLength(0);
@@ -298,16 +299,8 @@ test("failed or inconclusive checks cannot replace text, and unusable source evi
   ]) {
     const result = sourceVerdictsOf(
       {
-        settled: 1,
         input: { verdicts: [{ ...replacement, sources }] },
         searches,
-        usage: {
-          input: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          output: 0,
-          reasoning: 0,
-        },
       },
       [],
       assigned,

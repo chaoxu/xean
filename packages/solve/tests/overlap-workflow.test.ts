@@ -2,9 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { openCampaign, type Campaign } from "xean";
 import type { PiRunOptions } from "xean/pi";
 
-import { createPiRoles } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
-import { roleLabels, verifierLabels, verifierNames } from "../roles";
+import {
+  roleFromLabel,
+  roleLabels,
+  verifierLabels,
+  verifierNames,
+} from "../roles";
 import {
   deriveWorkflow,
   runWorkflow,
@@ -63,12 +68,18 @@ function script(replies: Record<string, readonly Reply[]>) {
     completed,
     codex: base.codex,
     async run(campaign: Campaign, options: PiRunOptions) {
-      calls.push(options);
-      const route = routes.get(options.label);
+      const label = options.label.replace("xean-solve/model/", "xean-solve/");
+      const role = roleFromLabel(label);
+      calls.push({
+        ...options,
+        label,
+        ...(role === undefined ? {} : { role }),
+      });
+      const route = routes.get(label);
       if (route === undefined)
         throw new Error(`unexpected call ${options.label}`);
       const result = await route.run(campaign, options);
-      completed.get(options.label)!.resolve();
+      completed.get(label)!.resolve();
       return result;
     },
   };
@@ -147,7 +158,7 @@ test.each(["explorer", "verifier"] as const)(
     });
     const running = runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
     );
     try {
       await within(
@@ -252,7 +263,7 @@ test("overlap retains a failed Explorer's partial notes, propagates support fail
   });
   const running = runWorkflow(
     campaign,
-    createPiRoles(campaign, config.settings, first),
+    createRoleHost(campaign, config.settings, first),
   );
   try {
     await within(
@@ -276,7 +287,7 @@ test("overlap retains a failed Explorer's partial notes, propagates support fail
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, resumed),
+        createRoleHost(campaign, config.settings, resumed),
       ),
     ).toMatchObject({
       kind: "turn-limit",
@@ -328,7 +339,7 @@ test("a completed overlapping Explorer is not repeated when verification fails a
   });
   const running = runWorkflow(
     campaign,
-    createPiRoles(campaign, config.settings, first),
+    createRoleHost(campaign, config.settings, first),
   );
   try {
     await within(
@@ -346,7 +357,7 @@ test("a completed overlapping Explorer is not repeated when verification fails a
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, resumed),
+        createRoleHost(campaign, config.settings, resumed),
       ),
     ).toMatchObject({
       kind: "turn-limit",
@@ -417,7 +428,7 @@ test("acceptance cancels and drains the overlapping Explorer while preserving it
   });
   const running = runWorkflow(
     campaign,
-    createPiRoles(campaign, config.settings, drive),
+    createRoleHost(campaign, config.settings, drive),
   );
   let returned = false;
   void running.then(
@@ -447,7 +458,7 @@ test("acceptance cancels and drains the overlapping Explorer while preserving it
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, noCalls),
+        createRoleHost(campaign, config.settings, noCalls),
       ),
     ).toEqual(result);
     expect(noCalls.calls).toHaveLength(0);
@@ -512,7 +523,7 @@ test("an overlap retry restores unselected original support in full with frozen 
       },
     ],
   });
-  const roles = createPiRoles(campaign, config.settings, drive);
+  const roles = createRoleHost(campaign, config.settings, drive);
   try {
     await expect(
       within(
@@ -548,7 +559,7 @@ test("an overlap retry restores unselected original support in full with frozen 
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, resumed),
+        createRoleHost(campaign, config.settings, resumed),
       ),
     ).toMatchObject({ kind: "turn-limit", turns: 1 });
   } finally {
@@ -589,7 +600,7 @@ test("parent interruption reaches both overlapping roles, drains them, and leave
   });
   const running = runWorkflow(
     campaign,
-    createPiRoles(campaign, config.settings, first),
+    createRoleHost(campaign, config.settings, first),
     { signal: controller.signal },
   );
   let returned = false;
@@ -635,7 +646,7 @@ test("parent interruption reaches both overlapping roles, drains them, and leave
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, resumed),
+        createRoleHost(campaign, config.settings, resumed),
       ),
     ).toMatchObject({
       kind: "turn-limit",
@@ -730,7 +741,7 @@ test("two overlap dispatches rejoin the coordinator and drain multiple verificat
   try {
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, config.settings, drive),
+      createRoleHost(campaign, config.settings, drive),
     );
     expect(phase).toMatchObject({
       kind: "turn-limit",
@@ -760,12 +771,18 @@ test("two overlap dispatches rejoin the coordinator and drain multiple verificat
       ({ label }) => label === verifierLabels.correctness,
     );
     expect(checks).toHaveLength(4);
-    expect(new Set(checks.map(({ parent }) => parent)).size).toBe(4);
+    const verifications = checks.map(({ parent }) => {
+      const logical = campaign.record(parent!);
+      if (logical?.kind !== "call" || logical.parent === undefined)
+        throw new Error("missing check ownership");
+      return logical.parent;
+    });
+    expect(new Set(verifications).size).toBe(4);
     const noCalls = script({});
     expect(
       await runWorkflow(
         campaign,
-        createPiRoles(campaign, config.settings, noCalls),
+        createRoleHost(campaign, config.settings, noCalls),
       ),
     ).toEqual(phase);
     expect(noCalls.calls).toHaveLength(0);

@@ -13,6 +13,15 @@ const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 export const applicationId = "xean-solve";
 export const workflowProtocol = "workflow";
 
+export const roleRequest = z.strictObject({
+  protocol: z.literal("xean-solve/role/v1"),
+  input: z.json(),
+});
+export const roleOutput = z.strictObject({
+  state: z.literal("succeeded"),
+  value: z.json(),
+});
+
 /** Rejects a journal that is not a current solver campaign before its declaration is read. */
 export function assertApplication(
   declaration: Entry | undefined,
@@ -912,6 +921,34 @@ export const sourcePrompt = z.strictObject({
   passages: z.array(sourcePassage),
 });
 
+/** Source reads assigned premises and matching passages, never support proofs. */
+export function sourceInputFor(
+  input: VerifierInput,
+  assigned: AssignedExternalResults,
+  passages: readonly Omit<z.output<typeof sourcePassage>, "id">[] = [],
+): z.output<typeof sourcePrompt> {
+  const premises = assignedPremises(assigned);
+  return sourcePrompt.parse({
+    task: input.task,
+    notes: assigned.map(({ note: id }) => {
+      const note = pick(input.notes, id);
+      return {
+        id,
+        text: note.text,
+        support: note.support,
+        externalResults: premises
+          .filter((premise) => premise.note === id)
+          .map(({ resultId, result }) => ({ id: resultId, text: result })),
+      };
+    }),
+    passages: passages
+      .filter((passage) =>
+        premises.some(({ result }) => passage.result === result),
+      )
+      .map((passage, index) => ({ ...passage, id: `p${index + 1}` })),
+  });
+}
+
 /** The external premises a completed correctness check assigned to each judged note. */
 export type AssignedExternalResults = readonly {
   readonly note: string;
@@ -1155,11 +1192,18 @@ export function journalVerdicts(
       throw new Error(`malformed verdict ${entry.seq}`);
     }
     const parsed = schema.safeParse(entry.evidence);
-    const result = succeededOutput(records, call.seq);
+    const result = returnedOutput(records, call.seq);
+    const output = roleOutput.safeParse(result?.output);
     if (
       !parsed.success ||
       parsed.data.verdicts.length === 0 ||
+      !roleRequest.safeParse(call.request).success ||
       result === undefined ||
+      !output.success ||
+      output.data.value === null ||
+      typeof output.data.value !== "object" ||
+      Array.isArray(output.data.value) ||
+      !isDeepStrictEqual(output.data.value.verdicts, parsed.data.verdicts) ||
       result.settled >= entry.seq ||
       call.role !== "verifier" ||
       call.parent === undefined ||
@@ -1255,7 +1299,7 @@ export function savedExplorerSubmission(
       };
 }
 
-export interface Roles {
+export interface RoleHost {
   readonly explorer: (
     input: ExplorerInput,
     signal?: AbortSignal,

@@ -1,15 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, openCampaign, openReader } from "xean";
 
-import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
+import { coordinatorCall, literatureCall } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
-import { codexRequest, storeCodexResult } from "../source";
-import { codexStdout } from "./fixtures/codex-stdout";
+import { codexRequest } from "../source";
 import {
   defaultCoordinatorBehavior,
-  jsonSnapshot,
   literatureReport,
   pendingVerifiers,
   roleLabels,
@@ -51,6 +50,7 @@ test("coordinator reads frozen older texts on demand and journals the read", asy
   };
   const campaign = createCampaign(campaignPath(), "xean-solve", {
     kind: "calls",
+    schemaVersion: 1,
   });
   const drive = dependencies([
     {
@@ -74,7 +74,7 @@ test("coordinator reads frozen older texts on demand and journals the read", asy
     },
   ]);
   try {
-    await createPiRoles(campaign, roleSettings(), drive).coordinator(input);
+    await createRoleHost(campaign, roleSettings(), drive).coordinator(input);
     expect(drive.calls[0]!.prompt).not.toContain("Exact old proof.");
     expect(drive.calls[0]!.prompt).toContain("New proof to file.");
     expect(drive.calls[0]!.prompt).toContain("Old result.");
@@ -203,7 +203,7 @@ test("the workflow starts with the coordinator and returns to it after literatur
   try {
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, workflow.settings, drive),
+      createRoleHost(campaign, workflow.settings, drive),
     );
     expect(phase.kind).toBe("accepted");
     accepted = phase.kind === "accepted";
@@ -286,7 +286,7 @@ test("a failed search allows a fresh call, and a successful empty search complet
   try {
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, workflow.settings, drive),
+      createRoleHost(campaign, workflow.settings, drive),
     );
     expect(phase.kind).toBe("turn-limit");
     expect(drive.allCalls.map(({ label }) => label)).toEqual([
@@ -331,12 +331,21 @@ test("a note submitted while an explorer phase waits returns to the coordinator"
   const request = { task, settings, campaignPath: path, turns: 2 };
   await init(request);
   // The coordinator settles, then the process stops before any explorer call.
+  let paused = false;
+  const first = dependencies([
+    { submission: coordination({ role: "explorer" }) },
+  ]);
   await expect(
-    run(
-      request,
-      dependencies([{ submission: coordination({ role: "explorer" }) }]),
-    ),
-  ).rejects.toThrow("no reply for xean-solve/explorer");
+    run(request, {
+      ...first,
+      pauseRequested: () => paused,
+      run: async (campaign, options) => {
+        const result = await first.run(campaign, options);
+        paused = true;
+        return result;
+      },
+    }),
+  ).resolves.toMatchObject({ outcome: "paused", at: "explorer" });
   const supplied = "A separately supplied lemma with its full proof.";
   await submitNotes(path, { notes: [{ text: supplied, support: [] }] }, "idle");
   const drive = dependencies([
@@ -656,7 +665,7 @@ test("settled literature survives a crash and enters before caller notes pending
     notes: [],
     submissions: [{ id: "during-search", pending: true }],
   });
-  // The process died immediately after the Codex result was journaled.
+  // The process died immediately after the logical role result was journaled.
   const campaign = openCampaign(path);
   try {
     await campaign.call(
@@ -668,20 +677,17 @@ test("settled literature survives a crash and enters before caller notes pending
           .findLast(
             (entry) => entry.kind === "call" && entry.role === "coordinator",
           )!.seq,
-        request: jsonSnapshot(literatureCall(input, settings.source).request),
+        request: { protocol: "xean-solve/role/v1", input },
       },
-      async () =>
-        storeCodexResult(campaign, {
-          state: "succeeded",
-          codexVersion: "fake",
-          stdout: codexStdout({
-            notes: [
-              { text: "A cited result.", support: [] },
-              { text: "Its corollary.", support: [1] },
-            ],
-          }),
-          stderr: "",
-        }),
+      async () => ({
+        state: "succeeded",
+        value: {
+          notes: [
+            { text: "A cited result.", support: [] },
+            { text: "Its corollary.", support: [1] },
+          ],
+        },
+      }),
     );
   } finally {
     campaign.close();

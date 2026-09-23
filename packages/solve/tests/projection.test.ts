@@ -209,7 +209,7 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
     label: verifierLabels.correctness,
     role: "verifier",
     parent: 2,
-    request: null,
+    request: { protocol: "xean-solve/role/v1", input: opening.request },
     tools: [],
   };
   const entry: Entry = {
@@ -234,7 +234,7 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
     atMs: 0,
     parent: call.seq,
     state: "returned",
-    output: { state: "succeeded" },
+    output: { state: "succeeded", value: entry.evidence },
   };
   expect(journalVerdicts([opening, call, result, entry])).toEqual([
     {
@@ -250,6 +250,30 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
       },
     },
   ]);
+  // A valid-looking receipt cannot replace the role's canonical returned verdict.
+  expect(() =>
+    journalVerdicts([
+      opening,
+      call,
+      {
+        ...result,
+        output: {
+          state: "succeeded",
+          value: {
+            verdicts: [
+              {
+                note: "n1",
+                verdict: "FAIL",
+                report: "The returned check found a defect.",
+                externalResults: [],
+              },
+            ],
+          },
+        },
+      },
+      entry,
+    ]),
+  ).toThrow("malformed verdict");
   expect(() =>
     journalVerdicts([
       opening,
@@ -308,25 +332,28 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
     verifier: VerifierName,
     seq: number,
     receipt: number,
-  ): Entry[] => [
-    { ...call, seq, label: verifierLabels[verifier] },
-    { ...result, seq: receipt - 1, parent: seq },
-    {
-      ...entry,
-      seq: receipt,
-      call: seq,
-      evidence: {
-        verdicts: [
-          {
-            note: "n1",
-            verdict: "PASS",
-            report: "Checked.",
-            ...(verifier === "correctness" ? { externalResults: [] } : {}),
-          },
-        ],
+  ): Entry[] => {
+    const evidence = {
+      verdicts: [
+        {
+          note: "n1",
+          verdict: "PASS",
+          report: "Checked.",
+          ...(verifier === "correctness" ? { externalResults: [] } : {}),
+        },
+      ],
+    };
+    return [
+      { ...call, seq, label: verifierLabels[verifier] },
+      {
+        ...result,
+        seq: receipt - 1,
+        parent: seq,
+        output: { state: "succeeded", value: evidence },
       },
-    },
-  ];
+      { ...entry, seq: receipt, call: seq, evidence },
+    ];
+  };
   const records = (entries: Entry[]) =>
     [
       {

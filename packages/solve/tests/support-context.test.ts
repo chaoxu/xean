@@ -1,13 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 
 import {
-  createPiRoles,
   proofCall,
   sourceCall,
   statementCall,
   verifierCall,
 } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import {
+  sourceInputFor,
   verifierInput,
   verifierNames,
   type Note,
@@ -97,11 +98,18 @@ test("correctness and reconstruction retain support while source reads only assi
     verifierCall("correctness", input, ["n3"]),
     verifierCall("requirements", input, ["n3"]),
     statementCall(input, target),
-    proofCall(input, target, { statement: "Coverage holds." }),
+    proofCall({
+      task,
+      support: input.support,
+      statement: { statement: "Coverage holds." },
+    }),
   ]);
-  const native = await sourceCall({ model: "test", reasoning: "low" }, input, [
-    { note: "n3", externalResults: ["An exact external theorem."] },
-  ]);
+  const native = await sourceCall(
+    { model: "test", reasoning: "low" },
+    sourceInputFor(input, [
+      { note: "n3", externalResults: ["An exact external theorem."] },
+    ]),
+  );
   for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt).toContain(first.text);
     expect(prompt).toContain(inherited.text);
@@ -199,7 +207,7 @@ test("workflow construction and per-call selection both retain ancestors across 
   try {
     const phase = await runWorkflow(
       campaign,
-      createPiRoles(campaign, settings, drive),
+      createRoleHost(campaign, settings, drive),
     );
     expect(phase.kind).toBe("turn-limit");
     if (phase.kind !== "turn-limit") throw new Error("expected turn limit");

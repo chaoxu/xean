@@ -5,17 +5,13 @@ import { builtinPi, derivePiAccounting, derivePiSpend } from "xean/pi";
 import { z } from "zod";
 import { inspectCoreCallSummaries, type CoreCallSummaryV2 } from "xean/observe";
 
-import { campaignAccounting } from "./accounting";
+import { campaignAccounting, roleAccounting } from "./accounting";
 import { appendGuidance, inspectGuidance } from "./guidance";
 import { appendSubmittedNotes, inspectSubmittedNotes } from "./notes";
 import { executionReport } from "./execution-contract";
-import {
-  createPiRoles,
-  roleSubmission,
-  piProviders,
-  solveSettings,
-  type SolveSettings,
-} from "./pi-roles";
+import { piProviders, solveSettings, type SolveSettings } from "./pi-roles";
+import { createRoleHost } from "./role-host";
+import { callsConfig, roleSubmission } from "./role-records";
 import {
   applicationId,
   assertApplication,
@@ -42,7 +38,7 @@ import {
   withSignals,
 } from "./runtime";
 import { withSerialToolCalls } from "./serial-tools";
-import { codexRequest, codexOutcome, prepareCodex } from "./source";
+import { prepareCodex } from "./source";
 import {
   deriveWorkflow,
   workflowConfig,
@@ -50,7 +46,6 @@ import {
   type WorkflowPhase,
 } from "./workflow";
 
-const callsConfig = z.strictObject({ kind: z.literal("calls") });
 const inspectionConfig = z.discriminatedUnion("kind", [
   workflowConfig,
   callsConfig,
@@ -132,15 +127,18 @@ export function inspectCampaignSnapshot(
     config.kind === "workflow" ? deriveWorkflow(records) : undefined;
   const accounting = derivePiAccounting(records);
   const coreCalls = inspectCoreCallSummaries(records, accounting);
+  const spend = derivePiSpend(records, accounting);
+  const cost = campaignAccounting(records, spend);
   const calls = coreCalls
     .filter(({ label }) => roleFromLabel(label) !== undefined)
-    .map(({ pi, tools: _tools, ...facts }) => {
+    .map(({ pi: _pi, tools: _tools, ...facts }) => {
       const entry = entries.get(facts.call)!;
       if (entry.kind !== "call") throw new Error(`missing call ${facts.call}`);
       const verifier = verifierFromLabel(entry.label);
-      const provider = codexRequest.safeParse(entry.request).success
-        ? codexOutcome(records, facts.call)
-        : undefined;
+      const models = coreCalls.filter(
+        ({ parent, label }) =>
+          parent === facts.call && label.startsWith("xean-solve/model/"),
+      );
       let submission: Json | undefined;
       let submissionError: string | undefined;
       try {
@@ -149,7 +147,6 @@ export function inspectCampaignSnapshot(
         submissionError =
           error instanceof Error ? error.message : String(error);
       }
-      const outcome = pi?.outcome ?? provider?.state;
       return {
         ...facts,
         ...snapshot?.noteSubmissions.find((value) => value.call === entry.seq),
@@ -158,15 +155,26 @@ export function inspectCampaignSnapshot(
             ? undefined
             : facts.settledAtMs - facts.startedAtMs,
         verifier,
-        outcome,
-        error:
-          provider && provider.state !== "succeeded"
-            ? provider.error
-            : (pi?.error ?? facts.error),
+        outcome:
+          facts.state === "returned"
+            ? "succeeded"
+            : facts.state === "threw"
+              ? "failed"
+              : undefined,
+        modelCalls: models.map(({ call }) => call),
+        accounting: roleAccounting(records, facts, models, cost),
         submission,
         submissionError,
         evidence: evidence.get(facts.call),
         request: options.includeRequests ? entry.request : undefined,
+        modelRequests: options.includeRequests
+          ? models.map(({ call }) => {
+              const model = entries.get(call)!;
+              if (model.kind !== "call")
+                throw new Error(`missing call ${call}`);
+              return { call, request: model.request };
+            })
+          : undefined,
       };
     });
   const phase = snapshot?.phase;
@@ -174,7 +182,6 @@ export function inspectCampaignSnapshot(
     phase?.kind === "accepted" || phase?.kind === "turn-limit"
       ? workflowResult(phase)
       : undefined;
-  const spend = derivePiSpend(records, accounting);
   const inspection = jsonSnapshot({
     ...(snapshot === undefined
       ? {}
@@ -198,7 +205,7 @@ export function inspectCampaignSnapshot(
         }),
     calls,
     spend: spend.summary,
-    accounting: campaignAccounting(records, spend),
+    accounting: cost,
     guidance: options.includeGuidance ? inspectGuidance(records) : undefined,
     submissions: options.includeSubmissions
       ? inspectSubmittedNotes(records, snapshot?.noteSubmissions)
@@ -317,21 +324,6 @@ export async function runRoleCommand(
   else if (command === "coordinator") coordinatorInput.parse(input);
   else if (command === "literature") literatureInput.parse(input);
   else verifierInput.parse(input);
-  const runtime =
-    command === "literature"
-      ? undefined
-      : await createModelRuntime({
-          modelsPath: modelRegistryPath(process.env),
-        });
-  if (runtime !== undefined) {
-    await requireCredentials(runtime!, piProviders(settings, command));
-  }
-  const codex =
-    command === "literature" || command === "verifier"
-      ? await prepareCodex({ command: codexCommand(process.env) })
-      : undefined;
-  const models =
-    runtime === undefined ? builtinPi() : withSerialToolCalls(runtime);
   const controller = new AbortController();
   return withSignals(
     () => controller.abort(),
@@ -339,9 +331,25 @@ export async function runRoleCommand(
       withCampaignLock(campaignPath, async () => {
         const campaign = openConfiguredCampaign(campaignPath, applicationId, {
           kind: "calls",
+          schemaVersion: 1,
         });
         try {
-          const roles = createPiRoles(campaign, settings, {
+          const runtime =
+            command === "literature"
+              ? undefined
+              : await createModelRuntime({
+                  modelsPath: modelRegistryPath(process.env),
+                });
+          if (runtime !== undefined) {
+            await requireCredentials(runtime, piProviders(settings, command));
+          }
+          const codex =
+            command === "literature" || command === "verifier"
+              ? await prepareCodex({ command: codexCommand(process.env) })
+              : undefined;
+          const models =
+            runtime === undefined ? builtinPi() : withSerialToolCalls(runtime);
+          const roles = createRoleHost(campaign, settings, {
             models,
             ...(codex === undefined ? {} : { codex }),
             signal: controller.signal,

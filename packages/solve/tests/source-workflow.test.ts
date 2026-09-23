@@ -2,11 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { createCampaign, type Campaign, type Json } from "xean";
 import { z } from "zod";
 
-import { createPiRoles, sourceCall, sourceVerdictsOf } from "../pi-roles";
+import { sourceCall, sourceVerdictsOf } from "../pi-roles";
+import { createRoleHost } from "../role-host";
 import {
   applicationId,
   correctnessVerdictsFor,
   journalVerdicts,
+  sourceInputFor,
+  roleRequest,
   type Note,
   type VerifierInput,
 } from "../roles";
@@ -84,11 +87,15 @@ const checked = (
 const calls = (campaign: Campaign) =>
   campaign
     .records({ kinds: ["call"] })
-    .filter((entry) => entry.kind === "call");
+    .filter((entry) => entry.kind === "call")
+    .filter((entry) => entry.role !== undefined);
 
 test("source grouping preserves origin and judged order while empty checks derive from frozen correctness", async () => {
   const path = campaignPath();
-  const campaign = createCampaign(path, applicationId, { kind: "calls" });
+  const campaign = createCampaign(path, applicationId, {
+    kind: "calls",
+    schemaVersion: 1,
+  });
   const drive = dependencies([
     correctness([
       { note: "n1", externalResults: [result] },
@@ -100,7 +107,7 @@ test("source grouping preserves origin and judged order while empty checks deriv
     checked(["n3", "n1"]),
   ]);
   try {
-    const roles = createPiRoles(campaign, roleSettings(), drive);
+    const roles = createRoleHost(campaign, roleSettings(), drive);
     const established: Note["verdicts"] = [];
     for (const ids of [["n1", "n2", "n3"], ["n4"]]) {
       const packet = input(ids.map((id) => makeNote(id)));
@@ -128,7 +135,9 @@ test("source grouping preserves origin and judged order while empty checks deriv
       calls(campaign)
         .filter(({ label }) => label.endsWith("/source"))
         .map(({ request }) => {
-          const remote = JSON.parse((request as { prompt: string }).prompt);
+          const remote = roleRequest.parse(request).input as {
+            notes: { id: string }[];
+          };
           return {
             notes: remote.notes.map(({ id }: { id: string }) => id),
           };
@@ -166,14 +175,6 @@ test("source grouping preserves origin and judged order while empty checks deriv
   }
 });
 
-const usage = {
-  input: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  output: 0,
-  reasoning: 0,
-};
-
 test("unusable source evidence is inconclusive for that note alone", () => {
   const assigned = [
     { note: "n1", externalResults: [result] },
@@ -191,11 +192,8 @@ test("unusable source evidence is inconclusive for that note alone", () => {
     searches = 1,
     supplied: Parameters<typeof sourceVerdictsOf>[1] = [],
   ) =>
-    sourceVerdictsOf(
-      { settled: 1, input: { verdicts }, searches, usage },
-      supplied,
-      assigned,
-    )?.verdicts;
+    sourceVerdictsOf({ input: { verdicts }, searches }, supplied, assigned)
+      ?.verdicts;
   const states = (value: ReturnType<typeof outcome>) =>
     value?.map(({ note, verdict }) => [note, verdict]);
   // A PASS missing a passage for an assigned ID.
@@ -284,8 +282,7 @@ test("source wire schemas require assigned premises and explicit nullable correc
   const assigned = [{ note: "n1", externalResults: [result] }];
   const call = sourceCall(
     roleSettings().source,
-    input([makeNote("n1")]),
-    assigned,
+    sourceInputFor(input([makeNote("n1")]), assigned),
   );
   const strictObjects = (value: unknown): void => {
     if (value === null || typeof value !== "object") return;
@@ -304,7 +301,7 @@ test("source wire schemas require assigned premises and explicit nullable correc
   );
   const assess = (value: Json) =>
     sourceVerdictsOf(
-      { settled: 1, input: { verdicts: [value] }, searches: 1, usage },
+      { input: { verdicts: [value] }, searches: 1 },
       [],
       assigned,
     )?.verdicts[0];
@@ -356,12 +353,12 @@ test("one supplied passage serves identical assignments without copying its text
     note,
     externalResults: [result],
   }));
-  const { request, passages } = sourceCall(
-    roleSettings().source,
+  const packet = sourceInputFor(
     input(assigned.map(({ note }) => makeNote(note))),
     assigned,
     [{ call: 1, note: "n1", ...source }],
   );
+  const { request } = sourceCall(roleSettings().source, packet);
   expect(JSON.parse(request.prompt).passages).toEqual([supplied]);
   const verdicts = assigned.map(({ note }) => ({
     note,
@@ -386,8 +383,8 @@ test("one supplied passage serves identical assignments without copying its text
   ).toBe(false);
   expect(
     sourceVerdictsOf(
-      { settled: 3, input: { verdicts }, searches: 0, usage },
-      passages,
+      { input: { verdicts }, searches: 0 },
+      packet.passages,
       assigned,
     )?.verdicts,
   ).toMatchObject(
@@ -402,6 +399,7 @@ test("one supplied passage serves identical assignments without copying its text
 test("an earlier PASS passage is supplied under the new call's premise ID and reused without a search", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
+    schemaVersion: 1,
   });
   const drive = dependencies([
     correctness([{ note: "n1", externalResults: [result] }]),
@@ -410,7 +408,7 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
     checked("n2", false, [{ passageId: "p1" }]),
   ]);
   try {
-    const roles = createPiRoles(campaign, roleSettings(), drive);
+    const roles = createRoleHost(campaign, roleSettings(), drive);
     await roles.verifier(input([makeNote("n1")]));
     const old = calls(campaign).find((call) => call.label.endsWith("/source"))!;
     const receipts = campaign.records({ kinds: ["evidence"] });
@@ -423,12 +421,13 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
       },
     ]);
     // Reuse consumes admitted evidence without interpreting the raw response again.
+    const raw = campaign.records({ kinds: ["call"], parent: old.seq })[0]!;
     const records = campaign.records.bind(campaign);
     campaign.records = (query) =>
       records(query).map((entry) =>
         entry.kind === "call-result" &&
         entry.state === "returned" &&
-        entry.parent === old.seq
+        entry.parent === raw.seq
           ? {
               ...entry,
               output: {
@@ -458,6 +457,7 @@ test.each(["wrong-id", "changed-result"])(
   async (corruption) => {
     const campaign = createCampaign(campaignPath(), applicationId, {
       kind: "calls",
+      schemaVersion: 1,
     });
     const drive = dependencies([
       correctness([{ note: "n1", externalResults: [result] }]),
@@ -466,7 +466,7 @@ test.each(["wrong-id", "changed-result"])(
       checked("n2", false),
     ]);
     try {
-      const roles = createPiRoles(campaign, roleSettings(), drive);
+      const roles = createRoleHost(campaign, roleSettings(), drive);
       await roles.verifier(input([makeNote("n1")]));
       const old = calls(campaign).find((call) =>
         call.label.endsWith("/source"),
@@ -503,6 +503,7 @@ test.each(["wrong-id", "changed-result"])(
 test("a malformed matching source transcript becomes inconclusive", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
+    schemaVersion: 1,
   });
   const packet = input([makeNote("n1")]);
   const first = {
@@ -532,7 +533,7 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
       return originalRecordEvidence(...args);
     };
     await expect(
-      createPiRoles(campaign, roleSettings(), first).verifier(packet),
+      createRoleHost(campaign, roleSettings(), first).verifier(packet),
     ).rejects.toThrow("simulated interruption");
     (campaign as any).recordEvidence = originalRecordEvidence;
     const verification = calls(campaign).find((call) =>
@@ -548,7 +549,7 @@ test("a malformed matching source transcript becomes inconclusive", async () => 
         throw new Error("replacement paid call");
       },
     };
-    const verdicts = await createPiRoles(
+    const verdicts = await createRoleHost(
       campaign,
       roleSettings(),
       second,
@@ -570,6 +571,7 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
   for (const changed of [false, true]) {
     const campaign = createCampaign(campaignPath(), applicationId, {
       kind: "calls",
+      schemaVersion: 1,
     });
     const replies = [
       correctness([{ note: "n1", externalResults: [result] }]),
@@ -588,7 +590,7 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
       );
     const drive = dependencies(replies);
     try {
-      const roles = createPiRoles(campaign, roleSettings(), drive);
+      const roles = createRoleHost(campaign, roleSettings(), drive);
       if (changed) await roles.verifier(input([makeNote("n1")]));
       const verdicts = await roles.verifier(
         input([makeNote(changed ? "n2" : "n1")]),
@@ -606,7 +608,7 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
       const sourceCall = inspection.calls.findLast(
         (call: any) => call.verifier === "source",
       );
-      expect(sourceCall.submission.verdicts[0].verdict).toBe("PASS");
+      expect(sourceCall.submission.verdicts[0].verdict).toBe("INCONCLUSIVE");
       expect(sourceCall.evidence.verdicts[0].verdict).toBe("INCONCLUSIVE");
     } finally {
       campaign.close();
@@ -617,6 +619,7 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
 test("a failed source assessment never supplies reusable evidence", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
+    schemaVersion: 1,
   });
   const drive = dependencies([
     correctness([{ note: "n1", externalResults: [result] }]),
@@ -637,7 +640,7 @@ test("a failed source assessment never supplies reusable evidence", async () => 
     checked("n2", false),
   ]);
   try {
-    const roles = createPiRoles(campaign, roleSettings(), drive);
+    const roles = createRoleHost(campaign, roleSettings(), drive);
     await roles.verifier(input([makeNote("n1")]));
     const verdicts = await roles.verifier(input([makeNote("n2")]));
     expect(verdicts).toContainEqual(

@@ -5,13 +5,14 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { z } from "zod";
 
 import {
-  createPiRoles,
   piProfileNames,
   piProviders,
   RoleCallError,
   solveSettings,
   type PiRoleDependencies,
 } from "./pi-roles";
+import { createRoleHost } from "./role-host";
+import type { RoleImplementations } from "./role-functions";
 import { applicationId, nonblank, task, workflowRecords } from "./roles";
 import { appendAllowance, positiveTurns, turnAllowances } from "./allowance";
 import {
@@ -45,10 +46,8 @@ const runRequest = z
     message: "an allowance id requires turns",
   });
 
-export interface RunDependencies extends Omit<PiRoleDependencies, "models"> {
-  readonly models?:
-    | PiRoleDependencies["models"]
-    | (() => Promise<PiRoleDependencies["models"]>);
+export interface RunDependencies extends PiRoleDependencies {
+  readonly roles?: Partial<RoleImplementations>;
   readonly pauseRequested?: () => boolean;
   readonly status?: (message: string) => void;
 }
@@ -124,13 +123,14 @@ async function drive(
   campaign: Campaign,
   config: WorkflowConfig,
   dependencies: RunDependencies,
-  models: PiRoleDependencies["models"],
   initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
 ): Promise<RunResult> {
-  const roles = createPiRoles(campaign, config.settings, {
-    ...dependencies,
-    models,
-  });
+  const roles = createRoleHost(
+    campaign,
+    config.settings,
+    dependencies,
+    dependencies.roles,
+  );
   try {
     const pending = runWorkflow(campaign, roles, dependencies, initial);
     initial = undefined;
@@ -184,45 +184,61 @@ export async function run(
         if (phase.kind === "accepted" || phase.kind === "turn-limit")
           return workflowResult(phase);
       }
-      const models = withSerialToolCalls(
-        typeof dependencies.models === "function"
-          ? await dependencies.models()
-          : (dependencies.models ?? builtinPi()),
-      );
-      // Resolve every configured Pi role before creating a fresh journal or
-      // dispatching any work, including roles reached only after exploration.
-      for (const name of piProfileNames) {
-        const profile = config.settings[name];
-        try {
-          const model = selectModel(models, {
-            provider: profile.provider,
-            modelId: profile.model,
-          });
-          if (!getSupportedThinkingLevels(model).includes(profile.reasoning)) {
+      const prepareModels = async () => {
+        const models = withSerialToolCalls(
+          typeof dependencies.models === "function"
+            ? await dependencies.models()
+            : (dependencies.models ?? builtinPi()),
+        );
+        // Validate the configured Pi runtime once before its first model call.
+        for (const name of piProfileNames) {
+          const profile = config.settings[name];
+          try {
+            const model = selectModel(models, {
+              provider: profile.provider,
+              modelId: profile.model,
+            });
+            if (
+              !getSupportedThinkingLevels(model).includes(profile.reasoning)
+            ) {
+              throw new Error(
+                `unsupported reasoning level ${profile.reasoning} for ${profile.provider}/${profile.model}`,
+              );
+            }
+          } catch (error) {
             throw new Error(
-              `unsupported reasoning level ${profile.reasoning} for ${profile.provider}/${profile.model}`,
+              `${name}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-        } catch (error) {
-          throw new Error(
-            `${name}: ${error instanceof Error ? error.message : String(error)}`,
+        }
+        if (models.checkAuth !== undefined) {
+          await requireCredentials(
+            { checkAuth: (provider) => models.checkAuth!(provider) },
+            piProviders(config.settings),
           );
         }
+        return models;
+      };
+      let execution: RunDependencies = {
+        ...dependencies,
+        models: prepareModels,
+      };
+      // Default roles keep fail-fast preflight. Replacements acquire only the
+      // backends they actually invoke through the host capabilities.
+      if (Object.keys(dependencies.roles ?? {}).length === 0) {
+        execution = {
+          ...execution,
+          models: await prepareModels(),
+          codex:
+            dependencies.codex ??
+            (await prepareCodex({
+              command: codexCommand(process.env),
+              ...(dependencies.signal === undefined
+                ? {}
+                : { signal: dependencies.signal }),
+            })),
+        };
       }
-      if (models.checkAuth !== undefined) {
-        await requireCredentials(
-          { checkAuth: (provider) => models.checkAuth!(provider) },
-          piProviders(config.settings),
-        );
-      }
-      const codex =
-        dependencies.codex ??
-        (await prepareCodex({
-          command: codexCommand(process.env),
-          ...(dependencies.signal === undefined
-            ? {}
-            : { signal: dependencies.signal }),
-        }));
       if (campaign === undefined) {
         campaign = openConfiguredCampaign(
           request.campaignPath,
@@ -231,13 +247,7 @@ export async function run(
         );
         await prepareAllowance(campaign, request.turns, request.id);
       }
-      const pending = drive(
-        campaign,
-        config,
-        { ...dependencies, codex },
-        models,
-        initial,
-      );
+      const pending = drive(campaign, config, execution, initial);
       initial = undefined;
       return await pending;
     } finally {
