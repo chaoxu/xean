@@ -5,7 +5,7 @@ import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
 import { inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import { runWorkflow, workflowConfiguration } from "../workflow";
-import { codexRequest } from "../source";
+import { codexRequest, storeCodexResult } from "../source";
 import { codexStdout } from "./fixtures/codex-stdout";
 import {
   defaultCoordinatorBehavior,
@@ -25,6 +25,75 @@ import {
 } from "./harness";
 
 afterEach(cleanupCampaigns);
+
+test("coordinator reads frozen older texts on demand and journals the read", async () => {
+  const input = {
+    task: { problem: "Prove P.", completionCriteria: "Prove P fully." },
+    notes: [
+      {
+        id: "n1",
+        summary: "Old result.",
+        text: "Exact old proof.",
+        support: [],
+        verdicts: [],
+        verified: false,
+        dead: false,
+      },
+      {
+        id: "n2",
+        text: "New proof to file.",
+        support: [],
+        verdicts: [],
+        verified: false,
+        dead: false,
+      },
+    ],
+  };
+  const campaign = await createWorkflowCampaign(
+    campaignPath(),
+    workflowConfiguration({ task: input.task, settings: roleSettings() }),
+  );
+  const drive = dependencies([
+    {
+      onStarted: async (tools) => {
+        input.notes[0]!.text = "Later caller mutation.";
+        const read = tools.find((tool) => tool.name === "read_notes")!;
+        await expect(read.execute({ noteIds: ["n9"] })).rejects.toThrow();
+        await expect(read.execute({ noteIds: ["n1", "n1"] })).rejects.toThrow();
+        expect(await read.execute({ noteIds: ["n1"] })).toEqual([
+          { id: "n1", text: "Exact old proof." },
+        ]);
+      },
+      submission: {
+        filings: [{ note: "n2", summary: "New result." }],
+        action: {
+          role: "explorer",
+          explorerGuidance: "Extend the old result.",
+          support: ["n1"],
+        },
+      },
+    },
+  ]);
+  try {
+    await createPiRoles(campaign, roleSettings(), drive).coordinator(input);
+    expect(drive.calls[0]!.prompt).not.toContain("Exact old proof.");
+    expect(drive.calls[0]!.prompt).toContain("New proof to file.");
+    expect(drive.calls[0]!.prompt).toContain("Old result.");
+    expect(drive.calls[0]!.terminalTool).toBe("submit_coordination");
+    expect(
+      campaign
+        .records()
+        .some(
+          (entry) =>
+            entry.kind === "tool-result" &&
+            entry.state === "returned" &&
+            JSON.stringify(entry.output).includes("Exact old proof."),
+        ),
+    ).toBe(true);
+  } finally {
+    campaign.close();
+  }
+});
 
 const task = {
   problem: "Prove P.",
@@ -598,14 +667,15 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
           role: "literature",
           request: jsonSnapshot(literatureCall(input, settings.source).request),
         },
-        async () => ({
-          state: "succeeded",
-          codexVersion: "fake",
-          stdout: codexStdout({
-            notes: [{ text: "A cited result.", support: [] }],
+        async () =>
+          storeCodexResult(campaign, {
+            state: "succeeded",
+            codexVersion: "fake",
+            stdout: codexStdout({
+              notes: [{ text: "A cited result.", support: [] }],
+            }),
+            stderr: "",
           }),
-          stderr: "",
-        }),
       )
     ).call;
   } finally {

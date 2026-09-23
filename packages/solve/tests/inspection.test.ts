@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createCampaign, defineTool, openReader } from "xean";
 
 import { createPiRoles } from "../pi-roles";
+import { storeCodexResult } from "../source";
 import { inspectCampaign } from "../role-cli";
 import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
 import { runWorkflow, workflowConfiguration } from "../workflow";
@@ -220,12 +221,13 @@ test.each(["failed", "cancelled"] as const)(
             outputSchema: {},
           },
         },
-        async () => ({
-          state,
-          error,
-          stdout: "PRIVATE_CODEX_STDOUT",
-          stderr: "PRIVATE_CODEX_STDERR",
-        }),
+        async () =>
+          storeCodexResult(campaign, {
+            state,
+            error,
+            stdout: "PRIVATE_CODEX_STDOUT",
+            stderr: "PRIVATE_CODEX_STDERR",
+          }),
       );
       const inspection = await inspectCampaign(path);
       expect(inspection).toMatchObject({

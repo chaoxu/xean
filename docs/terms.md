@@ -17,7 +17,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | label | The string naming a call. |
 | role | The category of a call: explorer, coordinator, literature, or verifier. |
 | request | The exact JSON input of a call. For a Pi call it holds the model, the system prompt, and the prompt. For a Codex call it holds the model, reasoning, search, developer instructions, prompt, and output schema. |
-| payload | A JSON value stored immutably by content digest for a provider request or Pi result attachment. Identical payloads share one row. Versioned call records explicitly reference payloads. Ordinary entry JSON never expands a reference implicitly. |
+| payload | A JSON value stored immutably by content digest for a provider request, Pi result attachment, or Codex log. Identical payloads share one row. Versioned call records explicitly reference payloads. Ordinary entry JSON never expands a reference implicitly. |
 | tool, submission | A model-callable tool, and the structured value the model passed to it. The solver's Pi submit tools are `submit_notes`, `submit_coordination`, `submit_verdict`, `submit_statement`, and `submit_proof`. A Codex literature, source, or independent-review call submits its final JSON message. A caller's submission through `submit` is a local journaled request containing text notes, with no model call. |
 | evidence | One application-owned JSON receipt bound to a successfully returned call. The kernel enforces call binding and uniqueness; the application validates its meaning. A solver receipt lists admitted note verdicts. |
 | transcript | The provider messages of a settled call. A Pi call-result references its saved transcript through `transcriptRef`. A Codex call's transcript is its JSONL output. |
@@ -25,6 +25,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | first request | The first provider operation within one logical Pi call. |
 | continuation | Any subsequent provider operation within that same logical Pi call, including recovery and length continuation. |
 | submission gate | The optional frozen Pi policy `{completeArgument, emptyArgument?, contextBudgetTokens?, maxResponses?, continuationPrompt}` for one submission tool, callable once per assistant response, which decides when a gated call ends. |
+| terminal tool | The optional frozen Pi `terminalTool` name. Successful calls to other tools continue the conversation. It is separate from a submission gate. The coordinator uses `submit_coordination` as its terminal tool and `read_notes` for exact frozen note texts. |
 | response budget | The gate's `maxResponses`: the maximum non-error model responses in one gated Pi call, including the first. The solver sets it from `maxExplorerResponses`. It is separate from `maxTurns`. |
 | context budget | The gate's `contextBudgetTokens`: the preferred total-context allocation for a gated call, bounded by the model's context window. The solver sets it from `explorerContextBudgetTokens`. It is separate from model capacity, input-based pricing thresholds, and cumulative billed usage. |
 | recovered request error | A provider error inside a Pi call that ultimately succeeds. It remains an error in the journal and does not imply complete usage accounting. |

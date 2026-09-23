@@ -108,7 +108,7 @@ function modelProfile(model: Model<Api>): Json {
 }
 
 export const piRequest = z.strictObject({
-  protocol: z.literal("xean/pi-run/v4"),
+  protocol: z.literal("xean/pi-run/v5"),
   model: piModel,
   modelProfile: json,
   system: z.string().optional(),
@@ -117,6 +117,7 @@ export const piRequest = z.strictObject({
   maxRecoveries: z.number().int().min(1).max(31).optional(),
   maxLengthContinuations: z.number().int().min(1).max(31).optional(),
   submissionGate: piSubmissionGate.optional(),
+  terminalTool: z.string().regex(/\S/u).optional(),
   cacheKey: z.string().min(1).max(64).optional(),
   replayReasoning: z.literal(false).optional(),
 });
@@ -304,6 +305,14 @@ export function readPiResult(
       transcript: reader.payload(transcriptRef),
     }),
   };
+}
+
+/** Resolve only the response text; transcript integrity belongs to readPiResult. */
+export function readPiResponseText(
+  output: unknown,
+  reader: Pick<Reader, "payload">,
+): string {
+  return z.string().parse(reader.payload(piResultRecord.parse(output).textRef));
 }
 
 const stopReason = z.enum([
@@ -514,8 +523,10 @@ export function derivePiAccounting(entries: readonly Entry[]) {
   };
 }
 
-export function derivePiSpend(entries: readonly Entry[]) {
-  const accounting = derivePiAccounting(entries);
+export function derivePiSpend(
+  entries: readonly Entry[],
+  accounting = derivePiAccounting(entries),
+) {
   const calls = accounting.calls.flatMap((value) => {
     if (value.state === "unsupported") throw value.error;
     return value.state === "available"
@@ -635,6 +646,7 @@ function result(
   signal: AbortSignal | undefined,
   contextWindow: number,
   requireSubmission: boolean,
+  terminalTool?: string,
 ): PiOutcome {
   const stored = jsonSnapshot(messages) as readonly Json[];
   let final: AssistantMessage | undefined;
@@ -672,7 +684,10 @@ function result(
     (final?.stopReason === "toolUse" || final?.stopReason === "stop") &&
     afterFinal.length > 0 &&
     afterFinal.every(
-      (message) => message.role === "toolResult" && !message.isError,
+      (message) =>
+        message.role === "toolResult" &&
+        !message.isError &&
+        (terminalTool === undefined || message.toolName === terminalTool),
     );
   const overflow =
     final !== undefined && isContextOverflow(final, contextWindow);
@@ -862,7 +877,16 @@ async function runPiBody(
       messages: [...messages],
       ...(tools.length === 0
         ? {}
-        : { tools: tools.map((tool) => piTool(tool, gate === undefined)) }),
+        : {
+            tools: tools.map((tool) =>
+              piTool(
+                tool,
+                gate === undefined &&
+                  (exact.terminalTool === undefined ||
+                    tool.name === exact.terminalTool),
+              ),
+            ),
+          }),
     });
     const loop = (
       content: string | undefined,
@@ -1059,7 +1083,8 @@ async function runPiBody(
       messages,
       signal,
       options.model.contextWindow,
-      gate !== undefined,
+      gate !== undefined || exact.terminalTool !== undefined,
+      exact.terminalTool,
     );
   } finally {
     cleanupSessionResources(sessionId);
@@ -1072,7 +1097,7 @@ export function piRequestFor(options: PiRunOptions) {
   // are not JSON data and must never enter the request snapshot.
   const request = piRequest.strip().parse({
     ...options,
-    protocol: "xean/pi-run/v4",
+    protocol: "xean/pi-run/v5",
     model: modelRecord.parse(options.model),
     modelProfile: modelProfile(options.model),
     replayReasoning: options.replayReasoning === false ? false : undefined,
@@ -1088,6 +1113,14 @@ export async function runPi(
     throw new TypeError("Pi models must provide streamSimple");
   }
   const request = piRequestFor(options);
+  if (request.terminalTool !== undefined) {
+    if (request.submissionGate !== undefined)
+      throw new TypeError(
+        "Pi terminalTool cannot be combined with submissionGate",
+      );
+    if (!options.tools?.some((tool) => tool.name === request.terminalTool))
+      throw new TypeError("Pi terminalTool must name a selected tool");
+  }
   if (request.submissionGate !== undefined) {
     if (options.tools?.length !== 1)
       throw new TypeError("Pi submission gate requires one terminal tool");

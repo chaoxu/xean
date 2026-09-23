@@ -57,7 +57,6 @@ const sourceVerdict = (note = "n1", value = "PASS") => ({
       ? [
           {
             resultId: `${note}#1`,
-            result: externalResults(note)[0]!,
             source: "Example Theorem 1",
             url: "https://example.org/theorem",
             quote: "Exact inspected theorem.",

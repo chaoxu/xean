@@ -137,7 +137,6 @@ test("a correctness correction reaches later checks and export without rewriting
 const premise = "For every x > 0, the primary theorem establishes T(x).";
 const passage = {
   resultId: "n1#1",
-  result: premise,
   source: "Primary paper, Theorem 7",
   url: "https://example.test/paper#theorem7",
   quote: "For every x > 0, T(x) holds.",

@@ -1,7 +1,7 @@
 import { openReader } from "./campaign";
 import {
   derivePiAccounting,
-  readPiResult,
+  readPiResponseText,
   summarizePiSpend,
   type PiRequestAttempt,
   type PiSpendOperation,
@@ -231,10 +231,10 @@ export function inspectCoreCampaignRecords(
       const accounting = index.accounting.byCall.get(call.seq);
       const stored =
         accounting?.state === "available" ? accounting.stored : undefined;
-      const full =
-        stored === undefined ? undefined : readPiResult(stored, reader);
-      return full?.text && value.pi
-        ? { ...value, pi: { ...value.pi, responseText: full.text } }
+      const responseText =
+        stored === undefined ? undefined : readPiResponseText(stored, reader);
+      return responseText && value.pi
+        ? { ...value, pi: { ...value.pi, responseText } }
         : value;
     }),
     spend: {
@@ -248,8 +248,9 @@ export function inspectCoreCampaignRecords(
 /** Project call metadata and accounting without reading result payloads. */
 export function inspectCoreCallSummaries(
   records: readonly Entry[],
+  accounting?: ReturnType<typeof derivePiAccounting>,
 ): readonly CoreCallSummaryV2[] {
-  const index = indexRecords(records);
+  const index = indexRecords(records, accounting);
   return index.calls.map((call) => projectCall(index, call));
 }
 
@@ -284,7 +285,10 @@ export function inspectCoreCampaignSummaryRecords(
   };
 }
 
-function indexRecords(records: readonly Entry[]) {
+function indexRecords(
+  records: readonly Entry[],
+  capturedAccounting?: ReturnType<typeof derivePiAccounting>,
+) {
   const declaration = records[0];
   if (declaration?.kind !== "campaign") {
     throw new Error("campaign declaration is unavailable");
@@ -299,7 +303,7 @@ function indexRecords(records: readonly Entry[]) {
       tools.set(entry.call, values);
     }
   }
-  const accounting = derivePiAccounting(records);
+  const accounting = capturedAccounting ?? derivePiAccounting(records);
   const attemptIds = new Set(accounting.attempts.map(({ call }) => call));
   return {
     declaration,

@@ -879,25 +879,33 @@ export const sourceVerdict = verdict
 
 // Structured output requires every field. Normalize its explicit null at the
 // provider boundary so local conclusions and journal verdicts stay canonical.
-function sourceWireVerdict(resultId: z.ZodType<string>) {
+function sourceWireVerdict(
+  resultId: z.ZodType<string>,
+  passageId?: z.ZodType<string>,
+) {
+  const inspected = z.strictObject({ resultId, ...sourceLocation });
   return sourceVerdict
     .extend({
       correctedText: nonblank.nullable(),
-      sources: z.array(passage(resultId)),
+      sources: z.array(
+        passageId === undefined
+          ? inspected
+          : z.union([inspected, z.strictObject({ resultId, passageId })]),
+      ),
     })
-    .transform(({ correctedText, ...value }): z.output<typeof sourceVerdict> =>
+    .transform(({ correctedText, ...value }) =>
       correctedText === null ? value : { ...value, correctedText },
     );
 }
 
 /** Decode a remote source submission before judging its evidence. */
 export const sourceSubmission = z.strictObject({
-  verdicts: z.array(sourceWireVerdict(nonblank)),
+  verdicts: z.array(sourceWireVerdict(nonblank, nonblank)),
 });
 
-// A packet supplies an earlier passage under this call's premise ID, with
-// the call and note that inspected it.
-const sourcePassage = sources.element.extend({
+// One earlier passage is supplied once, with its origin and a packet-local ID.
+const sourcePassage = sources.element.omit({ resultId: true }).extend({
+  id: nonblank,
   call: z.number().int().positive(),
   note: nonblank,
 });
@@ -957,7 +965,11 @@ export function sourceVerdictsOver(judged: readonly string[]) {
  * IDs to this call's; a PASS missing a passage remains possible.
  */
 export function sourceVerdictBinds(
-  verdict: z.output<typeof sourceSubmission>["verdicts"][number],
+  verdict: {
+    readonly note: string;
+    readonly verdict: string;
+    readonly sources: readonly { readonly resultId: string }[];
+  },
   assigned: AssignedExternalResults,
 ): boolean {
   const expected = assigned.find(({ note }) => note === verdict.note);
@@ -974,9 +986,16 @@ export function sourceVerdictBinds(
 export function sourceVerdictsFor(
   judged: readonly string[],
   assigned: AssignedExternalResults,
+  passageIds: readonly string[] = [],
 ) {
   const ids = assignedPremises(assigned).map(({ resultId }) => resultId);
-  return verdictsOver(sourceWireVerdict(z.enum(ids)), judged).refine(
+  return verdictsOver(
+    sourceWireVerdict(
+      z.enum(ids),
+      passageIds.length === 0 ? undefined : z.enum(passageIds),
+    ),
+    judged,
+  ).refine(
     (value) =>
       value.verdicts.every((verdict) => sourceVerdictBinds(verdict, assigned)),
     "source evidence must reference the assigned external premise IDs",

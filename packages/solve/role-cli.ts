@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 
 import { openCampaign, openReader, type Entry, type Json } from "xean";
-import { builtinPi, derivePiSpend } from "xean/pi";
+import { builtinPi, derivePiAccounting, derivePiSpend } from "xean/pi";
 import { z } from "zod";
-import { inspectCoreCallSummaries } from "xean/observe";
+import { inspectCoreCallSummaries, type CoreCallSummaryV2 } from "xean/observe";
 
 import { campaignAccounting } from "./accounting";
 import { appendGuidance, inspectGuidance } from "./guidance";
@@ -93,7 +93,7 @@ export function inspectCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions = {},
 ): Json {
-  return projectCampaignRecords(records, options, false).inspection;
+  return inspectCampaignSnapshot(records, options).inspection;
 }
 
 /** Share one workflow derivation between inspection and accepted-proof export. */
@@ -101,14 +101,22 @@ export function inspectAndExportCampaignRecords(
   records: readonly Entry[],
   options: InspectionOptions = {},
 ): { inspection: Json; solution?: Uint8Array } {
-  return projectCampaignRecords(records, options, true);
+  const { coreCalls: _, ...result } = inspectCampaignSnapshot(records, {
+    ...options,
+    includeSolution: true,
+  });
+  return result;
 }
 
-function projectCampaignRecords(
+/** Derive accounting once for all projections of one captured journal boundary. */
+export function inspectCampaignSnapshot(
   records: readonly Entry[],
-  options: InspectionOptions,
-  includeSolution: boolean,
-): { inspection: Json; solution?: Uint8Array } {
+  options: InspectionOptions & { readonly includeSolution?: boolean } = {},
+): {
+  inspection: Json;
+  coreCalls: readonly CoreCallSummaryV2[];
+  solution?: Uint8Array;
+} {
   assertApplication(records[0]);
   const declaration = records[0];
   const config = inspectionConfig.parse(
@@ -121,7 +129,9 @@ function projectCampaignRecords(
       entry.kind === "evidence" ? [[entry.call, entry.evidence] as const] : [],
     ),
   );
-  const calls = inspectCoreCallSummaries(records)
+  const accounting = derivePiAccounting(records);
+  const coreCalls = inspectCoreCallSummaries(records, accounting);
+  const calls = coreCalls
     .filter(({ label }) => roleFromLabel(label) !== undefined)
     .map(({ pi, tools: _tools, ...facts }) => {
       const entry = entries.get(facts.call)!;
@@ -170,7 +180,7 @@ function projectCampaignRecords(
     phase?.kind === "accepted" || phase?.kind === "turn-limit"
       ? workflowResult(phase)
       : undefined;
-  const spend = derivePiSpend(records);
+  const spend = derivePiSpend(records, accounting);
   const inspection = jsonSnapshot({
     ...(snapshot === undefined
       ? {}
@@ -202,7 +212,8 @@ function projectCampaignRecords(
   });
   return {
     inspection,
-    ...(includeSolution && phase?.kind === "accepted"
+    coreCalls,
+    ...(options.includeSolution && phase?.kind === "accepted"
       ? { solution: solutionBytes(phase) }
       : {}),
   };

@@ -34,7 +34,7 @@ function campaignPath(): string {
 
 function piRequest() {
   return {
-    protocol: "xean/pi-run/v4" as const,
+    protocol: "xean/pi-run/v5" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",
@@ -607,7 +607,7 @@ test.each([
   ["transcriptRef", "damaged"],
   ["transcriptRef", "missing"],
 ] as const)(
-  "summary and accounting avoid %s %s attachments; full inspection checks integrity",
+  "observation resolves only text while full Pi reads reject %s %s attachments",
   async (attachment, corruption) => {
     const { Database } = await import("bun:sqlite");
     const { derivePiSpend, piResultRecord, readPiResult } =
@@ -655,7 +655,9 @@ test.each([
         logicalProviderRequests: 1,
       });
       expect(() => readPiResult(receipt.output, campaign)).toThrow();
-      expect(() => inspectCoreCampaignRecords(campaign, records)).toThrow();
+      if (attachment === "textRef")
+        expect(() => inspectCoreCampaignRecords(campaign, records)).toThrow();
+      else expect(inspectCoreCampaignRecords(campaign, records)).toEqual(full);
     } finally {
       campaign.close();
     }

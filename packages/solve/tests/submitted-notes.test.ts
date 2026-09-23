@@ -103,7 +103,6 @@ function verdict(note: string, name: string, result = "PASS"): Reply {
             sources: [
               {
                 resultId: `${note}#1`,
-                result: `External theorem for ${note}.`,
                 source: "Primary theorem.",
                 url: "https://example.test/theorem",
                 quote: "Exact theorem statement.",

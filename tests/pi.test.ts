@@ -350,7 +350,7 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "xean/pi-run/v4",
+        protocol: "xean/pi-run/v5",
         model,
         modelProfile: null,
         prompt: "test",
@@ -1289,6 +1289,133 @@ test("the submission gate preserves the consecutive transient-error recovery bud
   expect(records.filter((entry) => entry.kind === "tool-call")).toHaveLength(0);
 });
 
+test("a named terminal tool allows observations and rejected submissions before ending", async () => {
+  const c = campaign();
+  const read = defineTool({
+    name: "read_note",
+    description: "Read a note",
+    input: z.strictObject({}),
+    async run() {
+      return { text: "The frozen note" };
+    },
+  });
+  const contexts: Context[] = [];
+  try {
+    const result = await runPi(c, {
+      models: models(
+        [
+          assistant(
+            [{ type: "toolCall", id: "read", name: read.name, arguments: {} }],
+            "toolUse",
+          ),
+          ...["INVALID", "PASS"].map((verdict) =>
+            assistant(
+              [
+                {
+                  type: "toolCall",
+                  id: verdict,
+                  name: submitVerdict.name,
+                  arguments: { verdict, evidence: null },
+                },
+              ],
+              "toolUse",
+            ),
+          ),
+        ],
+        (context) => contexts.push(structuredClone(context)),
+      ),
+      model,
+      label: "read-then-submit",
+      prompt: "Read and submit",
+      tools: [read, submitVerdict],
+      terminalTool: submitVerdict.name,
+    });
+    expect(result.state).toBe("succeeded");
+    expect(contexts).toHaveLength(3);
+    expect(JSON.stringify(contexts[1])).toContain("The frozen note");
+    expect(contexts[2]?.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      isError: true,
+    });
+    expect(c.record(result.call)).toMatchObject({
+      request: { terminalTool: submitVerdict.name },
+    });
+    expect(
+      c
+        .records({ kinds: ["tool-call"] })
+        .map((entry) => (entry.kind === "tool-call" ? entry.tool : undefined)),
+    ).toEqual([read.name, submitVerdict.name]);
+  } finally {
+    c.close();
+  }
+});
+
+test.each(["plain stop", "turn cap"])(
+  "a named terminal tool cannot succeed at %s without its submission",
+  async (ending) => {
+    const c = campaign();
+    try {
+      let requests = 0;
+      const result = await runPi(c, {
+        models: models(
+          ending === "plain stop"
+            ? [assistant([{ type: "text", text: "done" }], "stop")]
+            : Array.from({ length: 33 }, (_, index) =>
+                assistant(
+                  [
+                    {
+                      type: "toolCall",
+                      id: String(index),
+                      name: gatedTool.name,
+                      arguments: { solution: false, text: "observation" },
+                    },
+                  ],
+                  "toolUse",
+                ),
+              ),
+          () => {
+            requests += 1;
+          },
+        ),
+        model,
+        label: "missing-terminal-tool",
+        prompt: "Read and submit",
+        tools: [gatedTool, submitVerdict],
+        terminalTool: submitVerdict.name,
+      });
+      expect(result.state).toBe("failed");
+      expect(requests).toBe(ending === "plain stop" ? 1 : 32);
+    } finally {
+      c.close();
+    }
+  },
+);
+
+test("invalid terminal-tool selection writes no call", async () => {
+  const c = campaign();
+  try {
+    for (const options of [
+      { terminalTool: "missing" },
+      { terminalTool: " " },
+      { terminalTool: submitVerdict.name, submissionGate },
+    ]) {
+      await expect(
+        runPi(c, {
+          models: models([]),
+          model,
+          label: "bad-terminal-tool",
+          prompt: "Test",
+          tools: [submitVerdict],
+          ...options,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(c.records()).toHaveLength(1);
+  } finally {
+    c.close();
+  }
+});
+
 test("a submission gate requires one tool before creating a call", async () => {
   const c = campaign();
   try {
@@ -1898,7 +2025,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "xean/pi-run/v4",
+          protocol: "xean/pi-run/v5",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",

@@ -65,9 +65,8 @@ if (args[0] === "--version") {
           verdict: "PASS",
           report: "The primary source establishes each assigned result.",
           correctedText: null,
-          sources: externalResults.map(({ id, text }) => ({
+          sources: externalResults.map(({ id }) => ({
             resultId: id,
-            result: text,
             source: "Primary theorem.",
             url: "https://example.test/theorem",
             quote: "The exact statement.",

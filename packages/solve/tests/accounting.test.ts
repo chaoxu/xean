@@ -3,7 +3,7 @@ import { createCampaign, type Campaign } from "xean";
 import { derivePiSpend, storePiResult, type PiRunOptions } from "xean/pi";
 
 import { campaignAccounting } from "../accounting";
-import { inspectCampaign } from "../role-cli";
+import { inspectCampaign, inspectCampaignSnapshot } from "../role-cli";
 import { fakePiRequest, fakePiRequestCheckpoint } from "./fake-pi";
 import {
   campaignPath,
@@ -91,10 +91,21 @@ test("inspection exposes completeness without modifying the journal", async () =
   const path = campaignPath();
   const campaign = createCampaign(path, "xean-solve", { kind: "calls" });
   await measuredCall(campaign, false);
-  const spend = derivePiSpend(campaign.records()).summary;
+  const captured = campaign.records();
+  const spend = derivePiSpend(captured).summary;
+  const snapshot = inspectCampaignSnapshot(captured);
+  expect(snapshot.coreCalls).toHaveLength(1);
+  expect(snapshot.coreCalls[0]?.pi?.accounting).toMatchObject({
+    state: "available",
+    spend,
+  });
+  expect(snapshot.coreCalls[0]?.pi).not.toHaveProperty("responseText");
+  expect(snapshot).not.toHaveProperty("solution");
   campaign.close();
   const before = await Bun.file(path).arrayBuffer();
-  expect(await inspectCampaign(path)).toMatchObject({
+  const inspection = await inspectCampaign(path);
+  expect(snapshot.inspection).toEqual(inspection);
+  expect(inspection).toMatchObject({
     spend,
     accounting: {
       complete: false,

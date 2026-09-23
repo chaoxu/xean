@@ -24,12 +24,13 @@ afterEach(cleanupCampaigns);
 
 const result =
   "For x > 0, the primary theorem establishes T(x). This theorem note states T(x) with that hypothesis.";
-const source = {
-  result,
+const opened = {
   source: "Primary paper, Theorem 2",
   url: "https://example.test/paper#theorem2",
   quote: "For every x > 0, T(x) holds.",
 };
+const source = { result, ...opened };
+const supplied = { id: "p1", call: 1, note: "n1", ...source };
 const makeNote = (
   id: string,
   text = "Theorem T(x) for x > 0, citing the primary paper.",
@@ -67,7 +68,7 @@ const correctness = (
 const checked = (
   notes: string | string[],
   searched = true,
-  sources = [source],
+  sources: Record<string, Json>[] = [opened],
 ): Reply => ({
   searched,
   codex: {
@@ -194,7 +195,7 @@ test("unusable source evidence is inconclusive for that note alone", () => {
   // A PASS missing a passage for an assigned ID.
   expect(
     outcome([
-      verdict("n1", [{ ...source, result: "Restated.", resultId: "n1#1" }]),
+      verdict("n1", [{ ...opened, resultId: "n1#1" }]),
       verdict("n2", []),
     ]),
   ).toMatchObject([
@@ -209,8 +210,8 @@ test("unusable source evidence is inconclusive for that note alone", () => {
   // Another note's valid ID does not bind.
   expect(
     outcome([
-      verdict("n1", [{ ...source, resultId: "n1#1" }]),
-      verdict("n2", [{ ...source, resultId: "n1#1" }]),
+      verdict("n1", [{ ...opened, resultId: "n1#1" }]),
+      verdict("n2", [{ ...opened, resultId: "n1#1" }]),
     ]),
   ).toMatchObject([
     { note: "n1", verdict: "PASS" },
@@ -221,17 +222,49 @@ test("unusable source evidence is inconclusive for that note alone", () => {
     states(
       outcome(
         [
-          verdict("n1", [{ ...source, resultId: "n1#1" }]),
-          verdict("n2", [{ ...source, resultId: "n2#1" }]),
+          verdict("n1", [{ resultId: "n1#1", passageId: "p1" }]),
+          verdict("n2", [{ ...opened, resultId: "n2#1" }]),
         ],
         0,
-        [source],
+        [supplied],
       ),
     ),
   ).toEqual([
     ["n1", "PASS"],
     ["n2", "INCONCLUSIVE"],
   ]);
+  // A known passage cannot establish a different assigned premise, even
+  // when the same response also searched; an unknown reference is unusable.
+  for (const searches of [0, 1]) {
+    expect(
+      states(
+        outcome(
+          [
+            verdict("n1", [{ resultId: "n1#1", passageId: "p1" }]),
+            verdict("n2", [{ resultId: "n2#1", passageId: "p1" }]),
+          ],
+          searches,
+          [supplied],
+        ),
+      ),
+    ).toEqual([
+      ["n1", "PASS"],
+      ["n2", "INCONCLUSIVE"],
+    ]);
+    expect(
+      outcome(
+        [
+          verdict("n1", [{ resultId: "n1#1", passageId: "missing" }]),
+          verdict("n2", []),
+        ],
+        searches,
+        [supplied],
+      )?.[0],
+    ).toMatchObject({
+      verdict: "INCONCLUSIVE",
+      sources: [],
+    });
+  }
   // Not one verdict per judged note: nothing is usable.
   expect(outcome([verdict("n1", [])])).toBeUndefined();
 });
@@ -277,7 +310,7 @@ test("source wire schemas require assigned premises and explicit nullable correc
     note: "n1",
     verdict: "PASS",
     report: "Checked.",
-    sources: [{ ...source, resultId: "n1#1" }],
+    sources: [{ ...opened, resultId: "n1#1" }],
   };
   expect(
     wire.safeParse({
@@ -285,7 +318,7 @@ test("source wire schemas require assigned premises and explicit nullable correc
         {
           ...base,
           correctedText: null,
-          sources: [{ ...source, resultId: "n1#2" }],
+          sources: [{ ...opened, resultId: "n1#2" }],
         },
       ],
     }).success,
@@ -296,6 +329,16 @@ test("source wire schemas require assigned premises and explicit nullable correc
   const corrected = { ...base, correctedText };
   expect(wire.safeParse({ verdicts: [corrected] }).success).toBe(true);
   expect(assess(corrected)?.correctedText).toBe(correctedText);
+  expect(
+    wire.safeParse({
+      verdicts: [
+        {
+          ...corrected,
+          sources: [{ ...base.sources[0], result }],
+        },
+      ],
+    }).success,
+  ).toBe(false);
   for (const verdict of ["PASS", "FAIL", "INCONCLUSIVE"]) {
     const value = { ...base, verdict, correctedText: null };
     expect(wire.safeParse({ verdicts: [value] }).success).toBe(true);
@@ -306,6 +349,62 @@ test("source wire schemas require assigned premises and explicit nullable correc
   }
 });
 
+test("one supplied passage serves identical assignments without copying its text or trusting an unknown reference", () => {
+  const assigned = ["n1", "n2"].map((note) => ({
+    note,
+    externalResults: [result],
+  }));
+  const { request, passages } = sourceCall(
+    roleSettings().source,
+    input(assigned.map(({ note }) => makeNote(note))),
+    assigned.map(({ note }) => note),
+    {
+      call: 2,
+      verdicts: assigned.map((entry) => ({
+        ...entry,
+        verdict: "PASS",
+        report: "Correct.",
+      })),
+    },
+    [{ call: 1, note: "n1", ...source }],
+  );
+  expect(JSON.parse(request.prompt).passages).toEqual([supplied]);
+  const verdicts = assigned.map(({ note }) => ({
+    note,
+    verdict: "PASS",
+    report: "The supplied passage establishes the exact application.",
+    correctedText: null,
+    sources: [{ resultId: `${note}#1`, passageId: "p1" }],
+  }));
+  const wire = z.fromJSONSchema(
+    request.outputSchema as Parameters<typeof z.fromJSONSchema>[0],
+  );
+  expect(wire.safeParse({ verdicts }).success).toBe(true);
+  expect(
+    wire.safeParse({
+      verdicts: [
+        {
+          ...verdicts[0],
+          sources: [{ resultId: "n1#1", passageId: "missing" }],
+        },
+      ],
+    }).success,
+  ).toBe(false);
+  expect(
+    sourceVerdictsOf(
+      { settled: 3, input: { verdicts }, searches: 0, usage },
+      passages,
+      assigned,
+    )?.verdicts,
+  ).toMatchObject(
+    assigned.map(({ note }) => ({
+      note,
+      verdict: "PASS",
+      sources: [{ resultId: `${note}#1`, ...source }],
+    })),
+  );
+});
+
 test("an earlier PASS passage is supplied under the new call's premise ID and reused without a search", async () => {
   const campaign = createCampaign(campaignPath(), applicationId, {
     kind: "calls",
@@ -314,7 +413,7 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
     correctness([{ note: "n1", externalResults: [result] }]),
     checked("n1"),
     correctness([{ note: "n2", externalResults: [result] }]),
-    checked("n2", false),
+    checked("n2", false, [{ passageId: "p1" }]),
   ]);
   try {
     const roles = createPiRoles(campaign, roleSettings(), drive);
@@ -352,7 +451,7 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
     const verdicts = await roles.verifier(input([makeNote("n2")]));
     expect(verdicts.at(-1)?.verdict).toBe("PASS");
     expect(JSON.parse(drive.codexCalls[1]!.prompt).passages).toEqual([
-      { call: old.seq, note: "n1", resultId: "n2#1", ...source },
+      { id: "p1", call: old.seq, note: "n1", ...source },
     ]);
     expect(JSON.parse(drive.codexCalls[0]!.prompt).passages).toEqual([]);
   } finally {
@@ -490,7 +589,7 @@ test("new evidence without retrieval or a changed reused quotation cannot pass",
         checked("n1"),
         correctness([{ note: "n2", externalResults: [result] }]),
         checked("n2", false, [
-          { ...source, quote: "An uninspected stronger claim." },
+          { ...opened, quote: "An uninspected stronger claim." },
         ]),
       );
     const drive = dependencies(replies);
@@ -535,7 +634,7 @@ test("a failed source assessment never supplies reusable evidence", async () => 
             verdict: "FAIL",
             report: "The theorem's hypotheses do not match.",
             correctedText: null,
-            sources: [{ ...source, resultId: "n1#1" }],
+            sources: [{ ...opened, resultId: "n1#1" }],
           },
         ],
       },

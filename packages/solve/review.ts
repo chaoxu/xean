@@ -85,7 +85,7 @@ export async function review(
     ),
     outputSchema: z.toJSONSchema(reviewVerdict),
   });
-  const config = { schemaVersion: 2, request: jsonSnapshot(request) };
+  const config = { schemaVersion: 3, request: jsonSnapshot(request) };
   return withCampaignLock(value.campaignPath, async () => {
     const campaign = openConfiguredCampaign(
       value.campaignPath,

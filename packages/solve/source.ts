@@ -12,7 +12,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import type { Campaign, Entry, EntryId, Json } from "xean";
+import type { Campaign, Entry, EntryId, Json, Reader } from "xean";
 import { z } from "zod";
 
 import { jsonSnapshot, nonblank, returnedOutput, type RoleName } from "./roles";
@@ -20,7 +20,7 @@ import { jsonSnapshot, nonblank, returnedOutput, type RoleName } from "./roles";
 // The source verifier runs Codex with live web search, isolated in a fresh
 // CODEX_HOME. Only the selected provider's connection settings and credentials
 // are inherited; other Codex features stay disabled.
-// Its request and stdout are journaled like any call.
+// The journal stores the parsed result; exact process output lives in payloads.
 
 /** The reasoning levels the Codex CLI accepts for model_reasoning_effort. */
 export const codexReasoning = z.enum([
@@ -72,6 +72,75 @@ export const codexUsage = z.strictObject({
   reasoning: z.number().int().nonnegative(),
 });
 export type CodexUsage = z.output<typeof codexUsage>;
+
+const codexSubmissionResult = z.union([
+  z.strictObject({
+    input: z.json(),
+    searches: z.number().int().nonnegative(),
+    usage: codexUsage,
+  }),
+  z.strictObject({ error: nonblank }),
+]);
+const outputReferences = {
+  schemaVersion: z.literal(1),
+  stdoutRef: z.string().regex(/^[a-f0-9]{64}$/u),
+  stderrRef: z.string().regex(/^[a-f0-9]{64}$/u),
+};
+export const codexResultRecord = z.discriminatedUnion("state", [
+  codexResult.options[0].omit({ stdout: true, stderr: true }).extend({
+    ...outputReferences,
+    submission: codexSubmissionResult,
+  }),
+  codexResult.options[1]
+    .omit({ stdout: true, stderr: true })
+    .extend(outputReferences),
+]);
+
+/** Decode once when the process settles; malformed output is not a process failure. */
+export function storeCodexResult(campaign: Campaign, value: CodexResult) {
+  const { stdout, stderr, ...metadata } = codexResult.parse(value);
+  let submission: z.output<typeof codexSubmissionResult> | undefined;
+  if (metadata.state === "succeeded") {
+    try {
+      const { message, ...facts } = codexTranscript(stdout);
+      submission = { ...facts, input: z.json().parse(JSON.parse(message)) };
+    } catch (error) {
+      submission = {
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  return codexResultRecord.parse({
+    ...metadata,
+    schemaVersion: 1,
+    stdoutRef: campaign.storePayload(stdout),
+    stderrRef: campaign.storePayload(stderr),
+    ...(submission === undefined ? {} : { submission }),
+  });
+}
+
+/** Resolve exact process output only on demand, with payload digest validation. */
+export function readCodexResult(
+  output: unknown,
+  reader: Pick<Reader, "payload">,
+): CodexResult {
+  const stored = codexResultRecord.parse(output);
+  const {
+    schemaVersion: _schemaVersion,
+    stdoutRef,
+    stderrRef,
+    ...metadata
+  } = stored;
+  const { submission: _submission, ...result } = {
+    submission: undefined,
+    ...metadata,
+  };
+  return codexResult.parse({
+    ...result,
+    stdout: reader.payload(stdoutRef),
+    stderr: reader.payload(stderrRef),
+  });
+}
 
 const compactionWarning =
   "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
@@ -148,13 +217,13 @@ export function codexTranscript(stdout: string) {
 export function codexOutcome(records: readonly Entry[], call: EntryId) {
   const returned = returnedOutput(records, call);
   if (returned === undefined) return undefined;
-  const parsed = codexResult.safeParse(returned.output);
-  return parsed.success
-    ? { settled: returned.settled, ...parsed.data }
-    : undefined;
+  return {
+    settled: returned.settled,
+    ...codexResultRecord.parse(returned.output),
+  };
 }
 
-/** The parsed final message of a succeeded Codex call, with its searches and usage. Throws on a malformed transcript. */
+/** Read the parsed message without loading logs. Malformed output retains its original error. */
 export function codexSubmission(
   records: readonly Entry[],
   call: EntryId,
@@ -168,12 +237,10 @@ export function codexSubmission(
   | undefined {
   const output = codexOutcome(records, call);
   if (output?.state !== "succeeded") return undefined;
-  const transcript = codexTranscript(output.stdout);
+  if ("error" in output.submission) throw new Error(output.submission.error);
   return {
     settled: output.settled,
-    input: z.json().parse(JSON.parse(transcript.message)),
-    searches: transcript.searches,
-    usage: transcript.usage,
+    ...output.submission,
   };
 }
 
@@ -188,16 +255,26 @@ export async function codexCall(
   request: Json | CodexRequest,
   exec: CodexExec,
   signal?: AbortSignal,
-): Promise<{ readonly call: EntryId; readonly output: CodexResult }> {
+): Promise<{
+  readonly call: EntryId;
+  readonly output: z.output<typeof codexResultRecord>;
+}> {
   const receipt = await campaign.call(
     {
       ...call,
       request: jsonSnapshot(request),
       ...(signal === undefined ? {} : { signal }),
     },
-    (context) => exec(codexRequest.parse(context.request), context.signal),
+    async (context) =>
+      storeCodexResult(
+        campaign,
+        await exec(codexRequest.parse(context.request), context.signal),
+      ),
   );
-  return { call: receipt.call, output: codexResult.parse(receipt.output) };
+  return {
+    call: receipt.call,
+    output: codexResultRecord.parse(receipt.output),
+  };
 }
 
 interface CommandResult {

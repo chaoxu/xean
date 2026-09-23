@@ -88,10 +88,16 @@ test("selected support contributes its metadata once and its full proof once", (
   expect(call.prompt).not.toContain(second.text);
 });
 
-test("role prompts omit PASS reports without changing evidence or hiding failed checks", () => {
+test("role prompts omit resolved uncertainty and PASS reports without changing evidence or hiding failed checks", () => {
   const evidence = {
     ...note,
     verdicts: [
+      {
+        verifier: "correctness" as const,
+        note: "n1",
+        verdict: "INCONCLUSIVE" as const,
+        report: "RESOLVED MISSING CASE",
+      },
       { ...note.verdicts[0]!, report: "LONG HISTORICAL PASS EXPLANATION" },
       {
         verifier: "requirements" as const,
@@ -131,11 +137,14 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
   for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
     expect(prompt).toContain('"verdict": "PASS"');
-    expect(prompt).toContain(evidence.verdicts[1]!.report);
+    expect(prompt).not.toContain("RESOLVED MISSING CASE");
     expect(prompt).toContain(evidence.verdicts[2]!.report);
+    expect(prompt).toContain(evidence.verdicts[3]!.report);
     expect(prompt).toContain(evidence.summary);
-    expect(prompt).toContain(evidence.text);
   }
+  expect(calls[1]!.prompt).not.toContain(evidence.text);
+  for (const call of calls.filter((_, index) => index !== 1))
+    expect(call.prompt).toContain(evidence.text);
   expect(evidence).toEqual(before);
 });
 

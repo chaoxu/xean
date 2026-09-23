@@ -97,7 +97,6 @@ test("additional allowances preserve source evidence, failures, support, guidanc
             sources: [
               {
                 resultId: "n1#1",
-                result: "Theorem T",
                 source: "Theorem 1",
                 url: "https://example.org/theorem",
                 quote: "The exact theorem T.",

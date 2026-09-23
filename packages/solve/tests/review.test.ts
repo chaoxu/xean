@@ -3,7 +3,7 @@ import { openCampaign, openReader } from "xean";
 
 import { review, reviewVerdict } from "../review";
 import { codexStdout } from "./fixtures/codex-stdout";
-import type { CodexRequest } from "../source";
+import { storeCodexResult, type CodexRequest } from "../source";
 import { campaignPath, cleanupCampaigns } from "./harness";
 
 afterEach(cleanupCampaigns);
@@ -66,7 +66,7 @@ test("a full audit receives the entire argument and reuses only the exact comple
   expect(calls).toBe(1);
   const reader = openReader(request.campaignPath);
   try {
-    expect(reader.record(1)).toMatchObject({ config: { schemaVersion: 2 } });
+    expect(reader.record(1)).toMatchObject({ config: { schemaVersion: 3 } });
     expect(reader.records({ kinds: ["call"] })).toHaveLength(1);
     expect(reader.records({ kinds: ["call-result"] })).toHaveLength(1);
   } finally {
@@ -107,19 +107,20 @@ test.each(["request", "role"])(
               ? { ...frozen, prompt: "A different task and argument." }
               : frozen,
         },
-        async () => ({
-          state: "succeeded",
-          codexVersion: "fixture",
-          stdout: codexStdout(
-            {
-              verdict: "PASS",
-              report: "A different audit.",
-              externalResults: [],
-            },
-            false,
-          ),
-          stderr: "",
-        }),
+        async () =>
+          storeCodexResult(campaign, {
+            state: "succeeded",
+            codexVersion: "fixture",
+            stdout: codexStdout(
+              {
+                verdict: "PASS",
+                report: "A different audit.",
+                externalResults: [],
+              },
+              false,
+            ),
+            stderr: "",
+          }),
       );
     } finally {
       campaign.close();

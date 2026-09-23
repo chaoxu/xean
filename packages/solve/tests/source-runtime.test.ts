@@ -1,10 +1,21 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createCampaign } from "xean";
 
-import { prepareCodex, codexRequest, codexTranscript } from "../source";
+import {
+  prepareCodex,
+  codexCall,
+  codexOutcome,
+  codexRequest,
+  codexSubmission,
+  codexTranscript,
+  readCodexResult,
+  type CodexResult,
+} from "../source";
 import { codexStdout } from "./fixtures/codex-stdout";
 
 const warning = {
@@ -115,6 +126,131 @@ afterEach(async () => {
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
+});
+
+test.each(["missing", "corrupt"])(
+  "Codex replay uses compact results while explicit logs reject %s payloads",
+  async (damage) => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-source-result-"));
+    directories.push(directory);
+    const path = join(directory, "campaign.db");
+    const campaign = createCampaign(path, "source-storage", null);
+    try {
+      const raw = {
+        state: "succeeded" as const,
+        codexVersion: "fixture",
+        stdout: codexStdout({ verdict: "PASS" }),
+        stderr: "PRIVATE_PROCESS_LOG",
+      };
+      const result = await codexCall(
+        campaign,
+        { label: "source", role: "verifier" },
+        request,
+        async () => raw,
+      );
+      const records = campaign.records();
+      const submission = codexSubmission(records, result.call);
+      expect(submission).toMatchObject({
+        input: { verdict: "PASS" },
+        searches: 1,
+        usage: { input: 10 },
+      });
+      expect(JSON.stringify(records)).not.toContain("PRIVATE_PROCESS_LOG");
+      expect(JSON.stringify(records)).not.toContain("thread.started");
+      expect(readCodexResult(result.output, campaign)).toEqual(raw);
+      const database = new Database(path);
+      try {
+        database.run(
+          `DROP TRIGGER payloads_no_${damage === "missing" ? "delete" : "update"}`,
+        );
+        database.run(
+          damage === "missing"
+            ? "DELETE FROM payloads WHERE digest=?"
+            : "UPDATE payloads SET body='null' WHERE digest=?",
+          [result.output.stdoutRef],
+        );
+      } finally {
+        database.close();
+      }
+      expect(codexSubmission(records, result.call)).toEqual(submission);
+      expect(() => readCodexResult(result.output, campaign)).toThrow(
+        damage === "missing" ? "payload not found" : "payload digest mismatch",
+      );
+    } finally {
+      campaign.close();
+    }
+  },
+);
+
+test("compact Codex results distinguish malformed submissions from operational failures and reject the old format", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-source-result-"));
+  directories.push(directory);
+  const campaign = createCampaign(
+    join(directory, "campaign.db"),
+    "source-storage",
+    null,
+  );
+  try {
+    const malformedMessage = codexStdout({}).replace(
+      '"text":"{}"',
+      '"text":"not-json"',
+    );
+    const raw: CodexResult[] = [
+      {
+        state: "succeeded",
+        codexVersion: "fixture",
+        stdout: "invalid JSON",
+        stderr: "",
+      },
+      {
+        state: "succeeded",
+        codexVersion: "fixture",
+        stdout: malformedMessage,
+        stderr: "",
+      },
+      {
+        state: "failed",
+        error: "process failed",
+        stdout: "",
+        stderr: "",
+        exitCode: 1,
+      },
+      {
+        state: "cancelled",
+        error: "process cancelled",
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+      },
+    ];
+    for (const output of raw) {
+      const result = await codexCall(
+        campaign,
+        { label: "source", role: "verifier" },
+        request,
+        async () => output,
+      );
+      expect(codexOutcome(campaign.records(), result.call)?.state).toBe(
+        output.state,
+      );
+      expect(readCodexResult(result.output, campaign)).toEqual(output);
+      if (output.state === "succeeded")
+        expect(() => codexSubmission(campaign.records(), result.call)).toThrow(
+          "JSON",
+        );
+      else
+        expect(
+          codexSubmission(campaign.records(), result.call),
+        ).toBeUndefined();
+    }
+    const old = await campaign.call(
+      { label: "source", request },
+      async () => raw[0],
+    );
+    expect(() => codexOutcome(campaign.records(), old.call)).toThrow();
+  } finally {
+    campaign.close();
+  }
 });
 
 async function fixture(script: string) {
