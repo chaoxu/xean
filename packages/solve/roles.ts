@@ -437,31 +437,6 @@ export function noteEvidence(
   return result;
 }
 
-/** Coordinator scheduling uses the same note evidence as verification and projection. */
-export function verificationReadiness(notes: readonly Note[]) {
-  const evidence = noteEvidence(
-    notes,
-    notes.flatMap(({ verdicts }) => verdicts),
-  );
-  const ready = notes.filter((note) => {
-    const value = evidence.get(note.id)!;
-    return (
-      !value.dead && note.support.every((id) => evidence.get(id)?.verified)
-    );
-  });
-  return {
-    readyUnchecked: ready
-      .filter(
-        (note) =>
-          !evidence.get(note.id)!.verified && note.verdicts.length === 0,
-      )
-      .map(({ id }) => id),
-    verificationAvailable: ready.some(
-      (note) => pendingVerifiers(note, verifierNames).length > 0,
-    ),
-  };
-}
-
 const explorerAction = z.strictObject({
   role: z.literal("explorer"),
   explorerGuidance: nonblank,
@@ -486,35 +461,18 @@ export const coordinatorAction = z.union([
   overlapAction,
 ]);
 export type CoordinatorAction = z.output<typeof coordinatorAction>;
-const actionRoles = ["explorer", "literature", "verifier"] as const;
 export const coordinatorResult = z.strictObject({
   filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
   action: coordinatorAction,
 });
 export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
-/**
- * The coordinator submission schema over these notes. `allowedActions` lists
- * the roles the frozen coordinator behavior permits next, the submission must
- * choose one of them, and `requiredVerification` lists the notes that
- * behavior requires in the verify list. `overlap` requires a verifier action
- * to dispatch Explorer concurrently by supplying guidance and support.
- */
-export function coordinatorResultFor(
-  notes: readonly Pick<
-    Note,
-    | "id"
-    | "summary"
-    | "support"
-    | "verified"
-    | "dead"
-    | "verdicts"
-    | "verification"
-  >[],
-  allowedActions: readonly CoordinatorAction["role"][] = actionRoles,
-  requiredVerification: readonly string[] = [],
-  overlap = false,
-) {
+/** The coordinator's frozen input owns both scheduling policy and submission validity. */
+export function coordinatorResultFor({
+  notes,
+  literatureStatus: status,
+  coordinatorBehavior: behavior,
+}: CoordinatorInput) {
   const known = new Set(notes.map(({ id }) => id));
   const withoutSummary = new Set(
     notes.filter(({ summary }) => summary === undefined).map(({ id }) => id),
@@ -526,10 +484,38 @@ export function coordinatorResultFor(
   const verified = new Set(
     notes.filter(({ id }) => evidence.get(id)!.verified).map(({ id }) => id),
   );
+  const ready = notes.filter(
+    (note) =>
+      !evidence.get(note.id)!.dead &&
+      note.support.every((id) => verified.has(id)),
+  );
+  const readyUnchecked = ready
+    .filter((note) => !verified.has(note.id) && note.verdicts.length === 0)
+    .map(({ id }) => id);
+  const literatureFirst =
+    behavior.literature === "required-if-not-started" &&
+    status === "not-started";
+  const requiredVerification =
+    behavior.verification === "always" && !literatureFirst
+      ? readyUnchecked
+      : [];
+  const allowedActions: readonly CoordinatorAction["role"][] = literatureFirst
+    ? ["literature"]
+    : requiredVerification.length > 0
+      ? ["verifier"]
+      : (["explorer", "literature", "verifier"] as const).filter(
+          (role) =>
+            (role !== "literature" ||
+              (behavior.literature !== "never" && status !== "completed")) &&
+            (role !== "verifier" ||
+              ready.some(
+                (note) => pendingVerifiers(note, verifierNames).length > 0,
+              )),
+        );
   const action = z.discriminatedUnion("role", [
     explorerAction,
     literatureAction,
-    overlap ? overlapAction : verifierAction,
+    behavior.overlap ? overlapAction : verifierAction,
   ]);
   return coordinatorResult.extend({ action }).superRefine((value, ctx) => {
     const verify = value.action.role === "verifier" ? value.action.verify : [];
@@ -911,7 +897,6 @@ const sourcePassage = sources.element.omit({ resultId: true }).extend({
 });
 export const sourcePrompt = z.strictObject({
   task: z.strictObject({ problem: nonblank, completionCriteria: nonblank }),
-  correctnessCall: z.number().int().positive(),
   notes: z
     .array(
       z.strictObject({
@@ -927,11 +912,6 @@ export const sourcePrompt = z.strictObject({
   passages: z.array(sourcePassage),
 });
 
-export const localSourceRequest = z.strictObject({
-  protocol: z.literal("xean/source-local/v1"),
-  correctnessCall: z.number().int().positive(),
-  notes: z.array(nonblank).min(1),
-});
 /** The external premises a completed correctness check assigned to each judged note. */
 export type AssignedExternalResults = readonly {
   readonly note: string;
@@ -1016,51 +996,79 @@ export interface JournalVerdict {
   readonly sources?: z.output<typeof sources>;
 }
 
-// Admission preserves the validated premises and passages; raw submissions
-// remain provenance, not a second authority for source reuse.
-const evidenceSchemas = {
-  correctness: correctnessVerdicts,
-  requirements: verdicts,
-  reconstruction: verdicts,
-};
+/** Correctness admitted in this verification, or explicitly frozen for reuse. */
+export function correctnessEvidence(
+  history: readonly JournalVerdict[],
+  note: Note,
+  verification: EntryId,
+): JournalVerdict | undefined {
+  return history.findLast(
+    (entry) =>
+      entry.verdict.note === note.id &&
+      entry.verdict.verifier === "correctness" &&
+      entry.verdict.verdict === "PASS" &&
+      (entry.verification === verification ||
+        (entry.seq < verification &&
+          note.verdicts.some((value) =>
+            isDeepStrictEqual(value, entry.verdict),
+          ))),
+  );
+}
 
-/** Bind a receipt to its frozen source packet and already admitted correctness. */
-function sourceEvidenceFor(
-  call: Extract<Entry, { kind: "call" }>,
+/** Group exactly the requested notes by their admitted correctness call. */
+export function sourceGroups(
+  input: VerifierInput,
+  judged: readonly string[],
+  verification: EntryId,
   history: readonly JournalVerdict[],
 ) {
-  const local = localSourceRequest.safeParse(call.request);
-  const packet = local.success
-    ? {
-        correctnessCall: local.data.correctnessCall,
-        notes: local.data.notes.map((id) => ({ id, externalResults: [] })),
-      }
-    : sourcePrompt.parse(
-        JSON.parse(z.object({ prompt: nonblank }).parse(call.request).prompt),
-      );
-  const assigned = packet.notes.map(({ id: note, externalResults }) => {
-    const correctness = history.find(
-      (entry) =>
-        entry.call === packet.correctnessCall &&
-        entry.seq < call.seq &&
-        entry.verdict.note === note &&
-        entry.verdict.verifier === "correctness" &&
-        entry.verdict.verdict === "PASS",
+  const groups = new Map<
+    EntryId,
+    { note: string; externalResults: string[] }[]
+  >();
+  for (const id of judged) {
+    const prior = correctnessEvidence(
+      history,
+      pick(input.notes, id),
+      verification,
     );
-    if (correctness?.externalResults === undefined)
-      throw new Error("source requires its assigned correctness evidence");
-    const expected = assignedPremises([
-      { note, externalResults: correctness.externalResults },
-    ]);
-    if (
-      !isDeepStrictEqual(
-        expected.map(({ resultId: id, result: text }) => ({ id, text })),
-        externalResults,
-      )
-    )
-      throw new Error("source assignments differ from correctness evidence");
-    return { note, externalResults: correctness.externalResults };
-  });
+    if (prior?.externalResults === undefined)
+      throw new Error("source requires admitted correctness premises");
+    const group = groups.get(prior.call) ?? [];
+    group.push({ note: id, externalResults: prior.externalResults });
+    groups.set(prior.call, group);
+  }
+  return [...groups.values()];
+}
+
+/** Bind evidence to the checks eligible when the call began, never prompt text. */
+function verifierEvidenceFor(
+  history: readonly JournalVerdict[],
+  opening: Entry | undefined,
+  verifier: VerifierName,
+) {
+  if (opening?.kind !== "call" || opening.label !== verificationLabel)
+    throw new Error("missing verification");
+  const input = verifierInput.parse(opening.request);
+  const have = verificationVerdicts(
+    input,
+    history
+      .filter((entry) => entry.verification === opening.seq)
+      .map((entry) => entry.verdict),
+  );
+  const judged = missingVerdicts(
+    have,
+    verifier,
+    judgedBy(input, have, verifier),
+  );
+  if (verifier === "correctness") return correctnessVerdictsFor(judged);
+  if (verifier !== "source")
+    return verdictsFor(
+      verifier === "reconstruction" ? judged.slice(0, 1) : judged,
+    );
+  const assigned = sourceGroups(input, judged, opening.seq, history)[0];
+  if (assigned === undefined)
+    throw new Error("source call has no outstanding premises");
   const premises = new Map(
     assignedPremises(assigned).map(({ resultId, result }) => [
       resultId,
@@ -1069,7 +1077,7 @@ function sourceEvidenceFor(
   );
   return verdictsOver(
     sourceVerdict,
-    packet.notes.map(({ id }) => id),
+    assigned.map(({ note }) => note),
   ).refine(
     ({ verdicts }) =>
       verdicts.every(
@@ -1092,7 +1100,45 @@ export function journalVerdicts(
       .map((entry) => [entry.seq, entry]),
   );
   const verdicts: JournalVerdict[] = [];
+  const deriveSources = (verification: EntryId, seq: EntryId): void => {
+    const opening = calls.get(verification);
+    if (opening?.label !== verificationLabel)
+      throw new Error(`missing verification ${verification}`);
+    const input = verifierInput.parse(opening.request);
+    const have = verificationVerdicts(
+      input,
+      verdicts
+        .filter((entry) => entry.verification === verification)
+        .map(({ verdict }) => verdict),
+    );
+    for (const note of missingVerdicts(
+      have,
+      "source",
+      judgedBy(input, have, "source"),
+    )) {
+      const correctness = correctnessEvidence(
+        verdicts,
+        pick(input.notes, note),
+        verification,
+      );
+      if (correctness?.externalResults?.length !== 0) continue;
+      verdicts.push({
+        seq,
+        call: correctness.call,
+        verification,
+        verdict: {
+          verifier: "source",
+          note,
+          verdict: "PASS",
+          report: `The admitted correctness check in call ${correctness.call} identified no nonroutine external premise.`,
+        },
+        sources: [],
+      });
+    }
+  };
   for (const entry of records) {
+    if (entry.kind === "call" && entry.label === verificationLabel)
+      deriveSources(entry.seq, entry.seq);
     if (entry.kind !== "evidence") continue;
     const call = calls.get(entry.call);
     const verifier =
@@ -1100,10 +1146,11 @@ export function journalVerdicts(
     if (call?.kind !== "call" || verifier === undefined) continue;
     let schema;
     try {
-      schema =
-        verifier === "source"
-          ? sourceEvidenceFor(call, verdicts)
-          : evidenceSchemas[verifier];
+      schema = verifierEvidenceFor(
+        verdicts.filter((entry) => entry.seq < call.seq),
+        call.parent === undefined ? undefined : calls.get(call.parent),
+        verifier,
+      );
     } catch {
       throw new Error(`malformed verdict ${entry.seq}`);
     }
@@ -1117,6 +1164,12 @@ export function journalVerdicts(
       call.role !== "verifier" ||
       call.parent === undefined ||
       calls.get(call.parent)?.label !== verificationLabel ||
+      verdicts.some(
+        (prior) =>
+          prior.verification === call.parent &&
+          prior.verdict.verifier === verifier &&
+          parsed.data.verdicts.some(({ note }) => note === prior.verdict.note),
+      ) ||
       !parsed.data.verdicts.every(validCorrection)
     ) {
       throw new Error(`malformed verdict ${entry.seq}`);
@@ -1136,6 +1189,7 @@ export function journalVerdicts(
         ...(sources === undefined ? {} : { sources }),
       });
     }
+    if (verifier === "correctness") deriveSources(call.parent, entry.seq);
   }
   return verdicts;
 }
@@ -1205,17 +1259,22 @@ export interface Roles {
   readonly explorer: (
     input: ExplorerInput,
     signal?: AbortSignal,
+    parent?: EntryId,
   ) => Promise<ExplorerResult>;
   readonly coordinator: (
     input: z.input<typeof coordinatorInput>,
+    parent?: EntryId,
+    signal?: AbortSignal,
   ) => Promise<CoordinatorResult>;
   readonly literature: (
     input: LiteratureInput,
-    after?: EntryId,
+    parent?: EntryId,
+    signal?: AbortSignal,
   ) => Promise<LiteratureReport>;
   readonly verifier: (
     input: VerifierInput,
     verification?: EntryId,
     signal?: AbortSignal,
+    parent?: EntryId,
   ) => Promise<VerifierResult>;
 }

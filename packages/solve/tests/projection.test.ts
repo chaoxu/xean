@@ -6,7 +6,9 @@ import {
   verifierNames,
   judgedBy,
   journalVerdicts,
+  jsonSnapshot,
   verificationLabel,
+  verifierInput,
   verifierLabels,
   verificationComplete,
   type Note,
@@ -192,7 +194,12 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
     seq: 2,
     atMs: 0,
     label: verificationLabel,
-    request: null,
+    request: {
+      task: { problem: "Prove P.", completionCriteria: "P holds." },
+      verify: [{ note: "n1", verifiers: ["correctness"] }],
+      notes: [{ ...note("n1"), verdicts: [], verified: false, dead: false }],
+      support: [],
+    },
     tools: [],
   };
   const call: Entry = {
@@ -294,5 +301,78 @@ test("admitted note evidence requires a succeeded verifier child of a frozen ver
   ).toThrow("malformed verdict");
   expect(() =>
     journalVerdicts([{ ...opening, label: "unrelated" }, call, result, entry]),
+  ).toThrow("malformed verdict");
+
+  // Completed replay must check eligibility at dispatch, even for delayed receipts.
+  const check = (
+    verifier: VerifierName,
+    seq: number,
+    receipt: number,
+  ): Entry[] => [
+    { ...call, seq, label: verifierLabels[verifier] },
+    { ...result, seq: receipt - 1, parent: seq },
+    {
+      ...entry,
+      seq: receipt,
+      call: seq,
+      evidence: {
+        verdicts: [
+          {
+            note: "n1",
+            verdict: "PASS",
+            report: "Checked.",
+            ...(verifier === "correctness" ? { externalResults: [] } : {}),
+          },
+        ],
+      },
+    },
+  ];
+  const records = (entries: Entry[]) =>
+    [
+      {
+        ...opening,
+        request: jsonSnapshot({
+          ...verifierInput.parse(opening.request),
+          verify: [{ note: "n1", verifiers: [...verifierNames] }],
+        }),
+      },
+      ...entries,
+    ].sort((left, right) => left.seq - right.seq);
+  expect(
+    journalVerdicts(
+      records([
+        ...check("correctness", 3, 5),
+        ...check("requirements", 6, 8),
+        ...check("reconstruction", 9, 11),
+      ]),
+    ).map(({ verdict }) => verdict.verifier),
+  ).toEqual([...verifierNames]);
+  expect(() =>
+    journalVerdicts(
+      records([
+        ...check("requirements", 3, 5),
+        ...check("correctness", 6, 8),
+        ...check("reconstruction", 9, 11),
+      ]),
+    ),
+  ).toThrow("malformed verdict");
+  // A delayed receipt cannot make a prematurely dispatched check valid.
+  expect(() =>
+    journalVerdicts(
+      records([
+        ...check("requirements", 3, 9),
+        ...check("correctness", 4, 6),
+        ...check("reconstruction", 10, 12),
+      ]),
+    ),
+  ).toThrow("malformed verdict");
+  expect(() =>
+    journalVerdicts(
+      records([
+        ...check("correctness", 3, 5),
+        ...check("requirements", 6, 9),
+        ...check("requirements", 7, 11),
+      ]),
+    ),
   ).toThrow("malformed verdict");
 });

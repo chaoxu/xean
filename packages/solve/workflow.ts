@@ -9,20 +9,18 @@ import { explorerGuidance, guidanceInbox } from "./guidance";
 import { notesInbox } from "./notes";
 import { byId, supportClosure } from "./support";
 import {
-  coordinatorCall,
-  explorerCall,
-  literatureCall,
-  literatureNotesId,
   literatureOutcome,
-  matchingCalls,
+  callsAfter,
   readPiSubmission,
   solveSettings,
   type CallEntry,
-  type RoleCall,
 } from "./pi-roles";
 import {
   assertApplication,
   coordinatorInput,
+  coordinatorResultFor,
+  explorerResultFor,
+  roleTools,
   explorerInput,
   journalVerdicts,
   jsonSnapshot,
@@ -48,7 +46,7 @@ import {
   type VerifierInput,
 } from "./roles";
 
-export const workflowSchemaVersion = 34;
+export const workflowSchemaVersion = 35;
 export const workflowConfig = z.strictObject({
   kind: z.literal("workflow"),
   schemaVersion: z.literal(workflowSchemaVersion),
@@ -76,16 +74,19 @@ export type WorkflowTerminal = AcceptedPhase | TurnLimitPhase;
 type ExplorerPhase = {
   readonly kind: "explorer";
   readonly input: ExplorerInput;
+  readonly parent: EntryId;
 };
 type VerifierPhase = {
   readonly kind: "verifier";
   readonly input: VerifierInput;
   readonly verification?: EntryId;
+  readonly parent: EntryId;
 };
 type OverlapPhase = {
   readonly kind: "overlap";
   /** The settled coordinator decision owning both roles and every retry. */
   readonly after: EntryId;
+  readonly parent: EntryId;
   readonly request: Json;
   readonly opened?: EntryId;
   readonly explorer?: ExplorerPhase;
@@ -94,12 +95,15 @@ type OverlapPhase = {
 };
 export type WorkflowPhase =
   | ExplorerPhase
-  | { readonly kind: "coordinator"; readonly input: CoordinatorInput }
+  | {
+      readonly kind: "coordinator";
+      readonly input: CoordinatorInput;
+      readonly parent: EntryId;
+    }
   | {
       readonly kind: "literature";
       readonly input: LiteratureInput;
-      /** The dispatching coordinator's settled entry; earlier calls are not reused. */
-      readonly after: EntryId;
+      readonly parent: EntryId;
     }
   | VerifierPhase
   | OverlapPhase
@@ -120,6 +124,7 @@ export interface WorkflowSnapshot {
   readonly noteSubmissions: readonly {
     readonly call: EntryId;
     readonly noteIds: readonly string[];
+    readonly support?: readonly string[];
   }[];
 }
 
@@ -136,22 +141,17 @@ function firstCall(
   records: readonly Entry[],
   after: EntryId,
   label: string,
-  request: Json | RoleCall<z.ZodType>,
+  parent: EntryId,
+  request?: Json,
 ): CallEntry | undefined {
-  for (const call of matchingCalls(records, after, label, request)) return call;
-  return undefined;
-}
-
-function settledCall<S extends z.ZodType>(
-  records: readonly Entry[],
-  after: EntryId,
-  roleCall: RoleCall<S>,
-): { readonly settled: EntryId; readonly value: z.output<S> } | undefined {
-  for (const call of matchingCalls(records, after, roleCall.label, roleCall)) {
-    const submission = readPiSubmission(records, call.seq, roleCall);
-    if (submission !== undefined) return submission;
-  }
-  return undefined;
+  const call = callsAfter(records, after, label, parent).next().value;
+  if (
+    call !== undefined &&
+    request !== undefined &&
+    !isDeepStrictEqual(call.request, request)
+  )
+    throw new Error("frozen call input does not match its dispatch");
+  return call;
 }
 
 /**
@@ -195,8 +195,9 @@ interface Fold {
   readonly base: Pick<WorkflowSnapshot, "config" | "allowances" | "maxTurns">;
   readonly verdicts: ReturnType<typeof journalVerdicts>;
   readonly projection: Projection;
-  readonly noteSubmissions: { call: EntryId; noteIds: string[] }[];
+  readonly noteSubmissions: Array<WorkflowSnapshot["noteSubmissions"][number]>;
   cursor: EntryId;
+  owner: EntryId;
   turns: number;
   /** Pending work may expose saved notes beyond its last completed phase. */
   through?: EntryId;
@@ -217,6 +218,7 @@ function openFold(records: readonly Entry[]): Fold {
     projection: new Projection(verdicts),
     noteSubmissions: [],
     cursor: records[0]!.seq,
+    owner: allowances[0]!.call,
     turns: 0,
   };
 }
@@ -296,18 +298,24 @@ function replayExplorerTurn(
       selected,
       advice,
     );
-    const roleCall = explorerCall(
-      explorerRequest,
-      base.config.settings.explorerContextBudgetTokens,
-      base.config.settings.maxExplorerResponses,
-    );
-    const call = firstCall(records, after, roleCall.label, roleCall);
+    const call = firstCall(records, after, roleLabels.explorer, fold.owner);
     if (call === undefined) {
       fold.after = fold.cursor;
       fold.through = through;
-      return { kind: "explorer", input: explorerRequest };
+      return { kind: "explorer", input: explorerRequest, parent: fold.owner };
     }
-    const saved = readPiSubmission(records, call.seq, roleCall, true);
+    const submission = {
+      call: call.seq,
+      noteIds: [] as string[],
+      support: explorerRequest.support.map((note) => note.id),
+    };
+    fold.noteSubmissions.push(submission);
+    const saved = readPiSubmission(
+      records,
+      call.seq,
+      { tool: roleTools.explorer, schema: explorerResultFor(known) },
+      true,
+    );
     // Saved notes become visible at the last tool call; the next phase
     // starts only at the outer call-result, which can occur later.
     if (saved !== undefined) {
@@ -319,6 +327,7 @@ function replayExplorerTurn(
         verified: false,
         dead: false,
       }));
+      submission.noteIds = notes.map((note) => note.id);
       if (notes.length > 0) fold.projection.add(notes, saved.settled);
       selected.push(...notes.map(({ id }) => id));
       // New notes have no checks in this turn's frozen view. The canonical
@@ -377,10 +386,11 @@ function replayVerification(
       records,
       fold.cursor,
       verificationLabel,
+      fold.owner,
       jsonSnapshot(verifierRequest),
     );
     if (first === undefined)
-      return { kind: "verifier", input: verifierRequest };
+      return { kind: "verifier", input: verifierRequest, parent: fold.owner };
     const verification = first.seq;
     const recorded = fold.verdicts.filter(
       (entry) => entry.verification === verification,
@@ -415,6 +425,7 @@ function replayVerification(
         kind: "verifier",
         input: verifierRequest,
         verification,
+        parent: fold.owner,
       };
     // Completed entries leave the queue even when their verdict was not PASS.
     remaining = remaining.slice(verify.length);
@@ -451,25 +462,33 @@ function replayOverlap(
     fold.records,
     after,
     boundaryLabels.overlap,
+    fold.owner,
     request,
   );
-  if (opening === undefined) return { kind: "overlap", after, request };
+  if (opening === undefined)
+    return { kind: "overlap", after, parent: fold.owner, request };
 
-  const joined = firstCall(fold.records, opening.seq, overlapJoinLabel, {
-    schemaVersion: 1,
-    after: opening.seq,
-  });
+  const joined = firstCall(
+    fold.records,
+    opening.seq,
+    overlapJoinLabel,
+    opening.seq,
+    {
+      schemaVersion: 1,
+      after: opening.seq,
+    },
+  );
   const records =
     joined === undefined
       ? fold.records
       : fold.records.filter((entry) => entry.seq <= joined.seq);
   // Caller notes enter only after the join. Explorer alone assigns new note IDs.
   const pendingVerifier = replayVerification(
-    { ...fold, records, cursor: opening.seq },
+    { ...fold, records, cursor: opening.seq, owner: opening.seq },
     action.verify,
   );
   const exploring = replayExplorerTurn(
-    { ...fold, records, cursor: opening.seq },
+    { ...fold, records, cursor: opening.seq, owner: opening.seq },
     advice,
     action.support,
     known,
@@ -498,6 +517,7 @@ function replayOverlap(
   return {
     kind: "overlap",
     after,
+    parent: fold.owner,
     request,
     opened: opening.seq,
     ...(pendingExplorer === undefined ? {} : { explorer: pendingExplorer }),
@@ -508,53 +528,6 @@ function replayOverlap(
       ? { accepted: pendingVerifier }
       : {}),
   };
-}
-
-/** Whether discovery has run at or before this cursor, and whether any run returned a usable report. */
-function literatureSearchStatus(
-  records: readonly Entry[],
-  through: EntryId,
-): LiteratureStatus {
-  let status: LiteratureStatus = "not-started";
-  for (const entry of records) {
-    if (
-      entry.kind !== "call" ||
-      entry.seq > through ||
-      entry.label !== roleLabels.literature
-    )
-      continue;
-    status = "inconclusive";
-    if (literatureOutcome(records, entry.seq)?.report !== undefined)
-      return "completed";
-  }
-  return status;
-}
-
-/**
- * The settled literature call after the dispatching coordinator: a usable
- * report whose candidates are delivered, or a failed call, which ends
- * discovery without candidates. A cancelled or unusable call is replaced by
- * a fresh one, and an undelivered response waits for the runner.
- */
-function settledLiteratureCall(
-  records: readonly Entry[],
-  after: EntryId,
-  call: ReturnType<typeof literatureCall>,
-): EntryId | undefined {
-  for (const entry of matchingCalls(records, after, call.label, call.request)) {
-    const outcome = literatureOutcome(records, entry.seq);
-    if (outcome === undefined) continue;
-    if (
-      outcome.report !== undefined &&
-      outcome.report.notes.length > 0 &&
-      !notesInbox
-        .receipts(records)
-        .some(({ id }) => id === literatureNotesId(entry.seq))
-    )
-      return undefined;
-    return outcome.settled;
-  }
-  return undefined;
 }
 
 /**
@@ -569,6 +542,7 @@ function replay(fold: Fold): WorkflowPhase {
   const { records, base } = fold;
   const settings = base.config.settings;
   let emptySubmission = false;
+  let literatureStatus: LiteratureStatus = "not-started";
   for (;;) {
     const included = includeSubmitted(fold, fold.cursor);
     const notes = fold.projection.at(fold.cursor);
@@ -577,20 +551,33 @@ function replay(fold: Fold): WorkflowPhase {
     const input = coordinatorInput.parse({
       task: base.config.task,
       notes,
-      literatureStatus: literatureSearchStatus(records, fold.cursor),
+      literatureStatus,
       coordinatorBehavior: settings.coordinatorBehavior,
       ...(emptySubmission ? { emptySubmission: true } : {}),
     });
-    const coordinated = settledCall<z.ZodType<CoordinatorResult>>(
+    let coordinated:
+      { call: EntryId; settled: EntryId; value: CoordinatorResult } | undefined;
+    for (const call of callsAfter(
       records,
       fold.cursor,
-      coordinatorCall(input),
-    );
+      roleLabels.coordinator,
+      fold.owner,
+    )) {
+      const saved = readPiSubmission(records, call.seq, {
+        tool: roleTools.coordinator,
+        schema: coordinatorResultFor(input),
+      });
+      if (saved !== undefined) {
+        coordinated = { call: call.seq, ...saved };
+        break;
+      }
+    }
     if (coordinated === undefined) {
       if (!included) fold.after = fold.cursor;
-      return { kind: "coordinator", input };
+      return { kind: "coordinator", input, parent: fold.owner };
     }
     fold.cursor = coordinated.settled;
+    fold.owner = coordinated.call;
     fold.projection.file(coordinated.value.filings, fold.cursor);
     emptySubmission = false;
     const { action } = coordinated.value;
@@ -600,18 +587,39 @@ function replay(fold: Fold): WorkflowPhase {
         task: base.config.task,
         request: action.request,
       });
-      const settled = settledLiteratureCall(
+      let settled;
+      for (const call of callsAfter(
         records,
         fold.cursor,
-        literatureCall(input, settings.source),
-      );
+        roleLabels.literature,
+        fold.owner,
+      )) {
+        literatureStatus = "inconclusive";
+        const outcome = literatureOutcome(records, call.seq);
+        if (outcome !== undefined) {
+          settled = { call: call.seq, ...outcome };
+          break;
+        }
+      }
       if (settled === undefined)
         return {
           kind: "literature",
           input,
-          after: fold.cursor,
+          parent: fold.owner,
         };
-      fold.cursor = settled;
+      if (settled.report !== undefined) literatureStatus = "completed";
+      const count = fold.projection.at(fold.cursor).length;
+      const notes = (settled.report?.notes ?? []).map((note, index) => ({
+        id: noteIdAfter(count, index),
+        text: note.text,
+        support: note.support.map((id) => noteIdAfter(count, id - 1)),
+      }));
+      fold.projection.add(notes, settled.settled);
+      fold.noteSubmissions.push({
+        call: settled.call,
+        noteIds: notes.map((note) => note.id),
+      });
+      fold.cursor = settled.settled;
     } else if (action.role === "explorer") {
       // A caller's submission while this phase waited returns to the
       // coordinator with the new notes.
@@ -661,141 +669,168 @@ export interface WorkflowDependencies {
   readonly signal?: AbortSignal;
 }
 
-/** Drive only the two roles belonging to this opening, then drain before joining. */
-async function runOverlap(
-  campaign: Campaign,
-  roles: Roles,
-  initial: OverlapPhase,
-  dependencies: WorkflowDependencies,
-): Promise<void> {
-  if (initial.opened === undefined) {
-    await guidanceInbox.freeze(campaign, initial.after);
-    const { phase } = deriveWorkflow(workflowRecords(campaign));
-    if (phase.kind !== "overlap" || phase.after !== initial.after)
-      throw new Error("overlap boundary changed");
-    await campaign.call(
-      { label: boundaryLabels.overlap, request: phase.request },
-      async () => null,
-    );
-    return;
-  }
-  const controllers = {
-    explorer: new AbortController(),
-    verifier: new AbortController(),
-  };
-  const current = (): OverlapPhase => {
-    const { phase } = deriveWorkflow(workflowRecords(campaign));
-    if (phase.kind !== "overlap" || phase.opened !== initial.opened)
-      throw new Error("overlap changed before join");
-    return phase;
-  };
-  let failure: unknown;
-  const run = async (role: "explorer" | "verifier") => {
-    const signal = dependencies.signal
-      ? AbortSignal.any([controllers[role].signal, dependencies.signal])
-      : controllers[role].signal;
-    try {
-      for (;;) {
-        const phase = current();
-        if (phase.accepted !== undefined) {
-          controllers.explorer.abort();
-          return;
-        }
-        const step = phase[role];
-        if (
-          step === undefined ||
-          signal.aborted ||
-          dependencies.pauseRequested?.()
-        )
-          return;
-        if (step.kind === "explorer") await roles.explorer(step.input, signal);
-        else await roles.verifier(step.input, step.verification, signal);
-        const next = current();
-        if (next.accepted !== undefined) controllers.explorer.abort();
-        // A replacement role that made no durable progress leaves a resumable phase.
-        if (isDeepStrictEqual(next[role], step)) return;
-      }
-    } catch (error) {
-      failure ??= error;
-      controllers.explorer.abort();
-      controllers.verifier.abort();
-    }
-  };
-  await Promise.all([run("explorer"), run("verifier")]);
-  const phase = current();
-  if (
-    phase.accepted !== undefined ||
-    (phase.explorer === undefined && phase.verifier === undefined)
-  ) {
-    await campaign.call(
-      {
-        label: overlapJoinLabel,
-        request: { schemaVersion: 1, after: initial.opened },
-      },
-      async () => null,
-    );
-  }
-  if (phase.accepted !== undefined) return;
-  if (failure !== undefined) throw failure;
-  dependencies.signal?.throwIfAborted();
-}
+type RolePhase = Exclude<WorkflowPhase, WorkflowTerminal | OverlapPhase>;
 
+/** Serial and overlapping dispatches use the same owned calls and completion loop. */
 export async function runWorkflow(
   campaign: Campaign,
   roles: Roles,
   dependencies: WorkflowDependencies = {},
   initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
 ): Promise<WorkflowPhase> {
+  const read = () => deriveWorkflow(workflowRecords(campaign));
   let snapshot =
     initial !== undefined && campaign.lastSequence() === initial.through
       ? initial.snapshot
-      : deriveWorkflow(workflowRecords(campaign));
+      : read();
   initial = undefined;
-  let phase = snapshot.phase;
-  for (;;) {
-    if (phase.kind === "accepted" || phase.kind === "turn-limit") {
-      return phase;
+  const active = new Map<
+    string,
+    { controller: AbortController; done: Promise<RolePhase> }
+  >();
+  const blocked = new Set<string>();
+  let failure: unknown;
+  const cancel = () => {
+    for (const call of active.values()) call.controller.abort();
+  };
+  const execute = async (step: RolePhase, signal: AbortSignal) => {
+    switch (step.kind) {
+      case "explorer":
+        await roles.explorer(step.input, signal, step.parent);
+        break;
+      case "verifier":
+        await roles.verifier(
+          step.input,
+          step.verification,
+          signal,
+          step.parent,
+        );
+        break;
+      case "coordinator":
+        await roles.coordinator(step.input, step.parent, signal);
+        break;
+      case "literature":
+        await roles.literature(step.input, step.parent, signal);
+        break;
     }
-    if (dependencies.pauseRequested?.()) return phase;
-    // Notes freeze first in every phase; guidance follows in the explorer phase.
-    if (
-      snapshot.after !== undefined &&
-      (await notesInbox.freeze(campaign, snapshot.after))
-    ) {
-      snapshot = deriveWorkflow(workflowRecords(campaign));
-      phase = snapshot.phase;
-      continue;
-    }
-    dependencies.status?.(phase.kind);
-    const verifying = phase.kind === "verifier" ? phase.input : undefined;
-    const overlapping = phase.kind === "overlap" ? phase : undefined;
-    if (phase.kind === "overlap") {
-      await runOverlap(campaign, roles, phase, dependencies);
-    } else if (phase.kind === "explorer") {
-      if (await guidanceInbox.freeze(campaign, snapshot.after!)) {
-        snapshot = deriveWorkflow(workflowRecords(campaign));
-        phase = snapshot.phase;
-        if (phase.kind !== "explorer")
-          throw new Error("explorer boundary changed");
+  };
+  try {
+    for (;;) {
+      const phase = snapshot.phase;
+      const accepted =
+        phase.kind === "accepted" ||
+        (phase.kind === "overlap" && phase.accepted !== undefined);
+      if (accepted || failure !== undefined || dependencies.signal?.aborted)
+        cancel();
+      if (active.size === 0) {
+        if (
+          phase.kind === "overlap" &&
+          phase.opened !== undefined &&
+          (accepted ||
+            (phase.explorer === undefined && phase.verifier === undefined))
+        ) {
+          await campaign.call(
+            {
+              label: overlapJoinLabel,
+              parent: phase.opened,
+              request: { schemaVersion: 1, after: phase.opened },
+            },
+            async () => null,
+          );
+          if (accepted) failure = undefined;
+          snapshot = read();
+          continue;
+        }
+        if (phase.kind === "accepted" || phase.kind === "turn-limit")
+          return phase;
+        if (failure !== undefined) throw failure;
+        dependencies.signal?.throwIfAborted();
+        if (dependencies.pauseRequested?.()) return phase;
+        if (
+          snapshot.after !== undefined &&
+          (await notesInbox.freeze(campaign, snapshot.after))
+        ) {
+          snapshot = read();
+          continue;
+        }
+        if (
+          phase.kind === "explorer" ||
+          (phase.kind === "overlap" && phase.opened === undefined)
+        ) {
+          if (
+            await guidanceInbox.freeze(
+              campaign,
+              phase.kind === "overlap" ? phase.after : snapshot.after!,
+            )
+          ) {
+            snapshot = read();
+            continue;
+          }
+          if (phase.kind === "overlap") {
+            await campaign.call(
+              {
+                label: boundaryLabels.overlap,
+                parent: phase.parent,
+                request: phase.request,
+              },
+              async () => null,
+            );
+            snapshot = read();
+            continue;
+          }
+        }
       }
-      await roles.explorer(phase.input);
-    } else if (phase.kind === "coordinator") {
-      await roles.coordinator(phase.input);
-    } else if (phase.kind === "literature") {
-      await roles.literature(phase.input, phase.after);
-    } else {
-      await roles.verifier(phase.input, phase.verification);
+      dependencies.status?.(phase.kind);
+      const ready =
+        phase.kind === "overlap"
+          ? [phase.explorer, phase.verifier]
+          : phase.kind === "accepted" || phase.kind === "turn-limit"
+            ? []
+            : [phase];
+      if (
+        !accepted &&
+        failure === undefined &&
+        !dependencies.signal?.aborted &&
+        !dependencies.pauseRequested?.()
+      ) {
+        for (const step of ready) {
+          if (
+            step === undefined ||
+            active.has(step.kind) ||
+            blocked.has(step.kind)
+          )
+            continue;
+          const controller = new AbortController();
+          const signal = dependencies.signal
+            ? AbortSignal.any([controller.signal, dependencies.signal])
+            : controller.signal;
+          const done = execute(step, signal)
+            .catch((error) => {
+              failure ??= error;
+              cancel();
+            })
+            .then(() => step);
+          active.set(step.kind, { controller, done });
+        }
+      }
+      if (active.size === 0) return phase;
+      const completed = await Promise.race(
+        [...active.values()].map((call) => call.done),
+      );
+      active.delete(completed.kind);
+      snapshot = read();
+      const next =
+        snapshot.phase.kind === "overlap"
+          ? completed.kind === "explorer"
+            ? snapshot.phase.explorer
+            : snapshot.phase.verifier
+          : snapshot.phase;
+      if (isDeepStrictEqual(next, completed)) blocked.add(completed.kind);
+      else blocked.delete(completed.kind);
     }
-    snapshot = deriveWorkflow(workflowRecords(campaign));
-    phase = snapshot.phase;
-    if (
-      verifying !== undefined &&
-      phase.kind === "verifier" &&
-      isDeepStrictEqual(phase.input, verifying)
-    )
-      return phase;
-    if (phase.kind === "overlap" && overlapping?.opened !== undefined)
-      return phase;
+  } finally {
+    cancel();
+    await Promise.all([...active.values()].map((call) => call.done));
   }
 }
 

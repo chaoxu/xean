@@ -132,7 +132,9 @@ test.each(["request", "role"])(
           throw new Error("must reject without another model call");
         },
       }),
-    ).rejects.toThrow("does not match the derived xean-solve/review request");
+    ).rejects.toThrow(
+      mismatch === "request" ? "review request differs" : "does not belong",
+    );
     expect(calls).toBe(1);
   },
 );

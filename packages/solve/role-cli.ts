@@ -22,7 +22,6 @@ import {
   coordinatorInput,
   explorerInput,
   literatureInput,
-  localSourceRequest,
   jsonSnapshot,
   journalVerdicts,
   roleFromLabel,
@@ -129,6 +128,8 @@ export function inspectCampaignSnapshot(
       entry.kind === "evidence" ? [[entry.call, entry.evidence] as const] : [],
     ),
   );
+  const snapshot =
+    config.kind === "workflow" ? deriveWorkflow(records) : undefined;
   const accounting = derivePiAccounting(records);
   const coreCalls = inspectCoreCallSummaries(records, accounting);
   const calls = coreCalls
@@ -148,15 +149,10 @@ export function inspectCampaignSnapshot(
         submissionError =
           error instanceof Error ? error.message : String(error);
       }
-      const outcome =
-        pi?.outcome ??
-        provider?.state ??
-        (facts.state === "returned" &&
-        localSourceRequest.safeParse(entry.request).success
-          ? "succeeded"
-          : undefined);
+      const outcome = pi?.outcome ?? provider?.state;
       return {
         ...facts,
+        ...snapshot?.noteSubmissions.find((value) => value.call === entry.seq),
         elapsedMs:
           facts.settledAtMs === undefined
             ? undefined
@@ -173,8 +169,6 @@ export function inspectCampaignSnapshot(
         request: options.includeRequests ? entry.request : undefined,
       };
     });
-  const snapshot =
-    config.kind === "workflow" ? deriveWorkflow(records) : undefined;
   const phase = snapshot?.phase;
   const report =
     phase?.kind === "accepted" || phase?.kind === "turn-limit"

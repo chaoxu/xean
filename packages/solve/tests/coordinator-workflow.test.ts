@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { openCampaign, openReader } from "xean";
+import { createCampaign, openCampaign, openReader } from "xean";
 
 import { coordinatorCall, createPiRoles, literatureCall } from "../pi-roles";
 import { inspectCampaign, submitNotes } from "../role-cli";
@@ -49,10 +49,9 @@ test("coordinator reads frozen older texts on demand and journals the read", asy
       },
     ],
   };
-  const campaign = await createWorkflowCampaign(
-    campaignPath(),
-    workflowConfiguration({ task: input.task, settings: roleSettings() }),
-  );
+  const campaign = createCampaign(campaignPath(), "xean-solve", {
+    kind: "calls",
+  });
   const drive = dependencies([
     {
       onStarted: async (tools) => {
@@ -259,7 +258,7 @@ test("the workflow starts with the coordinator and returns to it after literatur
   });
 });
 
-test("a repeated literature request after a failed search runs a fresh call, and none after a completed one", async () => {
+test("a failed search allows a fresh call, and a successful empty search completes literature", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
@@ -280,14 +279,8 @@ test("a repeated literature request after a failed search runs a fresh call, and
     // The failed search leaves literature inconclusive, so the same request
     // runs a fresh call instead of reusing the failed one.
     { submission: search },
-    { codex: { notes: [{ text: "A cited result.", support: [] }] } },
-    {
-      submission: coordination(
-        { role: "explorer" },
-        [],
-        [{ note: "n1", summary: "A cited result." }],
-      ),
-    },
+    { codex: { notes: [] } },
+    { submission: coordination({ role: "explorer" }) },
     { submission: { solution: false, notes: [] } },
   ]);
   try {
@@ -308,15 +301,10 @@ test("a repeated literature request after a failed search runs a fresh call, and
       "Literature status: inconclusive",
     );
     expect(drive.allCalls[4]?.prompt).toContain("Literature status: completed");
+    expect(phase).toMatchObject({ notes: [] });
     expect(
-      campaign
-        .records({ kinds: ["call"], labels: ["xean-solve/notes"] })
-        .map((entry) => entry.kind === "call" && entry.request),
-    ).toEqual([
-      expect.objectContaining({
-        notes: [{ text: "A cited result.", support: [] }],
-      }),
-    ]);
+      campaign.records({ kinds: ["call"], labels: ["xean-solve/notes"] }),
+    ).toEqual([]);
   } finally {
     campaign.close();
   }
@@ -617,19 +605,19 @@ test("an unusable literature response is replaced by a fresh call on resume", as
     );
     expect(literature).toHaveLength(2);
     expect(
-      records
-        .filter(
-          (entry) =>
-            entry.kind === "call" && entry.label === "xean-solve/notes",
-        )
-        .map((entry) => entry.kind === "call" && entry.request),
-    ).toMatchObject([{ id: `literature:${literature[1]!.seq}` }]);
+      records.filter(
+        (entry) => entry.kind === "call" && entry.label === "xean-solve/notes",
+      ),
+    ).toEqual([]);
   } finally {
     reader.close();
   }
+  expect(await inspectCampaign(path)).toMatchObject({
+    notes: [{ id: "n1", text: "A cited result." }],
+  });
 });
 
-test("a succeeded literature call whose notes were not yet delivered is delivered without a new call", async () => {
+test("settled literature survives a crash and enters before caller notes pending during search", async () => {
   const path = campaignPath();
   const settings = {
     ...roleSettings(),
@@ -656,37 +644,68 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
       },
     }),
   ).rejects.toThrow("stopped before discovery");
-  // The process died after the Codex result was journaled but before delivery.
+  await submitNotes(
+    path,
+    { notes: [{ text: "A caller result.", support: [] }] },
+    "during-search",
+  );
+  expect(
+    await inspectCampaign(path, { includeSubmissions: true }),
+  ).toMatchObject({
+    phase: "literature",
+    notes: [],
+    submissions: [{ id: "during-search", pending: true }],
+  });
+  // The process died immediately after the Codex result was journaled.
   const campaign = openCampaign(path);
-  let call: number;
   try {
-    call = (
-      await campaign.call(
-        {
-          label: roleLabels.literature,
-          role: "literature",
-          request: jsonSnapshot(literatureCall(input, settings.source).request),
-        },
-        async () =>
-          storeCodexResult(campaign, {
-            state: "succeeded",
-            codexVersion: "fake",
-            stdout: codexStdout({
-              notes: [{ text: "A cited result.", support: [] }],
-            }),
-            stderr: "",
+    await campaign.call(
+      {
+        label: roleLabels.literature,
+        role: "literature",
+        parent: campaign
+          .records()
+          .findLast(
+            (entry) => entry.kind === "call" && entry.role === "coordinator",
+          )!.seq,
+        request: jsonSnapshot(literatureCall(input, settings.source).request),
+      },
+      async () =>
+        storeCodexResult(campaign, {
+          state: "succeeded",
+          codexVersion: "fake",
+          stdout: codexStdout({
+            notes: [
+              { text: "A cited result.", support: [] },
+              { text: "Its corollary.", support: [1] },
+            ],
           }),
-      )
-    ).call;
+          stderr: "",
+        }),
+    );
   } finally {
     campaign.close();
   }
+  expect(
+    await inspectCampaign(path, { includeSubmissions: true }),
+  ).toMatchObject({
+    phase: "coordinator",
+    notes: [
+      { id: "n1", text: "A cited result.", support: [] },
+      { id: "n2", text: "Its corollary.", support: ["n1"] },
+    ],
+    submissions: [{ id: "during-search", pending: true }],
+  });
   const drive = dependencies([
     {
       submission: coordination(
         { role: "explorer" },
         [],
-        [{ note: "n1", summary: "A cited result." }],
+        [
+          { note: "n1", summary: "A cited result." },
+          { note: "n2", summary: "Its corollary." },
+          { note: "n3", summary: "A caller result." },
+        ],
       ),
     },
     { submission: { solution: false, notes: [good] } },
@@ -701,19 +720,17 @@ test("a succeeded literature call whose notes were not yet delivered is delivere
     "explorer",
   ]);
   expect(drive.allCalls[0]?.prompt).toContain("A cited result.");
-  const reader = openReader(path);
-  try {
-    expect(
-      [...reader.records()]
-        .filter(
-          (entry) =>
-            entry.kind === "call" && entry.label === "xean-solve/notes",
-        )
-        .map((entry) => entry.kind === "call" && entry.request),
-    ).toMatchObject([{ id: `literature:${call}` }]);
-  } finally {
-    reader.close();
-  }
+  expect(
+    await inspectCampaign(path, { includeSubmissions: true }),
+  ).toMatchObject({
+    notes: [
+      { id: "n1", support: [] },
+      { id: "n2", support: ["n1"] },
+      { id: "n3", text: "A caller result." },
+      { id: "n4", text: good.text },
+    ],
+    submissions: [{ id: "during-search", pending: false, noteIds: ["n3"] }],
+  });
 });
 
 test("coordinator actions own exactly their required payload", () => {

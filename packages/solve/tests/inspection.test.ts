@@ -153,7 +153,15 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
         campaign,
         config.settings,
         dependencies([{ state: "failed", error: "incomplete.max_messages" }]),
-      ).coordinator(input),
+      ).coordinator(
+        input,
+        campaign
+          .records()
+          .find(
+            (entry) =>
+              entry.kind === "call" && entry.label === "xean-solve/allowance",
+          )!.seq,
+      ),
     ).rejects.toThrow("incomplete.max_messages");
     const before = campaign.records();
     const failed = await inspectCampaign(path);
@@ -186,7 +194,15 @@ test("inspection distinguishes a returned Pi failure from success and leaves ret
           },
         },
       ]),
-    ).coordinator(input);
+    ).coordinator(
+      input,
+      campaign
+        .records()
+        .find(
+          (entry) =>
+            entry.kind === "call" && entry.label === "xean-solve/allowance",
+        )!.seq,
+    );
     const succeeded: any = await inspectCampaign(path);
     expect(succeeded.phase).toBe("explorer");
     expect(succeeded.calls[1]).toMatchObject({

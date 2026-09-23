@@ -11,12 +11,12 @@ const requestSchema = z.strictObject({
 });
 export const notesInbox = inbox("notes", requestSchema);
 
-/** Caller notes validate a captured prefix; literature already holds the runner lock. */
+/** Caller notes validate a captured prefix before appending their receipt. */
 export async function appendSubmittedNotes(
   campaign: Campaign,
   input: z.input<typeof submittedNotes>,
   id: string,
-  caller?: {
+  caller: {
     readonly path: string;
     readonly validate: (records: readonly Entry[]) => Promise<void>;
   },
@@ -26,9 +26,12 @@ export async function appendSubmittedNotes(
     id,
     notes: submittedNotes.parse(input).notes,
   });
-  return caller
-    ? notesInbox.appendLocked(caller.path, campaign, request, caller.validate)
-    : notesInbox.append(campaign, request);
+  return notesInbox.appendLocked(
+    caller.path,
+    campaign,
+    request,
+    caller.validate,
+  );
 }
 
 /** Delivery records a coordinator request, not a model verification verdict. */

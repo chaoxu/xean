@@ -4,6 +4,7 @@ import { openCampaign, openReader, type Campaign } from "xean";
 
 import { createPiRoles } from "../pi-roles";
 import {
+  coordinatorInput,
   coordinatorResultFor,
   explorerResultFor,
   judgedBy,
@@ -36,6 +37,63 @@ import {
 } from "./harness";
 
 afterEach(cleanupCampaigns);
+
+test.each(["coordinator", "literature"] as const)(
+  "driver interruption reaches the active %s adapter without a construction-time signal",
+  async (role) => {
+    const settings = roleSettings();
+    settings.coordinatorBehavior = {
+      ...settings.coordinatorBehavior,
+      literature: "required-if-not-started",
+    };
+    const configuration = workflowConfiguration({ task, settings });
+    const campaign = await createWorkflowCampaign(
+      campaignPath(),
+      configuration,
+    );
+    const started = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<never>();
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const wait = (signal?: AbortSignal) => {
+      received = signal;
+      signal?.addEventListener(
+        "abort",
+        () => stopped.reject(new Error("provider aborted")),
+        { once: true },
+      );
+      started.resolve();
+      return stopped.promise;
+    };
+    const drive = dependencies([
+      {
+        submission: {
+          filings: [],
+          action: { role: "literature", request: "Find P." },
+        },
+      },
+    ]);
+    const roles = createPiRoles(campaign, settings, {
+      ...drive,
+      run: (campaign, options) =>
+        role === "coordinator"
+          ? wait(options.signal)
+          : drive.run(campaign, options),
+      codex: (_request, signal) => wait(signal),
+    });
+    const running = runWorkflow(campaign, roles, { signal: controller.signal });
+    try {
+      await started.promise;
+      controller.abort();
+      expect(received?.aborted).toBe(true);
+      await expect(running).rejects.toThrow();
+    } finally {
+      stopped.reject(new Error("test cleanup"));
+      await running.catch(() => {});
+      campaign.close();
+    }
+  },
+);
 
 const task = {
   problem: "Prove P.",
@@ -168,6 +226,26 @@ test("the durable workflow accepts a note every verifier passed", async () => {
   try {
     const roles = createPiRoles(campaign, workflow.settings, drive);
     const phase = await runWorkflow(campaign, roles);
+    const transportChanged = campaign.records().map((entry) => {
+      if (
+        entry.kind !== "call" ||
+        entry.role === undefined ||
+        typeof entry.request !== "object" ||
+        entry.request === null ||
+        Array.isArray(entry.request)
+      )
+        return entry;
+      return {
+        ...entry,
+        request: {
+          ...entry.request,
+          prompt: "Transport wording is not workflow identity.",
+        },
+      };
+    });
+    expect(deriveWorkflow(transportChanged)).toEqual(
+      deriveWorkflow(campaign.records()),
+    );
     expect(phase).toMatchObject({
       kind: "accepted",
       turns: 2,
@@ -523,18 +601,22 @@ test("a verification that fails mid-way resumes on the same verification", async
   campaign.close();
 });
 
-test("a journal written by other prompts is refused", async () => {
+test("workflow calls require their recorded owner", async () => {
   const path = campaignPath();
   const workflow = config();
   const campaign = await createWorkflowCampaign(path, workflow, 4);
   const drive = dependencies([dispatchExplorer()]);
   const roles = createPiRoles(campaign, workflow.settings, drive);
-  await roles.coordinator({
-    task: { ...task, problem: "Prove some other Q." },
-    notes: [],
-  });
+  await expect(roles.coordinator({ task, notes: [] })).rejects.toThrow(
+    "parent call",
+  );
+  const wrong = await campaign.call(
+    { label: "wrong-owner", request: null },
+    async () => null,
+  );
+  await roles.coordinator({ task, notes: [] }, wrong.call);
   expect(() => deriveWorkflow(campaign.records())).toThrow(
-    "does not match the derived coordinator request",
+    "does not belong to its dispatch",
   );
   campaign.close();
 });
@@ -589,7 +671,9 @@ test("a source FAIL kills a conditionally correct note before requirements, and 
     drive.calls.some(({ label }) => label === verifierLabels.requirements),
   ).toBe(false);
   expect(
-    coordinatorResultFor(phase.notes).safeParse({
+    coordinatorResultFor(
+      coordinatorInput.parse({ task, notes: phase.notes }),
+    ).safeParse({
       filings: [{ note: "n2", summary: "P." }],
 
       action: { role: "verifier", verify: [{ note: "n1", verifiers: all }] },
@@ -636,16 +720,22 @@ test("explorer notes name only live earlier notes as support", () => {
 test("coordination files every note without a summary and lists live notes over verified or earlier-listed support", () => {
   const known = {
     summary: "filed",
+    text: "Proof.",
     verdicts: [],
     verified: false,
     dead: false,
   };
-  const schema = coordinatorResultFor([
-    { ...known, id: "n1", support: [], verified: true },
-    { id: "n2", support: ["n1"], verdicts: [], verified: false, dead: false },
-    { ...known, id: "n3", support: ["n2"] },
-    { ...known, id: "n4", support: [], dead: true },
-  ]);
+  const schema = coordinatorResultFor(
+    coordinatorInput.parse({
+      task,
+      notes: [
+        { ...known, id: "n1", support: [], verified: true },
+        { ...known, id: "n2", support: ["n1"], summary: undefined },
+        { ...known, id: "n3", support: ["n2"] },
+        { ...known, id: "n4", support: [], dead: true },
+      ],
+    }),
+  );
   const filings = [{ note: "n2", summary: "new" }];
   const explorer = { role: "explorer", explorerGuidance: "Go.", support: [] };
   expect(schema.safeParse({ filings, action: explorer }).success).toBe(true);

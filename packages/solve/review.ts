@@ -1,8 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
 import {
   codexProfile,
-  matchingCalls,
+  callsAfter,
   correctionAssessment,
   sourceAssessment,
 } from "./pi-roles";
@@ -114,13 +115,15 @@ export async function review(
         return { result, sources, settled: submission.settled };
       };
       let checked: ReturnType<typeof read> | undefined;
-      for (const call of matchingCalls(
+      for (const call of callsAfter(
         campaign.records({ kinds: ["call"], labels: [label] }),
         0,
         label,
-        config.request,
+        undefined,
         "verifier",
       )) {
+        if (!isDeepStrictEqual(call.request, config.request))
+          throw new Error("review request differs from its declaration");
         // A malformed response is an operational failure, not a completed
         // audit. An explicit retry keeps it and makes one fresh call.
         try {

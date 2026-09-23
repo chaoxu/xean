@@ -7,7 +7,6 @@ import {
   applicationId,
   correctnessVerdictsFor,
   journalVerdicts,
-  localSourceRequest,
   type Note,
   type VerifierInput,
 } from "../roles";
@@ -87,7 +86,7 @@ const calls = (campaign: Campaign) =>
     .records({ kinds: ["call"] })
     .filter((entry) => entry.kind === "call");
 
-test("source grouping preserves origin and judged order while local conclusions avoid model calls", async () => {
+test("source grouping preserves origin and judged order while empty checks derive from frozen correctness", async () => {
   const path = campaignPath();
   const campaign = createCampaign(path, applicationId, { kind: "calls" });
   const drive = dependencies([
@@ -110,9 +109,14 @@ test("source grouping preserves origin and judged order while local conclusions 
       });
       established.push(...(await roles.verifier(packet)));
     }
-    const [first, second] = calls(campaign).filter(({ label }) =>
-      label.endsWith("/correctness"),
-    );
+    expect(
+      journalVerdicts(campaign.records()).every(
+        ({ verdict }) => verdict.verifier === "correctness",
+      ),
+    ).toBe(true);
+    const first = calls(campaign).find((entry) =>
+      entry.label.endsWith("/correctness"),
+    )!;
     const packet = input(
       ["n4", "n3", "n2", "n1"].map((id) => ({
         ...makeNote(id),
@@ -124,31 +128,33 @@ test("source grouping preserves origin and judged order while local conclusions 
       calls(campaign)
         .filter(({ label }) => label.endsWith("/source"))
         .map(({ request }) => {
-          const local = localSourceRequest.safeParse(request);
-          if (local.success)
-            return {
-              correctnessCall: local.data.correctnessCall,
-              notes: local.data.notes,
-            };
           const remote = JSON.parse((request as { prompt: string }).prompt);
           return {
-            correctnessCall: remote.correctnessCall,
             notes: remote.notes.map(({ id }: { id: string }) => id),
           };
         }),
-    ).toEqual([
-      { correctnessCall: second!.seq, notes: ["n4"] },
-      { correctnessCall: first!.seq, notes: ["n2"] },
-      { correctnessCall: first!.seq, notes: ["n3", "n1"] },
-    ]);
+    ).toEqual([{ notes: ["n4"] }, { notes: ["n3", "n1"] }]);
     const inspection: any = await inspectCampaign(path);
+    const derived = journalVerdicts(campaign.records()).filter(
+      ({ verdict }) => verdict.note === "n2" && verdict.verifier === "source",
+    );
+    expect(derived).toMatchObject([
+      {
+        call: first!.seq,
+        verdict: { note: "n2", verdict: "PASS" },
+        sources: [],
+      },
+    ]);
+    expect(campaign.records({ kinds: ["evidence"] })).toHaveLength(4);
+    expect(derived[0]!.seq).toBe(derived[0]!.verification);
     expect(
-      inspection.calls.find(
-        (call: any) => call.submission?.verdicts?.[0]?.note === "n2",
-      ).submission,
-    ).toMatchObject({
-      verdicts: [{ note: "n2", verdict: "PASS", sources: [] }],
-    });
+      journalVerdicts(
+        campaign.records({ through: derived[0]!.seq - 1 }),
+      ).filter(({ verdict }) => verdict.note === "n2"),
+    ).toHaveLength(1);
+    expect(
+      inspection.calls.filter((call: any) => call.verifier === "source"),
+    ).toHaveLength(2);
     expect(inspection.accounting.unpricedCalls).toHaveLength(2);
     const verification = calls(campaign).at(-1)!.parent!;
     const receipts = campaign.records();
@@ -279,11 +285,7 @@ test("source wire schemas require assigned premises and explicit nullable correc
   const call = sourceCall(
     roleSettings().source,
     input([makeNote("n1")]),
-    ["n1"],
-    {
-      call: 1,
-      verdicts: [{ ...assigned[0]!, verdict: "PASS", report: "Correct." }],
-    },
+    assigned,
   );
   const strictObjects = (value: unknown): void => {
     if (value === null || typeof value !== "object") return;
@@ -357,15 +359,7 @@ test("one supplied passage serves identical assignments without copying its text
   const { request, passages } = sourceCall(
     roleSettings().source,
     input(assigned.map(({ note }) => makeNote(note))),
-    assigned.map(({ note }) => note),
-    {
-      call: 2,
-      verdicts: assigned.map((entry) => ({
-        ...entry,
-        verdict: "PASS",
-        report: "Correct.",
-      })),
-    },
+    assigned,
     [{ call: 1, note: "n1", ...source }],
   );
   expect(JSON.parse(request.prompt).passages).toEqual([supplied]);

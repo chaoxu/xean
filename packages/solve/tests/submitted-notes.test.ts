@@ -658,7 +658,11 @@ test("a competing same-id submission wins even on the last validation retry", as
       path,
       validate: async () => {
         if (++validations === 3)
-          await appendSubmittedNotes(campaign, input, "competing");
+          await notesInbox.append(campaign, {
+            schemaVersion: 1,
+            id: "competing",
+            ...input,
+          });
         else
           await campaign.call(
             { label: "concurrent-writer", request: null },

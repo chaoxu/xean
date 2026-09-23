@@ -210,7 +210,15 @@ test("extended verifier prefixes reuse earlier checks across reopening and sourc
       verifierLabels.reconstruction,
     ]);
     const sourceInput = JSON.parse(rest.codexCalls[0]!.prompt);
-    expect(sourceInput.correctnessCall).toBe(correctness.seq);
+    expect(
+      campaign
+        .records()
+        .filter(
+          (entry) =>
+            entry.kind === "call" && entry.label === verifierLabels.correctness,
+        )
+        .map((entry) => entry.seq),
+    ).toEqual([correctness.seq]);
     expect(sourceInput.notes[0]).toMatchObject({
       text: arithmetic,
       externalResults: [{ text: premise }],

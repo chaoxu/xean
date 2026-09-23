@@ -1,7 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { type EntryId } from "xean";
-
 import {
   createPiRoles,
   proofCall,
@@ -101,22 +99,9 @@ test("correctness and reconstruction retain support while source reads only assi
     statementCall(input, target),
     proofCall(input, target, { statement: "Coverage holds." }),
   ]);
-  const native = await sourceCall(
-    { model: "test", reasoning: "low" },
-    input,
-    ["n3"],
-    {
-      call: 1 as EntryId,
-      verdicts: [
-        {
-          note: "n3",
-          verdict: "PASS",
-          report: "Conditional.",
-          externalResults: ["An exact external theorem."],
-        },
-      ],
-    },
-  );
+  const native = await sourceCall({ model: "test", reasoning: "low" }, input, [
+    { note: "n3", externalResults: ["An exact external theorem."] },
+  ]);
   for (const prompt of calls.map((c) => c.prompt)) {
     expect(prompt).toContain(first.text);
     expect(prompt).toContain(inherited.text);
@@ -236,9 +221,10 @@ test("workflow construction and per-call selection both retain ancestors across 
       { id: inherited.id, text: inherited.text },
     ]);
     expect(thirdPrompt).not.toContain("UNRELATED PROOF");
-    expect(phase.notes[0]!.verdicts[1]!.report).toContain(
-      "No source inference or retrieval was needed.",
-    );
+    expect(phase.notes[0]!.verdicts[1]).toMatchObject({
+      verifier: "source",
+      verdict: "PASS",
+    });
     expect(drive.codexCalls).toHaveLength(0);
   } finally {
     campaign.close();

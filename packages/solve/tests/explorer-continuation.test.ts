@@ -1,12 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { openCampaign } from "xean";
 
-import {
-  createPiRoles,
-  explorerCall,
-  sameRequest,
-  solveSettings,
-} from "../pi-roles";
+import { createPiRoles, explorerCall, solveSettings } from "../pi-roles";
 import { guideCampaign, inspectCampaign, submitNotes } from "../role-cli";
 import { init, run } from "../runner";
 import {
@@ -136,24 +131,6 @@ test("only Explorer uses a gate; a solution claim still goes through ordinary ve
     const inspection: any = await inspectCampaign(path);
     expect(inspection.calls[1].submission.solution).toBe(true);
     expect(inspection.result.outcome).toBe("turn-limit");
-    const explored = campaign
-      .records()
-      .find((entry) => entry.kind === "call" && entry.role === "explorer")!;
-    if (explored.kind !== "call") throw new Error("fixture");
-    expect(sameRequest(explored.request, explorerCall(input))).toBe(true);
-    const altered: any = structuredClone(explored.request);
-    delete altered.submissionGate;
-    expect(sameRequest(altered, explorerCall(input))).toBe(false);
-    altered.submissionGate = {
-      ...drive.calls[1]!.submissionGate,
-      contextBudgetTokens: 80_000,
-    };
-    expect(sameRequest(altered, explorerCall(input))).toBe(false);
-    altered.submissionGate = {
-      ...drive.calls[1]!.submissionGate,
-      continuationPrompt: "Different research assignment.",
-    };
-    expect(sameRequest(altered, explorerCall(input))).toBe(false);
     expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
       "turn-limit",
     );
@@ -393,28 +370,6 @@ test.each([1, 3])(
       expect((await deriveWorkflow(campaign.records())).phase.kind).toBe(
         "turn-limit",
       );
-      const call = campaign
-        .records()
-        .find((entry) => entry.kind === "call" && entry.role === "explorer");
-      if (call?.kind !== "call") throw new Error("missing Explorer call");
-      expect(
-        sameRequest(
-          call.request,
-          explorerCall(input, 80_000, maxExplorerResponses),
-        ),
-      ).toBe(true);
-      expect(
-        sameRequest(
-          call.request,
-          explorerCall(input, 90_000, maxExplorerResponses),
-        ),
-      ).toBe(false);
-      expect(
-        sameRequest(
-          call.request,
-          explorerCall(input, 80_000, maxExplorerResponses + 1),
-        ),
-      ).toBe(false);
       const before = campaign.records();
       await runWorkflow(
         campaign,
