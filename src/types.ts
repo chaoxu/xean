@@ -56,6 +56,7 @@ export interface AuditedTool extends ToolDeclaration {
 
 export interface Reader {
   records(options?: RecordQuery): readonly Entry[];
+  scan(options?: RecordQuery): IterableIterator<Entry>;
   record(seq: EntryId): Entry | undefined;
   lastSequence(): number;
   payload(digest: string): Json;

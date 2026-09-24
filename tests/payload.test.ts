@@ -75,10 +75,14 @@ describe("immutable request payloads", () => {
       true,
       42,
       "text",
+      'Unicode α, control \u0000, quotes " and a lone surrogate \ud800',
       [1, 2],
       { input: "literal", payloadRef: "literal" },
       { input: [] },
     ] satisfies Json[]) {
+      expect(campaign.storePayload(value)).toBe(
+        campaign.storePayloadJson(JSON.stringify(value)),
+      );
       expect(campaign.payload(campaign.storePayload(value))).toEqual(value);
       expect(
         campaign.payload(campaign.storePayloadJson(JSON.stringify(value))),

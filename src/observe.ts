@@ -1,6 +1,7 @@
 import { openReader } from "./campaign";
 import {
   derivePiAccounting,
+  piRequestAttempts,
   readPiResponseText,
   summarizePiSpend,
   type PiRequestAttempt,
@@ -10,7 +11,10 @@ import {
 import type { Entry, EntryId, Json, Reader } from "./types";
 
 type CallEntry = Extract<Entry, { kind: "call" }>;
-type ToolCallEntry = Extract<Entry, { kind: "tool-call" }>;
+type ToolCallIdentity = Pick<
+  Extract<Entry, { kind: "tool-call" }>,
+  "seq" | "tool"
+>;
 
 export interface PiUsageBreakdownV2 {
   readonly freshInputTokens: number;
@@ -123,7 +127,14 @@ export type PiAccountingObservationV2 =
   | { readonly state: "unsupported" };
 
 type RecordIndex = ReturnType<typeof indexRecords>;
-type PiCallAccounting = ReturnType<typeof derivePiAccounting>["calls"][number];
+type CallSpend =
+  | {
+      readonly state: "available";
+      readonly operations: readonly PiSpendOperation[];
+      readonly stored?:
+        { readonly state: "succeeded" | "failed" | "cancelled" } | undefined;
+    }
+  | { readonly state: "unsupported" | "unaccounted" };
 
 function observedSpend(spend: PiSpendSummary): PiObservationSpendV2 {
   if (!("measuredUsage" in spend)) return spend;
@@ -186,7 +197,45 @@ function recoveredErrors(
 export function inspectCoreCampaign(path: string): CoreCampaignObservationV2 {
   const reader = openReader(path);
   try {
-    return inspectCoreCampaignRecords(reader, reader.records());
+    const captured = captureCoreCampaign(reader, true);
+    const calls: CoreCallObservationV2[] = [];
+    for (const { call, index } of captured.calls()) {
+      const evidence = reader.records({
+        kinds: ["evidence"],
+        call: call.seq,
+        through: captured.lastSeq,
+      })[0];
+      const value = {
+        ...projectCall(index, call),
+        ...(evidence?.kind === "evidence"
+          ? { evidence: evidence.evidence }
+          : {}),
+      };
+      const accounting = index.accounting.byCall.get(call.seq);
+      const stored =
+        accounting?.state === "available" ? accounting.stored : undefined;
+      const responseText =
+        stored === undefined ? undefined : readPiResponseText(stored, reader);
+      calls.push(
+        responseText && value.pi
+          ? { ...value, pi: { ...value.pi, responseText } }
+          : value,
+      );
+    }
+    return {
+      schema: "xean.core-observation/v2",
+      application: captured.declaration.application,
+      applicationConfig: captured.declaration.config,
+      createdAtMs: captured.declaration.atMs,
+      lastSeq: captured.lastSeq,
+      lastAtMs: captured.lastAtMs,
+      calls,
+      spend: {
+        ...observedCallsSpend(captured.spend),
+        unsupportedCalls: captured.unsupportedCalls,
+        unaccountedCalls: captured.unaccountedCalls,
+      },
+    };
   } finally {
     reader.close();
   }
@@ -197,10 +246,127 @@ export function inspectCoreCampaignSummary(
 ): CoreCampaignSummaryV2 {
   const reader = openReader(path);
   try {
-    return inspectCoreCampaignSummaryRecords(reader.records());
+    const captured = captureCoreCampaign(reader, false);
+    let callCount = 0,
+      unsettledCount = 0,
+      oldestStartedAtMs = Infinity;
+    for (const { call, index } of captured.calls()) {
+      callCount += 1;
+      if (index.results.get(call.seq) === undefined) {
+        unsettledCount += 1;
+        oldestStartedAtMs = Math.min(oldestStartedAtMs, call.atMs);
+      }
+    }
+    return {
+      schema: "xean.core-observation-summary/v2",
+      application: captured.declaration.application,
+      createdAtMs: captured.declaration.atMs,
+      lastSeq: captured.lastSeq,
+      lastAtMs: captured.lastAtMs,
+      callCount,
+      ...(unsettledCount === 0
+        ? {}
+        : { callsWithoutResult: { count: unsettledCount, oldestStartedAtMs } }),
+      spend: {
+        ...observedCallsSpend(captured.spend),
+        unsupportedCalls: captured.unsupportedCalls.length,
+        unaccountedCalls: captured.unaccountedCalls.length,
+      },
+    };
   } finally {
     reader.close();
   }
+}
+
+/** Keep checkpoint identities and accounting, releasing each call's request after projection. */
+function captureCoreCampaign(reader: Reader, includeTools: boolean) {
+  const through = reader.lastSequence();
+  const declaration = reader.record(1);
+  if (declaration?.kind !== "campaign")
+    throw new Error("campaign declaration is unavailable");
+  const checkpoints = new Map<EntryId, EntryId[]>();
+  const checkpointIds = new Set<EntryId>();
+  let lastSeq = declaration.seq,
+    lastAtMs = declaration.atMs;
+  for (const entry of reader.scan({ through })) {
+    lastSeq = entry.seq;
+    lastAtMs = entry.atMs;
+    if (entry.kind !== "call" || entry.label !== "xean/pi-request") continue;
+    const parent = (entry.request as { parent?: unknown } | null)?.parent;
+    const owner =
+      typeof parent === "number" &&
+      Number.isInteger(parent) &&
+      parent > 0 &&
+      parent <= through
+        ? reader.record(parent)
+        : undefined;
+    const attempt = piRequestAttempts([
+      ...(owner === undefined ? [] : [owner]),
+      entry,
+      ...reader.records({ kinds: ["call-result"], parent: entry.seq, through }),
+    ])[0];
+    if (attempt === undefined) continue;
+    checkpointIds.add(entry.seq);
+    const children = checkpoints.get(attempt.parent) ?? [];
+    children.push(entry.seq);
+    checkpoints.set(attempt.parent, children);
+  }
+  const spend: CallSpend[] = [];
+  const unsupportedCalls: EntryId[] = [];
+  const unaccountedCalls: EntryId[] = [];
+  return {
+    declaration,
+    lastSeq,
+    lastAtMs,
+    spend,
+    unsupportedCalls,
+    unaccountedCalls,
+    *calls() {
+      for (const call of reader.scan({ kinds: ["call"], through })) {
+        if (call.kind !== "call" || checkpointIds.has(call.seq)) continue;
+        const frame = [
+          declaration,
+          call,
+          ...reader.records({
+            kinds: ["call-result"],
+            parent: call.seq,
+            through,
+          }),
+          ...(checkpoints.get(call.seq) ?? []).flatMap((seq) => [
+            reader.record(seq)!,
+            ...reader.records({ kinds: ["call-result"], parent: seq, through }),
+          ]),
+        ].sort((a, b) => a.seq - b.seq);
+        const index = indexRecords(frame);
+        if (includeTools) {
+          const tools: ToolCallIdentity[] = [];
+          for (const entry of reader.scan({
+            kinds: ["tool-call"],
+            call: call.seq,
+            through,
+          })) {
+            if (entry.kind === "tool-call")
+              tools.push({ seq: entry.seq, tool: entry.tool });
+          }
+          index.tools.set(call.seq, tools);
+        }
+        const value = index.accounting.byCall.get(call.seq);
+        if (value !== undefined) {
+          if (value.state === "unsupported") unsupportedCalls.push(call.seq);
+          if (!value.settled) unaccountedCalls.push(call.seq);
+          if (value.state === "available")
+            spend.push({
+              state: "available",
+              operations: value.operations,
+              ...(value.stored === undefined
+                ? {}
+                : { stored: { state: value.stored.state } }),
+            });
+        }
+        yield { call, index };
+      }
+    },
+  };
 }
 
 /** Project captured entries, resolving their immutable payloads through reader. */
@@ -274,7 +440,10 @@ export function inspectCoreCampaignSummaryRecords(
       : {
           callsWithoutResult: {
             count: unsettled.length,
-            oldestStartedAtMs: Math.min(...unsettled.map(({ atMs }) => atMs)),
+            oldestStartedAtMs: unsettled.reduce(
+              (oldest, { atMs }) => Math.min(oldest, atMs),
+              Infinity,
+            ),
           },
         }),
     spend: {
@@ -294,7 +463,7 @@ function indexRecords(
     throw new Error("campaign declaration is unavailable");
   }
   const callsById = new Map<EntryId, CallEntry>();
-  const tools = new Map<EntryId, ToolCallEntry[]>();
+  const tools = new Map<EntryId, ToolCallIdentity[]>();
   for (const entry of records) {
     if (entry.kind === "call") callsById.set(entry.seq, entry);
     else if (entry.kind === "tool-call") {
@@ -321,9 +490,7 @@ function indexRecords(
   };
 }
 
-function observedCallsSpend(
-  calls: readonly PiCallAccounting[],
-): PiObservationSpendV2 {
+function observedCallsSpend(calls: readonly CallSpend[]): PiObservationSpendV2 {
   const available = calls.filter((value) => value.state === "available");
   return {
     ...observedSpend(

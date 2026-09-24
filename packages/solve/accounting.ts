@@ -5,15 +5,18 @@ import type { CoreCallSummaryV2 } from "xean/observe";
 import { codexOutcome, codexRequest } from "./source";
 
 /** Read-only cost completeness. Native Codex usage has no recorded price. */
-export function campaignAccounting(
-  records: readonly Entry[],
-  spend: PiSpend = derivePiSpend(records),
-) {
-  const unpricedCalls = records.flatMap((record) =>
-    record.kind === "call" && codexRequest.safeParse(record.request).success
-      ? [record.seq]
-      : [],
-  );
+export function campaignAccounting(records: Iterable<Entry>, spend?: PiSpend) {
+  if (spend === undefined) {
+    records = [...records];
+    spend = derivePiSpend(records as readonly Entry[]);
+  }
+  const unpricedCalls: number[] = [];
+  for (const record of records)
+    if (
+      record.kind === "call" &&
+      codexRequest.safeParse(record.request).success
+    )
+      unpricedCalls.push(record.seq);
   const { unmeasuredRequests, logicalProviderRequests } = spend.summary;
   const measured =
     "measuredUsage" in spend.summary ? spend.summary.measuredUsage : undefined;

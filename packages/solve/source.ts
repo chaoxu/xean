@@ -160,7 +160,7 @@ export function codexTranscript(stdout: string) {
   let searches = 0;
   let usage: CodexUsage | undefined;
   let message: string | undefined;
-  for (const line of stdout.split("\n")) {
+  for (const [line] of stdout.matchAll(/[^\n]+/gu)) {
     if (line.trim() === "") continue;
     const event = eventObject(z.json().parse(JSON.parse(line)));
     const type = z.string().parse(event["type"]);

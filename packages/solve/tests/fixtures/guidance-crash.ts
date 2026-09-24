@@ -1,6 +1,5 @@
 import { openCampaign } from "xean";
 
-import { workflowRecords } from "../../roles";
 import { deriveWorkflow } from "../../workflow";
 
 const path = process.argv[2];
@@ -11,7 +10,7 @@ const campaign = openCampaign(path);
 
 /** The journal boundary before the pending Explorer call. */
 function explorerBoundary(): number {
-  const after = deriveWorkflow(workflowRecords(campaign)).after;
+  const after = deriveWorkflow(campaign).after;
   if (after === undefined)
     throw new Error("the campaign is not at an Explorer boundary");
   return after;

@@ -25,6 +25,14 @@ export class Projection {
     this.verdicts = verdicts.toSorted((a, b) => a.seq - b.seq);
   }
 
+  /** A pending turn may be replayed without changing the last completed turn. */
+  fork(verdicts = this.verdicts): Projection {
+    const copy = new Projection(verdicts);
+    for (const [id, note] of this.notes) copy.notes.set(id, note);
+    for (const [id, history] of this.summaries) copy.summaries.set(id, history);
+    return copy;
+  }
+
   add(entries: readonly StoredNote[], seq: EntryId): void {
     for (const { id, text, support, verification } of entries)
       this.notes.set(id, {
@@ -43,8 +51,7 @@ export class Projection {
   ): void {
     for (const { note, summary } of filings) {
       const history = this.summaries.get(note) ?? [];
-      history.push({ seq, summary });
-      this.summaries.set(note, history);
+      this.summaries.set(note, [...history, { seq, summary }]);
     }
     if (filings.length > 0) this.snapshot = undefined;
   }

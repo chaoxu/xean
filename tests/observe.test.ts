@@ -1,10 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 
 import {
   createCampaign,
+  defineTool,
+  openReader,
   type Campaign,
   type EntryId,
   type Reader,
@@ -139,6 +142,96 @@ test("call summaries preserve full metadata at the captured boundary", async () 
     campaign.close();
   }
 });
+
+test("file observations preserve captured results without materializing historical requests", async () => {
+  const path = campaignPath();
+  const campaign = createCampaign(path, "streamed-observation", {
+    revision: 1,
+  });
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let pending: Promise<unknown> | undefined;
+  try {
+    const local = await campaign.call(
+      {
+        label: "local",
+        request: { text: "large unrelated request".repeat(8192) },
+        tools: [
+          defineTool({
+            name: "lookup",
+            description: "Return local data",
+            input: z.string(),
+            async run() {
+              return "large tool result".repeat(8192);
+            },
+          }),
+        ],
+      },
+      async ({ tools }) => {
+        await tools[0]!.execute("large tool input".repeat(8192));
+        return { text: "large unrelated result".repeat(8192) };
+      },
+    );
+    campaign.recordEvidence(local.call, { source: "application" });
+    await campaign.call(
+      {
+        label: "measured",
+        role: "explorer",
+        parent: local.call,
+        request: piRequest(),
+      },
+      async ({ call }) =>
+        piResult(campaign, call, [
+          measured(firstUsage),
+          { error: "recovered" },
+          measured(secondUsage),
+        ]),
+    );
+    await campaign.call(
+      { label: "unsupported", request: piRequest() },
+      async () => null,
+    );
+    // A coincidental checkpoint label remains an ordinary application call.
+    await campaign.call(
+      { label: "xean/pi-request", request: null },
+      async () => null,
+    );
+    pending = campaign.call(
+      { label: "pending", request: piRequest() },
+      async () => {
+        await gate;
+        return null;
+      },
+    );
+    const records = campaign.records();
+    const expectedFull = inspectCoreCampaignRecords(campaign, records);
+    const expectedSummary = inspectCoreCampaignSummaryRecords(records);
+    const reader = openReader(path);
+    const prototype = Object.getPrototypeOf(reader) as Reader;
+    reader.close();
+    const read = prototype.records;
+    const bounded = spyOn(prototype, "records").mockImplementation(function (
+      this: Reader,
+      query,
+    ) {
+      if (query?.call === undefined && query?.parent === undefined)
+        throw new Error("unbounded array read");
+      return read.call(this, query);
+    });
+    try {
+      expect(inspectCoreCampaign(path)).toEqual(expectedFull);
+      expect(inspectCoreCampaignSummary(path)).toEqual(expectedSummary);
+    } finally {
+      bounded.mockRestore();
+    }
+  } finally {
+    finish();
+    await pending;
+    campaign.close();
+  }
+});
 const secondUsage = {
   input: 0,
   output: 5,
@@ -268,6 +361,7 @@ test("a captured pending call stays pending after its result is appended", async
   };
   const reader: Reader = {
     records: forbidden,
+    scan: forbidden,
     record: forbidden,
     lastSequence: forbidden,
     payload: forbidden,

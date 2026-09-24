@@ -6,6 +6,7 @@ import type { Campaign, Entry, EntryId } from "xean";
 import { z } from "zod";
 
 import { jsonSnapshot, roleLabels } from "./roles";
+import { historyAt, type RecordSource } from "./history";
 
 // An inbox holds caller input, guidance or submitted notes, in the campaign
 // until a boundary freezes it into the next role input. Its calls are local:
@@ -156,18 +157,19 @@ export function inbox<R extends { readonly id: string }>(
     path: string,
     campaign: Campaign,
     request: R,
-    validate?: (records: readonly Entry[]) => Promise<void>,
+    validate?: (source: RecordSource) => Promise<void>,
   ): Promise<Receipt> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const through = campaign.lastSequence();
       if (validate !== undefined) {
-        const records = campaign.records({
-          excludeLabels: ["xean/pi-request"],
-          through,
+        const source = historyAt(campaign, through);
+        const records = source.records({
+          kinds: ["call"],
+          labels: [receiptLabel],
         });
         const prior = existing(records, request);
         if (prior !== undefined) return prior;
-        await validate(records);
+        await validate(source);
       }
       using lock = new Database(`${realpathSync(path)}.inbox.lock`, {
         create: true,
@@ -200,25 +202,23 @@ export function inbox<R extends { readonly id: string }>(
     const through = campaign.lastSequence();
     const records = campaign.records({
       kinds: ["call"],
+      labels: [receiptLabel, boundaryLabel],
+      through,
+    });
+    const consumedThrough = boundaries(records).at(-1)?.through ?? 0;
+    if (!receipts(records).some((entry) => entry.call > consumedThrough))
+      return false;
+    for (const _entry of campaign.scan({
+      kinds: ["call"],
+      after,
+      through,
       labels: [
-        receiptLabel,
         boundaryLabel,
         boundaryLabels.overlap,
         roleLabels.explorer,
         roleLabels.coordinator,
       ],
-      through,
-    });
-    const consumedThrough = boundaries(records).at(-1)?.through ?? 0;
-    if (
-      !receipts(records).some((entry) => entry.call > consumedThrough) ||
-      records.some(
-        (entry) =>
-          entry.kind === "call" &&
-          entry.seq > after &&
-          entry.label !== receiptLabel,
-      )
-    )
+    }))
       return false;
     await campaign.call(
       {

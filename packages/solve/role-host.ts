@@ -29,12 +29,13 @@ import {
   explorerInput,
   explorerResult,
   explorerResultFor,
-  journalVerdicts,
+  VerdictHistory,
   jsonSnapshot,
   judgedBy,
   literatureInput,
   literatureReport,
   missingVerdicts,
+  modelCallLabel,
   noteIdAfter,
   pick,
   proof,
@@ -72,10 +73,6 @@ import {
 } from "./source";
 import { supportClosure } from "./support";
 
-/** Logical calls own function outputs. Their child calls retain model provenance. */
-export const modelCallLabel = (label: string) =>
-  label.replace("xean-solve/", "xean-solve/model/");
-
 function freeze<T>(value: T): T {
   if (value !== null && typeof value === "object") {
     for (const item of Object.values(value)) freeze(item);
@@ -104,6 +101,7 @@ export function createRoleHost(
   replacements: Partial<RoleImplementations> = {},
 ): RoleHost {
   const settings = solveSettings.parse(settingsValue);
+  const history = new VerdictHistory(campaign);
   const roles = { ...defaultRoleImplementations(settings), ...replacements };
   let preparedModels: Promise<SolveModels> | undefined;
   let prepared: Promise<CodexExec> | undefined;
@@ -414,7 +412,7 @@ export function createRoleHost(
         profile: "correctness" | "requirements" | "reconstruction",
         normalize?: (value: unknown, searches: number) => unknown,
       ) {
-        for (const call of campaign.records({
+        for (const call of campaign.scan({
           kinds: ["call"],
           parent: verification,
           after: cursor,
@@ -454,7 +452,8 @@ export function createRoleHost(
         return result;
       }
       const recorded = () =>
-        journalVerdicts(campaign.records())
+        history
+          .read(cursor)
           .filter(
             (entry) =>
               entry.verification === verification && entry.seq <= cursor,
@@ -481,12 +480,12 @@ export function createRoleHost(
               input,
               judged,
               verification,
-              journalVerdicts(campaign.records({ through: cursor })),
+              history.read(cursor),
             )) {
               const packet = sourceInputFor(
                 working,
                 assigned,
-                inspectedPassages(campaign, verification),
+                inspectedPassages(history, verification),
               );
               const result = await check(
                 verifierLabels.source,
@@ -586,7 +585,7 @@ export function createRoleHost(
 }
 
 /** Previously admitted passages are immutable factual inputs to a source role. */
-function inspectedPassages(campaign: Campaign, before: EntryId) {
+function inspectedPassages(history: VerdictHistory, before: EntryId) {
   const passages: Array<{
     call: EntryId;
     note: string;
@@ -595,9 +594,9 @@ function inspectedPassages(campaign: Campaign, before: EntryId) {
     url: string;
     quote: string;
   }> = [];
-  for (const entry of journalVerdicts(
-    campaign.records({ through: before - 1 }),
-  ).toSorted((a, b) => a.call - b.call)) {
+  for (const entry of history
+    .read(before - 1)
+    .toSorted((a, b) => a.call - b.call)) {
     if (entry.verdict.verifier !== "source" || entry.verdict.verdict !== "PASS")
       continue;
     for (const { result, source, url, quote } of entry.sources!) {

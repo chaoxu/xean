@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 
-import { type Entry, type EntryId, type Json, type Reader } from "xean";
+import { type Entry, type EntryId, type Json } from "xean";
 import { z } from "zod";
 
 import { byId, supportClosure } from "./support";
+import { historyAt, recordSource, type RecordSource } from "./history";
 
 export const nonblank = z.string().refine((value) => value.trim().length > 0, {
   message: "must contain non-whitespace text",
@@ -34,14 +35,9 @@ export function assertApplication(
   }
 }
 
-/** Workflow semantics use role calls and receipts, never provider checkpoint payloads. */
-export function workflowRecords(reader: Reader): readonly Entry[] {
-  return reader.records({ excludeLabels: ["xean/pi-request"] });
-}
-
 /** One role call's durable submission and settlement, without other calls' outputs. */
 export function roleCallRecords(
-  reader: Reader,
+  reader: RecordSource,
   call: EntryId,
 ): readonly Entry[] {
   const through = reader.lastSequence();
@@ -57,15 +53,17 @@ export function roleCallRecords(
     call,
     through: settledThrough,
   });
-  const toolIds = new Set(tools.map(({ seq }) => seq));
   return [
     ...(owner === undefined ? [] : [owner]),
     ...tools,
-    ...reader
-      .records({ kinds: ["tool-result"], after: call, through: settledThrough })
-      .filter(
-        (entry) => entry.kind === "tool-result" && toolIds.has(entry.parent),
-      ),
+    ...tools.flatMap(({ seq }) =>
+      reader.records({
+        kinds: ["tool-result"],
+        parent: seq,
+        after: call,
+        through: settledThrough,
+      }),
+    ),
     ...results,
   ].sort((left, right) => left.seq - right.seq);
 }
@@ -107,6 +105,10 @@ export const reconstructionCalls = {
     tool: "submit_proof",
   },
 } as const;
+
+/** Logical calls own function outputs. Their child calls retain model provenance. */
+export const modelCallLabel = (label: string) =>
+  label.replace("xean-solve/", "xean-solve/model/");
 export const roleTools = {
   explorer: "submit_notes",
   coordinator: "submit_coordination",
@@ -1131,15 +1133,48 @@ function verifierEvidenceFor(
 export function journalVerdicts(
   records: readonly Entry[],
 ): readonly JournalVerdict[] {
-  const calls = new Map(
-    records
-      .filter((entry) => entry.kind === "call")
-      .map((entry) => [entry.seq, entry]),
-  );
-  const verdicts: JournalVerdict[] = [];
-  const deriveSources = (verification: EntryId, seq: EntryId): void => {
-    const opening = calls.get(verification);
-    if (opening?.label !== verificationLabel)
+  return new VerdictHistory(recordSource(records)).read();
+}
+
+/** Admit each receipt once; historical role inputs stay in the journal. */
+export class VerdictHistory {
+  private through = 0;
+  private readonly verdicts: JournalVerdict[] = [];
+
+  constructor(private readonly source: RecordSource) {}
+
+  read(through = this.source.lastSequence()): readonly JournalVerdict[] {
+    if (through > this.through) {
+      const reader = historyAt(this.source, through);
+      const evidence = reader.records({
+        kinds: ["evidence"],
+        after: this.through,
+      });
+      let next = 0;
+      for (const opening of reader.scan({
+        kinds: ["call"],
+        labels: [verificationLabel],
+        after: this.through,
+      })) {
+        while (next < evidence.length && evidence[next]!.seq < opening.seq)
+          this.admit(reader, evidence[next++]!);
+        this.deriveSources(reader, opening.seq, opening.seq);
+        this.through = opening.seq;
+      }
+      while (next < evidence.length) this.admit(reader, evidence[next++]!);
+      this.through = through;
+    }
+    return this.verdicts.filter((entry) => entry.seq <= through);
+  }
+
+  private deriveSources(
+    reader: RecordSource,
+    verification: EntryId,
+    seq: EntryId,
+  ): void {
+    const verdicts = this.verdicts;
+    const opening = reader.record(verification);
+    if (opening?.kind !== "call" || opening.label !== verificationLabel)
       throw new Error(`missing verification ${verification}`);
     const input = verifierInput.parse(opening.request);
     const have = verificationVerdicts(
@@ -1172,27 +1207,32 @@ export function journalVerdicts(
         sources: [],
       });
     }
-  };
-  for (const entry of records) {
-    if (entry.kind === "call" && entry.label === verificationLabel)
-      deriveSources(entry.seq, entry.seq);
-    if (entry.kind !== "evidence") continue;
-    const call = calls.get(entry.call);
+  }
+
+  private admit(reader: RecordSource, entry: Entry): void {
+    if (entry.kind !== "evidence") return;
+    const verdicts = this.verdicts;
+    const call = reader.record(entry.call);
     const verifier =
       call?.kind === "call" ? verifierFromLabel(call.label) : undefined;
-    if (call?.kind !== "call" || verifier === undefined) continue;
+    if (call?.kind !== "call" || verifier === undefined) return;
+    const opening =
+      call.parent === undefined ? undefined : reader.record(call.parent);
     let schema;
     try {
       schema = verifierEvidenceFor(
         verdicts.filter((entry) => entry.seq < call.seq),
-        call.parent === undefined ? undefined : calls.get(call.parent),
+        opening,
         verifier,
       );
     } catch {
       throw new Error(`malformed verdict ${entry.seq}`);
     }
     const parsed = schema.safeParse(entry.evidence);
-    const result = returnedOutput(records, call.seq);
+    const result = returnedOutput(
+      reader.records({ kinds: ["call-result"], parent: call.seq }),
+      call.seq,
+    );
     const output = roleOutput.safeParse(result?.output);
     if (
       !parsed.success ||
@@ -1207,7 +1247,8 @@ export function journalVerdicts(
       result.settled >= entry.seq ||
       call.role !== "verifier" ||
       call.parent === undefined ||
-      calls.get(call.parent)?.label !== verificationLabel ||
+      opening?.kind !== "call" ||
+      opening.label !== verificationLabel ||
       verdicts.some(
         (prior) =>
           prior.verification === call.parent &&
@@ -1233,9 +1274,15 @@ export function journalVerdicts(
         ...(sources === undefined ? {} : { sources }),
       });
     }
-    if (verifier === "correctness") deriveSources(call.parent, entry.seq);
+    if (verifier === "correctness")
+      this.deriveSources(reader, call.parent, entry.seq);
+    this.through = entry.seq;
   }
-  return verdicts;
+}
+
+/** Read only verification evidence and the owning calls needed to validate it. */
+export function readJournalVerdicts(reader: RecordSource, through?: number) {
+  return new VerdictHistory(reader).read(through);
 }
 
 /** The returned call-result of a call, if it settled by returning. */

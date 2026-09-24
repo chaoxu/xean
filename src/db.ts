@@ -56,12 +56,26 @@ interface EntryRow {
 const payloadDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const digest = (text: string): string =>
   new Bun.CryptoHasher("sha256").update(text).digest("hex");
-function parsedRow(row: EntryRow): Entry {
+function parsedRow(row: EntryRow, strings?: Map<string, string>): Entry {
+  // Historical requests often contain the same note texts. Share immutable
+  // strings within this read instead of retaining one copy per request.
+  const body = JSON.parse(
+    row.body,
+    strings === undefined
+      ? undefined
+      : (_key, value: unknown) => {
+          if (typeof value !== "string") return value;
+          const saved = strings.get(value);
+          if (saved !== undefined) return saved;
+          strings.set(value, value);
+          return value;
+        },
+  );
   return entrySchema.parse({
     seq: Number(row.seq),
     atMs: Number(row.atMs),
     kind: row.kind,
-    ...JSON.parse(row.body),
+    ...body,
   });
 }
 function configure(database: Database): void {
@@ -222,11 +236,21 @@ export class Journal {
   }
 
   records(options: RecordQuery = {}): readonly Entry[] {
+    const strings = new Map<string, string>();
+    return Array.from(this.rows(options), (row) => parsedRow(row, strings));
+  }
+
+  /** Streaming reads do not retain prior rows or intern their strings. */
+  *scan(options: RecordQuery = {}): IterableIterator<Entry> {
+    for (const row of this.rows(options)) yield parsedRow(row);
+  }
+
+  private *rows(options: RecordQuery): IterableIterator<EntryRow> {
     const query = recordQuery.parse(options);
     const where: string[] = [];
     const values: (string | number)[] = [];
     if (query.kinds !== undefined) {
-      if (query.kinds.length === 0) return [];
+      if (query.kinds.length === 0) return;
       where.push(`e.kind IN (${query.kinds.map(() => "?").join(",")})`);
       values.push(...query.kinds);
     }
@@ -249,7 +273,7 @@ export class Journal {
     ] as const) {
       if (labels === undefined) continue;
       if (labels.length === 0) {
-        if (!exclude) return [];
+        if (!exclude) return;
         continue;
       }
       const slots = labels.map(() => "?").join(",");
@@ -258,13 +282,15 @@ export class Journal {
       values.push(...labels, ...labels);
     }
     const sql = `SELECT e.seq, e.at_ms AS atMs, e.kind, e.body FROM entries e${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY e.seq`;
-    const records: Entry[] = [];
-    for (const row of this.#database
-      .query<EntryRow, (string | number)[]>(sql)
-      .iterate(...values)) {
-      records.push(parsedRow(row));
+    // An uncached statement allows nested scans using the same query shape.
+    const statement = this.#database.prepare<EntryRow, (string | number)[]>(
+      sql,
+    );
+    try {
+      yield* statement.iterate(...values);
+    } finally {
+      statement.finalize();
     }
-    return records;
   }
 
   record(seq: EntryId): Entry | undefined {
@@ -288,6 +314,10 @@ export class Journal {
 
   /** Saves exact JSON serialization semantics under the content digest. */
   storePayload(value: Json): string {
+    // Process logs are already immutable strings. Their JSON encoding is
+    // canonical, so avoid decoding and encoding a second full copy.
+    if (typeof value === "string")
+      return this.insertPayload(JSON.stringify(value));
     // Validate the public JSON value, then preserve the serializer's own keys.
     // Zod's defensive record copy omits a literal "__proto__" property.
     copyJson(value);
@@ -296,6 +326,10 @@ export class Journal {
 
   storePayloadJson(encoded: string): string {
     const body = JSON.stringify(JSON.parse(z.string().parse(encoded)));
+    return this.insertPayload(body);
+  }
+
+  private insertPayload(body: string): string {
     const hash = digest(body);
     this.#database.run(
       "INSERT OR IGNORE INTO payloads(digest, body) VALUES (?, ?)",

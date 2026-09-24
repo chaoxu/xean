@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { inbox } from "./inbox";
 import { nonblank, submittedNotes } from "./roles";
+import type { RecordSource } from "./history";
 
 const requestSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -18,7 +19,7 @@ export async function appendSubmittedNotes(
   id: string,
   caller: {
     readonly path: string;
-    readonly validate: (records: readonly Entry[]) => Promise<void>;
+    readonly validate: (source: RecordSource) => Promise<void>;
   },
 ) {
   const request = requestSchema.parse({

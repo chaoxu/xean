@@ -1,6 +1,7 @@
 import type { Entry, EntryId, Json } from "xean";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { recordSource, type RecordSource } from "./history";
 
 import {
   coordinatorResult,
@@ -42,13 +43,17 @@ export function assertRoleInput(call: CallEntry, input: unknown): void {
 
 /** Calls belong to a durable dispatch; provider requests are provenance. */
 export function* callsAfter(
-  records: readonly Entry[],
+  records: readonly Entry[] | RecordSource,
   after: EntryId,
   label: string,
   parent?: EntryId,
   role = roleFromLabel(label),
 ): Generator<CallEntry> {
-  for (const call of records) {
+  for (const call of recordSource(records).scan({
+    kinds: ["call"],
+    labels: [label],
+    after,
+  })) {
     if (call.kind !== "call" || call.seq <= after || call.label !== label)
       continue;
     if (call.parent !== parent || call.role !== role)

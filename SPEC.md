@@ -49,6 +49,8 @@ Rows and public values are validated with closed Zod schemas. The row primary ke
 
 Payload storage is explicit and does not rewrite or expand an `Entry`. An application may include a payload digest in its versioned request protocol, then retrieve that payload only for full inspection or replay. Saving a payload before its journal reference can leave an unreferenced immutable payload after a crash. A saved payload alone records no dispatched request or provider result.
 
+`Reader.scan(query?)` applies the same filters as `records` and validates one entry at a time without retaining earlier rows. Nested scans have independent cursors; finishing or breaking a `for...of` loop closes its cursor. Explicit iterators must be completed or closed with `return()` before closing the reader. Capture `through` for a consistent prefix. Array reads share identical immutable strings within that read; streaming reads keep no string cache spanning the journal.
+
 ## Calls and tools
 
 ```ts

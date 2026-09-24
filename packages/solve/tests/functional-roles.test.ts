@@ -4,7 +4,12 @@ import { createCampaign, openCampaign } from "xean";
 import { coordinatorCall } from "../pi-roles";
 import type { RoleImplementations } from "../role-functions";
 import { createRoleHost } from "../role-host";
-import { applicationId, verifierNames } from "../roles";
+import {
+  applicationId,
+  journalVerdicts,
+  readJournalVerdicts,
+  verifierNames,
+} from "../roles";
 import { run } from "../runner";
 import {
   deriveWorkflow,
@@ -227,6 +232,8 @@ test.each([false, true])(
           ),
       ).toBe(true);
       const records = campaign.records();
+      expect(deriveWorkflow(campaign)).toEqual(deriveWorkflow(records));
+      expect(readJournalVerdicts(campaign)).toEqual(journalVerdicts(records));
       campaign.close();
       campaign = openCampaign(path);
       const fail = async () => {

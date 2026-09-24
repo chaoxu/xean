@@ -453,7 +453,7 @@ test("an earlier PASS passage is supplied under the new call's premise ID and re
 });
 
 test.each(["wrong-id", "changed-result"])(
-  "source receipt corruption fails before reuse: %s",
+  "source receipt corruption fails before reuse on recovery: %s",
   async (corruption) => {
     const campaign = createCampaign(campaignPath(), applicationId, {
       kind: "calls",
@@ -490,7 +490,10 @@ test.each(["wrong-id", "changed-result"])(
       expect(() => inspectCampaignRecords(campaign.records())).toThrow(
         "malformed verdict",
       );
-      await expect(roles.verifier(input([makeNote("n2")]))).rejects.toThrow(
+      // Recovery validates stored receipts before caching them. A running
+      // host keeps already admitted facts from the append-only journal.
+      const resumed = createRoleHost(campaign, roleSettings(), drive);
+      await expect(resumed.verifier(input([makeNote("n2")]))).rejects.toThrow(
         "malformed verdict",
       );
       expect(drive.codexCalls).toHaveLength(1);

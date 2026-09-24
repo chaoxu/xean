@@ -13,8 +13,13 @@ import {
 } from "./pi-roles";
 import { createRoleHost } from "./role-host";
 import type { RoleImplementations } from "./role-functions";
-import { applicationId, nonblank, task, workflowRecords } from "./roles";
-import { appendAllowance, positiveTurns, turnAllowances } from "./allowance";
+import { applicationId, nonblank, task } from "./roles";
+import {
+  allowanceLabel,
+  appendAllowance,
+  positiveTurns,
+  turnAllowances,
+} from "./allowance";
 import {
   codexCommand,
   openConfiguredCampaign,
@@ -26,12 +31,12 @@ import { withSerialToolCalls } from "./serial-tools";
 import { prepareCodex } from "./source";
 import {
   deriveWorkflow,
+  Workflow,
   runWorkflow,
   workflowConfiguration,
   workflowResult,
   type WorkflowConfig,
   type WorkflowResult,
-  type WorkflowSnapshot,
 } from "./workflow";
 
 const runRequest = z
@@ -95,8 +100,9 @@ async function prepareAllowance(
   turns?: number,
   id?: string,
 ) {
-  const records = workflowRecords(campaign);
-  const allowances = turnAllowances(records);
+  const allowances = turnAllowances(
+    campaign.records({ kinds: ["call"], labels: [allowanceLabel] }),
+  );
   if (allowances.length === 0) {
     await appendAllowance(campaign, turns ?? 20, 0, id ?? "initial");
     return;
@@ -111,7 +117,7 @@ async function prepareAllowance(
     return;
   }
   if (id === undefined) throw new Error("adding turns requires a new --id");
-  const snapshot = deriveWorkflow(records);
+  const snapshot = deriveWorkflow(campaign);
   if (snapshot.phase.kind !== "turn-limit")
     throw new Error(
       "only a campaign at its turn limit can receive another allowance",
@@ -123,7 +129,7 @@ async function drive(
   campaign: Campaign,
   config: WorkflowConfig,
   dependencies: RunDependencies,
-  initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
+  workflow = new Workflow(campaign),
 ): Promise<RunResult> {
   const roles = createRoleHost(
     campaign,
@@ -132,9 +138,7 @@ async function drive(
     dependencies.roles,
   );
   try {
-    const pending = runWorkflow(campaign, roles, dependencies, initial);
-    initial = undefined;
-    const phase = await pending;
+    const phase = await runWorkflow(campaign, roles, dependencies, workflow);
     if (phase.kind === "accepted" || phase.kind === "turn-limit") {
       return workflowResult(phase);
     }
@@ -142,7 +146,7 @@ async function drive(
   } catch (error) {
     let at: string;
     try {
-      at = deriveWorkflow(workflowRecords(campaign)).phase.kind;
+      at = workflow.read().phase.kind;
     } catch {
       throw error;
     }
@@ -169,17 +173,12 @@ export async function run(
     let campaign = existsSync(request.campaignPath)
       ? openConfiguredCampaign(request.campaignPath, applicationId, config)
       : undefined;
-    let initial:
-      | { readonly snapshot: WorkflowSnapshot; readonly through: number }
-      | undefined;
+    let initial: Workflow | undefined;
     try {
       if (campaign !== undefined) {
         await prepareAllowance(campaign, request.turns, request.id);
-        const through = campaign.lastSequence();
-        const snapshot = deriveWorkflow(
-          campaign.records({ excludeLabels: ["xean/pi-request"], through }),
-        );
-        initial = { snapshot, through };
+        initial = new Workflow(campaign);
+        const snapshot = initial.read();
         const phase = snapshot.phase;
         if (phase.kind === "accepted" || phase.kind === "turn-limit")
           return workflowResult(phase);

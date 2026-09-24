@@ -4,7 +4,8 @@ import { z } from "zod";
 
 import { Projection } from "./projection";
 import { boundaryLabels } from "./inbox";
-import { turnAllowances } from "./allowance";
+import { allowanceLabel, turnAllowances } from "./allowance";
+import { historyAt, recordSource, type RecordSource } from "./history";
 import { explorerGuidance, guidanceInbox } from "./guidance";
 import { notesInbox } from "./notes";
 import { byId, supportClosure } from "./support";
@@ -22,7 +23,7 @@ import {
   coordinatorResultFor,
   explorerResultFor,
   explorerInput,
-  journalVerdicts,
+  VerdictHistory,
   jsonSnapshot,
   noteIdAfter,
   pick,
@@ -32,7 +33,7 @@ import {
   verifierInput,
   roleLabels,
   literatureInput,
-  workflowRecords,
+  roleCallRecords,
   type CoordinatorInput,
   type CoordinatorAction,
   type CoordinatorResult,
@@ -124,7 +125,6 @@ export interface WorkflowSnapshot {
   readonly noteSubmissions: readonly {
     readonly call: EntryId;
     readonly noteIds: readonly string[];
-    readonly support?: readonly string[];
   }[];
 }
 
@@ -138,20 +138,18 @@ function parseConfig(declaration: Entry | undefined): WorkflowConfig {
 }
 
 function firstCall(
-  records: readonly Entry[],
+  records: RecordSource,
   after: EntryId,
   label: string,
   parent: EntryId,
   request?: Json,
 ): CallEntry | undefined {
-  const call = callsAfter(records, after, label, parent).next().value;
-  if (
-    call !== undefined &&
-    request !== undefined &&
-    !isDeepStrictEqual(call.request, request)
-  )
-    throw new Error("frozen call input does not match its dispatch");
-  return call;
+  for (const call of callsAfter(records, after, label, parent)) {
+    if (request !== undefined && !isDeepStrictEqual(call.request, request))
+      throw new Error("frozen call input does not match its dispatch");
+    return call;
+  }
+  return undefined;
 }
 
 /**
@@ -191,41 +189,49 @@ export function verificationPrefix(
 
 /** The replay state of one derivation; the cursor is historical, never the journal's latest entry. */
 interface Fold {
-  readonly records: readonly Entry[];
+  readonly source: RecordSource;
+  readonly inboxRecords: readonly Entry[];
   readonly base: Pick<WorkflowSnapshot, "config" | "allowances" | "maxTurns">;
-  readonly verdicts: ReturnType<typeof journalVerdicts>;
+  readonly verdicts: ReturnType<VerdictHistory["read"]>;
   readonly projection: Projection;
   readonly noteSubmissions: Array<WorkflowSnapshot["noteSubmissions"][number]>;
   cursor: EntryId;
   owner: EntryId;
   turns: number;
+  emptySubmission: boolean;
+  literatureStatus: LiteratureStatus;
   /** Pending work may expose saved notes beyond its last completed phase. */
   through?: EntryId;
   after?: EntryId;
 }
 
-function openFold(records: readonly Entry[]): Fold {
-  const config = parseConfig(records[0]);
-  const allowances = turnAllowances(records);
+function openFold(source: RecordSource): Fold {
+  const declaration = source.record(1);
+  const config = parseConfig(declaration);
+  const allowances = turnAllowances(
+    source.records({ kinds: ["call"], labels: [allowanceLabel] }),
+  );
   const maxTurns = allowances.at(-1)?.maxTurns;
   if (maxTurns === undefined)
     throw new Error("campaign has no initial turn allowance; run init first");
-  const verdicts = journalVerdicts(records);
   return {
-    records,
+    source,
+    inboxRecords: [],
     base: { config, allowances, maxTurns },
-    verdicts,
-    projection: new Projection(verdicts),
+    verdicts: [],
+    projection: new Projection([]),
     noteSubmissions: [],
-    cursor: records[0]!.seq,
+    cursor: declaration!.seq,
     owner: allowances[0]!.call,
     turns: 0,
+    emptySubmission: false,
+    literatureStatus: "not-started",
   };
 }
 
 /** Frozen caller submissions at this boundary enter the note graph before the next coordinator. */
 function includeSubmitted(fold: Fold, after: EntryId): boolean {
-  const boundary = notesInbox.at(fold.records, after);
+  const boundary = notesInbox.at(fold.inboxRecords, after);
   if (boundary === undefined) return false;
   let count = fold.projection.at(after).length;
   for (const submission of boundary.receipts) {
@@ -284,13 +290,13 @@ function replayExplorerTurn(
   support: readonly string[],
   known: readonly Note[] = fold.projection.at(fold.cursor),
 ): ExplorerPhase | { readonly emptySubmission: boolean } {
-  const { records, base } = fold;
+  const { source, base } = fold;
   let after = fold.cursor;
   let through = fold.cursor;
   const selected = [...support];
   // Advice stays frozen for the turn. A fresh call after interruption
   // also receives every note already saved by this turn, in full.
-  const advice = explorerGuidance(records, fold.cursor, guidance);
+  const advice = explorerGuidance(fold.inboxRecords, fold.cursor, guidance);
   for (;;) {
     const explorerRequest = explorerInputFor(
       base.config.task,
@@ -298,7 +304,7 @@ function replayExplorerTurn(
       selected,
       advice,
     );
-    const call = firstCall(records, after, roleLabels.explorer, fold.owner);
+    const call = firstCall(source, after, roleLabels.explorer, fold.owner);
     if (call === undefined) {
       fold.after = fold.cursor;
       fold.through = through;
@@ -308,11 +314,10 @@ function replayExplorerTurn(
     const submission = {
       call: call.seq,
       noteIds: [] as string[],
-      support: explorerRequest.support.map((note) => note.id),
     };
     fold.noteSubmissions.push(submission);
     const saved = readRoleSubmission(
-      records,
+      roleCallRecords(source, call.seq),
       call.seq,
       { schema: explorerResultFor(known) },
       true,
@@ -353,7 +358,7 @@ function replayVerification(
   fold: Fold,
   listed: readonly Verification[],
 ): VerifierPhase | AcceptedPhase | undefined {
-  const { records, base } = fold;
+  const { source, base } = fold;
   let remaining = listed;
   while (remaining.length > 0) {
     const filed = fold.projection.at(fold.cursor);
@@ -384,7 +389,7 @@ function replayVerification(
     });
     // The local opening freezes the exact input even when earlier checks are reused.
     const first = firstCall(
-      records,
+      source,
       fold.cursor,
       verificationLabel,
       fold.owner,
@@ -445,7 +450,11 @@ function replayOverlap(
   },
 ): OverlapPhase | AcceptedPhase | { readonly emptySubmission: boolean } {
   const after = fold.cursor;
-  const advice = explorerGuidance(fold.records, after, action.explorerGuidance);
+  const advice = explorerGuidance(
+    fold.inboxRecords,
+    after,
+    action.explorerGuidance,
+  );
   const known = fold.projection.at(after);
   const input = explorerInputFor(
     fold.base.config.task,
@@ -460,7 +469,7 @@ function replayOverlap(
     verify: action.verify,
   });
   const opening = firstCall(
-    fold.records,
+    fold.source,
     after,
     boundaryLabels.overlap,
     fold.owner,
@@ -470,7 +479,7 @@ function replayOverlap(
     return { kind: "overlap", after, parent: fold.owner, request };
 
   const joined = firstCall(
-    fold.records,
+    fold.source,
     opening.seq,
     overlapJoinLabel,
     opening.seq,
@@ -479,23 +488,23 @@ function replayOverlap(
       after: opening.seq,
     },
   );
-  const records =
-    joined === undefined
-      ? fold.records
-      : fold.records.filter((entry) => entry.seq <= joined.seq);
+  const through = joined?.seq ?? fold.source.lastSequence();
+  const frame = {
+    ...fold,
+    source: historyAt(fold.source, through),
+    inboxRecords: fold.inboxRecords.filter((entry) => entry.seq <= through),
+    cursor: opening.seq,
+    owner: opening.seq,
+  };
   // Caller notes enter only after the join. Explorer alone assigns new note IDs.
-  const pendingVerifier = replayVerification(
-    { ...fold, records, cursor: opening.seq, owner: opening.seq },
-    action.verify,
-  );
+  const pendingVerifier = replayVerification({ ...frame }, action.verify);
   const exploring = replayExplorerTurn(
-    { ...fold, records, cursor: opening.seq, owner: opening.seq },
+    { ...frame },
     advice,
     action.support,
     known,
   );
   const pendingExplorer = "kind" in exploring ? exploring : undefined;
-  const through = joined?.seq ?? records.at(-1)!.seq;
   const notes = fold.projection.at(through);
   if (joined !== undefined) {
     if (pendingVerifier?.kind === "accepted") {
@@ -539,12 +548,11 @@ function replayOverlap(
  * checks the whole list; later dispatches can check other ready notes or
  * extend completed checks without requiring more exploration.
  */
-function replay(fold: Fold): WorkflowPhase {
-  const { records, base } = fold;
+function replay(fold: Fold, completed: (fold: Fold) => void): WorkflowPhase {
+  const { source, base } = fold;
   const settings = base.config.settings;
-  let emptySubmission = false;
-  let literatureStatus: LiteratureStatus = "not-started";
   for (;;) {
+    completed(fold);
     const included = includeSubmitted(fold, fold.cursor);
     const notes = fold.projection.at(fold.cursor);
     if (fold.turns >= base.maxTurns)
@@ -552,22 +560,26 @@ function replay(fold: Fold): WorkflowPhase {
     const input = coordinatorInput.parse({
       task: base.config.task,
       notes,
-      literatureStatus,
+      literatureStatus: fold.literatureStatus,
       coordinatorBehavior: settings.coordinatorBehavior,
-      ...(emptySubmission ? { emptySubmission: true } : {}),
+      ...(fold.emptySubmission ? { emptySubmission: true } : {}),
     });
     let coordinated:
       { call: EntryId; settled: EntryId; value: CoordinatorResult } | undefined;
     for (const call of callsAfter(
-      records,
+      source,
       fold.cursor,
       roleLabels.coordinator,
       fold.owner,
     )) {
       assertRoleInput(call, input);
-      const saved = readRoleSubmission(records, call.seq, {
-        schema: coordinatorResultFor(input),
-      });
+      const saved = readRoleSubmission(
+        roleCallRecords(source, call.seq),
+        call.seq,
+        {
+          schema: coordinatorResultFor(input),
+        },
+      );
       if (saved !== undefined) {
         coordinated = { call: call.seq, ...saved };
         break;
@@ -580,7 +592,7 @@ function replay(fold: Fold): WorkflowPhase {
     fold.cursor = coordinated.settled;
     fold.owner = coordinated.call;
     fold.projection.file(coordinated.value.filings, fold.cursor);
-    emptySubmission = false;
+    fold.emptySubmission = false;
     const { action } = coordinated.value;
     fold.turns += 1;
     if (action.role === "literature") {
@@ -590,14 +602,17 @@ function replay(fold: Fold): WorkflowPhase {
       });
       let settled;
       for (const call of callsAfter(
-        records,
+        source,
         fold.cursor,
         roleLabels.literature,
         fold.owner,
       )) {
         assertRoleInput(call, input);
-        literatureStatus = "inconclusive";
-        const outcome = literatureOutcome(records, call.seq);
+        fold.literatureStatus = "inconclusive";
+        const outcome = literatureOutcome(
+          roleCallRecords(source, call.seq),
+          call.seq,
+        );
         if (outcome !== undefined) {
           settled = { call: call.seq, ...outcome };
           break;
@@ -609,7 +624,7 @@ function replay(fold: Fold): WorkflowPhase {
           input,
           parent: fold.owner,
         };
-      if (settled.report !== undefined) literatureStatus = "completed";
+      if (settled.report !== undefined) fold.literatureStatus = "completed";
       const count = fold.projection.at(fold.cursor).length;
       const notes = (settled.report?.notes ?? []).map((note, index) => ({
         id: noteIdAfter(count, index),
@@ -632,11 +647,11 @@ function replay(fold: Fold): WorkflowPhase {
         action.support,
       );
       if ("kind" in turn) return turn;
-      emptySubmission = turn.emptySubmission;
+      fold.emptySubmission = turn.emptySubmission;
     } else if ("explorerGuidance" in action) {
       const overlap = replayOverlap(fold, action);
       if ("kind" in overlap) return overlap;
-      emptySubmission = overlap.emptySubmission;
+      fold.emptySubmission = overlap.emptySubmission;
     } else {
       const verification = replayVerification(fold, action.verify);
       if (verification !== undefined) return verification;
@@ -644,16 +659,69 @@ function replay(fold: Fold): WorkflowPhase {
   }
 }
 
-export function deriveWorkflow(records: readonly Entry[]): WorkflowSnapshot {
-  const fold = openFold(records);
-  const phase = replay(fold);
-  return {
-    ...fold.base,
-    noteSubmissions: fold.noteSubmissions,
-    notes: fold.projection.at(fold.through ?? fold.cursor),
-    phase,
-    ...(fold.after === undefined ? {} : { after: fold.after }),
-  };
+export class Workflow {
+  private checkpoint: Fold;
+  private readonly verdicts: VerdictHistory;
+  private latest: { through: number; snapshot: WorkflowSnapshot } | undefined;
+
+  constructor(private readonly source: RecordSource) {
+    this.checkpoint = openFold(historyAt(source, source.lastSequence()));
+    this.verdicts = new VerdictHistory(source);
+  }
+
+  read(): WorkflowSnapshot {
+    const through = this.source.lastSequence();
+    if (this.latest?.through === through) return this.latest.snapshot;
+    const source = historyAt(this.source, through);
+    const verdicts = this.verdicts.read(through);
+    const allowances = turnAllowances(
+      source.records({ kinds: ["call"], labels: [allowanceLabel] }),
+    );
+    const { after: _, through: __, ...checkpoint } = this.checkpoint;
+    const fold: Fold = {
+      ...checkpoint,
+      source,
+      inboxRecords: source.records({
+        kinds: ["call"],
+        labels: [
+          "xean-solve/notes",
+          "xean-solve/guidance",
+          boundaryLabels.inbox,
+        ],
+      }),
+      base: {
+        ...checkpoint.base,
+        allowances,
+        maxTurns: allowances.at(-1)!.maxTurns,
+      },
+      verdicts,
+      projection: checkpoint.projection.fork(verdicts),
+      noteSubmissions: [...checkpoint.noteSubmissions],
+    };
+    const phase = replay(fold, (completed) => {
+      this.checkpoint = {
+        ...completed,
+        inboxRecords: [],
+        projection: completed.projection.fork(),
+        noteSubmissions: [...completed.noteSubmissions],
+      };
+    });
+    const snapshot = {
+      ...fold.base,
+      noteSubmissions: fold.noteSubmissions,
+      notes: fold.projection.at(fold.through ?? fold.cursor),
+      phase,
+      ...(fold.after === undefined ? {} : { after: fold.after }),
+    };
+    this.latest = { through, snapshot };
+    return snapshot;
+  }
+}
+
+export function deriveWorkflow(
+  records: readonly Entry[] | RecordSource,
+): WorkflowSnapshot {
+  return new Workflow(recordSource(records)).read();
 }
 
 export function workflowResult(phase: WorkflowTerminal): WorkflowResult {
@@ -678,14 +746,10 @@ export async function runWorkflow(
   campaign: Campaign,
   roles: RoleHost,
   dependencies: WorkflowDependencies = {},
-  initial?: { readonly snapshot: WorkflowSnapshot; readonly through: number },
+  workflow = new Workflow(campaign),
 ): Promise<WorkflowPhase> {
-  const read = () => deriveWorkflow(workflowRecords(campaign));
-  let snapshot =
-    initial !== undefined && campaign.lastSequence() === initial.through
-      ? initial.snapshot
-      : read();
-  initial = undefined;
+  const read = () => workflow.read();
+  let snapshot = read();
   const active = new Map<
     string,
     { controller: AbortController; done: Promise<RolePhase> }

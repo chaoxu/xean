@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { createCampaign, defineTool, openReader } from "xean";
 
-import { createRoleHost, modelCallLabel } from "../role-host";
+import { createRoleHost } from "../role-host";
+import { modelCallLabel } from "../roles";
 import { codexOutcome } from "../source";
 import { inspectCampaign, inspectCampaignSnapshot } from "../role-cli";
 import { applicationId, roleTools, verifierLabels, verdicts } from "../roles";
@@ -113,19 +114,18 @@ test("inspection derives every field from one captured journal prefix", async ()
   const reader = openReader(path);
   const prototype = Object.getPrototypeOf(reader) as typeof reader;
   reader.close();
-  const original = prototype.records;
+  const original = prototype.lastSequence;
   let reads = 0;
-  // Return the prefix captured before Explorer completed. A second read would
+  // Capture the prefix before Explorer completed. A second boundary read would
   // observe the later entries already in the database and mix the two views.
-  prototype.records = function () {
-    const records = original.call(this);
-    return ++reads === 1 ? records.filter(({ seq }) => seq <= 3) : records;
+  prototype.lastSequence = function () {
+    return ++reads === 1 ? 3 : original.call(this);
   };
   let report;
   try {
     report = await inspectCampaign(path, { includeGuidance: true });
   } finally {
-    prototype.records = original;
+    prototype.lastSequence = original;
   }
   expect(reads).toBe(1);
   expect(report).toMatchObject({

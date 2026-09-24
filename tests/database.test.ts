@@ -205,6 +205,16 @@ describe("campaign database", () => {
     );
     expect(reader.record(owner.seq)).toEqual(owner);
     expect(reader.lastSequence()).toBe(4);
+    const outer = reader.scan();
+    expect(outer.next().value?.kind).toBe("campaign");
+    // The same query can be nested and closed early without resetting the
+    // outer cursor or parsing the invalid tail.
+    for (const entry of reader.scan()) {
+      expect(entry.kind).toBe("campaign");
+      break;
+    }
+    expect(outer.next().value).toEqual(owner);
+    outer.return?.();
     expect(() => reader.records()).toThrow();
     reader.close();
   });

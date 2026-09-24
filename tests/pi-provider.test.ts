@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,11 @@ import {
   getOpenAICodexWebSocketDebugStats,
   streamSimple as streamCodex,
 } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import {
+  parseJsonWithRepair,
+  parseStreamingJson,
+  repairJson,
+} from "@earendil-works/pi-ai/utils/json-parse";
 import { createCampaign } from "../src";
 import { derivePiSpend, runPi } from "../src/pi";
 
@@ -37,6 +42,30 @@ const model: Model<"openai-codex-responses"> = {
   compat: proxyCompatibility,
 };
 const apiKey = "offline-proxy-api-key";
+
+test("JSON repair preserves unchanged spans, escapes, and partial tool arguments", () => {
+  const unchanged = '{"proof":"quoted \\"text\\" and \\u03b1 and \\\\ path';
+  expect(repairJson(unchanged)).toBe(unchanged);
+  expect(parseStreamingJson<Record<string, string>>(unchanged)).toEqual({
+    proof: 'quoted "text" and α and \\ path',
+  });
+  expect(
+    parseJsonWithRepair<Record<string, string>>(
+      '{"proof":"line\n\ttab \\q \\u1234 \\\\","nul":"a\u0000b"}',
+    ),
+  ).toEqual({ proof: "line\n\ttab \\q ሴ \\", nul: "a\u0000b" });
+  expect(
+    parseStreamingJson<Record<string, string>>('{"proof":"valid\\'),
+  ).toEqual({
+    proof: "valid",
+  });
+  expect(
+    parseStreamingJson<Record<string, string>>(
+      '{"proof":"raw\ninvalid \\q then trailing\\',
+    ),
+  ).toEqual({});
+});
+
 function campaign() {
   const directory = mkdtempSync(join(tmpdir(), "xean-provider-"));
   directories.push(directory);
@@ -202,6 +231,15 @@ function reply(index: number) {
 
 test("Pi proxy WebSockets send full then delta input, recover missing context, and release the session", async () => {
   const sessionId = "offline-websocket-session";
+  let fullBodySerializations = 0;
+  const requestBodies = new WeakSet<object>();
+  const stringify = JSON.stringify;
+  const stringifySpy = spyOn(JSON, "stringify").mockImplementation(
+    (value, replacer, space) => {
+      if (requestBodies.has(value)) fullBodySerializations += 1;
+      return stringify(value, replacer as never, space);
+    },
+  );
   const requests: Record<string, unknown>[] = [];
   const headers: {
     authorization: string | null;
@@ -257,6 +295,11 @@ test("Pi proxy WebSockets send full then delta input, recover missing context, a
       apiKey: key,
       sessionId,
       transport: "websocket-cached",
+      onPayload(payload) {
+        if (typeof payload !== "object" || payload === null)
+          throw new Error("Expected a request body");
+        requestBodies.add(payload);
+      },
     });
     for await (const _event of stream) {
       /* Drain the native stream. */
@@ -285,6 +328,7 @@ test("Pi proxy WebSockets send full then delta input, recover missing context, a
     expect((requests[3]!.input as unknown[]).length).toBeGreaterThan(
       (requests[2]!.input as unknown[]).length,
     );
+    expect(fullBodySerializations).toBe(0);
     expect(
       headers.every(
         (value) =>
@@ -303,6 +347,7 @@ test("Pi proxy WebSockets send full then delta input, recover missing context, a
     cleanupSessionResources(sessionId);
     expect(getOpenAICodexWebSocketDebugStats(sessionId)).toBeUndefined();
   } finally {
+    stringifySpy.mockRestore();
     cleanupSessionResources(sessionId);
     server.stop(true);
   }

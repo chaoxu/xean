@@ -52,6 +52,6 @@
   ],
   "overrides": {
     "tar": "^7.5.7",
-    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.87.0-xean.1.tgz"
+    "@earendil-works/pi-ai": "file:vendor/pi-ai-0.87.0-xean.2.tgz"
   }
 }

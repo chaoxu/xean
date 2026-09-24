@@ -39,6 +39,10 @@ class CampaignReader implements Reader {
     return this.journal.records(options);
   }
 
+  scan(options?: RecordQuery): IterableIterator<Entry> {
+    return this.journal.scan(options);
+  }
+
   record(seq: EntryId): Entry | undefined {
     return this.journal.record(seq);
   }
