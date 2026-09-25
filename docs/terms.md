@@ -28,6 +28,7 @@ This is the vocabulary of xean and `xean-solve`. Work in this repository uses th
 | first request | The first provider operation within one logical Pi call. |
 | continuation | Any subsequent provider operation within that same logical Pi call, including recovery and length continuation. |
 | submission gate | The optional frozen Pi policy `{completeArgument, emptyArgument?, contextBudgetTokens?, maxResponses?, continuationPrompt}` for one submission tool, callable once per assistant response, which decides when a gated call ends. |
+| terminal tool | The selected tool named by an optional Pi `terminalTool` request field. Its successful submission ends the call; other tools may supply observations. Ordinary text cannot replace its submission. |
 | response budget | The gate's `maxResponses`: the maximum non-error model responses in one gated Pi call, including the first. The solver sets it from `maxExplorerResponses`. It is separate from `maxTurns`. |
 | context budget | The gate's `contextBudgetTokens`: the preferred total-context allocation for a gated call, bounded by the model's context window. The solver sets it from `explorerContextBudgetTokens`. It is separate from model capacity, input-based pricing thresholds, and cumulative billed usage. |
 | recovered request error | A provider error inside a Pi call that ultimately succeeds. It remains an error in the journal and does not imply complete usage accounting. |

@@ -34,7 +34,7 @@ function campaignPath(): string {
 
 function piRequest() {
   return {
-    protocol: "xean/pi-run/v3" as const,
+    protocol: "xean/pi-run/v6" as const,
     model: { provider: "provider", id: "model", api: "responses" },
     modelProfile: null,
     prompt: "test",

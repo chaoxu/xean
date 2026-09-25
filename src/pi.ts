@@ -82,6 +82,8 @@ export interface PiRunOptions {
   /** Ordinary output-length continuations; omitted means no continuations. */
   readonly maxLengthContinuations?: number;
   readonly submissionGate?: PiSubmissionGate | undefined;
+  /** The tool whose successful submission is required to end this call. */
+  readonly terminalTool?: string;
   readonly signal?: AbortSignal;
   readonly transport?: Transport;
   readonly cacheKey?: string;
@@ -135,7 +137,7 @@ function modelProfile(model: Model<Api>): Json {
 }
 
 export const piRequest = z.strictObject({
-  protocol: z.literal("xean/pi-run/v3"),
+  protocol: z.literal("xean/pi-run/v6"),
   model: piModel,
   modelProfile: json,
   system: z.string().optional(),
@@ -144,6 +146,7 @@ export const piRequest = z.strictObject({
   maxRecoveries: z.number().int().min(1).max(31).optional(),
   maxLengthContinuations: z.number().int().min(1).max(31).optional(),
   submissionGate: piSubmissionGate.optional(),
+  terminalTool: z.string().regex(/\S/u).optional(),
   cacheKey: z.string().min(1).max(64).optional(),
   replayReasoning: z.literal(false).optional(),
 });
@@ -676,11 +679,29 @@ function jsonSnapshot(value: unknown): Json {
   return JSON.parse(encoded) as Json;
 }
 
+function successfulToolBatch(
+  messages: readonly AgentMessage[],
+  terminalTool?: string,
+): boolean {
+  return (
+    messages.length > 0 &&
+    messages.every(
+      (message) => message.role === "toolResult" && !message.isError,
+    ) &&
+    (terminalTool === undefined ||
+      messages.some(
+        (message) =>
+          message.role === "toolResult" && message.toolName === terminalTool,
+      ))
+  );
+}
+
 function result(
   messages: readonly AgentMessage[],
   signal: AbortSignal | undefined,
   contextWindow: number,
   requireSubmission: boolean,
+  terminalTool?: string,
 ): PiOutcome {
   const stored = jsonSnapshot(messages) as readonly Json[];
   let final: AssistantMessage | undefined;
@@ -716,10 +737,7 @@ function result(
   const afterFinal = messages.slice(finalAt + 1);
   const stoppedAfterTool =
     (final?.stopReason === "toolUse" || final?.stopReason === "stop") &&
-    afterFinal.length > 0 &&
-    afterFinal.every(
-      (message) => message.role === "toolResult" && !message.isError,
-    );
+    successfulToolBatch(afterFinal, terminalTool);
   const overflow =
     final !== undefined && isContextOverflow(final, contextWindow);
   if (
@@ -741,7 +759,9 @@ function result(
           : overflow
             ? "Pi exceeded its context window"
             : requireSubmission && final.stopReason === "stop"
-              ? "Pi ended without a terminal submission"
+              ? terminalTool === undefined
+                ? "Pi ended without a terminal submission"
+                : `Pi ended without calling ${terminalTool}`
               : `Pi stopped with ${final.stopReason}`),
     };
   }
@@ -909,7 +929,15 @@ async function runPiBody(
     let turns = 0;
     let responses = 0;
     let errorRecoveries = 0;
+    let remindedSubmission = false;
     const gate = exact.submissionGate;
+    const missingSubmission = (
+      message: AssistantMessage,
+      toolResults: readonly AgentMessage[],
+    ) =>
+      exact.terminalTool !== undefined &&
+      message.stopReason === "stop" &&
+      toolResults.length === 0;
     const responseLimitReached = () =>
       gate?.maxResponses !== undefined && responses >= gate.maxResponses;
     const contextState = (context: AgentContext) =>
@@ -920,7 +948,16 @@ async function runPiBody(
       messages: [...messages],
       ...(tools.length === 0
         ? {}
-        : { tools: tools.map((tool) => piTool(tool, gate === undefined)) }),
+        : {
+            tools: tools.map((tool) =>
+              piTool(
+                tool,
+                gate === undefined &&
+                  (exact.terminalTool === undefined ||
+                    tool.name === exact.terminalTool),
+              ),
+            ),
+          }),
     });
     const loop = (
       content: string | undefined,
@@ -956,10 +993,24 @@ async function runPiBody(
               errorRecoveries = 0;
             turns += 1;
             responses += 1;
-            if (gate === undefined)
-              return turns >= 32 || message.stopReason === "length"
-                ? { action: "end" }
-                : undefined;
+            if (gate === undefined) {
+              if (
+                turns >= 32 ||
+                message.stopReason === "length" ||
+                (exact.terminalTool !== undefined &&
+                  successfulToolBatch(toolResults, exact.terminalTool))
+              )
+                return { action: "end" };
+              if (
+                missingSubmission(message, toolResults) &&
+                !remindedSubmission &&
+                !isContextOverflow(message, options.model.contextWindow)
+              ) {
+                remindedSubmission = true;
+                return { action: "continue" };
+              }
+              return undefined;
+            }
             if (responseLimitReached()) return { action: "end" };
             const state = contextState(context);
             if (
@@ -977,7 +1028,20 @@ async function runPiBody(
             return undefined;
           },
           ...(gate === undefined
-            ? {}
+            ? {
+                prepareNextTurn: async ({ message, toolResults }) =>
+                  !signal.aborted && missingSubmission(message, toolResults)
+                    ? {
+                        messages: [
+                          {
+                            role: "user" as const,
+                            content: `Your previous response ended without calling ${exact.terminalTool}. Continue from the existing work and call ${exact.terminalTool} now. Prose or JSON text alone is not a submission.`,
+                            timestamp: Date.now(),
+                          },
+                        ],
+                      }
+                    : undefined,
+              }
             : {
                 beforeToolCall: async (entry: BeforeToolCallContext) => {
                   if (
@@ -1118,7 +1182,8 @@ async function runPiBody(
       messages,
       signal,
       options.model.contextWindow,
-      gate !== undefined,
+      gate !== undefined || exact.terminalTool !== undefined,
+      exact.terminalTool,
     );
   } finally {
     cleanupSessionResources(sessionId);
@@ -1133,7 +1198,7 @@ export async function runPi(
     throw new TypeError("Pi models must provide streamSimple");
   }
   const request = piRequest.parse({
-    protocol: "xean/pi-run/v3",
+    protocol: "xean/pi-run/v6",
     model: modelRecord(options.model),
     modelProfile: modelProfile(options.model),
     ...(options.system === undefined ? {} : { system: options.system }),
@@ -1150,11 +1215,22 @@ export async function runPi(
     ...(options.submissionGate === undefined
       ? {}
       : { submissionGate: options.submissionGate }),
+    ...(options.terminalTool === undefined
+      ? {}
+      : { terminalTool: options.terminalTool }),
     ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
     ...(options.replayReasoning === false
       ? { replayReasoning: false as const }
       : {}),
   });
+  if (request.terminalTool !== undefined) {
+    if (request.submissionGate !== undefined)
+      throw new TypeError(
+        "Pi terminalTool cannot be combined with submissionGate",
+      );
+    if (!options.tools?.some((tool) => tool.name === request.terminalTool))
+      throw new TypeError("Pi terminalTool must name a selected tool");
+  }
   if (request.submissionGate !== undefined) {
     if (options.tools?.length !== 1)
       throw new TypeError("Pi submission gate requires one terminal tool");

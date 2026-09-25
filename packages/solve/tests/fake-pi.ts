@@ -5,7 +5,7 @@ type Outcome = "succeeded" | "failed" | "cancelled";
 
 export function fakePiRequest(options: PiRunOptions): Json {
   const request = {
-    protocol: "xean/pi-run/v3",
+    protocol: "xean/pi-run/v6",
     model: {
       provider: options.model.provider,
       id: options.model.id,

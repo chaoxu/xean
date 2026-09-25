@@ -101,7 +101,7 @@ try {
   const candidate = campaign.submitCandidate(new TextEncoder().encode("x"), ["v1"]);
   deriveCandidateStatus(campaign.records(), candidate);
   derivePiSpend(campaign.records());
-  piRequest.parse({ protocol: "xean/pi-run/v3", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
+  piRequest.parse({ protocol: "xean/pi-run/v6", model: { provider: "p", id: "m", api: "a" }, modelProfile: null, prompt: "x" });
   piStoredResult.parse({ state: "succeeded", text: "x", transcript: [] });
   builtinPi({ credentials: new InMemoryCredentialStore() });
   defineTool({ name: "read", description: "Read", input: z.strictObject({}), async run() { return null; } });

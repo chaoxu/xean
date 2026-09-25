@@ -330,7 +330,7 @@ function spendEntries(
       kind: "call",
       label: "test/v1",
       request: {
-        protocol: "xean/pi-run/v3",
+        protocol: "xean/pi-run/v6",
         model,
         modelProfile: null,
         prompt: "test",
@@ -1312,6 +1312,184 @@ test("a submission gate requires one tool before creating a call", async () => {
   }
 });
 
+test("a required terminal tool retains observations and validates the eventual submission", async () => {
+  const c = campaign();
+  const read = defineTool({
+    name: "read_note",
+    description: "Read a note",
+    input: z.strictObject({}),
+    async run() {
+      return { text: "The frozen note" };
+    },
+  });
+  const contexts: Context[] = [];
+  try {
+    const outcome = await runPi(c, {
+      models: models(
+        [
+          assistant(
+            [{ type: "toolCall", id: "read", name: read.name, arguments: {} }],
+            "toolUse",
+          ),
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: "invalid",
+                name: submitVerdict.name,
+                arguments: { verdict: "INVALID", evidence: null },
+              },
+            ],
+            "toolUse",
+          ),
+          assistant([{ type: "text", text: "The verdict is PASS." }], "stop"),
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: "valid",
+                name: submitVerdict.name,
+                arguments: { verdict: "PASS", evidence: null },
+              },
+            ],
+            "toolUse",
+          ),
+        ],
+        (context) => contexts.push(structuredClone(context)),
+      ),
+      model,
+      label: "required-submission",
+      prompt: "Read and submit",
+      tools: [read, submitVerdict],
+      terminalTool: submitVerdict.name,
+    });
+    expect(outcome.state).toBe("succeeded");
+    expect(contexts).toHaveLength(4);
+    expect(contexts[2]!.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      isError: true,
+    });
+    expect(contexts[3]!.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining(submitVerdict.name),
+    });
+    expect(JSON.stringify(contexts[3])).toContain("The frozen note");
+    expect(
+      c
+        .records({ kinds: ["tool-call"] })
+        .map((entry) => (entry.kind === "tool-call" ? entry.tool : undefined)),
+    ).toEqual([read.name, submitVerdict.name]);
+    expect(c.record(outcome.call)).toMatchObject({
+      request: { terminalTool: submitVerdict.name },
+    });
+  } finally {
+    c.close();
+  }
+});
+
+test.each([false, true])(
+  "a required submission ends a mixed observation batch (submission first: %s)",
+  async (submissionFirst) => {
+    const c = campaign();
+    const calls = [
+      {
+        type: "toolCall" as const,
+        id: "observation",
+        name: gatedTool.name,
+        arguments: { solution: false, text: "observation" },
+      },
+      {
+        type: "toolCall" as const,
+        id: "submission",
+        name: submitVerdict.name,
+        arguments: { verdict: "PASS", evidence: null },
+      },
+    ];
+    let requests = 0;
+    try {
+      const outcome = await runPi(c, {
+        models: models(
+          [assistant(submissionFirst ? calls.toReversed() : calls, "toolUse")],
+          () => {
+            requests += 1;
+          },
+        ),
+        model,
+        label: "mixed-required-submission",
+        prompt: "Observe and submit",
+        tools: [gatedTool, submitVerdict],
+        terminalTool: submitVerdict.name,
+      });
+      expect(outcome.state).toBe("succeeded");
+      expect(requests).toBe(1);
+      expect(c.records({ kinds: ["tool-call"] })).toHaveLength(2);
+    } finally {
+      c.close();
+    }
+  },
+);
+
+test("observations alone cannot satisfy a required submission at the response limit", async () => {
+  const c = campaign();
+  let requests = 0;
+  try {
+    const outcome = await runPi(c, {
+      models: models(
+        Array.from({ length: 32 }, (_, i) =>
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: String(i),
+                name: gatedTool.name,
+                arguments: { solution: false, text: "observation" },
+              },
+            ],
+            "toolUse",
+          ),
+        ),
+        () => {
+          requests += 1;
+        },
+      ),
+      model,
+      label: "no-terminal-submission",
+      prompt: "Read and submit",
+      tools: [gatedTool, submitVerdict],
+      terminalTool: submitVerdict.name,
+    });
+    expect(outcome.state).toBe("failed");
+    expect(requests).toBe(32);
+  } finally {
+    c.close();
+  }
+});
+
+test("invalid required submission configuration creates no call", async () => {
+  const c = campaign();
+  try {
+    for (const options of [
+      { terminalTool: "missing" },
+      { terminalTool: " " },
+      { terminalTool: submitVerdict.name, submissionGate },
+    ]) {
+      await expect(
+        runPi(c, {
+          models: models([]),
+          model,
+          label: "bad-terminal",
+          prompt: "Test",
+          tools: [submitVerdict],
+          ...options,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(c.records()).toHaveLength(1);
+  } finally {
+    c.close();
+  }
+});
+
 function payloadModels(
   replies: readonly AssistantMessage[],
   payloads: readonly unknown[],
@@ -1868,7 +2046,7 @@ describe("thin Pi runner", () => {
       {
         label: "owner",
         request: {
-          protocol: "xean/pi-run/v3",
+          protocol: "xean/pi-run/v6",
           model: { provider: model.provider, id: model.id, api: model.api },
           modelProfile: null,
           prompt: "test",
@@ -2042,7 +2220,7 @@ describe("thin Pi runner", () => {
     ]);
     expect(
       store.records().find((entry) => entry.kind === "call"),
-    ).toMatchObject({ request: { protocol: "xean/pi-run/v3" } });
+    ).toMatchObject({ request: { protocol: "xean/pi-run/v6" } });
   });
 
   test("does not accept a terminal tool result after cancellation", async () => {
@@ -2597,50 +2775,55 @@ describe("thin Pi runner", () => {
     ).toHaveLength(32);
   });
 
-  test("does not accept a mixed terminal tool batch at the turn cap", async () => {
-    const store = campaign();
-    const candidate = store.submitCandidate(new TextEncoder().encode("claim"), [
-      "audit/v1",
-    ]);
-    const invalid = (id: string) => ({
-      type: "toolCall" as const,
-      id,
-      name: submitVerdict.name,
-      arguments: { verdict: "INVALID", evidence: null },
-    });
-    const replies = Array.from({ length: 31 }, (_, index) =>
-      assistant([invalid(`invalid-${index}`)], "toolUse"),
-    );
-    replies.push(
-      assistant(
-        [
-          invalid("invalid-final"),
-          {
-            type: "toolCall",
-            id: "valid-final",
-            name: submitVerdict.name,
-            arguments: { verdict: "PASS", evidence: null },
-          },
-        ],
-        "toolUse",
-      ),
-    );
-    const result = await runPi(store, {
-      models: models(replies),
-      model,
-      label: "audit/v1",
-      candidate,
-      prompt: "Audit",
-      tools: [submitVerdict],
-    });
-    expect(result.state).toBe("failed");
-    expect(() => store.recordVerdict(result.call, "PASS", null)).toThrow(
-      "fresh successful verifier call",
-    );
-    expect(deriveCandidateStatus(store.records(), candidate).verified).toBe(
-      false,
-    );
-  });
+  test.each([undefined, submitVerdict.name])(
+    "does not accept tool errors at the turn cap (required submission: %s)",
+    async (terminalTool) => {
+      const store = campaign();
+      const candidate = store.submitCandidate(
+        new TextEncoder().encode("claim"),
+        ["audit/v1"],
+      );
+      const invalid = (id: string) => ({
+        type: "toolCall" as const,
+        id,
+        name: submitVerdict.name,
+        arguments: { verdict: "INVALID", evidence: null },
+      });
+      const replies = Array.from({ length: 31 }, (_, index) =>
+        assistant([invalid(`invalid-${index}`)], "toolUse"),
+      );
+      replies.push(
+        assistant(
+          [
+            invalid("invalid-final"),
+            {
+              type: "toolCall",
+              id: "valid-final",
+              name: submitVerdict.name,
+              arguments: { verdict: "PASS", evidence: null },
+            },
+          ],
+          "toolUse",
+        ),
+      );
+      const result = await runPi(store, {
+        models: models(replies),
+        model,
+        label: "audit/v1",
+        candidate,
+        prompt: "Audit",
+        tools: [submitVerdict],
+        ...(terminalTool === undefined ? {} : { terminalTool }),
+      });
+      expect(result.state).toBe("failed");
+      expect(() => store.recordVerdict(result.call, "PASS", null)).toThrow(
+        "fresh successful verifier call",
+      );
+      expect(deriveCandidateStatus(store.records(), candidate).verified).toBe(
+        false,
+      );
+    },
+  );
 
   test("keeps interrupted text when a continuation uses tools", async () => {
     const echo = defineTool({

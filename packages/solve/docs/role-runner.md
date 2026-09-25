@@ -66,6 +66,8 @@ Every Pi role call sets `maxRecoveries: 8` and `maxLengthContinuations: 8` and a
 
 ### Recovery
 
+Non-Explorer Pi roles require their named submission tool. If the model ends with ordinary text instead, the same call permits one corrective user message asking it to submit, retaining the conversation and transport session. A second such stop fails with the missing tool's name. Both responses remain in the journal, and the campaign remains resumable. This correction does not restart mathematical work or grant another workflow turn. Explorer keeps its existing submission gate and response allowance.
+
 When a provider fails after making progress within a role call, meaning the last assistant message stopped with an error, an earlier one completed, and no tool result was an error, the workflow derives the unfinished role from the journal and retries it with a fresh provider session and rebuilt input. It permits three such retries between completed role calls, delayed by 1, 2, and 4 seconds. Cancellation, initial-request failures, and invalid tool submissions do not trigger these retries. A fresh Explorer call after failure or interruption receives all notes saved by the interrupted turn in full, with the same IDs and the turn's frozen guidance, and continues numbering after them.
 
 ## Coordinator
