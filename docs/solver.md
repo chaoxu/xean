@@ -788,7 +788,7 @@ claiming to solve the original task. The library exposes this operation as
 ### Corpus editing
 
 Editor rewrites a frozen corpus into fewer or simpler ordinary notes. It
-receives every full note, its status, and failed-check feedback, combines related results, replaces
+receives every full note, its status, and verification feedback, combines related results, replaces
 proofs, and removes obsolete intermediate scaffolding. The replacement should
 retain useful results, hypotheses, bounds, counterexamples, limitations, and
 unresolved gaps needed to continue the exact task. It need not retain each old
@@ -889,7 +889,8 @@ apply. The loop has no arbitrary wall-clock deadline. Model-based corpus review
 is a judgment of usefulness and coverage, not a formal losslessness guarantee.
 
 Editor and corpus review use the same full-text view as `read_notes`: IDs, both
-summaries, complete texts, support, status, passed stages, and failed-check feedback.
+summaries, complete texts, support, status, passed stages, and feedback on failed
+or unresolved checks.
 The frozen worker inputs retain every check and source quotation. Verifier uses
 that complete evidence, while the reading view omits its audit records. No note
 text is shortened or omitted.
