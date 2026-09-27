@@ -16,6 +16,7 @@ import type {
 } from "../packages/core/src/solve/contracts.ts";
 import {
   noteInfo,
+  corpusStats,
   refresh,
   sourceEvidence,
 } from "../packages/core/src/solve/notes.ts";
@@ -486,7 +487,15 @@ test("source INCONCLUSIVE is final across revisions, evidence, dependency checks
   });
   expect(await verify()).toEqual({ kind: "verification", checks: [] });
   const plan = await solver.functions.coordinator(
-    { task, notes, failures: [], guidance: [], literatureUsed: false },
+    {
+      task,
+      notes,
+      corpus: corpusStats(notes),
+      editingAvailable: false,
+      failures: [],
+      guidance: [],
+      literatureUsed: false,
+    },
     execution,
     BACKGROUND_CONTEXT,
   );
@@ -769,7 +778,15 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
   ]);
   // A candidate's own PASS must not prevent scheduling its missing dependency.
   const plan = await solver.functions.coordinator(
-    { task, notes, failures: [], guidance: [], literatureUsed: false },
+    {
+      task,
+      notes,
+      corpus: corpusStats(notes),
+      editingAvailable: false,
+      failures: [],
+      guidance: [],
+      literatureUsed: false,
+    },
     execution,
     BACKGROUND_CONTEXT,
   );

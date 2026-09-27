@@ -31,6 +31,10 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
   `read_notes` retrieves detailed summaries or full texts from the same frozen
   input. Dead notes may be read for diagnosis, but cannot supply mathematical
   support or change the verification requirements.
+- Editor optionally rewrites the whole corpus between worker groups. Coordinator
+  selects it using corpus-size statistics and the configured advisory threshold.
+  Its verification and repair loop runs before ordinary planning resumes.
+  See [corpus editing](#corpus-editing).
 - Verifier requests select a stopping stage: `correctness`, `source`,
   `requirements`, or `reconstruction`. Each stage checks multiple notes in one
   model request and returns a verdict per note. Dependencies must pass correctness
@@ -757,7 +761,8 @@ Standalone execution invokes those same functions:
 bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts role explorer INPUT.json ROLE.sqlite SETTINGS.json
 ```
 
-The role name may also be `coordinator`, `verifier`, `reconstruct`, or `literature`. Its input
+The role name may also be `coordinator`, `verifier`, `reconstruct`, `literature`,
+`editor`, or `editionReview`. Its input
 uses the exported TypeScript contract and includes `task`. A completed standalone
 role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
@@ -770,6 +775,108 @@ their support must already be verified for correctness and sources. It does not
 run the requirements check, so intermediate lemmas can be reconstructed without
 claiming to solve the original task. The library exposes this operation as
 `solver.functions.reconstruct` and `createRoles(...).reconstruct`.
+
+### Corpus editing
+
+Editor rewrites a frozen corpus into fewer or simpler ordinary notes. It
+receives every full note and its checks, combines related results, replaces
+proofs, and removes obsolete intermediate scaffolding. The replacement should
+retain useful results, hypotheses, bounds, counterexamples, limitations, and
+unresolved gaps needed to continue the exact task. It need not retain each old
+lemma or supply a one-to-one correspondence between old and new notes.
+
+Run an explicit editing campaign with the locked runtime:
+
+```sh
+bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts edit CORPUS.json EDITED.sqlite SETTINGS.json
+```
+
+`CORPUS.json` contains `{task, notes}`. `notes` is the complete projected `Note[]`,
+including full texts, support, import provenance, revisions, and checks, as
+returned by `project()` or solver inspection. Library callers use
+`createEditor({task, notes}, runtime, settings?, research?)` and open its
+returned kernel options through `Xean.open`. Runtime construction stays lazy.
+
+To let Coordinator request editing during a solver campaign, set:
+
+```json
+{ "editingThresholdTokens": 200000 }
+```
+
+Omitted or `null` disables Coordinator-directed editing. A positive safe integer
+enables it and suggests editing once the active corpus reaches that estimate.
+The example settings use 200,000. Coordinator may defer editing or choose it
+earlier when useful. The threshold is not a token budget or a context-fit check.
+
+Every ordinary planning input contains `corpus: {noteCount, estimatedTokens}`.
+The library calculates it from the latest committed full notes, including both
+summaries, text, support, and checks. Failed notes remain included while readable
+in the active corpus. Deprecated editions, private proposals, and execution
+history are excluded. Pi estimates tokens from serialized text length divided
+by four. These are approximate corpus sizes, not measured provider usage.
+Statistics require no additional model call or stored counter. Library callers
+can obtain the same values with `corpusStats(project(view))`.
+
+An `{"kind":"editor"}` request runs alone after the current worker group drains.
+The first worker freezes the current corpus. During editing, `submit` and
+`correct` commands are rejected for retry afterward, while guidance remains
+available. A mutation committed while Coordinator was still planning makes that
+editing snapshot stale, so it cannot replace the changed corpus.
+
+The deterministic Coordinator runs the following loop without planning calls:
+
+1. Editor proposes `{notes, retained, report}`. New notes use the ordinary
+   draft schema and receive fresh identities and checks. `retained` names notes
+   kept unchanged, with their support retained automatically. It may reuse
+   verified notes from a previous proposal. New proofs can depend only on those
+   retained notes and earlier new notes. Removed notes remain provenance, not
+   hidden mathematical premises.
+2. The existing Verifier checks every proposed note through correctness and
+   sources, reusing checks on unchanged notes. Failed or unresolved proposals go
+   back to Editor with their recorded checks. Mathematical repairs use new IDs, and the
+   permanent source-verdict rule remains in effect.
+3. `editionReview` compares the whole old and new corpora after every new
+   note is verified. It checks useful coverage, meaningful consolidation,
+   claims of supersession, and independence from removed proofs. It allows
+   obsolete lemmas to disappear. FAIL or INCONCLUSIVE returns to Editor.
+4. A passing review completes standalone editing with
+   `{notes, deprecated, review}`. `notes` is the checked replacement revision.
+   `deprecated` lists original IDs absent from it. The original snapshot and
+   every proposal/check remain in the durable records. Reopening a completed
+   campaign reuses its result.
+
+The Editor has an `editor` model profile. Corpus review reuses the
+`requirements` profile with its own instructions and corpus input. It checks
+whether the replacement is adequate for continued research, not whether the
+original research task is solved. Editing does not grant requirements or
+reconstruction PASS to notes. Exact-task acceptance still uses the normal solver
+checks. Independent reconstruction remains available as a separate operation.
+
+In a solver campaign, the passing review activates the entire checked
+replacement in one publication. Ordinary planning resumes with its refreshed
+corpus statistics. Re-editing an unchanged successful edition is disabled until
+the corpus changes. Original notes remain historical, with their identities and
+checks intact. Deprecation does not mark a note mathematically dead.
+
+Proposals stay outside the active corpus until approval. Committed checks on
+retained original IDs apply immediately even if the replacement is abandoned,
+preserving the final source-verdict rule. Operational editing failures return to
+ordinary planning with their diagnostic. A call cap retains the editing phase
+and committed progress for an explicit allowance extension. Standalone editing
+uses the same loop and returns its checked revision to the caller.
+
+Each editing proposal and review currently receives complete input in one
+model context and returns one complete result. Use models whose context and
+output capacity fit the corpus. Capacity errors retain prior committed work and
+never truncate proofs. Automatic partitioning is not implemented. Existing
+campaign call limits, extension, pause, cancellation, and whole-worker recovery
+apply. The loop has no arbitrary wall-clock deadline. Model-based corpus review
+is a judgment of usefulness and coverage, not a formal losslessness guarantee.
+
+Each Editor pass uses Pi's existing structured-result call with the full original
+corpus. Repair passes also receive the previous proposal with its recorded checks
+and the last corpus review. There is no separate feedback digest, retrieval tool,
+or recursive editing runtime. Corpus review returns only a verdict and report.
 
 An independent Codex review consumes the exact task and the full exported
 argument, without solver verdicts:

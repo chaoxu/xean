@@ -27,6 +27,7 @@ import { defaultReasoning } from "./contracts.ts";
 export type Profile = { model: Model<Api>; options?: SimpleStreamOptions };
 export const profileNames = [
   "explorer",
+  "editor",
   "coordinator",
   "correctness",
   "requirements",

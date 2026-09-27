@@ -89,6 +89,34 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     });
     expect(report.notes[0].text).toBe("Note");
 
+    await writeFile(
+      join(directory, "corpus.json"),
+      JSON.stringify({ task, notes: report.notes }),
+    );
+    await writeFile(
+      join(directory, "editor-settings.json"),
+      JSON.stringify({
+        profiles: { default: { provider: "openai", model: "gpt-6-astra" } },
+        limits: { providerCalls: 0 },
+      }),
+    );
+    const edited = run(
+      "edit",
+      "corpus.json",
+      "edition",
+      "editor-settings.json",
+    );
+    expect(edited.code, edited.stderr).toBe(0);
+    expect(JSON.parse(edited.stdout).campaign).toMatchObject({
+      status: "limited",
+      providerCalls: 0,
+      result: null,
+      task: { kind: "xean.edit", input: { task, notes: report.notes } },
+    });
+    expect(JSON.parse(run("inspect", "example").stdout).notes).toEqual(
+      report.notes,
+    );
+
     const rejected = run("export", "example");
     expect(rejected.code).not.toBe(0);
     expect(rejected.stderr).toContain("No accepted argument");

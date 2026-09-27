@@ -11,9 +11,9 @@ import {
   closure,
   completion,
   noteInfo,
-  project,
   refresh,
 } from "../packages/core/src/solve/notes.ts";
+import { project } from "../packages/core/src/solve/projection.ts";
 
 test("solver imports are trusted over verified support, preserve corrections, and replay safely", async () => {
   const pass = { verdict: "PASS", report: "Checked." };

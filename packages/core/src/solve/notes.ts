@@ -1,13 +1,13 @@
-import type { CampaignView, JsonValue } from "../types.ts";
+import type { JsonValue } from "../types.ts";
+import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { json } from "../json.ts";
-import type { SolverCommand } from "./commands.ts";
-import { declarationVersion, verificationStages } from "./contracts.ts";
+import { verificationStages } from "./contracts.ts";
 import type {
   Check,
+  Editing,
   Exploration,
   Note,
   NoteInfo,
-  SolverResult,
   SourceEvidence,
   Task,
   VerificationStage,
@@ -89,6 +89,24 @@ export function validateNotes(
     local.add(note.id);
     available.add(note.id);
   }
+}
+
+/** A replacement must contain every premise it uses, including retained support. */
+export function retainedNotes(
+  result: Editing,
+  available: readonly Note[],
+): Note[] {
+  const retained = closure(result.retained, available);
+  if (retained.some((note) => note.dead))
+    throw new Error("Cannot retain dead notes");
+  if (
+    result.notes.some((draft) => retained.some((note) => note.id === draft.id))
+  )
+    throw new Error("New local IDs must not collide with retained notes");
+  validateNotes(result.notes, retained);
+  if (!retained.length && !result.notes.length)
+    throw new Error("A replacement corpus must contain notes");
+  return retained;
 }
 
 export function verdict<Stage extends VerificationStage>(
@@ -180,95 +198,59 @@ export function refresh(notes: Note[]): Note[] {
   return notes;
 }
 
-/** Project immutable worker results and accepted inputs without modifying either. */
-export function project(view: CampaignView): Note[] {
-  const declaration = view.task as { version?: number } | null;
-  if (declaration?.version !== declarationVersion)
-    throw new Error("Unsupported solver declaration; use its matching runtime");
-  const notes: Note[] = [];
-  const append = (
-    prefix: string,
-    drafts: Exploration["notes"],
-    candidate: boolean,
-    imported = false,
-  ) => {
-    const local = new Set(drafts.map((note) => note.id));
-    for (const [index, draft] of drafts.entries())
-      notes.push({
-        ...draft,
-        id: `${prefix}/${draft.id}`,
-        revision: 0,
-        imported,
-        support: draft.support.map((id) =>
-          local.has(id) ? `${prefix}/${id}` : id,
-        ),
-        checks: [],
-        verified: false,
-        dead: false,
-        accepted: false,
-        candidate: candidate && index === drafts.length - 1,
-      });
-  };
-  // Dispatch order is not publication order. Replay worker commits and inputs
-  // together so a late verifier cannot overwrite an intervening correction.
-  const events = [
-    ...view.work
-      .filter((work) => work.status === "completed")
-      .map((work) => {
-        if (work.publicationId === null)
-          throw new Error(`Missing publication ID: ${work.id}`);
-        return { id: work.publicationId, work };
-      }),
-    ...view.inputs.map((input) => ({
-      id: input.id,
-      command: input.value as SolverCommand,
-    })),
-  ].sort((a, b) => a.id - b.id);
-  for (const event of events) {
-    if ("work" in event) {
-      const work = event.work;
-      const result = work.result as unknown as SolverResult;
-      if (result.kind === "notes")
-        append(work.id, result.notes, result.candidate);
-      else if (result.kind === "verification") {
-        for (const check of result.checks) {
-          const note = notes.find((note) => note.id === check.noteId);
-          if (!note)
-            throw new Error(
-              `Verification refers to unknown note: ${check.noteId}`,
-            );
-          if (check.correction && note.revision === check.correction.revision) {
-            const { revision: _revision, ...content } = check.correction;
-            Object.assign(note, content);
-            note.revision++;
-          }
-          // Edit proposals stay in immutable worker evidence, not later inputs.
-          const projected = json(check);
-          delete projected.correction;
-          for (const stage of verificationStages)
-            if (projected[stage]) delete projected[stage]!.correction;
-          note.checks.push(projected);
-        }
-      } else throw new Error(`Invalid solver result from ${work.id}`);
-      continue;
-    }
-    const command = event.command;
-    if (command.kind === "submit")
-      append(`input/${command.id}`, command.notes, command.candidate, true);
-    else if (command.kind === "correct") {
-      const note = notes.find((note) => note.id === command.note);
-      if (!note || note.revision !== command.revision)
-        throw new Error(
-          `Invalid correction history: ${command.note}@${command.revision}`,
-        );
-      note.text = command.text;
-      note.summary = command.summary;
-      note.detailedSummary = command.detailedSummary;
+/** Apply committed judgments to their exact notes, preserving correction revisions. */
+export function applyChecks(notes: Note[], checks: readonly Check[]): void {
+  for (const check of checks) {
+    const note = notes.find((note) => note.id === check.noteId);
+    if (!note)
+      throw new Error(`Verification refers to unknown note: ${check.noteId}`);
+    if (check.correction && note.revision === check.correction.revision) {
+      const { revision: _revision, ...content } = check.correction;
+      Object.assign(note, content);
       note.revision++;
-    } else if (command.kind !== "guide")
-      throw new Error("Invalid solver input");
+    }
+    // Edit proposals stay in immutable worker evidence, not later inputs.
+    const projected = json(check);
+    delete projected.correction;
+    for (const stage of verificationStages)
+      if (projected[stage]) delete projected[stage]!.correction;
+    note.checks.push(projected);
   }
-  return refresh(notes);
+  refresh(notes);
+}
+
+/** Assign durable identities without transferring checks to newly written mathematics. */
+export function materializeNotes(
+  prefix: string,
+  drafts: Exploration["notes"],
+  candidate = false,
+  imported = false,
+): Note[] {
+  const local = new Set(drafts.map((note) => note.id));
+  return drafts.map((draft, index) => ({
+    ...draft,
+    id: `${prefix}/${draft.id}`,
+    revision: 0,
+    imported,
+    support: draft.support.map((id) =>
+      local.has(id) ? `${prefix}/${id}` : id,
+    ),
+    checks: [],
+    verified: false,
+    dead: false,
+    accepted: false,
+    candidate: candidate && index === drafts.length - 1,
+  }));
+}
+
+/** Size of the complete current note packet, not prompt usage or billing. */
+export function corpusStats(notes: readonly Note[]) {
+  return {
+    noteCount: notes.length,
+    estimatedTokens: notes.length
+      ? estimateTextTokens(JSON.stringify(notes))
+      : 0,
+  };
 }
 
 export function noteInfo(note: Note): NoteInfo {

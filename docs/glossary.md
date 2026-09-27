@@ -58,3 +58,11 @@ Kernel completion records the application's accepted result. Standalone role
 and review campaigns can complete execution with a mathematical FAIL or
 INCONCLUSIVE verdict. Independent review and catalog closure remain separate
 from solver acceptance.
+
+Editor rewrites an entire corpus into a proposed replacement collection of
+ordinary notes. Corpus review (`editionReview`) judges its useful coverage
+after normal correctness and source checks. A corpus revision is the
+complete replacement collection approved by corpus review, returned by standalone
+editing or activated within a solver campaign.
+Deprecated notes are originals absent from that revision, not failed or dead
+mathematics. Historical proofs and checks keep their original identities.

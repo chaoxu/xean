@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 9;
+export const declarationVersion = 10;
 const text = Type.String({ minLength: 1 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -73,6 +73,8 @@ export const verdictSchema = object({
   correction: Type.Optional(noteContentSchema),
 });
 export type Verdict = Static<typeof verdictSchema>;
+export const editionReviewSchema = Type.Omit(verdictSchema, ["correction"]);
+export type EditionReview = Static<typeof editionReviewSchema>;
 export const correctnessSchema = object({
   ...verdictSchema.properties,
   premises: Type.Array(text, {
@@ -165,12 +167,20 @@ export const literaturePlan = object({
   kind: Type.Literal("literature"),
   query: text,
 });
-export const planSchema = (literature: boolean) =>
+const editPlan = object({ kind: Type.Literal("editor") });
+const workPlans = [explorePlan, verifyPlan, literaturePlan, editPlan] as const;
+export const planSchema = (literature: boolean, editing = false) =>
   object({
     work: Type.Array(
-      literature
-        ? Type.Union([explorePlan, verifyPlan, literaturePlan])
-        : Type.Union([explorePlan, verifyPlan]),
+      Type.Unsafe<Static<(typeof workPlans)[number]>>(
+        Type.Union(
+          workPlans.filter(
+            (schema) =>
+              (schema !== literaturePlan || literature) &&
+              (schema !== editPlan || editing),
+          ),
+        ),
+      ),
       { minItems: 1 },
     ),
   });
@@ -190,6 +200,21 @@ export type NoteInfo = Pick<
 export type ExplorerInput = SolverInput & {
   guidance: string;
 };
+export const editingSchema = object({
+  notes: Type.Array(noteDraftSchema),
+  retained: Type.Array(text, {
+    uniqueItems: true,
+    description:
+      "Existing note IDs kept unchanged. Their declared support is retained automatically. Rewritten notes must use fresh local IDs.",
+  }),
+  report: text,
+});
+export type Editing = Static<typeof editingSchema>;
+export type EditorInput = SolverInput & {
+  previous?: Note[];
+  review?: EditionReview;
+};
+export type EditionReviewInput = SolverInput & { previous: Note[] };
 export type VerifierInput = SolverInput & {
   targets: { id: string; through: VerificationStage }[];
   evidence?: SourceEvidence[];

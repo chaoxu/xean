@@ -23,6 +23,13 @@ campaigns and exports on their matching runtime. No migration is provided.
   Correctness checks the implication, source checks its external results, and
   requirements decides whether it solves the original task.
 - The observer shows detailed summaries before the full-note disclosure.
+- Editing campaigns rewrite a frozen corpus, verify replacement
+  notes with the existing Verifier, and repair inadequate proposals after a
+  corpus-level review. Successful results contain a replacement revision and
+  deprecated original IDs. Coordinator can schedule the same loop between worker
+  groups when `editingThresholdTokens` is configured. Every planning call receives
+  the active note count and estimated corpus tokens. The example threshold is
+  200,000. Whole-corpus proposals and review must fit the selected models.
 - Direct `createSolver` campaigns record the solver format version and reject
   reopening historical unversioned campaigns. Note projection requires a current
   solver declaration.

@@ -1,11 +1,13 @@
-export { createSolver } from "./solver.ts";
+export { createSolver, createEditor } from "./solver.ts";
+export { type EditingResult } from "./editor.ts";
 export {
   createRoles,
   type RoleOptions,
   type CoordinationInput,
 } from "./roles.ts";
 export { piRuntime, readSettings, type Settings } from "./config.ts";
-export { project, closure, completion } from "./notes.ts";
+export { closure, completion, corpusStats } from "./notes.ts";
+export { project } from "./projection.ts";
 export {
   readCommand,
   submitCommand,
@@ -31,6 +33,11 @@ export type {
   NoteInfo,
   Verdict,
   ExplorerInput,
+  EditorInput,
+  EditionReviewInput,
+  EditionReview,
+  Editing,
+  SolverInput,
   VerifierInput,
   ReconstructionInput,
   VerificationStage,

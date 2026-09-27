@@ -43,6 +43,15 @@ functions, with lazy runtime construction. Research invokes Codex through Execa,
 whose argv, stdin, process cancellation, and separate-output contract remains
 necessary. Pi's shell surface does not supply that contract.
 
+Standalone and Coordinator-directed corpus editing share the same roles, note
+checks, and kernel transactions. A deterministic loop schedules rewriting, verification,
+and corpus review from committed worker results. Completed drafts and checks
+therefore survive between repair iterations without a second scheduler or
+private-progress checkpoints. Pi's text estimator supplies approximate active
+corpus size at ordinary planning calls. Corpus replacement policy belongs to the solver,
+and requires no Pi patch. Whole-corpus model capacity remains a limit of the
+initial implementation, as described in the solver guide.
+
 ## Durable integration
 
 Store adapts native `createSession`. Its typed campaign document uses full bases

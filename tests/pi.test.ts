@@ -917,6 +917,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
       expect(prompt.capabilities).toEqual({
         literature: false,
         sourceRetrieval: false,
+        editing: false,
       });
       expect(
         prompt.notes.find((note: Note) => note.id === imported.id),
@@ -975,6 +976,8 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
         guidance: [],
         failures: [],
         literatureUsed: false,
+        corpus: { noteCount: 3, estimatedTokens: 1000 },
+        editingAvailable: false,
       },
       execution,
       BACKGROUND_CONTEXT,

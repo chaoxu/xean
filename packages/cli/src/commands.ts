@@ -180,6 +180,22 @@ program
     },
   );
 program
+  .command("edit <input> <campaign> <settings>")
+  .description("Rewrite and verify a frozen corpus into a replacement revision")
+  .action(async (file: string, campaign: string, settings: string) => {
+    const input = await read(file);
+    await runCampaign(
+      campaign,
+      readDeclaration({
+        version: declarationVersion,
+        kind: "xean.edit",
+        input,
+        task: input.task,
+        settings: await read(settings),
+      }),
+    );
+  });
+program
   .command("review <task> <argument> <campaign> <settings>")
   .action(
     async (

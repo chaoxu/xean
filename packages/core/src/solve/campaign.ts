@@ -8,7 +8,8 @@ import type { JsonValue, XeanOptions } from "../types.ts";
 import { readSettings, settingsSchema } from "./config.ts";
 import { decode, declarationVersion, object, taskSchema } from "./contracts.ts";
 import type { PiRuntime } from "./pi.ts";
-import { createSolver } from "./solver.ts";
+import { createSolver, createEditor } from "./solver.ts";
+import type { SolverInput } from "./contracts.ts";
 import { codexResearch } from "./research.ts";
 
 export { declarationVersion } from "./contracts.ts";
@@ -24,11 +25,18 @@ const declarationSchema = Type.Union([
     kind: Type.Literal("xean.role"),
     role: StringEnum([
       "explorer",
+      "editor",
+      "editionReview",
       "coordinator",
       "verifier",
       "reconstruct",
       "literature",
     ] as const),
+    input: Type.Record(Type.String(), Type.Unknown()),
+  }),
+  object({
+    ...common,
+    kind: Type.Literal("xean.edit"),
     input: Type.Record(Type.String(), Type.Unknown()),
   }),
   object({
@@ -44,7 +52,7 @@ export function readDeclaration(value: unknown): Declaration {
   const declaration = decode(declarationSchema, json(value));
   readSettings(declaration.settings);
   if (
-    declaration.kind === "xean.role" &&
+    (declaration.kind === "xean.role" || declaration.kind === "xean.edit") &&
     !isDeepStrictEqual(declaration.task, declaration.input.task)
   )
     throw new Error("Standalone input must contain the declared task");
@@ -72,6 +80,18 @@ export function campaignOptions(
 ): XeanOptions {
   const declaration = readDeclaration(value);
   const settings = declaration.settings;
+  if (declaration.kind === "xean.edit") {
+    return {
+      ...createEditor(
+        declaration.input as SolverInput,
+        runtime,
+        settings,
+        (ready) => codexResearch(settings.research, ready.usagePrefix),
+      ),
+      task: declaration as unknown as JsonValue,
+      limits: settings.limits,
+    };
+  }
   const solver = createSolver(declaration.task, runtime, settings, (ready) =>
     codexResearch(settings.research, ready.usagePrefix),
   );

@@ -12,7 +12,7 @@ import {
   campaignOptions,
   declarationVersion,
 } from "../packages/core/src/solve/campaign.ts";
-import { project } from "../packages/core/src/solve/notes.ts";
+import { project } from "../packages/core/src/solve/projection.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 
 const selection = (name: string, args: unknown) =>

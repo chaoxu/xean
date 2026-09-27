@@ -4,6 +4,8 @@ import { type Static, type TSchema } from "@earendil-works/pi-ai";
 import type { Execution } from "../types.ts";
 import {
   correctnessSchema,
+  editingSchema,
+  editionReviewSchema,
   batchSchema,
   batchResults,
   explorationSchema,
@@ -16,6 +18,10 @@ import {
   verificationStages,
   verificationTargets,
   type Check,
+  type Editing,
+  type EditorInput,
+  type EditionReviewInput,
+  type EditionReview,
   type Exploration,
   type ExplorerInput,
   type Note,
@@ -29,8 +35,10 @@ import {
 } from "./contracts.ts";
 import {
   closure,
+  corpusStats,
   noteInfo,
   refresh,
+  retainedNotes,
   requiredStages,
   sourceEvidence,
   stagePassed,
@@ -54,10 +62,13 @@ export type CoordinationInput = {
   failures: { id: string; role: string; error: string | null }[];
   guidance: string[];
   literatureUsed: boolean;
+  corpus: ReturnType<typeof corpusStats>;
+  editingAvailable: boolean;
 };
 export type RoleOptions = Required<
   Pick<Settings, "maxExplorerResponses" | "maxExplorerReads" | "literature">
->;
+> &
+  Pick<Settings, "editingThresholdTokens">;
 
 /** Ordinary functions used by both campaigns and standalone role execution. */
 export function createRoles(
@@ -218,6 +229,60 @@ export function createRoles(
   };
   return {
     reconstruct,
+    async editor(
+      input: EditorInput,
+      execution: Execution,
+      context: Context,
+    ): Promise<Editing> {
+      input = structuredClone(input);
+      const available = [
+        ...new Map(
+          [...input.notes, ...(input.previous ?? [])].map((note) => [
+            note.id,
+            note,
+          ]),
+        ).values(),
+      ];
+      return ask(
+        runtime,
+        "editor",
+        "Edit the entire supplied mathematical corpus into fewer or simpler ordinary notes for continued work on the exact task. Read every full note and its checks. Merge related results, simplify or replace proofs, and remove obsolete scaffolding. Preserve useful results, hypotheses, conditionality, quantitative and computational bounds, counterexamples, limitations, and open gaps. Stronger theorems may replace several notes, but must cover their claimed hypotheses and guarantees. Treat failed arguments as diagnostic history. New notes need complete arguments using only task-permitted background, explicitly sourced external premises, retained notes, or earlier new notes. Use fresh local IDs n1, n2, ... . retained selects unchanged notes and their support; reading alone creates no support. For repairs, address the checks on previous notes and the corpus review, reusing successful notes unchanged. Explain substantive consolidations and omissions in report. Return one complete proposal. Editing the corpus does not declare the research task solved.",
+        input,
+        editingSchema,
+        execution,
+        context,
+        {
+          submit(result) {
+            retainedNotes(result, available);
+            return { done: true, receipt: { validated: true } };
+          },
+        },
+      );
+    },
+
+    async editionReview(
+      input: EditionReviewInput,
+      execution: Execution,
+      context: Context,
+    ): Promise<EditionReview> {
+      input = structuredClone(input);
+      if (
+        !input.notes.length ||
+        refresh(input.notes).some((note) => !note.verified)
+      )
+        throw new Error(
+          "Editing review requires a verified replacement corpus",
+        );
+      return ask(
+        runtime,
+        "requirements",
+        "Assess the entire new corpus as a useful, self-contained replacement for the previous corpus. This check does not ask whether the research task has been solved. Read all old and new notes. Preserve important results, hypotheses, conditionality, quantitative and computational guarantees, counterexamples, limitations, and open gaps. Allow different proofs, stronger results replacing several lemmas, and removal of obsolete scaffolding; no one-to-one mapping or derivation of every old lemma is required. Check that claimed supersession covers earlier hypotheses and guarantees and that no proof relies on a removed note. Correctness and sources are already checked, but do not establish corpus coverage. PASS requires meaningful consolidation and adequate knowledge for continued research. FAIL requires concrete omissions, incorrect supersession, or hidden dependencies. Use INCONCLUSIVE when unsure, with actionable feedback for Editor.",
+        input,
+        editionReviewSchema,
+        execution,
+        context,
+      );
+    },
     async explorer(
       input: ExplorerInput,
       execution: Execution,
@@ -280,22 +345,33 @@ export function createRoles(
       const prompt = {
         ...input,
         notes: notes.map(noteInfo),
+        editingThresholdTokens: options.editingThresholdTokens ?? null,
         capabilities: {
           literature: literature && !input.literatureUsed,
           sourceRetrieval: research.retrieval,
+          editing:
+            options.editingThresholdTokens != null &&
+            input.editingAvailable &&
+            notes.length > 0,
         },
       };
       return ask(
         runtime,
         "coordinator",
-        "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
+        "corpus reports the complete active note count and estimated tokens, including full texts and checks. When editing is available and estimatedTokens reaches editingThresholdTokens, consider an editor request to simplify the entire corpus. This threshold is advice, not a requirement or context guarantee. You may defer editing or request it earlier when useful. An editor request must be the only work item. Editing verifies and reviews a replacement before exploration resumes. " +
+          "Schedule work for this mathematical task. You alone create work requests; workers return results. Explorer owns the mathematical strategy. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Explorer never has external retrieval tools. Follow capabilities: when literature is false, do not request a literature search or delegate external retrieval to Explorer; when sourceRetrieval is false, verification cannot look up sources. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims identified in notes and unverified claims on which further exploration repeatedly relies. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness for a mathematical check alone, source to establish support, requirements to check the exact completion criteria, and reconstruction for final acceptance. Dependencies receive correctness and necessary source checks. Final reconstruction also proves every generated claim in the transitive support, in one blinded batch. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported notes are trusted for correctness and source when their support is verified. The passed list includes trusted import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. New evidence requires a new note. Only executions without a committed result may retry source checking. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Dispatch at most one Explorer, which may run alongside verification or enabled literature. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes, batching independent IDs in one call. Skip reads when the supplied context already supports the decision, then submit your plan. Mathematical notes are the shared memory. Return at least one useful work request. Never declare a solution yourself: code accepts only complete verification evidence.",
         prompt,
-        planSchema(prompt.capabilities.literature),
+        planSchema(prompt.capabilities.literature, prompt.capabilities.editing),
         execution,
         context,
         {
           tools: [noteReader(notes)],
           submit(plan) {
+            if (
+              plan.work.some(({ kind }) => kind === "editor") &&
+              plan.work.length !== 1
+            )
+              throw new Error("Editing must run alone");
             if (plan.work.filter(({ kind }) => kind === "explorer").length > 1)
               throw new Error("Dispatch at most one Explorer");
             if (

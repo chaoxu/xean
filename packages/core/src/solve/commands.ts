@@ -9,7 +9,8 @@ import {
   noteDraftSchema,
   object,
 } from "./contracts.ts";
-import { project, validateNotes } from "./notes.ts";
+import { validateNotes } from "./notes.ts";
+import { project } from "./projection.ts";
 
 const id = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
 const text = Type.String({ minLength: 1, pattern: "\\S" });
@@ -41,8 +42,19 @@ export function validateCommand(value: unknown, view: CampaignView): void {
     throw new Error("Command values must be normalized before input");
   const command = value;
   if (command.kind === "guide") return;
+  if (typeof view.state === "string" && view.state.startsWith("edit-"))
+    throw new Error(
+      "Notes are frozen while editing; retry after editing finishes",
+    );
   const notes = project(view);
   if (command.kind === "submit") {
+    if (
+      view.inputs.some(({ value }) => {
+        const previous = value as SolverCommand;
+        return previous.kind === "submit" && previous.id === command.id;
+      })
+    )
+      throw new Error(`Submission already exists: ${command.id}`);
     validateNotes(command.notes, notes);
     for (const note of command.notes) {
       const id = `input/${command.id}/${note.id}`;
