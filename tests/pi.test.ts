@@ -22,7 +22,10 @@ import { piRuntime, readSettings } from "../packages/core/src/solve/config.ts";
 import { createSolver } from "../packages/core/src/solve/solver.ts";
 import { ask } from "../packages/core/src/solve/pi.ts";
 import { createRoles } from "../packages/core/src/solve/roles.ts";
-import { validateNotes } from "../packages/core/src/solve/notes.ts";
+import {
+  materializeNotes,
+  validateNotes,
+} from "../packages/core/src/solve/notes.ts";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import type { Note, Plan } from "../packages/core/src/solve/contracts.ts";
 import { Xean, type Limits } from "../packages/core/src/index.ts";
@@ -987,6 +990,74 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
   await expect(
     roles.literature(null!, execution, BACKGROUND_CONTEXT),
   ).rejects.toThrow("disabled");
+});
+
+test("batch rejection names exact IDs so Pi can repair a malformed verifier reply", async () => {
+  const notes = materializeNotes(
+    "edit/attempt",
+    ["n1", "n2", "n3"].map((id) => ({
+      id,
+      summary: id,
+      detailedSummary: id,
+      text: id,
+      support: [],
+    })),
+  );
+  const expected = notes.map((note) => note.id);
+  const result = { verdict: "PASS" as const, report: "Checked.", premises: [] };
+  let calls = 0;
+  const runtime = fixtureRuntime((input) => {
+    if (++calls === 1)
+      return fauxAssistantMessage(
+        [
+          fauxToolCall("submit_result", {
+            results: [expected[0]!, expected[0]!, "edit/attempt/n4"].map(
+              (noteId) => ({ noteId, result }),
+            ),
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    expect(calls).toBe(2);
+    const reply = input.messages.at(-1)!;
+    expect(reply).toMatchObject({ role: "toolResult", isError: true });
+    const message = (reply.content as { text: string }[])[0]!.text;
+    expect(JSON.parse(message.slice(message.indexOf("{")))).toEqual({
+      expected,
+      missing: expected.slice(1),
+      unexpected: ["edit/attempt/n4"],
+      duplicates: [expected[0]],
+    });
+    return fauxAssistantMessage(
+      [
+        fauxToolCall("submit_result", {
+          results: expected.map((noteId) => ({ noteId, result })),
+        }),
+      ],
+      { stopReason: "toolUse" },
+    );
+  });
+  const state = recording();
+  const solver = createSolver(
+    { problem: "P", completionCriteria: "Prove P" },
+    runtime,
+    {},
+    offlineResearch,
+  );
+  const checked = await solver.functions.verifier(
+    {
+      task: solver.task.task,
+      notes,
+      targets: expected.map((id) => ({ id, through: "correctness" })),
+    },
+    { attemptId: "batch-repair", recorder: state.recorder },
+    BACKGROUND_CONTEXT,
+  );
+  expect(checked).toEqual({
+    kind: "verification",
+    checks: expected.map((noteId) => ({ noteId, correctness: result })),
+  });
+  expect(state.calls).toHaveLength(2);
 });
 
 test("turn recovery stops at its allowance, refused admission, cancellation, and invalid requests", async () => {

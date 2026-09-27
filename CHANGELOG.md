@@ -30,6 +30,8 @@ campaigns and exports on their matching runtime. No migration is provided.
   groups when `editingThresholdTokens` is configured. Every planning call receives
   the active note count and estimated corpus tokens. The example threshold is
   200,000. Whole-corpus proposals and review must fit the selected models.
+- Rejected verification batches report exact expected, missing, unexpected,
+  and duplicate note IDs so a model can repair the submission.
 - Direct `createSolver` campaigns record the solver format version and reject
   reopening historical unversioned campaigns. Note projection requires a current
   solver declaration.

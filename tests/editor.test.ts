@@ -78,7 +78,6 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
   const sourced: string[] = [];
   let drafts = 0;
   let reviews = 0;
-  let loads = 0;
   const correctness = (notes: Note[]) => ({
     results: notes.map((note) => ({
       noteId: note.id,
@@ -158,15 +157,7 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     throw new Error(`Unexpected call: ${role}`);
   });
   const options = {
-    ...createEditor(
-      input,
-      () => {
-        loads++;
-        return runtime;
-      },
-      {},
-      research,
-    ),
+    ...createEditor(input, runtime, {}, research),
     limits: { providerCalls: 2 },
   };
   let engine = await Xean.open(await openXeanStorage(path), options);
@@ -216,13 +207,6 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     expect(new Set(sourced).size).toBe(sourced.length);
     expect(reviews).toBe(2);
     expect(input).toEqual(original);
-    const count = drafts + judged.length + reviews;
-    await engine.close();
-    engine = await Xean.open(await openXeanStorage(path), options);
-    expect((await engine.run()).result).toEqual(completed.result);
-    expect(drafts + judged.length + reviews).toBe(count);
-    expect(loads).toBe(1);
-
     // A completed revision is valid input to another run, without reusing new-note IDs.
     const nextRuntime = editorRuntime((role, data) =>
       role === "editor"

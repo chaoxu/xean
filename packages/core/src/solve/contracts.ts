@@ -21,15 +21,27 @@ export function batchResults<T>(
   ids: readonly string[],
   results: { noteId: string; result: T }[],
 ): T[] {
-  const byId = new Map(results.map(({ noteId, result }) => [noteId, result]));
+  const expected = new Set(ids);
+  const byId = new Map<string, T>();
+  const duplicates = new Set<string>();
+  for (const { noteId, result } of results) {
+    if (byId.has(noteId)) duplicates.add(noteId);
+    byId.set(noteId, result);
+  }
   if (
-    new Set(ids).size !== ids.length ||
+    expected.size !== ids.length ||
     byId.size !== results.length ||
     results.length !== ids.length ||
     ids.some((id) => !byId.has(id))
   )
     throw new Error(
-      "Batch results must contain exactly one result per requested note",
+      "Batch results must contain exactly one result per requested note. " +
+        JSON.stringify({
+          expected: ids,
+          missing: ids.filter((id) => !byId.has(id)),
+          unexpected: [...byId.keys()].filter((id) => !expected.has(id)),
+          duplicates: [...duplicates],
+        }),
     );
   return ids.map((id) => byId.get(id)!);
 }

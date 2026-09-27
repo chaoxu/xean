@@ -575,7 +575,7 @@ campaigns reject new grants.
 
 [The settings example](../examples/solver-settings.json) uses Astra through
 the public OpenAI API and its `OPENAI_API_KEY` environment variable.
-`profiles.default` supplies the shared Pi profile. Override `explorer`,
+`profiles.default` supplies the shared Pi profile. Override `explorer`, `editor`,
 `coordinator`, `correctness`, `requirements`, `statement`, `proof`, or `reconstruction`
 with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
 `max` for Pi roles and Codex research. Explicit effort overrides remain supported.
@@ -732,6 +732,7 @@ Library callers can replace implementations before opening a campaign:
 | Replace                                                 | Public entry point                                                                        | What remains built in                                                                  |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Explorer, Verifier, literature                          | Assign `solver.functions.explorer`, `.verifier`, or `.literature` after `createSolver`    | Group scheduling, publication, note projection, and acceptance                         |
+| Editing and corpus review                               | Assign `solver.functions.editor` or `.editionReview` after `createSolver`                 | Exclusive editing, verification, repair scheduling, and corpus activation              |
 | Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan` | Signal handling and group scheduling                                                   |
 | Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                          | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
 | Literature, source checking, independent review backend | Supply a `Research` object or factory to `createSolver`                                   | Built-in role procedures                                                               |
@@ -742,6 +743,8 @@ Replacing a planning function also replaces its validation policy, including the
 single-Explorer restriction. Replacement functions are trusted code and must
 honor their exported input/output types and mathematical contracts. A custom
 Verifier supplies the evidence consumed by the solver's acceptance guard.
+The solver still enforces editing availability and exclusive scheduling when
+planning is replaced.
 
 Individual correctness, requirements, extraction, proof, and comparison
 procedures inside the built-in Verifier are fixed. Their model profiles are
