@@ -794,11 +794,17 @@ Run an explicit editing campaign with the locked runtime:
 bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts edit CORPUS.json EDITED.sqlite SETTINGS.json
 ```
 
-`CORPUS.json` contains `{task, notes}`. `notes` is the complete projected `Note[]`,
-including full texts, support, import provenance, revisions, and checks, as
-returned by `project()` or solver inspection. Library callers use
+`CORPUS.json` contains `{task, notes}`. `notes` may contain the entire projected
+corpus or a selected subset with all transitive support, including full texts,
+import provenance, revisions, and checks from `project()` or solver inspection.
+Every supplied note is within the editing scope, including supporting notes.
+Library callers use
 `createEditor({task, notes}, runtime, settings?, research?)` and open its
 returned kernel options through `Xean.open`. Runtime construction stays lazy.
+Standalone review covers only the supplied corpus. Its `deprecated` IDs describe
+that snapshot. Before removing them from a larger corpus, callers must preserve
+any support still required by notes outside the selection. Integrated editing
+currently replaces the whole active corpus.
 
 To let Coordinator request editing during a solver campaign, set:
 
