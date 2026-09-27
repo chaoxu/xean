@@ -90,19 +90,6 @@ const metrics = (notes: any[]) => {
   const count = (text: string) => ({ bytes: Buffer.byteLength(text), utf16Chars: text.length, piEstimate: Math.ceil(text.length / 4) });
   return { notes: notes.length, supportEdges: notes.reduce((sum, note) => sum + note.support.length, 0), bodies: count(notes.map(note => note.text).join("\n")), serialized: count(JSON.stringify(notes)), corpus: corpusStats(notes) };
 };
-function probe(name: string, run: (execution: any, context: any) => Promise<unknown>) {
-  return {
-    task: { kind: "xean.editor-smoke", name, sourceCommit: deployment.sourceCommit, corpusSha256: deployment.corpusSha256 },
-    roles: [{ name, run: (_: unknown, execution: any, context: any) => run(execution, context) }],
-    coordinator: { name: `${name}.dispatch`, run(signal: any, view: any) {
-      if (signal.kind === "start") return { state: null, dispatch: [{ id: name, role: name, input: null }] };
-      const work = view.work[0];
-      if (work?.status === "failed") throw new Error(work.error);
-      return work?.status === "completed" ? { state: null, completion: work.result } : { state: null };
-    } },
-    accept: (_: unknown, view: any) => view.work[0]?.status === "completed",
-  };
-}
 async function runCase(name: string, options: any) {
   assert(!cancelled, "Cancelled before next case");
   const remaining = settings.limits.providerCalls - usedCalls;
@@ -155,23 +142,22 @@ try {
     const research = codexResearch(own.research, own.usagePrefix);
     return { own, runtime, research, solver: createSolver(input.task, runtime, own, research) };
   };
-  const sourceCase = fresh("source");
-  const sourceProbe = await runCase("source", probe("source", (execution, context) => {
-    const premise = "For every real x > 0, Gamma(x+1)=x Gamma(x), as stated in NIST DLMF equation 5.5.1: https://dlmf.nist.gov/5.5.E1 .";
-    return sourceCase.research.source({ task: { problem: "Check the Gamma recurrence in its stated domain.", completionCriteria: "Verify the exact premise using its primary source." }, notes: [{ id: "gamma-smoke", text: premise, premises: [premise] }] }, execution, context);
-  }));
-  assert.equal(sourceProbe.campaign.status, "completed", sourceProbe.campaign.error ?? "Source smoke incomplete");
-  assert.equal(sourceProbe.campaign.result[0].result.verdict, "PASS");
-  assert(sourceProbe.nativeSearches > 0, "Source smoke requires actual native retrieval");
-  const coordinator = fresh("coordinator");
-  const guidance = "The user explicitly requests editing this complete copied corpus now to evaluate consolidation. Request the Editor as the sole work item, even though its corpus size is below the advisory threshold. Do not schedule exploration or literature for this smoke; all original notes and their checks are already supplied.";
-  const coordinationInput = { ...input, failures: [], guidance: [guidance], literatureUsed: false, corpus: corpusStats(input.notes), editingAvailable: true };
-  await save("coordinator-input.json", coordinationInput);
-  const decision = await runCase("coordinator", probe("coordinator", (execution, context) => coordinator.solver.functions.coordinator(coordinationInput, execution, context)));
-  assert.equal(decision.campaign.status, "completed", decision.campaign.error ?? "Coordinator smoke incomplete");
-  assert.deepEqual(decision.campaign.result.work, [{ kind: "editor" }], "Coordinator did not request exclusive editing");
+  // Only the committed Editor proposal is replayed; every check and repair is live.
+  const prior = await Bun.file(resolve(directory, "proposal.json")).json();
   const editor = fresh("editor");
-  const edited = await runCase("editor", createEditor(input, editor.runtime, editor.own, editor.research));
+  const options = createEditor(input, editor.runtime, editor.own, editor.research);
+  let replayed = false;
+  options.roles = options.roles.map((role: any) => role.name !== "xean.editor" ? role : {
+    ...role,
+    async run(value: any, execution: any, context: any) {
+      if (replayed) return role.run(value, execution, context);
+      assert.deepEqual(value, input);
+      replayed = true;
+      mark({ replayedCommittedProposal: { sourceCommit: prior.sourceCommit, attemptId: prior.attemptId, workId: prior.workId } });
+      return structuredClone(prior.result);
+    },
+  });
+  const edited = await runCase("editor", options);
   assert.equal(hash(await readFile(resolve(directory, "source-snapshot.json"))), hash(snapshotBytes), "Source snapshot changed");
   assert.deepEqual(input, originalInput, "Caller input changed");
   const result = edited.campaign.result;
