@@ -184,8 +184,17 @@ try {
     assert.equal(closure(result.notes.map((note: any) => note.id), result.notes).length, result.notes.length);
     for (const note of result.notes) {
       const old = input.notes.find((other: any) => other.id === note.id);
-      if (old) assert.equal(note.text, old.text, "Retained identity changed meaning");
-      else assert(!note.imported, "New rewritten notes must not be trusted imports");
+      if (!old) { assert(!note.imported, "New rewritten notes must not be trusted imports"); continue; }
+      const expected = structuredClone(old);
+      const verifications = edited.campaign.work.filter((work: any) => work.role === "xean.editVerifier" && work.status === "completed").sort((a: any, b: any) => a.publicationId - b.publicationId);
+      for (const work of verifications) for (const check of work.result.checks) {
+        if (check.noteId !== note.id || !check.correction) continue;
+        const { revision, ...content } = check.correction;
+        assert.equal(revision, expected.revision, "Correction must bind the retained revision");
+        assert([check.correctness, check.source, check.requirements, check.reconstruction].some(stage => stage?.verdict === "PASS" && stage.correction && stage.correction.text === content.text), "Retained correction lacks a passing verifier record");
+        Object.assign(expected, content, { revision: revision + 1 });
+      }
+      for (const field of ["text", "summary", "detailedSummary", "revision"]) assert.deepEqual(note[field], expected[field], "Retained content must match committed harmless corrections");
     }
   }
   await save("metrics.json", { before: metrics(input.notes), after: result ? metrics(result.notes) : null, providerCalls: usedCalls, initialAllowance: settings.limits.providerCalls, sourceSnapshotUnchanged: true, statusesPreserved: true, sourceCommit: deployment.sourceCommit, note: "Pi estimates are approximate. Corpus review judges coverage; original internal acceptance is not inherited by rewritten notes." });
