@@ -12,6 +12,13 @@ const readSchema = object({
   level: StringEnum(["detailed", "full"] as const),
 });
 
+/** Shared full-text view; durable verification evidence stays in the snapshot. */
+export const fullNote = (note: Note) => ({
+  ...noteInfo(note),
+  detailedSummary: note.detailedSummary,
+  text: note.text,
+});
+
 /** Read from the caller's detached, frozen invocation snapshot. */
 export function noteReader(notes: Note[]): AgentTool<typeof readSchema> {
   return {
@@ -24,10 +31,10 @@ export function noteReader(notes: Note[]): AgentTool<typeof readSchema> {
       const values = ids.map((id) => {
         const note = notes.find((note) => note.id === id);
         if (!note) throw new Error(`Unknown note: ${id}`);
+        const { text, ...details } = fullNote(note);
         return {
-          ...noteInfo(note),
-          detailedSummary: note.detailedSummary,
-          ...(level === "full" ? { text: note.text } : {}),
+          ...details,
+          ...(level === "full" ? { text } : {}),
         };
       });
       return {

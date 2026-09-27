@@ -581,7 +581,13 @@ with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
 `max` for Pi roles and Codex research. Explicit effort overrides remain supported.
 `ProfileName` and `profileNames` name these model-configuration slots. The
 Verifier uses several profiles within one role invocation.
-Optional fields are `baseUrl`, `apiKeyEnv`, and `transport`. Endpoint URLs cannot
+Optional fields are `baseUrl`, `apiKeyEnv`, `transport`, and `contextWindow`.
+`contextWindow` selects a supported total context size for that endpoint when it
+differs from Pi's catalog default. It changes the local capacity estimate, not
+the provider's limits. Xean still reserves the model's maximum output and Pi's
+safety margin. The example uses the public Astra API's documented 1,050,000-token
+window. Gateways and subscription providers may support a different maximum.
+Endpoint URLs cannot
 contain credentials, query parameters, or fragments. The CLI supports
 Pi's OpenAI, Codex, Anthropic, ChatGPT Web, and Claude Code providers. Library callers supply their own
 native Pi `Models` collection and model objects for other providers.
@@ -782,7 +788,7 @@ claiming to solve the original task. The library exposes this operation as
 ### Corpus editing
 
 Editor rewrites a frozen corpus into fewer or simpler ordinary notes. It
-receives every full note and its checks, combines related results, replaces
+receives every full note, its status, and failed-check feedback, combines related results, replaces
 proofs, and removes obsolete intermediate scaffolding. The replacement should
 retain useful results, hypotheses, bounds, counterexamples, limitations, and
 unresolved gaps needed to continue the exact task. It need not retain each old
@@ -882,10 +888,16 @@ campaign call limits, extension, pause, cancellation, and whole-worker recovery
 apply. The loop has no arbitrary wall-clock deadline. Model-based corpus review
 is a judgment of usefulness and coverage, not a formal losslessness guarantee.
 
+Editor and corpus review use the same full-text view as `read_notes`: IDs, both
+summaries, complete texts, support, status, passed stages, and failed-check feedback.
+The frozen worker inputs retain every check and source quotation. Verifier uses
+that complete evidence, while the reading view omits its audit records. No note
+text is shortened or omitted.
+
 Each Editor pass uses Pi's existing structured-result call with the full original
-corpus. Repair passes also receive the previous proposal with its recorded checks
-and the last corpus review. There is no separate feedback digest, retrieval tool,
-or recursive editing runtime. Corpus review returns only a verdict and report.
+corpus. Repair passes also receive the previous proposal and the last corpus review.
+There is no separate feedback digest, retrieval tool, or recursive editing runtime.
+Corpus review returns only a verdict and report.
 
 An independent Codex review consumes the exact task and the full exported
 argument, without solver verdicts:
@@ -903,8 +915,9 @@ coverage as source verification.
 The library is in `packages/core`, and `xean-cli` is in `packages/cli`. The CLI
 uses public declaration/loading and campaign APIs. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
-vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 9, with distinct solver, standalone-role, and review kinds. Only this
+vendored packages. Individual workspace packages remain private. Campaign declarations
+carry the [solver format version](../packages/core/src/solve/contracts.ts), with
+distinct solver, standalone-role, editing, and review kinds. Only the current
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the
@@ -919,7 +932,8 @@ Use the [development check](../README.md#development-on-fleet) and
 [provider smoke procedure](kernel-smoke.md#live-provider-checks) for the current
 candidate. The suite exercises source-verdict finality, conditional dependency
 checks, imported support, correction races, batch identity, and reconstruction
-throughout the generated dependency chain.
+throughout the generated dependency chain. Editing checks cover atomic activation,
+stale snapshots, failures, and continuation after a call-cap extension.
 
 Historical mathematical benchmarks and provider smokes retain their original
 source, settings, and artifacts under local `runs/` directories. Earlier versions

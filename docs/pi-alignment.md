@@ -100,6 +100,15 @@ not cover Codex WebSockets. Telemetry cannot replace durable admission or
 settlement. Context capacity belongs in `prepareRequest`, since Pi's
 `convertToLlm` and `transformContext` contracts forbid throwing.
 
+Pi accepts caller-supplied model objects and retains their context metadata in
+`Models.streamSimple`. Xean's optional profile `contextWindow` uses that API
+without changing the frozen catalog or provider transport. Catalog defaults may
+be smaller than an endpoint's supported maximum. Select a larger window only
+from that endpoint's documented or advertised capability. The public
+[Astra API](https://developers.openai.com/api/docs/models/gpt-6-astra) documents
+1,050,000 total tokens with 128,000 maximum output. The capacity guard continues
+to reserve the full output allowance.
+
 The Pi AI patch preserves failed-response usage, typed provider errors, explicit
 zero counts, retry-listener cleanup, cache-session isolation, and the existing
 JSON/serialization allocation fixes. Authentication, invalid requests, context

@@ -50,7 +50,7 @@ import {
 import { ask, type PiRuntime, type ProfileName } from "./pi.ts";
 import { type Research, type LiteratureInput } from "./research.ts";
 import type { Settings } from "./config.ts";
-import { noteReader } from "./reader.ts";
+import { fullNote, noteReader } from "./reader.ts";
 
 const mathematicalCheck =
   "Check exact statements and hypotheses. PASS requires an established argument. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. On PASS, you may supply correction with the complete text and consistent summary and detailedSummary, changing only harmless typos, formatting, or unambiguous notation. Preserve mathematical meaning and dependencies; never repair a substantive gap this way. A substantial repair requires a new note. Treat established support results as given, but verify their applicability and all new reasoning. Do not infer mathematical truth from an earlier model's confidence.";
@@ -246,8 +246,12 @@ export function createRoles(
       return ask(
         runtime,
         "editor",
-        "Edit the entire supplied mathematical corpus into fewer or simpler ordinary notes for continued work on the exact task. Read every full note and its checks. Merge related results, simplify or replace proofs, and remove obsolete scaffolding. Preserve useful results, hypotheses, conditionality, quantitative and computational bounds, counterexamples, limitations, and open gaps. Stronger theorems may replace several notes, but must cover their claimed hypotheses and guarantees. Treat failed arguments as diagnostic history. New notes need complete arguments using only task-permitted background, explicitly sourced external premises, retained notes, or earlier new notes. Use fresh local IDs n1, n2, ... . retained selects unchanged notes and their support; reading alone creates no support. For repairs, address the checks on previous notes and the corpus review, reusing successful notes unchanged. Explain substantive consolidations and omissions in report. Return one complete proposal. Editing the corpus does not declare the research task solved.",
-        input,
+        "Edit the entire supplied mathematical corpus into fewer or simpler ordinary notes for continued work on the exact task. Read every full note, its status, and failed-check feedback. Merge related results, simplify or replace proofs, and remove obsolete scaffolding. Preserve useful results, hypotheses, conditionality, quantitative and computational bounds, counterexamples, limitations, and open gaps. Stronger theorems may replace several notes, but must cover their claimed hypotheses and guarantees. Treat failed arguments as diagnostic history. New notes need complete arguments using only task-permitted background, explicitly sourced external premises, retained notes, or earlier new notes. Use fresh local IDs n1, n2, ... . retained selects unchanged notes and their support; reading alone creates no support. For repairs, address the checks on previous notes and the corpus review, reusing successful notes unchanged. Explain substantive consolidations and omissions in report. Return one complete proposal. Editing the corpus does not declare the research task solved.",
+        {
+          ...input,
+          notes: input.notes.map(fullNote),
+          ...(input.previous ? { previous: input.previous.map(fullNote) } : {}),
+        },
         editingSchema,
         execution,
         context,
@@ -277,7 +281,11 @@ export function createRoles(
         runtime,
         "requirements",
         "Assess the entire new corpus as a useful, self-contained replacement for the previous corpus. This check does not ask whether the research task has been solved. Read all old and new notes. Preserve important results, hypotheses, conditionality, quantitative and computational guarantees, counterexamples, limitations, and open gaps. Allow different proofs, stronger results replacing several lemmas, and removal of obsolete scaffolding; no one-to-one mapping or derivation of every old lemma is required. Check that claimed supersession covers earlier hypotheses and guarantees and that no proof relies on a removed note. Correctness and sources are already checked, but do not establish corpus coverage. PASS requires meaningful consolidation and adequate knowledge for continued research. FAIL requires concrete omissions, incorrect supersession, or hidden dependencies. Use INCONCLUSIVE when unsure, with actionable feedback for Editor.",
-        input,
+        {
+          ...input,
+          notes: input.notes.map(fullNote),
+          previous: input.previous.map(fullNote),
+        },
         editionReviewSchema,
         execution,
         context,

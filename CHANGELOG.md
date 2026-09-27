@@ -5,7 +5,7 @@
 Notes now require `summary`, `detailedSummary`, and authoritative full `text`.
 Harmless corrections replace all three together. This changes public note and
 correction APIs, CLI input files, and persisted solver inputs. Solver declarations
-use version 9 and observer exports use `xean-observe/v2`. Keep historical
+use version 10 and observer exports use `xean-observe/v2`. Keep historical
 campaigns and exports on their matching runtime. No migration is provided.
 
 - Explorer always starts with the task, all note IDs and summaries, and current
@@ -29,7 +29,11 @@ campaigns and exports on their matching runtime. No migration is provided.
   deprecated original IDs. Coordinator can schedule the same loop between worker
   groups when `editingThresholdTokens` is configured. Every planning call receives
   the active note count and estimated corpus tokens. The example threshold is
-  200,000. Whole-corpus proposals and review must fit the selected models.
+  200,000. Editor and corpus review reuse the full-note reader view, while complete
+  audit evidence stays in their frozen inputs. Whole-corpus proposals and review
+  must fit the selected models.
+- Profiles can select a supported `contextWindow` when it differs from Pi's
+  catalog default. Capacity checks still reserve the maximum model output.
 - Rejected verification batches report exact expected, missing, unexpected,
   and duplicate note IDs so a model can repair the submission.
 - Direct `createSolver` campaigns record the solver format version and reject

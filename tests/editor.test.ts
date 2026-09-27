@@ -20,6 +20,7 @@ import {
   type Research,
 } from "../packages/core/src/solve/research.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
+import { fullNote } from "../packages/core/src/solve/reader.ts";
 
 const draft = (id: string, text: string, support: string[] = []) => ({
   id,
@@ -31,7 +32,14 @@ const draft = (id: string, text: string, support: string[] = []) => ({
 const pass = { verdict: "PASS" as const, report: "Checked." };
 
 function editorRuntime(
-  respond: (role: string, input: EditorInput, prompt: string) => unknown,
+  respond: (
+    role: string,
+    input: Omit<EditorInput, "notes" | "previous"> & {
+      notes: ReturnType<typeof fullNote>[];
+      previous?: ReturnType<typeof fullNote>[];
+    },
+    prompt: string,
+  ) => unknown,
 ) {
   return fixtureRuntime((context, _options, selected) => {
     const input = JSON.parse(
@@ -78,7 +86,7 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
   const sourced: string[] = [];
   let drafts = 0;
   let reviews = 0;
-  const correctness = (notes: Note[]) => ({
+  const correctness = (notes: Pick<Note, "id" | "text">[]) => ({
     results: notes.map((note) => ({
       noteId: note.id,
       result: {
@@ -102,6 +110,7 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
       expect(data.notes.map((note) => note.text)).toEqual(
         original.notes.map((note) => note.text),
       );
+      expect(data.notes.every((note) => !("checks" in note))).toBe(true);
       if (drafts === 1)
         return {
           retained: [],
@@ -115,10 +124,9 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
         expect(
           data.previous?.find((note) => note.text === "Defective proof")?.dead,
         ).toBe(true);
-        expect(
-          data.previous?.find((note) => note.dead)?.checks.at(-1)?.correctness
-            ?.report,
-        ).toBe("Missing boundary case");
+        expect(data.previous?.find((note) => note.dead)?.feedback).toEqual([
+          "correctness: Missing boundary case",
+        ]);
         const base = data.previous!.find((note) => note.text === "New base")!;
         expect(base.verified).toBe(true);
         return {
@@ -146,7 +154,12 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     if (role === "requirements") {
       reviews++;
       expect(data.notes.every((note) => note.verified)).toBe(true);
-      expect(data.previous).toEqual(original.notes);
+      expect(
+        data.previous?.map(({ id, text, support }) => ({ id, text, support })),
+      ).toEqual(
+        original.notes.map(({ id, text, support }) => ({ id, text, support })),
+      );
+      expect(data.notes.every((note) => !("checks" in note))).toBe(true);
       expect(prompt).toContain(
         "does not ask whether the research task has been solved",
       );

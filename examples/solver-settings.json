@@ -3,6 +3,7 @@
     "default": {
       "provider": "openai",
       "model": "gpt-6-astra",
+      "contextWindow": 1050000,
       "reasoning": "max"
     }
   },

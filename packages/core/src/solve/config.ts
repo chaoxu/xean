@@ -45,6 +45,7 @@ const profile = object({
   ] as const),
   model: Type.String({ minLength: 1 }),
   reasoning,
+  contextWindow: Type.Optional(positiveIntegerSchema),
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   apiKeyEnv: Type.Optional(Type.String({ minLength: 1 })),
   transport: Type.Optional(
@@ -121,6 +122,7 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
         );
       const model = {
         ...base,
+        contextWindow: configured.contextWindow ?? base.contextWindow,
         ...(configured.baseUrl ? { baseUrl: configured.baseUrl } : {}),
         ...(configured.provider === "openai-codex" &&
         configured.baseUrl &&

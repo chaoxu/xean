@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const [sourceArg, directoryArg] = process.argv.slice(2);
@@ -146,29 +146,22 @@ const contextSelection = {
     await readFile(resolve(directory, "context-evidence.json")),
   ),
 };
-// This experiment selects the gateway's documented supported context override.
-// Keep package catalogs and all other runtime profiles unchanged.
+// The ordinary JSON profile now selects the supported gateway context.
 const runtimeFor = (own: Parameters<typeof piRuntime>[0]) => {
   const runtime = piRuntime(own);
   for (const name of ["editor", "correctness", "requirements"] as const) {
     const profile = runtime.profiles[name];
     assert.equal(profile.model.provider, contextSelection.provider);
     assert.equal(profile.model.id, contextSelection.model);
-    assert.equal(
-      profile.model.contextWindow,
-      contextSelection.catalogContextWindow,
-    );
+    assert.equal(profile.model.contextWindow, contextSelection.contextWindow);
     assert.equal(profile.model.maxTokens, 128000);
-    runtime.profiles[name] = {
-      ...profile,
-      model: {
-        ...profile.model,
-        contextWindow: contextSelection.contextWindow,
-      },
-    };
   }
   return runtime;
 };
+const continuation = await Bun.file(resolve(directory, "origin.json")).json();
+const { fullNote } = await import(
+  resolve(source, "packages/core/src/solve/reader.ts")
+);
 const capacities = runtimeFor(settings).profiles;
 await save(
   "model-capacities.json",
@@ -252,6 +245,41 @@ async function runCase(name: string, options: any) {
     ...options,
     limits: { concurrency: 1, attempts: 1, providerCalls: remaining },
   };
+  const destination = resolve(output, "campaign.sqlite");
+  assert(
+    !(await Bun.file(destination).exists()),
+    "Continuation destination already exists",
+  );
+  assert.equal(
+    hash(await readFile(resolve(directory, "campaign.seed.sqlite"))),
+    continuation.seedSha256,
+  );
+  await copyFile(resolve(directory, "campaign.seed.sqlite"), destination);
+  const coordinator = options.coordinator;
+  options.coordinator = {
+    ...coordinator,
+    async run(signal: any, view: any, ...args: any[]) {
+      const failed = view.work.at(-1);
+      if (
+        failed?.id === continuation.failedWorkId &&
+        failed.status === "failed"
+      ) {
+        assert.equal(failed.error, continuation.error);
+        // One explicit logical retry of the diagnosed capacity failure, with preserved inputs.
+        return {
+          state: null,
+          dispatch: [
+            {
+              id: "edit/retry-" + signal.id,
+              role: failed.role,
+              input: failed.input,
+            },
+          ],
+        };
+      }
+      return coordinator.run(signal, view, ...args);
+    },
+  };
   const engine = await Xean.open(
     await openXeanStorage(resolve(output, "campaign.sqlite")),
     options,
@@ -282,7 +310,11 @@ async function runCase(name: string, options: any) {
       );
   }, 30_000);
   try {
-    const campaign = await engine.run();
+    const initial = await engine.inspect();
+    assert.equal(initial.status, "blocked");
+    assert.equal(initial.providerCalls, continuation.providerCalls);
+    assert.equal(hash(JSON.stringify(initial.task)), continuation.taskSha256);
+    const campaign = await engine.resume();
     const records = await engine.records();
     usedCalls += campaign.providerCalls;
     assert(usedCalls <= settings.limits.providerCalls);
@@ -334,6 +366,8 @@ async function runCase(name: string, options: any) {
       error: campaign.error,
       calls: campaign.providerCalls,
       cumulativeCalls: usedCalls,
+      inheritedCalls: continuation.providerCalls,
+      newCalls: campaign.providerCalls - continuation.providerCalls,
       nativeSearches,
       usage: settled.map((record: any) => record.data.usage),
       work: campaign.work.map((work: any) => ({
@@ -368,11 +402,19 @@ try {
   // Gate the initial Editor request; same-size replacement cases are diagnostics.
   // The runtime independently checks each exact prompt and actual proposal.
   const capacityInputs = [
-    { role: "editor", phase: "initial", input },
+    {
+      role: "editor",
+      phase: "initial",
+      input: { ...input, notes: input.notes.map(fullNote) },
+    },
     {
       role: "editor",
       phase: "repair",
-      input: { ...input, previous: input.notes },
+      input: {
+        ...input,
+        notes: input.notes.map(fullNote),
+        previous: input.notes.map(fullNote),
+      },
     },
     {
       role: "correctness",
@@ -382,7 +424,11 @@ try {
     {
       role: "requirements",
       phase: "corpus-review",
-      input: { ...input, previous: input.notes },
+      input: {
+        ...input,
+        notes: input.notes.map(fullNote),
+        previous: input.notes.map(fullNote),
+      },
     },
   ];
   const capacityChecks = capacityInputs.map(({ role, phase, input: value }) => {

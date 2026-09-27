@@ -52,6 +52,11 @@ test("configuration and library limits share safe integer boundaries", async () 
     expect(() =>
       readSettings({ profiles, maxExplorerResponses: value }),
     ).toThrow();
+    expect(() =>
+      readSettings({
+        profiles: { default: { ...profiles.default, contextWindow: value } },
+      }),
+    ).toThrow();
     expect(() => solver(value)).toThrow();
     expect(() =>
       readSettings({ profiles, limits: { concurrency: value } }),
@@ -134,6 +139,7 @@ test("Codex profiles keep native auth on official hosts and opaque keys on gatew
           default: {
             provider: "openai-codex",
             model: "gpt-6-astra",
+            ...(gateway ? { contextWindow: 872000 } : {}),
             ...(baseUrl ? { baseUrl, reasoning: "max" } : {}),
           },
         },
@@ -141,6 +147,7 @@ test("Codex profiles keep native auth on official hosts and opaque keys on gatew
       key,
     );
     const profile = runtime.profiles.explorer;
+    expect(profile.model.contextWindow).toBe(gateway ? 872000 : 272000);
     let sent = false;
     const result = await runtime.models
       .streamSimple(profile.model, context, {

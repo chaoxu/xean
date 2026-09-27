@@ -322,7 +322,7 @@ Xean's campaign state and campaign document use format version 6. Earlier format
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 9.
+version 1. Solver declarations have an independent format version.
 
 Pi configures WAL journaling; Xean selects `synchronous = FULL`. Readers hold
 consistent SQLite snapshots while the owner continues committing work. A separate
