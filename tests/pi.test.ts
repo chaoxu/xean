@@ -1007,6 +1007,12 @@ test("batch rejection names exact IDs so Pi can repair a malformed verifier repl
   const result = { verdict: "PASS" as const, report: "Checked.", premises: [] };
   let calls = 0;
   const runtime = fixtureRuntime((input) => {
+    const prompt = JSON.parse(
+      String(
+        input.messages.find((message) => message.role === "user")!.content,
+      ),
+    );
+    expect(prompt.requestedNoteIds).toEqual(expected);
     if (++calls === 1)
       return fauxAssistantMessage(
         [

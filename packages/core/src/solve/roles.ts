@@ -91,8 +91,8 @@ export function createRoles(
     const result = await ask(
       runtime,
       profile,
-      "Carry out the mathematical assignment in the top-level instructions field. Return exactly one result per requested noteId, and no others.",
-      { ...input, instructions },
+      "Carry out the mathematical assignment in the top-level instructions field. Return exactly one result for each ID in requestedNoteIds, and no others. Support notes are context, not additional targets.",
+      { ...input, requestedNoteIds: ids, instructions },
       batchSchema(schema),
       execution,
       context,
