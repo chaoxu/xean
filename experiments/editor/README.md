@@ -13,7 +13,7 @@ The research question is whether a prompt produces a coherent, materially simple
 - [consolidation.md](prompts/consolidation.md) tests explicit removal of repeated exposition without adding research that leaves the old proofs intact.
 - [settings.json](settings.json) fixes the model and reasoning settings.
 
-Each arm admits one model call and returns one draft. It uses the existing Pi request path, output schema, and dependency validation. There are no automatic repairs, verifiers, source searches, or subsequent editing calls. Failed requests and invalid submissions remain experimental outcomes. A completed generation is not mathematical acceptance.
+Each generation arm admits one model call and returns one draft. It uses the existing Pi request path, output schema, and dependency validation. There are no automatic repairs, verifiers, source searches, or subsequent editing calls. Failed requests and invalid submissions remain experimental outcomes. A completed generation is not mathematical acceptance. Native assessment and complete-workflow trials are recorded separately below.
 
 Compare outputs against the answer key after generation. Record whether the useful capabilities and their proofs survive, whether negative conclusions retain their scope, whether dependencies close, and whether the output consolidates repeated arguments. Record each defect concretely. Equivalent valid proofs and different note organizations are welcome. There is no per-note preservation requirement or compression target.
 
@@ -139,3 +139,17 @@ The pair cost **$0.0149068**, bringing all eleven golden-data model calls to **$
 These results support testing coverage as a cheap screen before stronger proof verification. Final acceptance still needs both checks. The production editing loop currently checks proofs first. Inputs, preregistration, removed text, and accounting are retained in `runs/editor-golden-coverage-controls-r01/`; the native campaigns are `editor-golden-coverage-a-r01` and `editor-golden-coverage-b-r01`, frozen at source commit `5d3e98dc97836200d319236a25051937eeb4cd97`.
 
 A read-only gateway metadata check also advertises an extended context of 872,000 tokens for both GPT-6 Luna and Sol, above their 272,000-token defaults. This is capability metadata, not a large-input experiment. The fixed small-fixture settings remain unchanged, and Xean's output reserve and capacity checks still apply. The receipt is `runs/editor-golden-coverage-controls-r01/model-capacity.json`.
+
+## Native workflow trial
+
+Source commit `257134aaf6cb384d4a94a41803b8c3d83bb5f77b` adopts the exact consolidation prompt in the built-in Editor, with repair guidance added only on repair invocations. A fresh `xean edit` trial used the same fixture, Luna/max drafting and coverage, Sol/max correctness, and three total admitted calls. The golden key and previous results remained outside the model inputs.
+
+The campaign ended **limited, without an accepted replacement**. Its first Luna request failed with a WebSocket 1011 transport error after about seven minutes. Pi's retry produced four notes with 4,674 body tokens and 5,626 total mathematical tokens: reductions of **17.5%** and **7.9%**. The third call checked proofs. The allowance then prevented coverage from calling a model; there was no extension or repair run.
+
+Sol passed three notes and rejected the ray construction for dropping the hypothesis that threshold `L` is an integer. An independent reviewer, without seeing the native verdict, found the same defect. Both supplied concrete fractional-threshold counterexamples where the success tests pass but the claimed finite boundary search fails. On the source's integer domain, the independent review found the useful capabilities and scoped obstruction preserved, with no other consequential defect. The raw draft remains unchanged; a local repair is still required.
+
+The three gateway requests took 7m 24s, 3m 24s, and 4m 14s respectively. Successful drafting cost **$0.00496034** and proof verification **$0.138612**, totaling **$0.14357234 known API-equivalent cost**, plus the failed request whose token usage and cost are unknown. All admitted calls match gateway records, and the successful token buckets match Pi. Across all fourteen small-fixture requests, known cost is **$1.11953644**, plus that unpriced failure. Curation and interactive reviews remain separate and unpriced.
+
+This trial measures a failed complete-workflow attempt and a successful detection of a mathematical editing error. The earlier checked candidate remains evidence that a one-draft result is possible; this fresh sample shows that it is not guaranteed. It does not establish a needed number of repair rounds or full-corpus economics. Artifacts, frozen settings, measurements, independent review, and accounting are under `runs/editor-golden-native-r01/`, with preregistration in `runs/editor-golden-native-r01-protocol/`. No historical research corpus was activated or modified.
+
+The integration adds 3 production lines and 21 experiment/operator lines, with no new tests or runner. Types, formatting, documentation checks, and all 103 tests passed. The existing acceptance, combined-feedback repair, and atomic-activation checks remain in place.
