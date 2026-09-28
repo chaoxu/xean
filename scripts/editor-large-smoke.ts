@@ -34,6 +34,10 @@ if (continuation) {
   assert.equal(continuation.additionalCalls, 6);
   assert.equal(continuation.parentCalls, 6);
   assert.equal(continuation.parentCallAllowance, 6);
+  assert.equal(
+    feedback.diagnostics.resultSha256,
+    continuation.parentResultSha256,
+  );
 }
 for (const [path, digest] of Object.entries(deployment.files)) {
   assert.equal(
@@ -557,10 +561,50 @@ try {
     coordinator: {
       ...native,
       async run(...args: any[]) {
-        let decision = await native.run(...args);
-        const editorCount = args[1].work.filter(
+        const [signal, view] = args;
+        const editors = view.work.filter(
           (work: any) => work.role === "xean.editor",
-        ).length;
+        );
+        const editorCount = editors.length;
+        let decision;
+        if (continuation && signal.kind === "allowance" && editorCount === 1) {
+          const last = view.work.at(-1);
+          assert(!view.callLimitReached);
+          assert(
+            !view.work.some((work: any) =>
+              ["active", "queued"].includes(work.status),
+            ),
+          );
+          assert.equal(editors[0].id, feedback.editorWorkId);
+          assert.equal(editors[0].status, "completed");
+          assert.equal(last.id, feedback.failedVerifierId);
+          assert.equal(last.role, "xean.editVerifier");
+          assert.equal(last.status, "failed");
+          assert.equal(last.error, "Provider call limit reached");
+          const state = projectEditing(input, view.work);
+          assert.equal(state.step, "xean.editor");
+          assert(
+            state.notes.every(
+              (note: any) => !note.verified && note.checks.length === 0,
+            ),
+          );
+          // The failed worker published no checks. Review coverage, then repair
+          // using its diagnostic response as feedback, never as trusted state.
+          decision = {
+            state: null,
+            dispatch: [
+              {
+                id: `edit/w${signal.id}`,
+                role: "xean.editionReview",
+                input: {
+                  task: input.task,
+                  notes: state.notes,
+                  previous: state.original,
+                },
+              },
+            ],
+          };
+        } else decision = await native.run(...args);
         if (
           decision.completion &&
           feedback?.report.trim() &&
@@ -608,7 +652,7 @@ try {
               request.input.review
                 ? `Native corpus review (${request.input.review.verdict}):\n${request.input.review.report}`
                 : undefined,
-              `Independent findings on the prior proposal:\n${feedback.report}`,
+              `Unpublished correctness diagnostics and independent findings on the prior proposal:\n${feedback.report}`,
             ]
               .filter(Boolean)
               .join("\n\n"),
