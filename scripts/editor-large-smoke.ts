@@ -109,7 +109,33 @@ assert.deepEqual(
   adapted,
   "Legacy statuses must match current derivation",
 );
-const input = { task: snapshot.task, notes: adapted };
+const seed = await Bun.file(resolve(directory, "followup-seed.json")).json();
+const feedbackBytes = await readFile(
+  resolve(directory, "external-feedback.json"),
+);
+const feedback = JSON.parse(feedbackBytes.toString());
+assert.equal(seed.provenance.originalCorpusSha256, deployment.corpusSha256);
+assert.equal(hash(feedbackBytes), seed.provenance.externalFeedbackSha256);
+assert.equal(hash(JSON.stringify(seed.input)), seed.provenance.inputSha256);
+assert.deepEqual(seed.input.task, snapshot.task);
+const coverage = new Set(seed.coverageIds);
+const input = {
+  task: snapshot.task,
+  notes: seed.input.notes.filter((note: any) => coverage.has(note.id)),
+};
+assert.deepEqual(
+  [...coverage].sort(),
+  adapted.map((note: any) => note.id).sort(),
+);
+assert.equal(input.notes.length, 289);
+const previous = seed.previousIds.map((id: string) => {
+  const note = seed.input.notes.find((note: any) => note.id === id);
+  assert(note);
+  return note;
+});
+const { followup } = await import(
+  resolve(source, "scripts/editor-followup.ts")
+);
 const originalInput = structuredClone(input);
 assert(
   corpusStats(input.notes).estimatedTokens > 200000,
@@ -122,7 +148,7 @@ await save("adaptation.json", {
   inputSha256: hash(JSON.stringify(input)),
   notes: adapted.length,
   transformation:
-    "Only absent detailedSummary fields copy their same object's historical summary. Original full text, IDs, dependencies, revisions, checks, import flags, and statuses remain unchanged. Original files remain immutable.",
+    "The historical source snapshot remains immutable. Coverage notes and reusable prior notes carry only authentic published R04 revisions and checks from followup-seed.json; independent feedback is not inserted as a check.",
   addedFields: adaptedPaths,
 });
 const settings = readSettings(
@@ -394,7 +420,12 @@ try {
     {
       role: "editor",
       phase: "initial",
-      input: { ...input, notes: input.notes.map(fullNote) },
+      input: {
+        ...input,
+        notes: input.notes.map(fullNote),
+        previous: previous.map(fullNote),
+        review: feedback.review,
+      },
     },
     {
       role: "editor",
@@ -463,11 +494,15 @@ try {
   const own = { ...settings, usagePrefix: settings.usagePrefix + "/editor" };
   const edited = await runCase(
     "editor",
-    createEditor(
-      input,
-      runtimeFor(own),
-      own,
-      codexResearch(own.research, own.usagePrefix),
+    followup(
+      createEditor(
+        seed.input,
+        runtimeFor(own),
+        own,
+        codexResearch(own.research, own.usagePrefix),
+      ),
+      seed,
+      feedback,
     ),
   );
   assert.equal(
@@ -496,6 +531,7 @@ try {
   await save("coverage-report.json", {
     completeOriginalIds: input.notes.map((note: any) => note.id),
     originalCorpusSha256: deployment.corpusSha256,
+    seedProvenance: seed.provenance,
     proposals,
     reviews,
     activated: edited.campaign.status === "completed",
@@ -515,7 +551,7 @@ try {
       result.notes.length,
     );
     for (const note of result.notes) {
-      const old = input.notes.find((other: any) => other.id === note.id);
+      const old = seed.input.notes.find((other: any) => other.id === note.id);
       if (!old) {
         assert(
           !note.imported,
