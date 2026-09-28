@@ -799,6 +799,9 @@ share lemmas, consolidate results, and remove obsolete intermediate results,
 repetition, and details that no longer help the research. An omitted claim needs
 no separate replacement. When claiming that one result subsumes another, the
 notes must justify that scope.
+Useful negative results identify the failed method, obstruction, and scope in
+summaries as well as full text, so Explorer can recognize ruled-out approaches.
+A failed attempt remains distinct from a proved obstruction.
 
 Claims kept as established knowledge retain their precise hypotheses and
 guarantees, complete arguments, and declared support. Counterexamples retain
