@@ -8,7 +8,7 @@ import { declarationVersion } from "../../packages/core/src/solve/contracts.ts";
 const [action, id, selection, inputFile, settingsFile] = process.argv.slice(2);
 const role =
   selection === "verifier" || selection === "editionReview" ? selection : "";
-const prompt = role ? "consolidation" : selection;
+const prompt = role ? undefined : selection;
 assert(action && ["launch", "status", "collect", "cancel"].includes(action));
 assert(
   id && /^editor-golden-[a-z0-9-]+$/.test(id),
@@ -91,13 +91,13 @@ if (action === "launch") {
     roleFiles = { "input.json": json(input), "settings.json": json(settings) };
   } else {
     assert.equal(process.argv.length, 5);
+    assert(prompt && /^[a-z0-9-]+$/.test(prompt), "Supply a prompt name");
+    assert(
+      await Bun.file(
+        resolve(import.meta.dir, "prompts", `${prompt}.md`),
+      ).exists(),
+    );
   }
-  assert(prompt && /^[a-z0-9-]+$/.test(prompt), "Supply a prompt name");
-  assert(
-    await Bun.file(
-      resolve(import.meta.dir, "prompts", `${prompt}.md`),
-    ).exists(),
-  );
   await invoke(["git", "diff", "--exit-code", "HEAD"]);
   assert.equal(
     (
@@ -186,7 +186,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
         "-output",
         `-var=run_id=${id}`,
         `-var=source_commit=${commit}`,
-        `-var=prompt=${prompt}`,
+        `-var=prompt=${prompt ?? ""}`,
         `-var=role=${role}`,
         `-var=image=${image}`,
         "-",
