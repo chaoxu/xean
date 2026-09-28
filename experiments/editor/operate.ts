@@ -271,21 +271,18 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
       await remote(`
 const files={};for(const name of await readdir(root+"/output"))if(name.endsWith(".json"))files[name]=await readFile(root+"/output/"+name,"utf8");console.log(JSON.stringify(files));`),
     );
-    await mkdir(local, { recursive: true, mode: 0o700 });
-    for (const [name, bytes] of Object.entries(files)) {
-      assert(/^[a-zA-Z0-9.-]+\.json$/.test(name));
-      await writeFile(resolve(local, name), bytes as string, { mode: 0o600 });
-    }
     const intent = JSON.parse(
       await readFile(resolve(local, "intent.json"), "utf8"),
     );
     if (intent.role) {
-      const snapshot = await remote(`
+      files["snapshot.json"] = await remote(`
 const {inspectCampaign}=await import(root+"/source/packages/core/src/index.ts");
 console.log(JSON.stringify(await inspectCampaign(root+"/output/campaign.sqlite")));`);
-      await writeFile(resolve(local, "snapshot.json"), snapshot, {
-        mode: 0o600,
-      });
+    }
+    await mkdir(local, { recursive: true, mode: 0o700 });
+    for (const [name, bytes] of Object.entries(files)) {
+      assert(/^[a-zA-Z0-9.-]+\.json$/.test(name));
+      await writeFile(resolve(local, name), bytes as string, { mode: 0o600 });
     }
     console.log(json({ collected: Object.keys(files), local }));
   }
