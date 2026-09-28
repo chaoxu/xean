@@ -113,4 +113,19 @@ Drafting with Luna, verifying with Sol, and reviewing coverage with Luna totals 
 
 The candidate needed no mathematical revision. The independent and native reviews recorded minor clarity suggestions about state-set membership costs, the dead-zone summary, the one-sided boundary-search interval, and reuse of the algebraic span-finding subroutine. They found no consequential loss or defect. The raw candidate stays unchanged, with feedback retained separately.
 
-This establishes a cheap successful combination on one valid fixture. It does not yet establish the cheaper reviewer's ability to catch a broken replacement. The next useful check is a known defective variant of these same notes, with the golden key still withheld from the model. Larger runs remain outside this experiment. Native campaigns and receipts are under `runs/editor-golden-luna6-verifier-r01/`, `runs/editor-golden-luna6-coverage-*/`, and `runs/editor-golden-assessment-r01/`.
+This establishes a cheap successful combination on one valid fixture. The matched controls below test one known defect, with the golden key still withheld from the model. Larger runs remain outside this experiment. Native campaigns and receipts are under `runs/editor-golden-luna6-verifier-r01/`, `runs/editor-golden-luna6-coverage-*/`, and `runs/editor-golden-assessment-r01/`.
+
+## Coverage controls
+
+Two further Luna/max calls compared an intact copy of the same draft with a copy lacking the useful geometric obstruction. Both replacements had fresh IDs and empty verification histories. This removes verification status as a cue. The defective copy retained the conditional ray method, its proofs, and its horizontal application. Only the counterexample paragraph and corresponding summary claims were removed. The model received the ordinary original/replacement input, with no mutation label, golden key, or expected verdict.
+
+| Replacement                   | Native coverage verdict        | Request time | API-equivalent cost |
+| ----------------------------- | ------------------------------ | -----------: | ------------------: |
+| Geometric obstruction omitted | FAIL, intended loss identified |       2m 29s |          $0.0052904 |
+| Intact, equally unverified    | PASS                           |       5m 03s |          $0.0096164 |
+
+The failure report identified the exact H=4, w_i=(5/2)^i family and reconstructed why polynomially bounded B cannot make this quantized-hull branch universal. It explained why this is a branch limitation rather than an obstruction to the original compression problem. The intact control preserved those capabilities and passed, while correctly treating its absent per-note checks as a separate verification requirement.
+
+The pair cost **$0.0149068**, bringing all eleven golden-data model calls to **$0.9759641**. Gateway identities and token buckets match Pi. This is one positive/negative pair testing omission of an informative obstruction. It establishes neither a general defect-detection rate nor full-corpus reliability.
+
+These results support testing coverage as a cheap screen before stronger proof verification. Final acceptance still needs both checks. The production editing loop currently checks proofs first. Inputs, preregistration, removed text, and accounting are retained in `runs/editor-golden-coverage-controls-r01/`; the native campaigns are `editor-golden-coverage-a-r01` and `editor-golden-coverage-b-r01`, frozen at source commit `5d3e98dc97836200d319236a25051937eeb4cd97`.
