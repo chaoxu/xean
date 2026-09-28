@@ -61,8 +61,9 @@ from solver acceptance.
 
 Editor rewrites an entire corpus into a proposed replacement collection of
 ordinary notes. Corpus review (`editionReview`) judges its useful coverage
-after normal correctness and source checks. A corpus revision is the
-complete replacement collection approved by corpus review, returned by standalone
+after normal correctness and source checks, even when some remain unsuccessful,
+so repairs receive mathematical and coverage findings together. A corpus revision
+is the complete verified replacement collection approved by corpus review, returned by standalone
 editing or activated within a solver campaign.
 Deprecated notes are originals absent from that revision, not failed or dead
 mathematics. Historical proofs and checks keep their original identities.

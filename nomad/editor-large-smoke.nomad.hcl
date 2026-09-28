@@ -13,7 +13,7 @@ job "xean-editor-large-smoke-template" {
     fleet_owner = "xean"
     source_repo = "xean"
     source_commit = var.source_commit
-    logical_call_allowance = "24"
+    logical_call_allowance = "6"
   }
   constraint {
     attribute = "${node.unique.name}"
@@ -44,6 +44,7 @@ job "xean-editor-large-smoke-template" {
           "/runs/_xean/${var.run_id}/source/scripts/editor-large-smoke.ts",
           "/runs/_xean/${var.run_id}/source",
           "/runs/_xean/${var.run_id}",
+          "trial",
         ]
         network_mode = "bridge"
         readonly_rootfs = true

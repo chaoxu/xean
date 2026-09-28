@@ -863,20 +863,24 @@ The deterministic Coordinator runs the following loop without planning calls:
    retained notes and earlier new notes. Removed notes remain provenance, not
    hidden mathematical premises.
 2. The existing Verifier checks every proposed note through correctness and
-   sources, reusing checks on unchanged notes. Failed or unresolved proposals go
-   back to Editor with their recorded checks. Mathematical repairs use new IDs, and the
-   permanent source-verdict rule remains in effect.
-   Repairs fix defects and restore missing coverage. Further shortening is optional.
-3. `editionReview` compares the whole old and new corpora after every new
-   note is verified. It checks useful coverage, meaningful consolidation,
+   sources, reusing checks on unchanged notes. Its findings remain attached to
+   the proposal. Mathematical repairs use new IDs, and the permanent
+   source-verdict rule remains in effect.
+3. `editionReview` then compares the whole old and new corpora, including when
+   mathematical checks failed or remain unresolved. It reads their actual
+   status and feedback and checks useful coverage, meaningful consolidation,
    claims of supersession, and independence from removed proofs. It allows
    obsolete lemmas to disappear. Modest consolidation is acceptable when the
    corpus contains distinct useful results. An omission must lose useful research
    knowledge to count as a coverage failure. An absent old lemma alone is
    insufficient. Earlier PASS checks do not excuse missing arguments or lost
    hypotheses found during review.
-   FAIL or INCONCLUSIVE returns to Editor.
-4. A passing review completes standalone editing with
+   If any note is unverified or corpus review is not PASS, Editor receives both
+   the recorded mathematical checks and corpus-review findings in one repair
+   pass. Repairs retain unaffected notes by their exact IDs, fix defects, and
+   restore missing coverage. Further shortening is optional.
+4. Only a fully verified proposal with a passing corpus review completes
+   standalone editing with
    `{notes, deprecated, review}`. `notes` is the checked replacement revision.
    `deprecated` lists original IDs absent from it. The original snapshot and
    every proposal/check remain in the durable records. Reopening a completed
@@ -889,8 +893,9 @@ original research task is solved. Editing does not grant requirements or
 reconstruction PASS to notes. Exact-task acceptance still uses the normal solver
 checks. Independent reconstruction remains available as a separate operation.
 
-In a solver campaign, the passing review activates the entire checked
-replacement in one publication. Ordinary planning resumes with its refreshed
+In a solver campaign, the same two gates activate the entire checked
+replacement in one publication. A review PASS cannot activate unverified notes.
+Ordinary planning resumes with its refreshed
 corpus statistics. Re-editing an unchanged successful edition is disabled until
 the corpus changes. Original notes remain historical, with their identities and
 checks intact. Deprecation does not mark a note mathematically dead.

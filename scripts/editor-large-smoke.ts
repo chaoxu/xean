@@ -3,20 +3,25 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const [sourceArg, directoryArg, continuationId, additionalArg] =
-  process.argv.slice(2);
-assert(sourceArg && directoryArg, "Expected frozen source and smoke directory");
-const additionalCalls = Number(additionalArg ?? 0);
-assert(!continuationId || /^[a-z0-9][a-z0-9-]{0,47}$/.test(continuationId));
-assert(Number.isSafeInteger(additionalCalls) && additionalCalls >= 0);
-assert(continuationId || additionalCalls === 0);
+const [sourceArg, directoryArg, phase] = process.argv.slice(2);
+assert(sourceArg && directoryArg, "Expected frozen source and trial directory");
+assert(phase === "smoke" || phase === "trial", "Expected smoke or trial phase");
+assert.equal(
+  process.argv.length,
+  5,
+  "Continuations and call extensions are outside this trial",
+);
+const proposalLimit = 2;
 const source = resolve(sourceArg);
 const directory = resolve(directoryArg);
+const outputDirectory =
+  phase === "smoke" ? resolve(directory, "smoke") : directory;
+await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
 const hash = (value: string | Uint8Array) =>
   createHash("sha256").update(value).digest("hex");
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 const save = (name: string, value: unknown) =>
-  writeFile(resolve(directory, name), json(value), { mode: 0o600 });
+  writeFile(resolve(outputDirectory, name), json(value), { mode: 0o600 });
 const mark = (value: object) =>
   console.log(JSON.stringify({ at: new Date().toISOString(), ...value }));
 assert.equal(Bun.version, "1.4.2");
@@ -61,7 +66,7 @@ const { Xean, openXeanStorage } = await import(
 const { createEditor, piRuntime, readSettings, codexResearch } = await import(
   resolve(source, "packages/core/src/solve/index.ts")
 );
-const { refresh, corpusStats, closure } = await import(
+const { refresh, corpusStats, closure, materializeNotes } = await import(
   resolve(source, "packages/core/src/solve/notes.ts")
 );
 const snapshotBytes = await readFile(
@@ -109,59 +114,87 @@ assert.deepEqual(
   adapted,
   "Legacy statuses must match current derivation",
 );
-const seed = await Bun.file(resolve(directory, "followup-seed.json")).json();
-const feedbackBytes = await readFile(
-  resolve(directory, "external-feedback.json"),
-);
-const feedback = JSON.parse(feedbackBytes.toString());
-assert.equal(seed.provenance.originalCorpusSha256, deployment.corpusSha256);
-assert.equal(hash(feedbackBytes), seed.provenance.externalFeedbackSha256);
-assert.equal(hash(JSON.stringify(seed.input)), seed.provenance.inputSha256);
-assert.deepEqual(seed.input.task, snapshot.task);
-const coverage = new Set(seed.coverageIds);
-const input = {
-  task: snapshot.task,
-  notes: seed.input.notes.filter((note: any) => coverage.has(note.id)),
-};
-assert.deepEqual(
-  [...coverage].sort(),
-  adapted.map((note: any) => note.id).sort(),
-);
-assert.equal(input.notes.length, 289);
-const previous = seed.previousIds.map((id: string) => {
-  const note = seed.input.notes.find((note: any) => note.id === id);
-  assert(note);
-  return note;
+const originalCorpus = { task: snapshot.task, notes: adapted };
+assert.equal(originalCorpus.notes.length, 289);
+assert(corpusStats(originalCorpus.notes).estimatedTokens > 200000);
+const smokeDraft = (id: string, text: string, support: string[] = []) => ({
+  id,
+  summary: text,
+  detailedSummary: text,
+  text,
+  support,
 });
-const { followup } = await import(
-  resolve(source, "scripts/editor-followup.ts")
-);
+const input =
+  phase === "trial"
+    ? originalCorpus
+    : {
+        task: {
+          problem:
+            "Maintain a compact, self-contained account of the sum of the first n odd positive integers and the limitation of checking only finitely many instances.",
+          completionCriteria:
+            "Use elementary algebra and explicit proofs. Preserve the statement for every integer n >= 0 and the distinction between examples and a universal proof.",
+        },
+        notes: refresh(
+          materializeNotes("smoke", [
+            smokeDraft(
+              "n1",
+              "For every integer n >= 0, sum_{k=1}^n (2k-1)=n^2, where the empty sum is zero. Proof: 2k-1=k^2-(k-1)^2, so summing telescopes to n^2-0^2.",
+            ),
+            smokeDraft(
+              "n2",
+              "The n=3 instance is 1+3+5=9=3^2. It also follows directly from the general identity.",
+              ["n1"],
+            ),
+            smokeDraft(
+              "n3",
+              "Agreement at n=0,1,2,3 does not establish a formula for all nonnegative integers. Define f(n)=n^2 for n != 4 and f(4)=17. This agrees with n^2 on those four tested inputs and disagrees at n=4.",
+            ),
+          ]),
+        ),
+      };
 const originalInput = structuredClone(input);
-assert(
-  corpusStats(input.notes).estimatedTokens > 200000,
-  "The complete large corpus must exceed 200,000 estimated tokens",
-);
+if (phase === "trial") {
+  const smoke = await Bun.file(
+    resolve(directory, "smoke/complete.json"),
+  ).json();
+  assert(
+    smoke.passed && smoke.nativeAccepted && smoke.requiredRolesPassed,
+    "Full trial requires a passing deployed smoke",
+  );
+  assert.equal(smoke.sourceCommit, deployment.sourceCommit);
+  assert.equal(
+    smoke.deploymentSha256,
+    hash(await readFile(resolve(directory, "deployment.json"))),
+  );
+  assert.equal(
+    smoke.resultSha256,
+    hash(await readFile(resolve(directory, "smoke/editor/result.json"))),
+  );
+}
 await save("input.json", input);
 await save("adaptation.json", {
   originalSnapshotSha256: hash(snapshotBytes),
   originalCorpusSha256: deployment.corpusSha256,
   inputSha256: hash(JSON.stringify(input)),
-  notes: adapted.length,
+  phase,
+  notes: input.notes.length,
   transformation:
-    "The historical source snapshot remains immutable. Coverage notes and reusable prior notes carry only authentic published R04 revisions and checks from followup-seed.json; independent feedback is not inserted as a check.",
+    phase === "smoke"
+      ? "Three elementary self-contained unverified fixture notes. The original corpus is hash-checked but is not supplied to the smoke Editor."
+      : "Only absent detailedSummary fields copy their same object's historical summary. Original full text, IDs, dependencies, revisions, checks, import flags, and statuses remain unchanged. Original files remain immutable.",
   addedFields: adaptedPaths,
 });
 const settings = readSettings(
   await Bun.file(resolve(directory, "settings.json")).json(),
 );
 for (const profile of Object.values(settings.profiles) as any[]) {
-  assert.equal(profile.model, "gpt-6-astra");
+  assert.equal(profile.model, "gpt-6-sol");
   assert.equal(profile.reasoning, "max");
 }
 assert.equal(settings.research.model, "gpt-6-astra");
 assert.equal(settings.research.reasoning, "max");
 assert.equal(settings.editingThresholdTokens, 200000);
-assert.equal(settings.limits.providerCalls, 24);
+assert.equal(settings.limits.providerCalls, 6);
 const credential = process.env.XEAN_API_KEY ?? "";
 assert(credential, "Missing injected Xean credential");
 assert(
@@ -170,7 +203,7 @@ assert(
 );
 const contextSelection = {
   provider: "openai-codex",
-  model: "gpt-6-astra",
+  model: "gpt-6-sol",
   catalogContextWindow: 272000,
   contextWindow: 872000,
   evidenceSha256: hash(
@@ -267,7 +300,7 @@ const metrics = (notes: any[]) => {
 };
 async function runCase(name: string, options: any) {
   assert(!cancelled, "Cancelled before next case");
-  const output = resolve(directory, name);
+  const output = resolve(outputDirectory, name);
   await mkdir(output, { recursive: true, mode: 0o700 });
   options = {
     ...options,
@@ -275,8 +308,8 @@ async function runCase(name: string, options: any) {
   };
   const destination = resolve(output, "campaign.sqlite");
   assert(
-    (await Bun.file(destination).exists()) === Boolean(continuationId),
-    "Fresh starts require an absent campaign; continuation requires its existing campaign",
+    !(await Bun.file(destination).exists()),
+    "This experiment permits only fresh campaigns, without relaunch or continuation",
   );
   const engine = await Xean.open(
     await openXeanStorage(resolve(output, "campaign.sqlite")),
@@ -295,7 +328,7 @@ async function runCase(name: string, options: any) {
           status: campaign.status,
           calls: campaign.providerCalls,
           callAllowance: campaign.callAllowance,
-          continuationId: continuationId ?? null,
+          phase,
           active: campaign.work
             .filter((work: any) => work.status === "active")
             .map((work: any) => ({ id: work.id, role: work.role })),
@@ -311,22 +344,12 @@ async function runCase(name: string, options: any) {
   }, 30_000);
   try {
     const initial = await engine.inspect();
-    if (!continuationId)
-      assert.equal(
-        initial.providerCalls,
-        0,
-        "Fresh experiment must not inherit model calls",
-      );
-    usedCalls = initial.providerCalls;
-    if (continuationId && additionalCalls > 0) {
-      const receipt = await engine.extendCalls(additionalCalls, continuationId);
-      await save(`allowance-${continuationId}.json`, receipt);
-    }
-    const ready = await engine.inspect();
-    const campaign =
-      continuationId && ["blocked", "paused"].includes(ready.status)
-        ? await engine.resume()
-        : await engine.run();
+    assert.equal(
+      initial.providerCalls,
+      0,
+      "Fresh experiment must not inherit model calls",
+    );
+    const campaign = await engine.run();
     const records = await engine.records();
     usedCalls = campaign.providerCalls;
     assert(
@@ -341,10 +364,12 @@ async function runCase(name: string, options: any) {
     assert(
       requests.every(
         (request: any) =>
-          request.model === "gpt-6-astra" &&
+          (request.model === "gpt-6-sol" ||
+            (request.kind === "codex-exec" &&
+              request.model === "gpt-6-astra")) &&
           (request.reasoning?.effort ?? request.reasoning) === "max",
       ),
-      "Every request must use Astra/max",
+      "Pi requests must use Sol/max and native source requests Astra/max",
     );
     assert.equal(
       records.filter((record: any) => record.kind === "xean.call.started")
@@ -382,7 +407,7 @@ async function runCase(name: string, options: any) {
       cumulativeCalls: usedCalls,
       callAllowance: campaign.callAllowance,
       invocationCalls: campaign.providerCalls - initial.providerCalls,
-      continuationId: continuationId ?? null,
+      phase,
       nativeSearches,
       usage: settled.map((record: any) => record.data.usage),
       work: campaign.work.map((work: any) => ({
@@ -420,12 +445,7 @@ try {
     {
       role: "editor",
       phase: "initial",
-      input: {
-        ...input,
-        notes: input.notes.map(fullNote),
-        previous: previous.map(fullNote),
-        review: feedback.review,
-      },
+      input: { ...input, notes: input.notes.map(fullNote) },
     },
     {
       role: "editor",
@@ -491,20 +511,48 @@ try {
     capacityChecks.find((check) => check.phase === "initial")!.fits,
     "Configured Editor profile cannot fit the complete corpus; see capacity-preflight.json",
   );
-  const own = { ...settings, usagePrefix: settings.usagePrefix + "/editor" };
-  const edited = await runCase(
-    "editor",
-    followup(
-      createEditor(
-        seed.input,
-        runtimeFor(own),
-        own,
-        codexResearch(own.research, own.usagePrefix),
-      ),
-      seed,
-      feedback,
-    ),
+  const own = {
+    ...settings,
+    usagePrefix: settings.usagePrefix + "/" + phase + "/editor",
+  };
+  const options = createEditor(
+    input,
+    runtimeFor(own),
+    own,
+    codexResearch(own.research, own.usagePrefix),
   );
+  const native = options.coordinator;
+  let repairSuppressed = false;
+  const edited = await runCase("editor", {
+    ...options,
+    coordinator: {
+      ...native,
+      async run(...args: any[]) {
+        const decision = await native.run(...args);
+        const editorCount = args[1].work.filter(
+          (work: any) => work.role === "xean.editor",
+        ).length;
+        const request = decision.dispatch?.find(
+          (work: any) => work.role === "xean.editor",
+        );
+        if (request && editorCount === 0) {
+          assert(
+            !("previous" in request.input) && !("review" in request.input),
+          );
+          assert.deepEqual(request.input.task, input.task);
+          assert.deepEqual(
+            new Map(request.input.notes.map((note: any) => [note.id, note])),
+            new Map(input.notes.map((note: any) => [note.id, note])),
+          );
+        }
+        if (request && editorCount >= proposalLimit) {
+          repairSuppressed = true;
+          return { state: decision.state };
+        }
+        return decision;
+      },
+    },
+  });
   assert.equal(
     hash(await readFile(resolve(directory, "source-snapshot.json"))),
     hash(snapshotBytes),
@@ -512,6 +560,45 @@ try {
   );
   assert.deepEqual(input, originalInput, "Caller input changed");
   const result = edited.campaign.result;
+  const editorWork = edited.campaign.work.filter(
+    (work: any) => work.role === "xean.editor",
+  );
+  assert(
+    editorWork.length >= 1 && editorWork.length <= proposalLimit,
+    "This trial allows a first draft and at most one repair",
+  );
+  const { projectEditing } = await import(
+    resolve(source, "packages/core/src/solve/editor.ts")
+  );
+  const current = projectEditing(input, edited.campaign.work);
+  const proposal = editorWork[0];
+  if (proposal.status === "completed") {
+    const first = projectEditing(input, [proposal]);
+    await save("first-proposal.json", {
+      at: new Date().toISOString(),
+      work: proposal,
+      notes: first.notes,
+      scope:
+        "Exact first publication reconstructed before subsequent checks or harmless corrections. No earlier edited corpus or audit feedback was supplied.",
+    });
+  }
+  const nativeAccepted = edited.campaign.status === "completed";
+  const trialFinished =
+    !edited.campaign.work.some(
+      (work: any) => work.status === "active" || work.status === "queued",
+    ) &&
+    (nativeAccepted ||
+      repairSuppressed ||
+      ["limited", "blocked", "failed"].includes(edited.campaign.status));
+  const requiredRolesPassed = [
+    "xean.editor",
+    "xean.editVerifier",
+    "xean.editionReview",
+  ].every((role) =>
+    edited.campaign.work.some(
+      (work: any) => work.role === role && work.status === "completed",
+    ),
+  );
   const proposals = edited.campaign.work
     .filter(
       (work: any) => work.role === "xean.editor" && work.status === "completed",
@@ -531,10 +618,13 @@ try {
   await save("coverage-report.json", {
     completeOriginalIds: input.notes.map((note: any) => note.id),
     originalCorpusSha256: deployment.corpusSha256,
-    seedProvenance: seed.provenance,
     proposals,
     reviews,
-    activated: edited.campaign.status === "completed",
+    nativeAccepted,
+    trialFinished,
+    repairSuppressed,
+    corpusReviewReached: reviews.length > 0,
+    originalCampaignActivated: false,
     result,
   });
   if (edited.campaign.status === "completed") {
@@ -551,7 +641,7 @@ try {
       result.notes.length,
     );
     for (const note of result.notes) {
-      const old = seed.input.notes.find((other: any) => other.id === note.id);
+      const old = input.notes.find((other: any) => other.id === note.id);
       if (!old) {
         assert(
           !note.imported,
@@ -601,7 +691,7 @@ try {
   }
   await save("metrics.json", {
     before: metrics(input.notes),
-    after: result ? metrics(result.notes) : null,
+    after: current.notes.length ? metrics(current.notes) : null,
     providerCalls: usedCalls,
     initialAllowance: settings.limits.providerCalls,
     sourceSnapshotUnchanged: true,
@@ -611,12 +701,24 @@ try {
   });
   await save("complete.json", {
     status: edited.campaign.status,
-    passed: edited.campaign.status === "completed",
+    passed: nativeAccepted && (phase !== "smoke" || requiredRolesPassed),
+    requiredRolesPassed,
+    resultSha256: hash(
+      await readFile(resolve(outputDirectory, "editor/result.json")),
+    ),
+    proposalLimit,
+    proposals: editorWork.length,
+    limitDescription:
+      "At most two Editor proposals (first draft and one repair), six kernel calls, no continuation or relaunch. Native acceptance remains mandatory for success.",
+    trialFinished,
+    repairSuppressed,
+    nativeAccepted,
+    corpusReviewReached: reviews.length > 0,
     cancelled,
     calls: usedCalls,
     callAllowance: edited.campaign.callAllowance,
     checkpoint: edited.campaign.status === "limited",
-    continuationId: continuationId ?? null,
+    phase,
     initialAllowance: settings.limits.providerCalls,
     finishedAt: new Date().toISOString(),
     sourceCommit: deployment.sourceCommit,
@@ -625,7 +727,10 @@ try {
     ),
     cases,
   });
-  if (!["completed", "limited"].includes(edited.campaign.status))
+  if (
+    !trialFinished ||
+    (phase === "smoke" && !(nativeAccepted && requiredRolesPassed))
+  )
     process.exitCode = 1;
 } catch (error) {
   const message = String(error).replaceAll(credential, "[redacted]");

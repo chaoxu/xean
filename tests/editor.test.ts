@@ -59,7 +59,7 @@ function editorRuntime(
   });
 }
 
-test("editing repairs proofs and corpus omissions, reuses checks, and publishes only after review", async () => {
+test("editing combines proof and coverage feedback before repair and reuses checks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-editing-"));
   const path = join(directory, "campaign.sqlite");
   const input = {
@@ -120,31 +120,27 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
             draft("n2", "Defective proof", ["n1"]),
           ],
         };
-      if (drafts === 2) {
-        expect(
-          data.previous?.find((note) => note.text === "Defective proof")?.dead,
-        ).toBe(true);
-        expect(data.previous?.find((note) => note.dead)?.feedback).toEqual([
-          "correctness: Missing boundary case",
-        ]);
-        const base = data.previous!.find((note) => note.text === "New base")!;
-        expect(base.verified).toBe(true);
-        return {
-          retained: [base.id],
-          report: "Fix the proof and retain the checked base.",
-          notes: [draft("n1", "Repaired proof", [base.id])],
-        };
-      }
-      expect(drafts).toBe(3);
+      expect(drafts).toBe(2);
+      expect(
+        data.previous?.find((note) => note.text === "Defective proof")?.dead,
+      ).toBe(true);
+      expect(data.previous?.find((note) => note.dead)?.feedback).toEqual([
+        "correctness: Missing boundary case",
+      ]);
       expect(data.review).toEqual({
         verdict: "FAIL",
         report: "Lost counterexample",
       });
-      expect(data.previous!.every((note) => note.verified)).toBe(true);
+      const base = data.previous!.find((note) => note.text === "New base")!;
+      expect(base.verified).toBe(true);
       return {
-        retained: data.previous!.map((note) => note.id),
-        report: "Restore the useful negative finding.",
-        notes: [draft("n1", "Counterexample and limitation")],
+        retained: [base.id],
+        report:
+          "Fix the proof and restore the counterexample with the checked base.",
+        notes: [
+          draft("n1", "Repaired proof", [base.id]),
+          draft("n2", "Counterexample and limitation"),
+        ],
       };
     }
     if (role === "correctness") {
@@ -153,7 +149,11 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     }
     if (role === "requirements") {
       reviews++;
-      expect(data.notes.every((note) => note.verified)).toBe(true);
+      expect(data.notes.every((note) => note.verified)).toBe(reviews > 1);
+      if (reviews === 1)
+        expect(data.notes.find((note) => note.dead)?.feedback).toEqual([
+          "correctness: Missing boundary case",
+        ]);
       expect(
         data.previous?.map(({ id, text, support }) => ({ id, text, support })),
       ).toEqual(
@@ -180,7 +180,7 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     expect(limited.result).toBeNull();
     expect(reviews).toBe(0);
     expect(limited.work.at(-1)).toMatchObject({
-      role: "xean.editor",
+      role: "xean.editionReview",
       status: "failed",
       error: "Provider call limit reached",
     });
@@ -214,10 +214,10 @@ test("editing repairs proofs and corpus omissions, reuses checks, and publishes 
     ).toBe(true);
     expect(judged).toEqual([
       ["New base", "Defective proof"],
-      ["Repaired proof"],
-      ["Counterexample and limitation"],
+      ["Repaired proof", "Counterexample and limitation"],
     ]);
     expect(new Set(sourced).size).toBe(sourced.length);
+    expect(drafts).toBe(2);
     expect(reviews).toBe(2);
     expect(input).toEqual(original);
     // A completed revision is valid input to another run, without reusing new-note IDs.

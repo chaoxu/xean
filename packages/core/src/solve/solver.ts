@@ -146,7 +146,10 @@ export function createSolver(
         (work) =>
           work.role === "xean.editionReview" &&
           work.status === "completed" &&
-          (work.result as { verdict?: string } | null)?.verdict === "PASS",
+          (work.result as { verdict?: string } | null)?.verdict === "PASS" &&
+          (work.input as unknown as SolverInput).notes.every(
+            (note) => note.verified,
+          ),
       );
       const input: CoordinationInput = {
         task,

@@ -116,11 +116,7 @@ export function editingDecision(
   let role: string;
   let value: EditorInput | VerifierInput | EditionReviewInput;
   const verified = state.notes.every((note) => note.verified);
-  if (
-    !state.step ||
-    state.review ||
-    (state.step === "xean.editVerifier" && !verified)
-  ) {
+  if (!state.step || state.review) {
     role = "xean.editor";
     value = {
       task: input.task,
@@ -132,7 +128,7 @@ export function editingDecision(
           }
         : {}),
     };
-  } else if (!verified) {
+  } else if (state.step === "xean.editor" && !verified) {
     role = "xean.editVerifier";
     value = {
       task: input.task,

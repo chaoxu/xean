@@ -170,18 +170,24 @@ test("solver edits below the advisory threshold and publishes only the reviewed 
   }
 });
 
-test("stale editing cannot replace new input, and a failed edit preserves source judgments", async () => {
+test("stale or unverified editing cannot activate even with a passing corpus review", async () => {
   const solver = solverFixture();
   const planning = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let plans = 0;
   let edits = 0;
   let checks = 0;
-  solver.functions.coordinator = async ({ notes, failures }) => {
+  let reviews = 0;
+  solver.functions.coordinator = async ({
+    notes,
+    failures,
+    editingAvailable,
+  }) => {
     if (failures.length) {
       expect(failures.at(-1)?.error).toBe(
         "Repair cannot establish the premise",
       );
+      expect(editingAvailable).toBe(true);
       return { work: [] };
     }
     if (!notes.length)
@@ -197,7 +203,7 @@ test("stale editing cannot replace new input, and a failed edit preserves source
     candidate: false,
     notes: [draft("n1", "Original claim")],
   });
-  solver.functions.editor = async ({ notes, previous }) => {
+  solver.functions.editor = async ({ notes, previous, review }) => {
     edits++;
     if (edits === 1)
       return {
@@ -211,17 +217,21 @@ test("stale editing cannot replace new input, and a failed edit preserves source
     ]);
     if (edits === 2)
       return {
-        retained: [notes[0]!.id],
+        retained: notes.map((note) => note.id),
         notes: [],
-        report: "Keep original claim.",
+        report: "Keep both original notes.",
       };
     expect(verdict(notes[0]!, "source")?.verdict).toBe("INCONCLUSIVE");
     expect(previous?.[0]!.verified).toBe(false);
+    expect(review).toEqual(pass);
     throw new Error("Repair cannot establish the premise");
   };
   solver.functions.verifier = async ({ notes }) => {
     checks++;
-    expect(notes.map((note) => note.text)).toEqual(["Original claim"]);
+    expect(notes.map((note) => note.text)).toEqual([
+      "Original claim",
+      "External discovery",
+    ]);
     return {
       kind: "verification",
       checks: [
@@ -230,11 +240,22 @@ test("stale editing cannot replace new input, and a failed edit preserves source
           correctness: { ...pass, premises: ["Unsettled premise"] },
           source: { verdict: "INCONCLUSIVE", report: "Source unavailable." },
         },
+        {
+          noteId: notes[1]!.id,
+          correctness: { ...pass, premises: [] },
+          source: pass,
+        },
       ],
     };
   };
-  solver.functions.editionReview = async () => {
-    throw new Error("An unverified replacement must not reach review");
+  solver.functions.editionReview = async ({ notes }) => {
+    reviews++;
+    expect(notes[0]!.verified).toBe(false);
+    expect(verdict(notes[0]!, "source")).toEqual({
+      verdict: "INCONCLUSIVE",
+      report: "Source unavailable.",
+    });
+    return pass;
   };
   const engine = await Xean.open(new MemoryStorage(), solver);
   try {
@@ -253,6 +274,7 @@ test("stale editing cannot replace new input, and a failed edit preserves source
     expect(failed.result).toBeNull();
     expect(edits).toBe(3);
     expect(checks).toBe(1);
+    expect(reviews).toBe(1);
     const notes = project(failed);
     expect(notes.map((note) => note.text)).toEqual([
       "Original claim",
