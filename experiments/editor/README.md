@@ -74,4 +74,14 @@ Luna generation was 78.2% cheaper, but took 81.5% longer. Its proof bodies shran
 
 The four golden generations total **$0.609288** in reported API-equivalent usage. Dataset curation and interactive reviews remain separate and unpriced. Native correctness and coverage costs are still unmeasured. These single samples establish neither general model superiority nor full-corpus cost effectiveness. Raw evidence and measurements are under `runs/editor-golden-luna-r01/`.
 
-The next comparison uses `gpt-6-luna` with the same consolidation prompt, input, max reasoning, one-call allowance, and evaluation. It is a separate model condition from GPT-5.6 Luna.
+## GPT-6 Luna comparison
+
+One `gpt-6-luna` call used the same consolidation prompt, input, max reasoning, one-call allowance, and evaluation. Source commit: `8a148328ba77305f8325741791e5c0c89a877115`. It is a separate model condition from GPT-5.6 Luna.
+
+The result has 4 notes, **4,312 body tokens and 5,276 total mathematical tokens**, reductions of **23.9%** and **13.6%**. It took **5m 33s** and reported **$0.0096681** in API-equivalent usage. Compared with the Sol sample, generation cost fell 94.2% and elapsed time rose 14.3%, with nearly identical total mathematical size. Gateway and Pi token buckets match. Gateway price is NULL, so the estimate uses the frozen model rates.
+
+Independent review, blinded to model and cost, found no consequential mathematical defect or lost required capability. The proofs preserve the scaled learner, exact-zero compression, guarded conformal ray, horizontal application, scoped geometric obstruction, and unresolved operation-count gap. Two minor clarifications remain: charge arbitrary state-set membership costs in the generic DP statement, and describe the learner statistic as encoding labels in its short summary. The full proof already distinguishes the statistic from an exact sign representative. The generated output remains unchanged.
+
+This sample supports GPT-6 Luna for further development on the fixture: one call achieved a reviewed reduction comparable to Sol at much lower generation cost. No native verifier or corpus-acceptance checks have been run, and one sample cannot establish reliability or full-corpus economics.
+
+The five golden generations total **$0.618956**, excluding curation and interactive reviews. Native correctness and coverage costs remain unmeasured. Raw artifacts, reference-token measurements, and accounting are under `runs/editor-golden-luna6-r01/`.
