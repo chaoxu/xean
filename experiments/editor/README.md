@@ -172,3 +172,29 @@ The second changed only the repair prompt, leaving the initial consolidation pro
 The shared preliminary review cost $0.0048531 and took 2m 09s. These three calls cost **$0.0255486** in total. All seventeen small-fixture requests now have **$1.14508504 known API-equivalent cost**, plus the earlier unpriced transport failure. Gateway and Pi usage agree for all three follow-up calls. Interactive curation and reviews remain separate and unpriced. Both repair drafts remain mathematically unverified and unaccepted; the planned stronger verification and final coverage calls were not run. All three follow-up jobs are terminal.
 
 The remaining observed problem is expansion within the changed note. Any next comparison should test passage-level preservation and continued use of valid support, while retaining the successful whole-note reuse behavior. Inputs, preregistrations, stopping decisions, and accounting are under `runs/editor-golden-repair-r01-protocol/` and `runs/editor-golden-repair-r02-protocol/`; native outputs are under the corresponding `editor-golden-repair-*` attempt directories.
+
+## Local repair and model comparison
+
+Independent design and mathematical reviews found that the diagnosed defect requires a local hypothesis and summary correction; the existing proofs and both dependencies remain usable. The repair prompt was tightened to preserve unaffected passages, formulas, and valid support verbatim, with expansion allowed where mathematics requires it. This adds no runtime or test lines. The initial consolidation prompt remains unchanged, and all 103 tests pass. Source commit: `b36ce07839dc552ef70f28635c182ab942c743f7`.
+
+Luna/max still expanded the changed note, from 1,862 to 2,378 body tokens, despite retaining the three passing notes and both dependencies. The complete corpus reached 6,213 mathematical tokens, 1.7% above the original fixture, and stopped before verification. A matched Sol/max call then used the identical input, feedback, prompt, schema, and one-call allowance. Its proof text changed only by adding “be an integer”; summaries were updated consistently. It retained the three passing notes and both dependencies.
+
+| Repair model | New proof body | Complete mathematical tokens | Request time | API-equivalent cost |
+| ------------ | -------------: | ---------------------------: | -----------: | ------------------: |
+| GPT-6 Luna   |          2,378 |                        6,213 |       4m 41s |          $0.0072534 |
+| GPT-6 Sol    |          1,865 |                        5,629 |          55s |          $0.0569080 |
+
+The Sol repair subsequently passed one native Sol/max correctness/source call, which checked only the changed note and reused the other three notes' checks. Luna/max then returned corpus PASS against the original fixture, confirming the useful results, methods, scoped geometric obstruction, and open gap. The final result has **4,677 body tokens and 5,629 mathematical tokens**, reductions of **17.4%** and **7.9%**. The actual `fullNote` projection, including status and feedback, decreases from 6,196 to 5,745 tokens, or **7.3%**. All retained support is counted.
+
+| Successful repair stage | Request time | API-equivalent cost |
+| ----------------------- | -----------: | ------------------: |
+| Sol repair              |          55s |          $0.0569080 |
+| Sol proof/source check  |       3m 57s |          $0.1157880 |
+| Luna corpus review      |       2m 24s |          $0.0052492 |
+| Total                   |       7m 16s |      **$0.1779452** |
+
+The complete actual path from the native draft, including all three rejected Luna repair trials, has **$0.35431954 known cost**, plus its initial unpriced transport failure. All twenty-one small-fixture requests total **$1.33028364 known API-equivalent cost**, plus that same failure counted once. The successful stages are not a counterfactual clean-run price: the draft followed the failed transport request. Gateway and Pi identities and usage agree. Interactive curation and reviews remain separate and unpriced.
+
+The authentic standalone outputs satisfy the existing `editingResult` predicate when assembled locally; the original capped campaign remains limited and no research corpus was activated. The corpus review retained a minor clarification about charging arbitrary state-set membership costs; every actual application uses explicit thresholds. It found no consequential defect or lost capability.
+
+This matched sample supports cheap drafting and corpus review, with Sol for precise repairs and proof checking. It does not establish general model superiority or full-corpus economics. The mixture was measured with existing standalone roles; the built-in Editor still uses its configured `editor` profile for both drafting and repair. Preregistrations and the rejected Luna result are in `runs/editor-golden-repair-r03-protocol/`. The checked edition, final measurements, reconciliation, and successful-stage artifacts are referenced from `runs/editor-golden-repair-sol-r01-protocol/`.
