@@ -484,7 +484,12 @@ test("roles hand off valid private submissions and never continue a rejected one
   );
   expect(result).toEqual({ answer: 7 });
   expect(state.calls).toHaveLength(3);
-  expect(state.calls[0]?.payload).toMatchObject({ parallel_tool_calls: false });
+  for (const call of state.calls.slice(0, 2))
+    expect(call.payload).toMatchObject({
+      parallel_tool_calls: false,
+      tool_choice: "required",
+    });
+  expect(state.calls[2]?.payload).not.toHaveProperty("tool_choice");
 });
 
 test("Codex requires submission when it is the only tool and preserves explicit choices", async () => {

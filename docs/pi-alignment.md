@@ -131,8 +131,9 @@ extra call solely for submission. Pi's provider-specific Codex options support
 `required`, but its provider-neutral `SimpleStreamOptions` exposes only `auto`
 and `none`, so this uses the existing payload hook. Tool declarations may live
 in Pi's `additional_tools` input message rather than a top-level array. Calls
-with other tools keep automatic selection. Pi still validates and executes the
-submission, and all existing admission and publication rules apply.
+with other tools or a prior valid submission keep automatic selection. Pi still
+validates and executes the submission, and all existing admission and publication
+rules apply.
 
 Explorer supplies the task and each index entry as separate user messages,
 followed by mutable note states, feedback, guidance, and allowances. Pi preserves

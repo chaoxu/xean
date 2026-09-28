@@ -226,7 +226,8 @@ export async function ask<S extends TSchema>(
                 parallel_tool_calls: false,
                 // Pi may put tool declarations in additional_tools messages.
                 // A submission-only call must return its structured result.
-                ...(!options.tools?.length &&
+                ...(value === undefined &&
+                !options.tools?.length &&
                 profile.options?.toolChoice === undefined &&
                 (!("tool_choice" in request) || request.tool_choice === "auto")
                   ? { tool_choice: "required" }
