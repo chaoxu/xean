@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const [sourceArg, directoryArg] = process.argv.slice(2);
@@ -158,7 +158,6 @@ const runtimeFor = (own: Parameters<typeof piRuntime>[0]) => {
   }
   return runtime;
 };
-const continuation = await Bun.file(resolve(directory, "origin.json")).json();
 const { fullNote } = await import(
   resolve(source, "packages/core/src/solve/reader.ts")
 );
@@ -248,38 +247,8 @@ async function runCase(name: string, options: any) {
   const destination = resolve(output, "campaign.sqlite");
   assert(
     !(await Bun.file(destination).exists()),
-    "Continuation destination already exists",
+    "Fresh experiment destination already exists",
   );
-  assert.equal(
-    hash(await readFile(resolve(directory, "campaign.seed.sqlite"))),
-    continuation.seedSha256,
-  );
-  await copyFile(resolve(directory, "campaign.seed.sqlite"), destination);
-  const coordinator = options.coordinator;
-  options.coordinator = {
-    ...coordinator,
-    async run(signal: any, view: any, ...args: any[]) {
-      const failed = view.work.at(-1);
-      if (
-        failed?.id === continuation.failedWorkId &&
-        failed.status === "failed"
-      ) {
-        assert.equal(failed.error, continuation.error);
-        // One explicit logical retry of the diagnosed capacity failure, with preserved inputs.
-        return {
-          state: null,
-          dispatch: [
-            {
-              id: "edit/retry-" + signal.id,
-              role: failed.role,
-              input: failed.input,
-            },
-          ],
-        };
-      }
-      return coordinator.run(signal, view, ...args);
-    },
-  };
   const engine = await Xean.open(
     await openXeanStorage(resolve(output, "campaign.sqlite")),
     options,
@@ -311,10 +280,12 @@ async function runCase(name: string, options: any) {
   }, 30_000);
   try {
     const initial = await engine.inspect();
-    assert.equal(initial.status, "blocked");
-    assert.equal(initial.providerCalls, continuation.providerCalls);
-    assert.equal(hash(JSON.stringify(initial.task)), continuation.taskSha256);
-    const campaign = await engine.resume();
+    assert.equal(
+      initial.providerCalls,
+      0,
+      "Fresh experiment must not inherit model calls",
+    );
+    const campaign = await engine.run();
     const records = await engine.records();
     usedCalls += campaign.providerCalls;
     assert(usedCalls <= settings.limits.providerCalls);
@@ -366,8 +337,6 @@ async function runCase(name: string, options: any) {
       error: campaign.error,
       calls: campaign.providerCalls,
       cumulativeCalls: usedCalls,
-      inheritedCalls: continuation.providerCalls,
-      newCalls: campaign.providerCalls - continuation.providerCalls,
       nativeSearches,
       usage: settled.map((record: any) => record.data.usage),
       work: campaign.work.map((work: any) => ({
@@ -455,13 +424,16 @@ try {
   await save("capacity-preflight.json", {
     checks: capacityChecks,
     method:
-      "Pinned Pi capacity estimator with 8,192 estimated instruction tokens. Only initial Editor fit is required for admission. Same-size replacement cases diagnose the need for actual compression; exact requests retain runtime checks.",
+      "Pinned Pi capacity estimator with 8,192 estimated instruction tokens. Only initial Editor fit is required for admission. Same-size replacement cases are context-capacity diagnostics, not output size targets; exact requests retain runtime checks.",
     contextSelection,
     replacementPayloadHeadroomEstimate:
       contextSelection.contextWindow -
       capacities.editor.model.maxTokens -
       4096 -
-      Math.ceil(JSON.stringify(input).length / 4),
+      Math.ceil(
+        JSON.stringify({ ...input, notes: input.notes.map(fullNote) }).length /
+          4,
+      ),
     instructionReserveEstimate: 8192,
   });
   assert(
