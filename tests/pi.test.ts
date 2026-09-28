@@ -487,6 +487,79 @@ test("roles hand off valid private submissions and never continue a rejected one
   expect(state.calls[0]?.payload).toMatchObject({ parallel_tool_calls: false });
 });
 
+test("Codex requires submission when it is the only tool and preserves explicit choices", async () => {
+  for (const mode of ["submit", "reader", "none", "auto"] as const) {
+    const payloads: any[] = [];
+    const tool = {
+      type: "function_call",
+      id: "fc_submission",
+      call_id: "submission",
+      name: "submit_result",
+      arguments: '{"answer":1}',
+      status: "completed",
+    };
+    const runtime = fixtureRuntime(() => fauxAssistantMessage(""));
+    runtime.profiles.requirements.model = {
+      ...model,
+      compat: {
+        ...model.compat,
+        supportsAdditionalTools: true,
+        supportsMidConvoSystemMessages: true,
+      },
+    };
+    runtime.profiles.requirements.options =
+      mode === "none" || mode === "auto" ? { toolChoice: mode } : {};
+    runtime.models.streamSimple = fixtureModels(async (init) => {
+      payloads.push(await requestBody(init));
+      return eventResponse(
+        { type: "response.output_item.added", output_index: 0, item: tool },
+        { type: "response.output_item.done", output_index: 0, item: tool },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_submission",
+            status: "completed",
+            output: [tool],
+          },
+        },
+      );
+    }).streamSimple;
+    await ask(
+      runtime,
+      "requirements",
+      "Judge the supplied notes",
+      {},
+      Type.Object({ answer: Type.Number() }),
+      { attemptId: "required-submission", recorder: recording().recorder },
+      BACKGROUND_CONTEXT,
+      {
+        maxResponses: 1,
+        tools:
+          mode === "reader"
+            ? [
+                {
+                  name: "read_notes",
+                  label: "Read notes",
+                  description: "Read a note",
+                  parameters: Type.Object({}),
+                  async execute() {
+                    throw new Error("Unexpected read");
+                  },
+                },
+              ]
+            : [],
+      },
+    );
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].tools).toBeUndefined();
+    expect(payloads[0].input[0].type).toBe("additional_tools");
+    expect(payloads[0].tool_choice).toBe(
+      mode === "submit" ? "required" : mode === "none" ? "none" : "auto",
+    );
+    expect(payloads[0].parallel_tool_calls).toBe(false);
+  }
+});
+
 test("cache routing follows identical prefixes while sessions and caller choices remain independent", async () => {
   const payloads: { prompt_cache_key?: string }[] = [];
   const sessions: (string | undefined)[] = [];

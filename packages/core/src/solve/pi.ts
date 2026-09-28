@@ -221,7 +221,17 @@ export async function ask<S extends TSchema>(
             };
           // Codex Responses Lite requires this; role submissions are sequential.
           return model.api === "openai-codex-responses"
-            ? { ...request, parallel_tool_calls: false }
+            ? {
+                ...request,
+                parallel_tool_calls: false,
+                // Pi may put tool declarations in additional_tools messages.
+                // A submission-only call must return its structured result.
+                ...(!options.tools?.length &&
+                profile.options?.toolChoice === undefined &&
+                (!("tool_choice" in request) || request.tool_choice === "auto")
+                  ? { tool_choice: "required" }
+                  : {}),
+              }
             : request;
         },
         headers: {

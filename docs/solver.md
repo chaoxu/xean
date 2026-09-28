@@ -211,6 +211,8 @@ Pi roles use role-specific system instructions, JSON user messages, and a typed
 `submit_result` tool. Explorer continuation stays in the same Pi conversation;
 each verification check starts its own conversation. Prompts preserve Xean's
 exact-task, dependency, and independent-proof principles in shorter form.
+Codex Responses calls with only `submit_result` require a tool call by default.
+Explicit profile choices and calls with additional tools retain their policy.
 If a response ends without a tool call, Xean requests the missing submission
 once in the same conversation and session. A second omission fails the invocation.
 After a valid submission, a response without a tool call hands off the submitted
