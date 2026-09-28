@@ -34,3 +34,18 @@ Launch requires a clean, internally pushed commit and a fresh attempt ID. It use
 Results are collected under ignored `runs/<attempt-id>/`. Keep the input, prompt, settings and model hashes, source commit, complete request records, generated replacement, reported usage, elapsed time, and a short `review.md` together. Missing usage is unknown cost. Report API-equivalent usage separately from subscription billing and independent review overhead.
 
 The former large-run drivers and job templates are retired from this branch. Their source remains in commit `23f19fa9188c119ca0fc2210019f032ae73b1614`, and historical run artifacts remain under the original checkout's ignored `runs/`. The cancelled full-corpus continuation produced no replacement or coverage verdict. No large run is part of this experiment.
+
+## First comparison
+
+The first pair used source commit `cfdd4e9445ed1dd7fe9aaf5badaab000983a2b6a`, the same input, and Sol/max. Each arm used one call with no correction or repair. The input had 3 notes, 5,663 body tokens, and 6,110 tokens of mathematical content including summaries and dependencies.
+
+| Prompt    | Notes | Body tokens | All mathematical tokens |   Time | Reported API-equivalent cost |
+| --------- | ----: | ----------: | ----------------------: | -----: | ---------------------------: |
+| Baseline  |     4 |       5,249 |                   6,838 | 6m 55s |                    $0.213570 |
+| Reference |     6 |       9,429 |                  10,918 | 5m 52s |                    $0.191292 |
+
+Counts use `o200k_base` as a common reference tokenizer. They exclude historical verification records. Provider usage includes reasoning and is recorded separately. The two gateway requests have complete reported usage matching Pi. Their price fields are NULL, so the amounts above use the frozen model's API-equivalent rates. The pair totals $0.404862. Interactive curation and review are separate and unpriced.
+
+Blind review of the baseline found no substantive proof defect or lost required capability, with minor scope clarifications about integer budgets and predicate evaluation. It shared repeated DP and boundary-search arguments, but expanded summaries made the whole mathematical payload 11.9% larger. The reference prompt retained all three source notes through dependencies and added three new notes, making the payload 78.7% larger. That arm fails consolidation without needing a complete audit of its added mathematics.
+
+Neither arm demonstrates useful net compression. The proposed reference prompt is not adopted. This one pair supports testing more explicit removal of repeated exposition and avoiding additions that leave the old proofs intact. It does not establish that prompting alone explains the earlier full-corpus failures. Both raw outputs and the comparison records remain in ignored `runs/editor-golden-*-r01/`, including the separate `editor-golden-comparison-r01` review and accounting records.
