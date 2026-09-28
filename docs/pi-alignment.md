@@ -134,6 +134,9 @@ in Pi's `additional_tools` input message rather than a top-level array. Calls
 with other tools or a prior valid submission keep automatic selection. Pi still
 validates and executes the submission, and all existing admission and publication
 rules apply.
+The fixed golden-data coverage trials qualified this request on GPT-6 Sol and
+GPT-6 Luna through the deployed Codex gateway: each call published a structured
+PASS verdict.
 
 Explorer supplies the task and each index entry as separate user messages,
 followed by mutable note states, feedback, guidance, and allowances. Pi preserves

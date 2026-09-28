@@ -81,7 +81,7 @@ One `gpt-5.6-luna` call used the same consolidation prompt, input, max reasoning
 
 Luna generation was 78.2% cheaper, but took 81.5% longer. Its proof bodies shrank only 4.1%, and the complete mathematical payload grew 9.3% over the input. It factored shared machinery and rewrote all notes, but did not produce a smaller reference by the token measure. This fails the editing objective without requiring another proof audit. The candidate remains mathematically unverified.
 
-The four golden generations total **$0.609288** in reported API-equivalent usage. Dataset curation and interactive reviews remain separate and unpriced. Native correctness and coverage costs are still unmeasured. These single samples establish neither general model superiority nor full-corpus cost effectiveness. Raw evidence and measurements are under `runs/editor-golden-luna-r01/`.
+The four golden generations total **$0.609288** in reported API-equivalent usage. Dataset curation and interactive reviews remain separate and unpriced. Native assessment is measured separately below. These single samples establish neither general model superiority nor full-corpus cost effectiveness. Raw evidence and measurements are under `runs/editor-golden-luna-r01/`.
 
 ## GPT-6 Luna comparison
 
@@ -91,6 +91,26 @@ The result has 4 notes, **4,312 body tokens and 5,276 total mathematical tokens*
 
 Independent review, blinded to model and cost, found no consequential mathematical defect or lost required capability. The proofs preserve the scaled learner, exact-zero compression, guarded conformal ray, horizontal application, scoped geometric obstruction, and unresolved operation-count gap. Two minor clarifications remain: charge arbitrary state-set membership costs in the generic DP statement, and describe the learner statistic as encoding labels in its short summary. The full proof already distinguishes the statistic from an exact sign representative. The generated output remains unchanged.
 
-This sample supports GPT-6 Luna for further development on the fixture: one call achieved a reviewed reduction comparable to Sol at much lower generation cost. No native verifier or corpus-acceptance checks have been run, and one sample cannot establish reliability or full-corpus economics.
+This sample supports GPT-6 Luna for further development on the fixture: one call achieved a reviewed reduction comparable to Sol at much lower generation cost. Subsequent native assessment is recorded below. One sample cannot establish reliability or full-corpus economics.
 
-The five golden generations total **$0.618956**, excluding curation and interactive reviews. Native correctness and coverage costs remain unmeasured. Raw artifacts, reference-token measurements, and accounting are under `runs/editor-golden-luna6-r01/`.
+The five golden generations total **$0.618956**, excluding curation and interactive reviews. Raw artifacts, reference-token measurements, and accounting are under `runs/editor-golden-luna6-r01/`.
+
+## Native assessment costs
+
+The unchanged GPT-6 Luna draft then received correctness and source PASS for all four notes from one native Sol/max Verifier call. No correction or external source-model call was needed. Published checks were applied to a copy with `applyChecks` before corpus review. Both Sol/max and Luna/max subsequently returned native coverage PASS against the original corpus. The same candidate satisfies the existing editing acceptance predicate when these authentic results are assembled offline. The research campaign itself remains unchanged.
+
+| Stage                  | Model      | Outcome                          | Request time | API-equivalent cost |
+| ---------------------- | ---------- | -------------------------------- | -----------: | ------------------: |
+| Draft                  | GPT-6 Luna | 13.6% smaller complete payload   |       5m 33s |          $0.0096681 |
+| Correctness and source | GPT-6 Sol  | All 4 notes PASS, no corrections |       2m 20s |          $0.0766120 |
+| Coverage, first call   | GPT-6 Sol  | Prose only, no published verdict |       1m 29s |          $0.0631580 |
+| Coverage, retry        | GPT-6 Sol  | PASS                             |      12m 34s |          $0.1956480 |
+| Coverage comparison    | GPT-6 Luna | PASS                             |       4m 55s |          $0.0066834 |
+
+The first coverage response omitted `submit_result`, and its one-call cap correctly prevented a recovery call from publishing a verdict. The retry changed only tool selection, using Pi's Codex support for `tool_choice: "required"` when submission is the sole tool and no valid result exists. The [provider contract](../../docs/pi-alignment.md#provider-integration) records this small adapter integration. Explicit caller choices and calls with other tools retain their behavior. No prose-to-verdict parser was added. The Luna comparison used the same coverage input, prompt, schema, reasoning, and required submission policy as the Sol retry.
+
+Drafting with Luna, verifying with Sol, and reviewing coverage with Luna totals **$0.0929635** across the three measured stages. Using the successful Sol coverage call instead totals **$0.2819281**. The actual path to the Sol-checked result cost **$0.3450861**, including the unsuccessful first coverage call. All five draft generations and four native assessment calls total **$0.9610573**. These are model-usage estimates from frozen prices, reconciled against gateway token buckets. Interactive curation and independent reviews are separate and unpriced. Stage times exclude operator work and queueing between stages.
+
+The candidate needed no mathematical revision. The independent and native reviews recorded minor clarity suggestions about state-set membership costs, the dead-zone summary, the one-sided boundary-search interval, and reuse of the algebraic span-finding subroutine. They found no consequential loss or defect. The raw candidate stays unchanged, with feedback retained separately.
+
+This establishes a cheap successful combination on one valid fixture. It does not yet establish the cheaper reviewer's ability to catch a broken replacement. The next useful check is a known defective variant of these same notes, with the golden key still withheld from the model. Larger runs remain outside this experiment. Native campaigns and receipts are under `runs/editor-golden-luna6-verifier-r01/`, `runs/editor-golden-luna6-coverage-*/`, and `runs/editor-golden-assessment-r01/`.
