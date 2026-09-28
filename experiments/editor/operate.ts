@@ -8,6 +8,7 @@ import { declarationVersion } from "../../packages/core/src/solve/contracts.ts";
 
 const [action, id, selection, inputFile, settingsFile] = process.argv.slice(2);
 const role =
+  selection === "editor" ||
   selection === "verifier" ||
   selection === "editionReview" ||
   selection === "edit"

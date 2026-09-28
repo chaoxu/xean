@@ -43,6 +43,8 @@ bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/opera
 
 Verifier input contains `task`, the replacement `notes`, and `targets` selecting every note through `source`. Effective settings and inputs are frozen with hashes, with one admitted call per role. Collection writes the read-only native campaign and records to `snapshot.json`. Apply only a completed verifier result's published checks to a copy using `applyChecks`, preserving the raw candidate and any correction revisions. Then invoke `editionReview` with `{task, notes: checkedReplacement, previous: originalNotes}` and a fresh attempt ID. Keep the golden key and independent review outside both inputs. Unexpected premises, invalid responses, and failures remain outcomes. A completed role invocation alone does not establish mathematical PASS or activate a replacement.
 
+For a controlled repair, invoke `editor` with `{task, notes: originalNotes, previous: checkedReplacement, review: coverageVerdict}`. This uses the built-in Editor's repair instructions. Retained IDs keep their existing checks; rewritten notes receive fresh IDs and need verification. Freeze each stage before calling it and report the combined cost, including the rejected draft and prior checks. The standalone stages measure repair behavior without extending a completed trial's allowance.
+
 To test the complete built-in workflow on the same fixture, select `edit`:
 
 ```sh
