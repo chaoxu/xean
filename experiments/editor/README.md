@@ -1,6 +1,6 @@
-# Editor prompt experiment
+# Editor experiment
 
-Test editing prompts on one frozen mathematical dataset before considering larger runs. The dataset contains three related research notes with complete proofs, overlapping arguments, and a counterexample limiting a promising approach. Its full bodies contain 5,663 reference tokens. The complete input contains 7,511 reference tokens.
+Compare editing prompts and models on one frozen mathematical dataset before considering larger runs. The dataset contains three related research notes with complete proofs, overlapping arguments, and a counterexample limiting a promising approach. Its full bodies contain 5,663 reference tokens. The complete input contains 7,511 reference tokens.
 
 The research question is whether a prompt produces a coherent, materially simpler reference while preserving usable mathematics. Size reduction, model cost, and elapsed time are measurements. A short but defective result fails.
 
@@ -24,10 +24,10 @@ Change one experimental factor at a time and commit it before the next run. Prom
 Run from the adjacent Fleet Infra checkout using its locked Bun:
 
 ```sh
-bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-baseline-r01 baseline
-bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts status editor-golden-baseline-r01
-bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts collect editor-golden-baseline-r01
-bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts cancel editor-golden-baseline-r01
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-example-r01 consolidation
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts status editor-golden-example-r01
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts collect editor-golden-example-r01
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts cancel editor-golden-example-r01
 ```
 
 Launch requires a clean, internally pushed commit and a fresh attempt ID. It uses the existing pinned worker image on jupiter and the committed [Nomad specification](job.nomad.hcl). The operator reads only the Xean gateway credential from OpenBao and injects it in memory. Credentials never enter committed files or saved job specifications. After a submission error, inspect the attempt before creating another one.
@@ -60,3 +60,18 @@ One call produced 4 notes with **4,172 body tokens and 5,284 total mathematical 
 Independent review found no consequential defect or lost required capability. The shared DP, span, and boundary-search arguments preserve the scaled learner, exact-zero restoration, guarded conformal ray, horizontal application, scoped geometric obstruction, and unresolved operation-count gap. One minor clarification remains: the general state-predicate wording should charge predicate evaluation or restrict it to efficient predicates. Every actual application uses constant-cost thresholds.
 
 This is a useful edit on the fixed small fixture, with genuine consolidation and a smaller complete payload. It is one sample, not evidence of full-corpus reliability or a complete production cost measurement. No native verification or automatic repair was run. The output remains unchanged, with the review recorded separately under `runs/editor-golden-consolidation-r01/`. Further experiments remain restricted to this fixture.
+
+## GPT-5.6 Luna comparison
+
+One `gpt-5.6-luna` call used the same consolidation prompt, input, max reasoning, and one-call allowance. Source commit `d7d40bce24024681336582a45e407d9e1c1119ca` changes only the configured model and removes the runner's duplicate Sol-only assertion. The generator received no prior output, answer key, or review findings.
+
+| Model        | Notes | Body tokens | All mathematical tokens |   Time | Reported API-equivalent cost |
+| ------------ | ----: | ----------: | ----------------------: | -----: | ---------------------------: |
+| GPT-6 Sol    |     4 |       4,172 |                   5,284 | 4m 51s |                    $0.167792 |
+| GPT-5.6 Luna |     4 |       5,433 |                   6,679 | 8m 49s |                    $0.036634 |
+
+Luna generation was 78.2% cheaper, but took 81.5% longer. Its proof bodies shrank only 4.1%, and the complete mathematical payload grew 9.3% over the input. It factored shared machinery and rewrote all notes, but did not produce a smaller reference by the token measure. This fails the editing objective without requiring another proof audit. The candidate remains mathematically unverified.
+
+The four golden generations total **$0.609288** in reported API-equivalent usage. Dataset curation and interactive reviews remain separate and unpriced. Native correctness and coverage costs are still unmeasured. These single samples establish neither general model superiority nor full-corpus cost effectiveness. Raw evidence and measurements are under `runs/editor-golden-luna-r01/`.
+
+The next comparison uses `gpt-6-luna` with the same consolidation prompt, input, max reasoning, one-call allowance, and evaluation. It is a separate model condition from GPT-5.6 Luna.
