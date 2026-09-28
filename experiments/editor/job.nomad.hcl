@@ -1,26 +1,23 @@
-variable "source_commit" { type = string }
 variable "run_id" { type = string }
+variable "source_commit" { type = string }
+variable "prompt" { type = string }
 variable "image" { type = string }
 
-# Source and protocol files are frozen separately; inject XEAN_API_KEY only
-# into the Nomad JSON task environment, never into this file or run artifacts.
-job "xean-editor-smoke-template" {
+job "xean-editor-golden" {
   type = "batch"
   datacenters = ["lab"]
   meta {
-    fleet_run_id = var.run_id
-    fleet_run_kind = "xean-editor-smoke"
+    fleet_run_kind = "xean-editor-golden"
     fleet_owner = "xean"
-    source_repo = "xean"
     source_commit = var.source_commit
-    logical_call_allowance = "12"
+    logical_call_allowance = "1"
   }
   constraint {
     attribute = "${node.unique.name}"
     value = "jupiter"
   }
   reschedule { attempts = 0 }
-  group "smoke" {
+  group "experiment" {
     restart {
       attempts = 0
       mode = "fail"
@@ -30,7 +27,7 @@ job "xean-editor-smoke-template" {
       source = "xean_lab_runs"
       read_only = false
     }
-    task "smoke" {
+    task "editor" {
       driver = "docker"
       user = "1000:1000"
       kill_signal = "SIGINT"
@@ -38,39 +35,24 @@ job "xean-editor-smoke-template" {
       config {
         image = var.image
         force_pull = false
-        entrypoint = ["/runs/_xean/${var.run_id}/runtime/bun"]
+        entrypoint = ["/runs/_yean/hard-problems-resume-20260926/runtime/bun"]
         args = [
           "--no-install", "--no-env-file",
-          "/runs/_xean/${var.run_id}/source/scripts/editor-smoke.ts",
-          "/runs/_xean/${var.run_id}/source",
-          "/runs/_xean/${var.run_id}",
+          "/runs/_xean/${var.run_id}/source/experiments/editor/run.ts",
+          "/runs/_xean/${var.run_id}/source/experiments/editor/prompts/${var.prompt}.md",
+          "/runs/_xean/${var.run_id}/output",
         ]
-        network_mode = "bridge"
         readonly_rootfs = true
         cap_drop = ["ALL"]
         security_opt = ["no-new-privileges"]
-        pids_limit = 1024
-        mount {
-          type = "tmpfs"
-          target = "/scratch"
-          tmpfs_options {
-            size = 268435456
-            mode = 1023
-          }
-        }
+        pids_limit = 512
         mount {
           type = "tmpfs"
           target = "/tmp"
-          tmpfs_options {
-            size = 134217728
-            mode = 1023
-          }
+          tmpfs_options { size = 134217728 }
         }
       }
       env {
-        TMPDIR = "/scratch"
-        HOME = "/scratch"
-        CODEX_HOME = "/scratch/codex"
         NODE_EXTRA_CA_CERTS = "/usr/local/share/ca-certificates/lab-root.crt"
       }
       volume_mount {
@@ -84,8 +66,8 @@ job "xean-editor-smoke-template" {
         memory_max = 2048
       }
       logs {
-        max_files = 4
-        max_file_size = 20
+        max_files = 2
+        max_file_size = 10
       }
     }
   }

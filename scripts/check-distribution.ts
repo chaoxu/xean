@@ -43,9 +43,9 @@ for (const artifact of provenance.artifacts) {
 // Bun parses Markdown, including reference links and fenced code blocks.
 const documents = new Map<string, { anchors: Set<string>; links: string[] }>();
 const files = ["README.md", "AGENTS.md", "CHANGELOG.md"];
-for await (const file of new Bun.Glob("{docs,packages,vendor}/**/*.md").scan(
-  root,
-))
+for await (const file of new Bun.Glob(
+  "{docs,experiments,packages,vendor}/**/*.md",
+).scan(root))
   files.push(file);
 for (const file of files) {
   const links: string[] = [];

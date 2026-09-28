@@ -7,6 +7,7 @@ if (!process.argv.includes("--write"))
 const formatPaths = [
   "tests",
   "examples",
+  "experiments",
   "scripts",
   "packages",
   "vendor",

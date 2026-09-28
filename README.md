@@ -17,6 +17,7 @@ campaigns through the read-only API and displays exported remote snapshots.
 - [Glossary](docs/glossary.md): canonical terminology.
 - [Pi alignment](docs/pi-alignment.md): native APIs and deferred adoption.
 - [Verification](docs/kernel-smoke.md): checks and provider smoke procedures.
+- [Editor prompt experiment](experiments/editor/README.md): fixed small dataset and prompt comparisons.
 - [Changelog](CHANGELOG.md): release changes and compatibility.
 - [Contributor rules](AGENTS.md): design priorities and repository boundaries.
 

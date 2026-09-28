@@ -1,0 +1,18 @@
+{
+  "profiles": {
+    "default": {
+      "provider": "openai-codex",
+      "model": "gpt-6-sol",
+      "reasoning": "max",
+      "baseUrl": "https://codex-lb.lab/backend-api/codex",
+      "transport": "websocket-cached",
+      "apiKeyEnv": "XEAN_API_KEY"
+    }
+  },
+  "literature": false,
+  "limits": {
+    "concurrency": 1,
+    "attempts": 1,
+    "providerCalls": 1
+  }
+}

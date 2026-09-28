@@ -8,7 +8,7 @@ let
         relative = pkgs.lib.removePrefix (toString projectRoot + "/") (toString path);
         top = builtins.head (pkgs.lib.splitString "/" relative);
       in path == projectRoot || builtins.elem top [
-        "tests" "examples" "scripts" "packages" "docs" "patches" "vendor" "node_modules"
+        "tests" "examples" "experiments" "scripts" "packages" "docs" "patches" "vendor" "node_modules"
         "README.md" "AGENTS.md" "CHANGELOG.md" "LICENSE" "package.json" "tsconfig.json" "bun.lock" ".prettierignore"
       ];
   };
