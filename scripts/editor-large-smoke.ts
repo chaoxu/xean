@@ -136,7 +136,7 @@ assert.equal(settings.research.model, "gpt-6-astra");
 assert.equal(settings.research.reasoning, "max");
 assert.equal(settings.editingThresholdTokens, 200000);
 assert.equal(settings.limits.providerCalls, 24);
-const credential = process.env.XEAN_API_KEY;
+const credential = process.env.XEAN_API_KEY ?? "";
 assert(credential, "Missing injected Xean credential");
 assert(
   deployment.files["context-evidence.json"],
