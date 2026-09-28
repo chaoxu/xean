@@ -856,11 +856,12 @@ editing snapshot stale, so it cannot replace the changed corpus.
 The deterministic Coordinator runs the following loop without planning calls:
 
 1. Editor proposes `{notes, retained, report}`. New notes use the ordinary
-   draft schema and receive fresh identities and checks. `retained` names notes
-   kept unchanged, with their support retained automatically. It may reuse
+   draft schema and receive fresh identities and checks. Existing notes named
+   in `support` and their dependencies are included automatically. `retained`
+   names additional unchanged notes to keep, also with their dependencies. Editor may reuse
    verified notes from a previous proposal when they fit the revised proof
-   structure, or rewrite them with fresh checks. New proofs can depend only on those
-   retained notes and earlier new notes. Removed notes remain provenance, not
+   structure, or rewrite them with fresh checks. New proofs can depend on existing
+   notes and earlier new notes. Removed notes remain provenance, not
    hidden mathematical premises.
 2. The existing Verifier checks every proposed note through correctness and
    sources, reusing checks on unchanged notes. Its findings remain attached to

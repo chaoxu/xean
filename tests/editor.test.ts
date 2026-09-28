@@ -134,7 +134,7 @@ test("editing combines proof and coverage feedback before repair and reuses chec
       const base = data.previous!.find((note) => note.text === "New base")!;
       expect(base.verified).toBe(true);
       return {
-        retained: [base.id],
+        retained: [],
         report:
           "Fix the proof and restore the counterexample with the checked base.",
         notes: [
@@ -259,7 +259,7 @@ test("editing combines proof and coverage feedback before repair and reuses chec
   }
 });
 
-test("replacement support must be retained explicitly and can never revive rejected notes", () => {
+test("replacement support retains its closure without reviving rejected or forward references", () => {
   const notes = refresh(
     materializeNotes(
       "old",
@@ -268,16 +268,57 @@ test("replacement support must be retained explicitly and can never revive rejec
       true,
     ),
   );
+  const proposal = {
+    retained: [],
+    notes: [draft("n1", "Uses the old result", ["old/n2"])],
+    report: "Reuse its complete proof chain",
+  };
+  expect(retainedNotes(proposal, notes).map((note) => note.id)).toEqual([
+    "old/n1",
+    "old/n2",
+  ]);
+  expect(() =>
+    retainedNotes(
+      { ...proposal, notes: [draft("n1", "Unknown support", ["missing"])] },
+      notes,
+    ),
+  ).toThrow("Unknown note");
+  const shadowed = notes.map((note, index) => ({
+    ...note,
+    id: `n${index + 1}`,
+    support: index ? ["n1"] : [],
+  }));
   expect(() =>
     retainedNotes(
       {
-        retained: [],
-        notes: [draft("n1", "Uses missing old proof", ["old/n1"])],
-        report: "Invalid",
+        ...proposal,
+        notes: [draft("n1", "Collides with an ancestor", ["n2"])],
       },
-      notes,
+      shadowed,
     ),
-  ).toThrow("Unknown, dead, or forward support");
+  ).toThrow("New local IDs must not collide");
+  for (const id of ["n1", "n2"])
+    expect(() =>
+      retainedNotes(
+        {
+          ...proposal,
+          notes: [draft("n1", "Invalid local use", [id]), draft("n2", "Later")],
+        },
+        shadowed,
+      ),
+    ).toThrow("Unknown, dead, or forward support");
+  expect(
+    retainedNotes(
+      {
+        ...proposal,
+        notes: [
+          draft("n1", "New base"),
+          draft("n2", "Valid local use", ["n1"]),
+        ],
+      },
+      shadowed,
+    ),
+  ).toEqual([]);
   const retained = retainedNotes(
     { retained: ["old/n2"], notes: [], report: "Keep the result" },
     notes,
@@ -288,6 +329,7 @@ test("replacement support must be retained explicitly and can never revive rejec
     correctness: { verdict: "FAIL", report: "Defect", premises: [] },
   });
   refresh(notes);
+  expect(() => retainedNotes(proposal, notes)).toThrow("Cannot retain dead");
   expect(() =>
     retainedNotes(
       { retained: ["old/n2"], notes: [], report: "Cannot revive" },

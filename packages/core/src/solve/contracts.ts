@@ -217,7 +217,7 @@ export const editingSchema = object({
   retained: Type.Array(text, {
     uniqueItems: true,
     description:
-      "Existing note IDs kept unchanged. Their declared support is retained automatically. Rewritten notes must use fresh local IDs.",
+      "Additional existing note IDs to keep unchanged. Existing notes referenced by support and all their dependencies are included automatically. Rewritten notes must use fresh local IDs.",
   }),
   report: text,
 });

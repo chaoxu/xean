@@ -96,7 +96,16 @@ export function retainedNotes(
   result: Editing,
   available: readonly Note[],
 ): Note[] {
-  const retained = closure(result.retained, available);
+  const local = new Set(result.notes.map((note) => note.id));
+  const retained = closure(
+    [
+      ...result.retained,
+      ...result.notes.flatMap((note) =>
+        note.support.filter((id) => !local.has(id)),
+      ),
+    ],
+    available,
+  );
   if (retained.some((note) => note.dead))
     throw new Error("Cannot retain dead notes");
   if (
