@@ -17,7 +17,7 @@ Each arm admits one model call and returns one draft. It uses the existing Pi re
 
 Compare outputs against the answer key after generation. Record whether the useful capabilities and their proofs survive, whether negative conclusions retain their scope, whether dependencies close, and whether the output consolidates repeated arguments. Record each defect concretely. Equivalent valid proofs and different note organizations are welcome. There is no per-note preservation requirement or compression target.
 
-Change one prompt at a time, use a new prompt filename, and commit it before the next run. Keep the dataset and answer key fixed. A success on this development fixture establishes only success on this fixture. Further runs remain limited to this dataset.
+Change one experimental factor at a time and commit it before the next run. Prompt comparisons use a new prompt filename with fixed settings. Model comparisons change settings while holding the prompt and reasoning fixed. Keep the dataset and answer key fixed. A success on this development fixture establishes only success on this fixture. Further runs remain limited to this dataset.
 
 ## Run on Fleet
 

@@ -129,7 +129,6 @@ try {
   readSettings(settings);
   const runtime = piRuntime(settings);
   const profile = runtime.profiles.editor;
-  assert.equal(profile.model.id, "gpt-6-sol");
   assert.equal(profile.options?.reasoning, "max");
   await save("manifest.json", {
     startedAt,

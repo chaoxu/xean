@@ -2,7 +2,7 @@
   "profiles": {
     "default": {
       "provider": "openai-codex",
-      "model": "gpt-6-sol",
+      "model": "gpt-5.6-luna",
       "reasoning": "max",
       "baseUrl": "https://codex-lb.lab/backend-api/codex",
       "transport": "websocket-cached",
