@@ -1,6 +1,10 @@
 variable "run_id" { type = string }
 variable "source_commit" { type = string }
 variable "prompt" { type = string }
+variable "role" {
+  type = string
+  default = ""
+}
 variable "image" { type = string }
 
 job "xean-editor-golden" {
@@ -36,11 +40,18 @@ job "xean-editor-golden" {
         image = var.image
         force_pull = false
         entrypoint = ["/runs/_yean/hard-problems-resume-20260926/runtime/bun"]
-        args = [
+        args = var.role == "" ? [
           "--no-install", "--no-env-file",
           "/runs/_xean/${var.run_id}/source/experiments/editor/run.ts",
           "/runs/_xean/${var.run_id}/source/experiments/editor/prompts/${var.prompt}.md",
           "/runs/_xean/${var.run_id}/output",
+        ] : [
+          "--no-install", "--no-env-file",
+          "/runs/_xean/${var.run_id}/source/packages/cli/src/index.ts",
+          "role", var.role,
+          "/runs/_xean/${var.run_id}/input.json",
+          "/runs/_xean/${var.run_id}/output/campaign.sqlite",
+          "/runs/_xean/${var.run_id}/settings.json",
         ]
         readonly_rootfs = true
         cap_drop = ["ALL"]

@@ -34,6 +34,15 @@ Launch requires a clean, internally pushed commit and a fresh attempt ID. It use
 
 Results are collected under ignored `runs/<attempt-id>/`. Keep the input, prompt, settings and model hashes, source commit, complete request records, generated replacement, reported usage, elapsed time, and a short `review.md` together. Missing usage is unknown cost. Report API-equivalent usage separately from subscription billing and independent review overhead.
 
+To measure native assessment of a frozen candidate, use the same operator with the existing CLI roles:
+
+```sh
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-check-r01 verifier INPUT.json SETTINGS.json
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts collect editor-golden-check-r01
+```
+
+Verifier input contains `task`, the replacement `notes`, and `targets` selecting every note through `source`. Effective settings and inputs are frozen with hashes, with one admitted call per role. Collection writes the read-only native campaign and records to `snapshot.json`. Apply only a completed verifier result's published checks to a copy using `applyChecks`, preserving the raw candidate and any correction revisions. Then invoke `editionReview` with `{task, notes: checkedReplacement, previous: originalNotes}` and a fresh attempt ID. Keep the golden key and independent review outside both inputs. Unexpected premises, invalid responses, and failures remain outcomes. A completed role invocation alone does not establish mathematical PASS or activate a replacement.
+
 The former large-run drivers and job templates are retired from this branch. Their source remains in commit `23f19fa9188c119ca0fc2210019f032ae73b1614`, and historical run artifacts remain under the original checkout's ignored `runs/`. The cancelled full-corpus continuation produced no replacement or coverage verdict. No large run is part of this experiment.
 
 ## First comparison

@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { readDeclaration } from "../../packages/core/src/solve/campaign.ts";
+import { declarationVersion } from "../../packages/core/src/solve/contracts.ts";
 
-const [action, id, prompt] = process.argv.slice(2);
+const [action, id, selection, inputFile, settingsFile] = process.argv.slice(2);
+const role =
+  selection === "verifier" || selection === "editionReview" ? selection : "";
+const prompt = role ? "consolidation" : selection;
 assert(action && ["launch", "status", "collect", "cancel"].includes(action));
 assert(
   id && /^editor-golden-[a-z0-9-]+$/.test(id),
@@ -64,6 +69,29 @@ const save = (name: string, value: unknown) =>
 assert.equal(Bun.version, "1.4.2");
 
 if (action === "launch") {
+  let roleFiles: Record<string, string> | undefined;
+  if (role) {
+    assert(inputFile && settingsFile && process.argv.length === 7);
+    const input = JSON.parse(await readFile(resolve(inputFile), "utf8"));
+    const settings = JSON.parse(await readFile(resolve(settingsFile), "utf8"));
+    settings.usagePrefix = `editor-golden/${id}`;
+    readDeclaration({
+      version: declarationVersion,
+      kind: "xean.role",
+      role,
+      task: input.task,
+      input,
+      settings,
+    });
+    assert.deepEqual(settings.limits, {
+      concurrency: 1,
+      attempts: 1,
+      providerCalls: 1,
+    });
+    roleFiles = { "input.json": json(input), "settings.json": json(settings) };
+  } else {
+    assert.equal(process.argv.length, 5);
+  }
   assert(prompt && /^[a-z0-9-]+$/.test(prompt), "Supply a prompt name");
   assert(
     await Bun.file(
@@ -120,6 +148,12 @@ if (action === "launch") {
   await save("intent.json", {
     id,
     prompt,
+    role,
+    roleFiles: roleFiles
+      ? Object.fromEntries(
+          Object.entries(roleFiles).map(([name, bytes]) => [name, hash(bytes)]),
+        )
+      : undefined,
     commit,
     archiveHash,
     image,
@@ -131,6 +165,12 @@ const check=Bun.spawnSync(["docker","image","inspect","--format","{{.Id}}",${JSO
 assert.equal(check.exitCode,0);assert.equal(check.stdout.toString().trim(),${JSON.stringify(image)});
 assert.equal(createHash("sha256").update(await readFile(${JSON.stringify(runtime)})).digest("hex"),"616f267a34278ff5ac282df37ffdfba1d7141f4f6926bca99af2cd6ef3ad32b1");
 await mkdir(root,{mode:0o755});await mkdir(root+"/source",{mode:0o755});await mkdir(root+"/output",{mode:0o755});`);
+  if (roleFiles) {
+    for (const [name, bytes] of Object.entries(roleFiles))
+      await writeFile(resolve(local, name), bytes, { flag: "wx", mode: 0o600 });
+    await remote(`
+for(const [name,bytes]of Object.entries(${JSON.stringify(roleFiles)}))await writeFile(root+"/"+name,bytes,{flag:"wx",mode:0o644});`);
+  }
   await invoke(["scp", archive, `jupiter:${remoteRoot}/source.tar`]);
   await remote(`
 assert.equal(createHash("sha256").update(await readFile(root+"/source.tar")).digest("hex"),${JSON.stringify(archiveHash)});
@@ -147,6 +187,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
         `-var=run_id=${id}`,
         `-var=source_commit=${commit}`,
         `-var=prompt=${prompt}`,
+        `-var=role=${role}`,
         `-var=image=${image}`,
         "-",
       ],
@@ -207,6 +248,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
       jobId,
       commit,
       prompt,
+      role,
       local,
       cancellation: `operate.ts cancel ${id}`,
     }),
@@ -233,6 +275,17 @@ const files={};for(const name of await readdir(root+"/output"))if(name.endsWith(
     for (const [name, bytes] of Object.entries(files)) {
       assert(/^[a-zA-Z0-9.-]+\.json$/.test(name));
       await writeFile(resolve(local, name), bytes as string, { mode: 0o600 });
+    }
+    const intent = JSON.parse(
+      await readFile(resolve(local, "intent.json"), "utf8"),
+    );
+    if (intent.role) {
+      const snapshot = await remote(`
+const {inspectCampaign}=await import(root+"/source/packages/core/src/index.ts");
+console.log(JSON.stringify(await inspectCampaign(root+"/output/campaign.sqlite")));`);
+      await writeFile(resolve(local, "snapshot.json"), snapshot, {
+        mode: 0o600,
+      });
     }
     console.log(json({ collected: Object.keys(files), local }));
   }
