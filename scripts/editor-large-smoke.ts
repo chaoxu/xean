@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const [sourceArg, directoryArg, phase] = process.argv.slice(2);
@@ -9,7 +9,7 @@ assert(phase === "smoke" || phase === "trial", "Expected smoke or trial phase");
 assert.equal(
   process.argv.length,
   5,
-  "Continuations and call extensions are outside this trial",
+  "Only the frozen phase configuration is accepted",
 );
 const proposalLimit = 2;
 const source = resolve(sourceArg);
@@ -26,6 +26,15 @@ const mark = (value: object) =>
   console.log(JSON.stringify({ at: new Date().toISOString(), ...value }));
 assert.equal(Bun.version, "1.4.2");
 const deployment = await Bun.file(resolve(directory, "deployment.json")).json();
+const continuation = phase === "trial" ? deployment.continuation : undefined;
+const feedback = continuation
+  ? await Bun.file(resolve(directory, "external-feedback.json")).json()
+  : undefined;
+if (continuation) {
+  assert.equal(continuation.additionalCalls, 6);
+  assert.equal(continuation.parentCalls, 6);
+  assert.equal(continuation.parentCallAllowance, 6);
+}
 for (const [path, digest] of Object.entries(deployment.files)) {
   assert.equal(
     hash(await readFile(resolve(directory, path))),
@@ -309,8 +318,16 @@ async function runCase(name: string, options: any) {
   const destination = resolve(output, "campaign.sqlite");
   assert(
     !(await Bun.file(destination).exists()),
-    "This experiment permits only fresh campaigns, without relaunch or continuation",
+    "An existing destination requires reconciliation, never relaunch",
   );
+  if (continuation) {
+    const checkpoint = resolve(directory, "continuation.sqlite");
+    assert.equal(
+      hash(await readFile(checkpoint)),
+      continuation.checkpointSha256,
+    );
+    await copyFile(checkpoint, destination);
+  }
   const engine = await Xean.open(
     await openXeanStorage(resolve(output, "campaign.sqlite")),
     options,
@@ -344,11 +361,20 @@ async function runCase(name: string, options: any) {
   }, 30_000);
   try {
     const initial = await engine.inspect();
-    assert.equal(
-      initial.providerCalls,
-      0,
-      "Fresh experiment must not inherit model calls",
-    );
+    assert.equal(initial.providerCalls, continuation?.parentCalls ?? 0);
+    if (continuation) {
+      assert.equal(initial.status, "limited");
+      assert.equal(initial.callAllowance, continuation.parentCallAllowance);
+      assert(
+        !initial.work.some((work: any) =>
+          ["active", "queued"].includes(work.status),
+        ),
+      );
+      await engine.extendCalls(
+        continuation.additionalCalls,
+        continuation.allowanceKey,
+      );
+    }
     const campaign = await engine.run();
     const records = await engine.records();
     usedCalls = campaign.providerCalls;
@@ -521,6 +547,9 @@ try {
     own,
     codexResearch(own.research, own.usagePrefix),
   );
+  const { projectEditing } = await import(
+    resolve(source, "packages/core/src/solve/editor.ts")
+  );
   const native = options.coordinator;
   let repairSuppressed = false;
   const edited = await runCase("editor", {
@@ -528,10 +557,33 @@ try {
     coordinator: {
       ...native,
       async run(...args: any[]) {
-        const decision = await native.run(...args);
+        let decision = await native.run(...args);
         const editorCount = args[1].work.filter(
           (work: any) => work.role === "xean.editor",
         ).length;
+        if (
+          decision.completion &&
+          feedback?.report.trim() &&
+          editorCount === 1
+        ) {
+          const state = projectEditing(input, args[1].work);
+          // Keep the native verdict intact; independent findings require a repair.
+          decision = {
+            state: decision.state,
+            dispatch: [
+              {
+                id: `edit/w${args[0].id}`,
+                role: "xean.editor",
+                input: {
+                  task: input.task,
+                  notes: state.original,
+                  previous: state.notes,
+                  review: state.review,
+                },
+              },
+            ],
+          };
+        }
         const request = decision.dispatch?.find(
           (work: any) => work.role === "xean.editor",
         );
@@ -548,6 +600,19 @@ try {
         if (request && editorCount >= proposalLimit) {
           repairSuppressed = true;
           return { state: decision.state };
+        }
+        if (request && feedback) {
+          request.input.review = {
+            verdict: "FAIL",
+            report: [
+              request.input.review
+                ? `Native corpus review (${request.input.review.verdict}):\n${request.input.review.report}`
+                : undefined,
+              `Independent findings on the prior proposal:\n${feedback.report}`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          };
         }
         return decision;
       },
@@ -566,9 +631,6 @@ try {
   assert(
     editorWork.length >= 1 && editorWork.length <= proposalLimit,
     "This trial allows a first draft and at most one repair",
-  );
-  const { projectEditing } = await import(
-    resolve(source, "packages/core/src/solve/editor.ts")
   );
   const current = projectEditing(input, edited.campaign.work);
   const proposal = editorWork[0];
@@ -709,7 +771,8 @@ try {
     proposalLimit,
     proposals: editorWork.length,
     limitDescription:
-      "At most two Editor proposals (first draft and one repair), six kernel calls, no continuation or relaunch. Native acceptance remains mandatory for success.",
+      "At most two Editor proposals across the full history. The copied trial checkpoint receives one frozen six-call grant. Smoke is fresh with six calls. No further extension or relaunch. Native acceptance remains mandatory for success.",
+    continuation: continuation ?? null,
     trialFinished,
     repairSuppressed,
     nativeAccepted,
