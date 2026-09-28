@@ -886,8 +886,9 @@ The deterministic Coordinator runs the following loop without planning calls:
    the recorded mathematical checks and corpus-review findings in one repair
    pass. Repairs retain unaffected notes by their exact IDs, fix defects, and
    restore missing coverage. A separate repair prompt limits rewriting to those
-   findings and affected dependencies; further consolidation waits for another
-   editing operation.
+   findings and affected dependencies. Within a changed note, unaffected passages
+   and valid support remain unchanged, with expansion only where a mathematical
+   repair requires it. Further consolidation waits for another editing operation.
 4. Only a fully verified proposal with a passing corpus review completes
    standalone editing with
    `{notes, deprecated, review}`. `notes` is the checked replacement revision.
