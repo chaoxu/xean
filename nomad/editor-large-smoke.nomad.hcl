@@ -13,7 +13,7 @@ job "xean-editor-large-smoke-template" {
     fleet_owner = "xean"
     source_repo = "xean"
     source_commit = var.source_commit
-    logical_call_allowance = "12"
+    logical_call_allowance = "24"
   }
   constraint {
     attribute = "${node.unique.name}"

@@ -787,12 +787,24 @@ claiming to solve the original task. The library exposes this operation as
 
 ### Corpus editing
 
-Editor rewrites a frozen corpus into fewer or simpler ordinary notes. It
-receives every full note, its status, and verification feedback, combines related results, replaces
-proofs, and removes obsolete intermediate scaffolding. The replacement should
-retain useful results, hypotheses, bounds, counterexamples, limitations, and
-unresolved gaps needed to continue the exact task. It need not retain each old
-lemma or supply a one-to-one correspondence between old and new notes.
+Editor periodically reorganizes a frozen corpus into a clearer mathematical
+account for continued research. It receives every full note, its status, and
+verification feedback. Every note and dependency chain may be rewritten,
+including verified notes. There is no preset length or note-count target.
+
+The replacement is judged as a whole by the useful knowledge it carries forward:
+important results, relevant alternative approaches, informative counterexamples
+and failed approaches, limitations, and open gaps. Editor may rewrite proofs,
+share lemmas, consolidate results, and remove obsolete intermediate results,
+repetition, and details that no longer help the research. An omitted claim needs
+no separate replacement. When claiming that one result subsumes another, the
+notes must justify that scope.
+
+Claims kept as established knowledge retain their precise hypotheses and
+guarantees, complete arguments, and declared support. Counterexamples retain
+their constructions and justifications. Mathematical justifications belong in
+the replacement notes. The editorial report explains choices and omissions.
+Simplification counts all support retained indirectly.
 
 Run an explicit editing campaign with the locked runtime:
 
@@ -843,17 +855,24 @@ The deterministic Coordinator runs the following loop without planning calls:
 1. Editor proposes `{notes, retained, report}`. New notes use the ordinary
    draft schema and receive fresh identities and checks. `retained` names notes
    kept unchanged, with their support retained automatically. It may reuse
-   verified notes from a previous proposal. New proofs can depend only on those
+   verified notes from a previous proposal when they fit the revised proof
+   structure, or rewrite them with fresh checks. New proofs can depend only on those
    retained notes and earlier new notes. Removed notes remain provenance, not
    hidden mathematical premises.
 2. The existing Verifier checks every proposed note through correctness and
    sources, reusing checks on unchanged notes. Failed or unresolved proposals go
    back to Editor with their recorded checks. Mathematical repairs use new IDs, and the
    permanent source-verdict rule remains in effect.
+   Repairs fix defects and restore missing coverage. Further shortening is optional.
 3. `editionReview` compares the whole old and new corpora after every new
    note is verified. It checks useful coverage, meaningful consolidation,
    claims of supersession, and independence from removed proofs. It allows
-   obsolete lemmas to disappear. FAIL or INCONCLUSIVE returns to Editor.
+   obsolete lemmas to disappear. Modest consolidation is acceptable when the
+   corpus contains distinct useful results. An omission must lose useful research
+   knowledge to count as a coverage failure. An absent old lemma alone is
+   insufficient. Earlier PASS checks do not excuse missing arguments or lost
+   hypotheses found during review.
+   FAIL or INCONCLUSIVE returns to Editor.
 4. A passing review completes standalone editing with
    `{notes, deprecated, review}`. `notes` is the checked replacement revision.
    `deprecated` lists original IDs absent from it. The original snapshot and

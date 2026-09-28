@@ -3,8 +3,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const [sourceArg, directoryArg] = process.argv.slice(2);
+const [sourceArg, directoryArg, continuationId, additionalArg] =
+  process.argv.slice(2);
 assert(sourceArg && directoryArg, "Expected frozen source and smoke directory");
+const additionalCalls = Number(additionalArg ?? 0);
+assert(!continuationId || /^[a-z0-9][a-z0-9-]{0,47}$/.test(continuationId));
+assert(Number.isSafeInteger(additionalCalls) && additionalCalls >= 0);
+assert(continuationId || additionalCalls === 0);
 const source = resolve(sourceArg);
 const directory = resolve(directoryArg);
 const hash = (value: string | Uint8Array) =>
@@ -130,7 +135,7 @@ for (const profile of Object.values(settings.profiles) as any[]) {
 assert.equal(settings.research.model, "gpt-6-astra");
 assert.equal(settings.research.reasoning, "max");
 assert.equal(settings.editingThresholdTokens, 200000);
-assert.equal(settings.limits.providerCalls, 12);
+assert.equal(settings.limits.providerCalls, 24);
 const credential = process.env.XEAN_API_KEY;
 assert(credential, "Missing injected Xean credential");
 assert(
@@ -236,18 +241,16 @@ const metrics = (notes: any[]) => {
 };
 async function runCase(name: string, options: any) {
   assert(!cancelled, "Cancelled before next case");
-  const remaining = settings.limits.providerCalls - usedCalls;
-  assert(remaining > 0, "Initial total call allowance is exhausted");
   const output = resolve(directory, name);
   await mkdir(output, { recursive: true, mode: 0o700 });
   options = {
     ...options,
-    limits: { concurrency: 1, attempts: 1, providerCalls: remaining },
+    limits: settings.limits,
   };
   const destination = resolve(output, "campaign.sqlite");
   assert(
-    !(await Bun.file(destination).exists()),
-    "Fresh experiment destination already exists",
+    (await Bun.file(destination).exists()) === Boolean(continuationId),
+    "Fresh starts require an absent campaign; continuation requires its existing campaign",
   );
   const engine = await Xean.open(
     await openXeanStorage(resolve(output, "campaign.sqlite")),
@@ -265,6 +268,8 @@ async function runCase(name: string, options: any) {
           at: new Date().toISOString(),
           status: campaign.status,
           calls: campaign.providerCalls,
+          callAllowance: campaign.callAllowance,
+          continuationId: continuationId ?? null,
           active: campaign.work
             .filter((work: any) => work.status === "active")
             .map((work: any) => ({ id: work.id, role: work.role })),
@@ -280,15 +285,27 @@ async function runCase(name: string, options: any) {
   }, 30_000);
   try {
     const initial = await engine.inspect();
-    assert.equal(
-      initial.providerCalls,
-      0,
-      "Fresh experiment must not inherit model calls",
-    );
-    const campaign = await engine.run();
+    if (!continuationId)
+      assert.equal(
+        initial.providerCalls,
+        0,
+        "Fresh experiment must not inherit model calls",
+      );
+    usedCalls = initial.providerCalls;
+    if (continuationId && additionalCalls > 0) {
+      const receipt = await engine.extendCalls(additionalCalls, continuationId);
+      await save(`allowance-${continuationId}.json`, receipt);
+    }
+    const ready = await engine.inspect();
+    const campaign =
+      continuationId && ["blocked", "paused"].includes(ready.status)
+        ? await engine.resume()
+        : await engine.run();
     const records = await engine.records();
-    usedCalls += campaign.providerCalls;
-    assert(usedCalls <= settings.limits.providerCalls);
+    usedCalls = campaign.providerCalls;
+    assert(
+      campaign.callAllowance !== null && usedCalls <= campaign.callAllowance,
+    );
     const requests = records
       .filter((record: any) => record.kind === "xean.call.request")
       .map((record: any) => record.data.payload);
@@ -337,6 +354,9 @@ async function runCase(name: string, options: any) {
       error: campaign.error,
       calls: campaign.providerCalls,
       cumulativeCalls: usedCalls,
+      callAllowance: campaign.callAllowance,
+      invocationCalls: campaign.providerCalls - initial.providerCalls,
+      continuationId: continuationId ?? null,
       nativeSearches,
       usage: settled.map((record: any) => record.data.usage),
       work: campaign.work.map((work: any) => ({
@@ -558,6 +578,9 @@ try {
     passed: edited.campaign.status === "completed",
     cancelled,
     calls: usedCalls,
+    callAllowance: edited.campaign.callAllowance,
+    checkpoint: edited.campaign.status === "limited",
+    continuationId: continuationId ?? null,
     initialAllowance: settings.limits.providerCalls,
     finishedAt: new Date().toISOString(),
     sourceCommit: deployment.sourceCommit,
@@ -566,7 +589,8 @@ try {
     ),
     cases,
   });
-  if (edited.campaign.status !== "completed") process.exitCode = 1;
+  if (!["completed", "limited"].includes(edited.campaign.status))
+    process.exitCode = 1;
 } catch (error) {
   const message = String(error).replaceAll(credential, "[redacted]");
   await save("failed.json", {
