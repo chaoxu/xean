@@ -155,3 +155,20 @@ The three gateway requests took 7m 24s, 3m 24s, and 4m 14s respectively. Success
 This trial measures a failed complete-workflow attempt and a successful detection of a mathematical editing error. The earlier checked candidate remains evidence that a one-draft result is possible; this fresh sample shows that it is not guaranteed. It does not establish a needed number of repair rounds or full-corpus economics. Artifacts, frozen settings, measurements, independent review, and accounting are under `runs/editor-golden-native-r01/`, with preregistration in `runs/editor-golden-native-r01-protocol/`. No historical research corpus was activated or modified.
 
 The integration adds 3 production lines and 21 experiment/operator lines, with no new tests or runner. Types, formatting, documentation checks, and all 103 tests passed. The existing acceptance, combined-feedback repair, and atomic-activation checks remain in place.
+
+## Repair prompt comparison
+
+A standalone Luna/max corpus review of the checked native draft identified the same integer-threshold defect and no additional useful-content loss. Two one-call Editor trials then received exactly the same original notes, checked proposal, and native review. The answer key and independent review stayed outside both inputs. These are staged follow-ups; they do not extend or complete the capped native campaign.
+
+| Repair instructions                                | Passing notes retained | Notes rewritten | Body tokens | All mathematical tokens | Request time | API-equivalent cost |
+| -------------------------------------------------- | ---------------------: | --------------: | ----------: | ----------------------: | -----------: | ------------------: |
+| Consolidation prompt with appended repair guidance |                      0 |               4 |       4,644 |                   5,634 |       5m 23s |          $0.0103194 |
+| Separate repair prompt                             |                      3 |               1 |       5,535 |                   6,565 |       8m 03s |          $0.0103761 |
+
+The first trial fixed the reported hypothesis but discarded all three reusable checks by rewriting their notes, with almost no change in total size. It stopped before verification because it failed the targeted-repair objective. Source commit: `aad77f66fdcc425206455ae8f1b9c29aae977d57`.
+
+The second changed only the repair prompt, leaving the initial consolidation prompt byte-identical. It retained the three passing notes by exact ID. However, the changed note grew from 1,862 to 2,723 body tokens and no longer used the existing exact-compression note as support, repeating more machinery. The complete payload became 7.4% larger than the original fixture, so it also stopped before verification, as preregistered. This establishes note retention on this sample, not an adequate repaired corpus. Source commit: `2f6c859114e5eabe02c8f14db65a3d938e688bf8`. The change removes one production line; no schema, runtime, or test was added.
+
+The shared preliminary review cost $0.0048531 and took 2m 09s. These three calls cost **$0.0255486** in total. All seventeen small-fixture requests now have **$1.14508504 known API-equivalent cost**, plus the earlier unpriced transport failure. Gateway and Pi usage agree for all three follow-up calls. Interactive curation and reviews remain separate and unpriced. Both repair drafts remain mathematically unverified and unaccepted; the planned stronger verification and final coverage calls were not run. All three follow-up jobs are terminal.
+
+The remaining observed problem is expansion within the changed note. Any next comparison should test passage-level preservation and continued use of valid support, while retaining the successful whole-note reuse behavior. Inputs, preregistrations, stopping decisions, and accounting are under `runs/editor-golden-repair-r01-protocol/` and `runs/editor-golden-repair-r02-protocol/`; native outputs are under the corresponding `editor-golden-repair-*` attempt directories.
