@@ -802,6 +802,9 @@ share lemmas, consolidate results, and remove obsolete intermediate results,
 repetition, and details that no longer help the research. An omitted claim needs
 no separate replacement. When claiming that one result subsumes another, the
 notes must justify that scope.
+Shared arguments replace repeated proofs in their uses, and summaries stay
+concise. New statements and proofs serve consolidation rather than extending
+the research with additional results.
 Useful negative results identify the failed method, obstruction, and scope in
 summaries as well as full text, so Explorer can recognize ruled-out approaches.
 A failed attempt remains distinct from a proved obstruction.

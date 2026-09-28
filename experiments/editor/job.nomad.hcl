@@ -6,6 +6,7 @@ variable "role" {
   default = ""
 }
 variable "image" { type = string }
+variable "call_allowance" { type = number }
 
 job "xean-editor-golden" {
   type = "batch"
@@ -14,7 +15,7 @@ job "xean-editor-golden" {
     fleet_run_kind = "xean-editor-golden"
     fleet_owner = "xean"
     source_commit = var.source_commit
-    logical_call_allowance = "1"
+    logical_call_allowance = "${var.call_allowance}"
   }
   constraint {
     attribute = "${node.unique.name}"
@@ -45,14 +46,14 @@ job "xean-editor-golden" {
           "/runs/_xean/${var.run_id}/source/experiments/editor/run.ts",
           "/runs/_xean/${var.run_id}/source/experiments/editor/prompts/${var.prompt}.md",
           "/runs/_xean/${var.run_id}/output",
-        ] : [
+        ] : concat([
           "--no-install", "--no-env-file",
           "/runs/_xean/${var.run_id}/source/packages/cli/src/index.ts",
-          "role", var.role,
+        ], var.role == "edit" ? ["edit"] : ["role", var.role], [
           "/runs/_xean/${var.run_id}/input.json",
           "/runs/_xean/${var.run_id}/output/campaign.sqlite",
           "/runs/_xean/${var.run_id}/settings.json",
-        ]
+        ])
         readonly_rootfs = true
         cap_drop = ["ALL"]
         security_opt = ["no-new-privileges"]

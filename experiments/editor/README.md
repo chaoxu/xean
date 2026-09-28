@@ -43,6 +43,14 @@ bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/opera
 
 Verifier input contains `task`, the replacement `notes`, and `targets` selecting every note through `source`. Effective settings and inputs are frozen with hashes, with one admitted call per role. Collection writes the read-only native campaign and records to `snapshot.json`. Apply only a completed verifier result's published checks to a copy using `applyChecks`, preserving the raw candidate and any correction revisions. Then invoke `editionReview` with `{task, notes: checkedReplacement, previous: originalNotes}` and a fresh attempt ID. Keep the golden key and independent review outside both inputs. Unexpected premises, invalid responses, and failures remain outcomes. A completed role invocation alone does not establish mathematical PASS or activate a replacement.
 
+To test the complete built-in workflow on the same fixture, select `edit`:
+
+```sh
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-native-r01 edit ../xean-editor-science/experiments/editor/input.json SETTINGS.json
+```
+
+This uses the existing `xean edit` CLI, with three admitted calls for the whole campaign. Settings use Luna/max as the default, a complete Sol/max `correctness` profile, and limits `{concurrency: 1, attempts: 1, providerCalls: 3}`. Copy the default profile when overriding the model so gateway and credential settings survive. The expected stages are drafting, proof verification, and corpus coverage; an invalid submission or unexpected source obligation can exhaust the allowance earlier. No extension is automatic. Only the native completed result establishes that the verification gates passed. Measure size and compare useful capabilities separately.
+
 The former large-run drivers and job templates are retired from this branch. Their source remains in commit `23f19fa9188c119ca0fc2210019f032ae73b1614`, and historical run artifacts remain under the original checkout's ignored `runs/`. The cancelled full-corpus continuation produced no replacement or coverage verdict. No large run is part of this experiment.
 
 ## First comparison

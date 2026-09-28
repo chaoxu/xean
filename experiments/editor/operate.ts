@@ -3,11 +3,16 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readDeclaration } from "../../packages/core/src/solve/campaign.ts";
+import { readSettings } from "../../packages/core/src/solve/config.ts";
 import { declarationVersion } from "../../packages/core/src/solve/contracts.ts";
 
 const [action, id, selection, inputFile, settingsFile] = process.argv.slice(2);
 const role =
-  selection === "verifier" || selection === "editionReview" ? selection : "";
+  selection === "verifier" ||
+  selection === "editionReview" ||
+  selection === "edit"
+    ? selection
+    : "";
 const prompt = role ? undefined : selection;
 assert(action && ["launch", "status", "collect", "cancel"].includes(action));
 assert(
@@ -70,6 +75,7 @@ assert.equal(Bun.version, "1.4.2");
 
 if (action === "launch") {
   let roleFiles: Record<string, string> | undefined;
+  let callAllowance: number;
   if (role) {
     assert(inputFile && settingsFile && process.argv.length === 7);
     const input = JSON.parse(await readFile(resolve(inputFile), "utf8"));
@@ -77,8 +83,8 @@ if (action === "launch") {
     settings.usagePrefix = `editor-golden/${id}`;
     readDeclaration({
       version: declarationVersion,
-      kind: "xean.role",
-      role,
+      kind: role === "edit" ? "xean.edit" : "xean.role",
+      ...(role === "edit" ? {} : { role }),
       task: input.task,
       input,
       settings,
@@ -86,8 +92,9 @@ if (action === "launch") {
     assert.deepEqual(settings.limits, {
       concurrency: 1,
       attempts: 1,
-      providerCalls: 1,
+      providerCalls: role === "edit" ? 3 : 1,
     });
+    callAllowance = settings.limits.providerCalls;
     roleFiles = { "input.json": json(input), "settings.json": json(settings) };
   } else {
     assert.equal(process.argv.length, 5);
@@ -97,6 +104,14 @@ if (action === "launch") {
         resolve(import.meta.dir, "prompts", `${prompt}.md`),
       ).exists(),
     );
+    const settings = readSettings(
+      JSON.parse(
+        await readFile(resolve(import.meta.dir, "settings.json"), "utf8"),
+      ),
+    );
+    const allowance = settings.limits?.providerCalls;
+    assert.equal(allowance, 1);
+    callAllowance = allowance;
   }
   await invoke(["git", "diff", "--exit-code", "HEAD"]);
   assert.equal(
@@ -149,6 +164,8 @@ if (action === "launch") {
     id,
     prompt,
     role,
+    kind: role === "edit" ? "xean.edit" : "xean.role",
+    callAllowance,
     roleFiles: roleFiles
       ? Object.fromEntries(
           Object.entries(roleFiles).map(([name, bytes]) => [name, hash(bytes)]),
@@ -188,6 +205,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
         `-var=source_commit=${commit}`,
         `-var=prompt=${prompt ?? ""}`,
         `-var=role=${role}`,
+        `-var=call_allowance=${callAllowance}`,
         `-var=image=${image}`,
         "-",
       ],
@@ -240,6 +258,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
   );
   await save("submission.json", {
     jobId,
+    callAllowance,
     at: new Date().toISOString(),
     receipt,
   });
@@ -249,6 +268,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
       commit,
       prompt,
       role,
+      callAllowance,
       local,
       cancellation: `operate.ts cancel ${id}`,
     }),
