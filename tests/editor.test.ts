@@ -105,8 +105,10 @@ test("editing combines proof and coverage feedback before repair and reuses chec
     },
   };
   const runtime = editorRuntime((role, data, prompt) => {
-    if (role === "editor") {
+    if (role === "editor" || role === "editorRepair") {
       drafts++;
+      expect(role).toBe(drafts === 1 ? "editor" : "editorRepair");
+      expect(data.previous !== undefined).toBe(drafts > 1);
       expect(data.notes.map((note) => note.text)).toEqual(
         original.notes.map((note) => note.text),
       );

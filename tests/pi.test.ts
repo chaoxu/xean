@@ -119,6 +119,23 @@ function completedResponse(): Response {
   });
 }
 
+test("Editor repair profiles fall back to Editor and accept complete overrides", () => {
+  const base = { provider: "openai-codex", model: "gpt-6-luna" } as const;
+  const editor = {
+    ...base,
+    model: "gpt-6-sol",
+    baseUrl: "https://xean.invalid",
+  };
+  for (const overrides of [{}, { editor }, { editor, editorRepair: base }]) {
+    const runtime = piRuntime(
+      readSettings({ profiles: { default: base, ...overrides } }),
+    );
+    const expected =
+      runtime.profiles["editorRepair" in overrides ? "explorer" : "editor"];
+    expect(runtime.profiles.editorRepair).toEqual(expected);
+  }
+});
+
 test("Codex profiles keep native auth on official hosts and opaque keys on gateways", async () => {
   const token = `fixture.${Buffer.from(
     JSON.stringify({

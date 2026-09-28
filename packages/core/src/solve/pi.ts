@@ -28,6 +28,7 @@ export type Profile = { model: Model<Api>; options?: SimpleStreamOptions };
 export const profileNames = [
   "explorer",
   "editor",
+  "editorRepair",
   "coordinator",
   "correctness",
   "requirements",

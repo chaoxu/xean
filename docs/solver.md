@@ -578,7 +578,7 @@ campaigns reject new grants.
 
 [The settings example](../examples/solver-settings.json) uses Astra through
 the public OpenAI API and its `OPENAI_API_KEY` environment variable.
-`profiles.default` supplies the shared Pi profile. Override `explorer`, `editor`,
+`profiles.default` supplies the shared Pi profile. Override `explorer`, `editor`, `editorRepair`,
 `coordinator`, `correctness`, `requirements`, `statement`, `proof`, or `reconstruction`
 with a complete `{provider, model, reasoning?}` profile. Omitted reasoning uses
 `max` for Pi roles and Codex research. Explicit effort overrides remain supported.
@@ -896,7 +896,10 @@ The deterministic Coordinator runs the following loop without planning calls:
    every proposal/check remain in the durable records. Reopening a completed
    campaign reuses its result.
 
-The Editor has an `editor` model profile. Corpus review reuses the
+The Editor uses `editor` for its initial proposal and `editorRepair` when given a
+previous proposal to repair. An omitted `editorRepair` falls back to `editor`,
+then `default`. Each configured profile is a complete override; individual fields
+are not merged. Corpus review reuses the
 `requirements` profile with its own instructions and corpus input. It checks
 whether the replacement is adequate for continued research, not whether the
 original research task is solved. Editing does not grant requirements or

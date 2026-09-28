@@ -114,7 +114,10 @@ export function piRuntime(settings: Settings, key?: string): PiRuntime {
   });
   const profiles = Object.fromEntries(
     profileNames.map((name) => {
-      const configured = settings.profiles[name] ?? settings.profiles.default;
+      const configured =
+        settings.profiles[name] ??
+        (name === "editorRepair" ? settings.profiles.editor : undefined) ??
+        settings.profiles.default;
       const base = models.getModel(configured.provider, configured.model);
       if (!base)
         throw new Error(

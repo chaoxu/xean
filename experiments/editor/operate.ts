@@ -90,12 +90,16 @@ if (action === "launch") {
       input,
       settings,
     });
+    callAllowance = settings.limits?.providerCalls;
+    assert(
+      Number.isSafeInteger(callAllowance) && callAllowance > 0,
+      "Native editing requires a finite positive providerCalls allowance",
+    );
     assert.deepEqual(settings.limits, {
       concurrency: 1,
       attempts: 1,
-      providerCalls: role === "edit" ? 3 : 1,
+      providerCalls: role === "edit" ? callAllowance : 1,
     });
-    callAllowance = settings.limits.providerCalls;
     roleFiles = { "input.json": json(input), "settings.json": json(settings) };
   } else {
     assert.equal(process.argv.length, 5);
