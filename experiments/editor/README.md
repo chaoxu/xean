@@ -10,6 +10,7 @@ The research question is whether a prompt produces a coherent, materially simple
 - [golden.md](golden.md) contains provenance, the mathematical answer key, and known failure cases. The runner never reads it.
 - [baseline.md](prompts/baseline.md) freezes the existing Editor instructions.
 - [reference.md](prompts/reference.md) describes the intended mathematical reference in self-contained terms.
+- [consolidation.md](prompts/consolidation.md) tests explicit removal of repeated exposition without adding research that leaves the old proofs intact.
 - [settings.json](settings.json) fixes the model and reasoning settings.
 
 Each arm admits one model call and returns one draft. It uses the existing Pi request path, output schema, and dependency validation. There are no automatic repairs, verifiers, source searches, or subsequent editing calls. Failed requests and invalid submissions remain experimental outcomes. A completed generation is not mathematical acceptance.
