@@ -1,27 +1,28 @@
 # Editor experiment
 
-Compare editing prompts and models on one frozen mathematical dataset before considering larger runs. The dataset contains three related research notes with complete proofs, overlapping arguments, and a counterexample limiting a promising approach. Its full bodies contain 5,663 reference tokens. The complete input contains 7,511 reference tokens.
+Test whether editing produces a smaller, coherent mathematical reference while preserving useful results, proofs, methods, scoped limitations, and open gaps. All trials use one frozen three-note fixture. There is no compression target or requirement to preserve each old note. A short but defective replacement fails.
 
-The research question is whether a prompt produces a coherent, materially simpler reference while preserving usable mathematics. Size reduction, model cost, and elapsed time are measurements. A short but defective result fails.
+The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 13.6%. Fresh native workflows reduced it by 10.1% with Sol checking and 3.4% with Luna checking. These samples show inexpensive editing with modest compression and substantial latency. General reliability and downstream monetary savings remain unestablished. The latest summary controls returned unchanged PASS despite a preregistered expectation of correction. Independent audit confirmed that the wording exceeds the supplied proof, but did not establish that the stronger assertion is false.
 
-## Fixed materials
+**Current accounting: 33 requests, $1.61070294 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
 
-- [input.json](input.json) contains the problem and notes shown to the model.
-- [golden.md](golden.md) contains provenance, the mathematical answer key, and known failure cases. The runner never reads it.
-- [baseline.md](prompts/baseline.md) freezes the existing Editor instructions.
-- [reference.md](prompts/reference.md) describes the intended mathematical reference in self-contained terms.
-- [consolidation.md](prompts/consolidation.md) tests explicit removal of repeated exposition without adding research that leaves the old proofs intact.
-- [settings.json](settings.json) fixes the model and reasoning settings.
+## Materials and protocol
 
-Each generation arm admits one model call and returns one draft. It uses the existing Pi request path, output schema, and dependency validation. There are no automatic repairs, verifiers, source searches, or subsequent editing calls. Failed requests and invalid submissions remain experimental outcomes. A completed generation is not mathematical acceptance. Native assessment and complete-workflow trials are recorded separately below.
+- [input.json](input.json): the problem and three original notes shown to the model.
+- [golden.md](golden.md): provenance, capability/proof answer key, and known failure cases. The runner never reads it.
+- [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), and [consolidation.md](prompts/consolidation.md): frozen prompt conditions.
+- [settings.json](settings.json): current GPT-6 Luna/max generation settings, with one admitted call and no literature access.
+- [run.ts](run.ts), [operate.ts](operate.ts), and [job.nomad.hcl](job.nomad.hcl): generation, operations, and the shared native-role job.
 
-Compare outputs against the answer key after generation. Record whether the useful capabilities and their proofs survive, whether negative conclusions retain their scope, whether dependencies close, and whether the output consolidates repeated arguments. Record each defect concretely. Equivalent valid proofs and different note organizations are welcome. There is no per-note preservation requirement or compression target.
+The input has 5,663 proof-body tokens, 6,110 mathematical tokens including summaries and support, and 7,511 tokens in its complete JSON. Counts use `o200k_base` as a common reference tokenizer. Mathematical counts include retained dependency closure and exclude historical verification records. The original `fullNote` projection, including status and feedback, has 6,196 tokens. Provider usage is measured separately and includes reasoning.
 
-Change one experimental factor at a time and commit it before the next run. Prompt comparisons use a new prompt filename with fixed settings. Model comparisons change settings while holding the prompt and reasoning fixed. Keep the dataset and answer key fixed. A success on this development fixture establishes only success on this fixture. Further runs remain limited to this dataset.
+Each generation uses the existing Pi request path, schema, and dependency validation for one call and one draft. It has no automatic repair or verification. Compare its output with the hidden key afterward: check usable capabilities and complete arguments, scoped negatives, dependency closure, and consolidation of repeated exposition. Equivalent valid proofs and different organizations are welcome. Generation completion, native acceptance, and independent review are separate outcomes.
+
+Change one factor at a time and commit before launching. Prompt comparisons use separate frozen prompt files. Model comparisons hold prompt and reasoning fixed. Preserve failed requests and invalid submissions. Keep the dataset and answer key fixed, and treat success as evidence about this development fixture only.
 
 ## Run on Fleet
 
-Run from the adjacent Fleet Infra checkout using its locked Bun:
+Run from the adjacent Fleet Infra checkout with its locked Bun:
 
 ```sh
 bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-example-r01 consolidation
@@ -30,259 +31,140 @@ bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/opera
 bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts cancel editor-golden-example-r01
 ```
 
-Launch requires a clean, internally pushed commit and a fresh attempt ID. It uses the existing pinned worker image on jupiter and the committed [Nomad specification](job.nomad.hcl). The operator reads only the Xean gateway credential from OpenBao and injects it in memory. Credentials never enter committed files or saved job specifications. After a submission error, inspect the attempt before creating another one.
+Launch requires a clean, internally pushed commit and a fresh attempt ID. It reuses the pinned worker image on jupiter. The operator reads the gateway credential from OpenBao into memory, excluding it from committed files and saved jobs. Inspect the attempt after a submission error before creating another.
 
-Results are collected under ignored `runs/<attempt-id>/`. Keep the input, prompt, settings and model hashes, source commit, complete request records, generated replacement, reported usage, elapsed time, and a short `review.md` together. Missing usage is unknown cost. Report API-equivalent usage separately from subscription billing and independent review overhead.
+Collect into ignored `runs/<attempt-id>/`. Preserve frozen inputs/settings, hashes, source commit, complete request records, replacement, usage, elapsed time, and review evidence. Missing usage is unknown cost. Gateway and Pi usage overlap and must not be added. Costs below use frozen API-equivalent rates reconciled against gateway token buckets, not subscription bills. Request latency excludes queueing and operator work. Detailed reports and accounting remain in the evidence paths below, with earlier README narratives in Git.
 
-To measure native assessment of a frozen candidate, use the same operator with the existing CLI roles:
+The same operator runs native roles or the complete workflow:
 
 ```sh
 bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-check-r01 verifier INPUT.json SETTINGS.json
-bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts collect editor-golden-check-r01
-```
-
-Verifier input contains `task`, the replacement `notes`, and `targets` selecting every note through `source`. Effective settings and inputs are frozen with hashes, with one admitted call per role. Collection writes the read-only native campaign and records to `snapshot.json`. Apply only a completed verifier result's published checks to a copy using `applyChecks`, preserving the raw candidate and any correction revisions. Then invoke `editionReview` with `{task, notes: checkedReplacement, previous: originalNotes}` and a fresh attempt ID. Keep the golden key and independent review outside both inputs. Unexpected premises, invalid responses, and failures remain outcomes. A completed role invocation alone does not establish mathematical PASS or activate a replacement.
-
-For a controlled repair, invoke `editor` with `{task, notes: originalNotes, previous: checkedReplacement, review: coverageVerdict}`. This uses the built-in Editor's repair instructions. Retained IDs keep their existing checks; rewritten notes receive fresh IDs and need verification. Freeze each stage before calling it and report the combined cost, including the rejected draft and prior checks. The standalone stages measure repair behavior without extending a completed trial's allowance.
-
-To test the complete built-in workflow on the same fixture, select `edit`:
-
-```sh
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-review-r01 editionReview INPUT.json SETTINGS.json
+bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-repair-r01 editor INPUT.json SETTINGS.json
 bin/fleet-nix run .#fleet-run -- ../xean-editor-science/experiments/editor/operate.ts launch editor-golden-native-r01 edit ../xean-editor-science/experiments/editor/input.json SETTINGS.json
 ```
 
-This uses the existing `xean edit` CLI with a finite positive `limits.providerCalls` allowance fixed before launch. Settings use GPT-6 Luna/max as the default and complete GPT-6 Sol/max `correctness` and `editorRepair` profiles. Copy the default profile when overriding the model so gateway and credential settings survive. Limits `{concurrency: 1, attempts: 1, providerCalls: 6}` allow one draft/check/review cycle and one repair/check/review cycle if each stage takes one call. The workflow stops earlier on acceptance. Retries, invalid submissions, or unexpected source obligations can exhaust the allowance before those cycles finish. No extension is automatic. Standalone role and generation trials remain capped at one call. Only the native completed result establishes that the verification gates passed. Measure size and compare useful capabilities separately.
+For `verifier`, supply `{task, notes: replacement, targets}` with every target through `source`. Collection reads the native campaign without ownership or recovery and writes `snapshot.json`. Apply only completed published checks to a copy with `applyChecks`, preserving raw drafts and correction revisions. Supply `{task, notes: checkedReplacement, previous: originalNotes}` to `editionReview`. For a controlled repair, supply `{task, notes: originalNotes, previous: checkedReplacement, review: coverageVerdict}` to `editor`. Retained IDs keep checks, while rewritten notes need fresh verification. Freeze each stage, withhold the golden key and independent review, and include failed drafts and prior checks in actual-path costs. Standalone roles admit one call each.
 
-The former large-run drivers and job templates are retired from this branch. Their source remains in commit `23f19fa9188c119ca0fc2210019f032ae73b1614`, and historical run artifacts remain under the original checkout's ignored `runs/`. The cancelled full-corpus continuation produced no replacement or coverage verdict. No large run is part of this experiment.
+`edit` runs the built-in workflow with a finite positive `limits.providerCalls` fixed before launch. The conservative reference configuration uses GPT-6 Luna/max by default and complete GPT-6 Sol/max `correctness` and `editorRepair` profiles. Native-r03 instead used Luna correctness, with Sol repair configured but unused. These are experimental settings, not changes to production defaults. Profiles replace whole profiles, so copy gateway and credential fields when overriding a model. `editorRepair` falls back to `editor`, then `default`. See [solver configuration](../../docs/solver.md) for editing-only runtime composition and check reuse across models.
 
-## First comparison
+Limits `{concurrency: 1, attempts: 1, providerCalls: 6}` allow an initial cycle and one repair cycle if every stage takes one call. Acceptance stops earlier. Retries, invalid submissions, or source obligations can consume the allowance first. Extensions are not automatic. A native completed editing result establishes that its gates passed. Measure size and independently inspect useful mathematics as separate judgments.
 
-The first pair used source commit `cfdd4e9445ed1dd7fe9aaf5badaab000983a2b6a`, the same input, and Sol/max. Each arm used one call with no correction or repair. The input had 3 notes, 5,663 body tokens, and 6,110 tokens of mathematical content including summaries and dependencies.
+The former large-run drivers and templates remain in commit `23f19fa9188c119ca0fc2210019f032ae73b1614`, with historical artifacts under the original checkout's ignored `runs/`. The cancelled full-corpus continuation produced no replacement or coverage verdict and remains stopped.
 
-| Prompt    | Notes | Body tokens | All mathematical tokens |   Time | Reported API-equivalent cost |
-| --------- | ----: | ----------: | ----------------------: | -----: | ---------------------------: |
-| Baseline  |     4 |       5,249 |                   6,838 | 6m 55s |                    $0.213570 |
-| Reference |     6 |       9,429 |                  10,918 | 5m 52s |                    $0.191292 |
+## Outcomes
 
-Counts use `o200k_base` as a common reference tokenizer. They exclude historical verification records. Provider usage includes reasoning and is recorded separately. The two gateway requests have complete reported usage matching Pi. Their price fields are NULL, so the amounts above use the frozen model's API-equivalent rates. The pair totals $0.404862. Interactive curation and review are separate and unpriced.
+All model conditions below use max reasoning. Each table records request time unless marked as whole-task time.
 
-Blind review of the baseline found no substantive proof defect or lost required capability, with minor scope clarifications about integer budgets and predicate evaluation. It shared repeated DP and boundary-search arguments, but expanded summaries made the whole mathematical payload 11.9% larger. The reference prompt retained all three source notes through dependencies and added three new notes, making the payload 78.7% larger. That arm fails consolidation without needing a complete audit of its added mathematics.
+### Generation comparisons
 
-Neither arm demonstrates useful net compression. The proposed reference prompt is not adopted. This one pair supports testing more explicit removal of repeated exposition and avoiding additions that leave the old proofs intact. It does not establish that prompting alone explains the earlier full-corpus failures. Both raw outputs and the comparison records remain in ignored `runs/editor-golden-*-r01/`, including the separate `editor-golden-comparison-r01` review and accounting records.
+| Prompt        | Model        | Notes | Body tokens | Mathematical tokens |   Time |       Cost |
+| ------------- | ------------ | ----: | ----------: | ------------------: | -----: | ---------: |
+| Baseline      | GPT-6 Sol    |     4 |       5,249 |               6,838 | 6m 55s |  $0.213570 |
+| Reference     | GPT-6 Sol    |     6 |       9,429 |              10,918 | 5m 52s |  $0.191292 |
+| Consolidation | GPT-6 Sol    |     4 |       4,172 |               5,284 | 4m 51s |  $0.167792 |
+| Consolidation | GPT-5.6 Luna |     4 |       5,433 |               6,679 | 8m 49s |  $0.036634 |
+| Consolidation | GPT-6 Luna   |     4 |       4,312 |               5,276 | 5m 33s | $0.0096681 |
 
-## Consolidation trial
+Baseline preserved the useful mathematics under blind review but grew the complete payload 11.9%. Reference retained all originals through dependencies and added notes, growing it 78.7%. Neither achieved useful net compression. Consolidation explicitly replaces repeated arguments and keeps summaries concise. Its Sol and GPT-6 Luna samples reduced mathematical payload by 13.5% and 13.6%, with no consequential defect or lost capability found independently. Minor clarifications concerned generic predicate-evaluation costs and learner-summary wording. GPT-5.6 Luna grew the payload 9.3% and stopped before a proof audit.
 
-The next prompt explicitly asks shared arguments to replace repeated exposition, counts retained dependency closures, and keeps summaries concise. It permits new formulations that simplify the supplied mathematics while excluding additions merely extending it. Input, model, settings, runner, and answer key are unchanged. The prompt receives neither prior outputs nor review findings. Source commit: `208ca7160804675cc5c144abe7f0857fc5d69ae5`.
+The first pair cost $0.404862, the first three calls $0.572654, and all five generations $0.618956 (rounded). Evidence: `runs/editor-golden-comparison-r01/`, `runs/editor-golden-baseline-r01/`, `runs/editor-golden-reference-r01/`, `runs/editor-golden-consolidation-r01/`, `runs/editor-golden-luna-r01/`, and `runs/editor-golden-luna6-r01/`.
 
-One call produced 4 notes with **4,172 body tokens and 5,284 total mathematical tokens**, reductions of **26.3%** and **13.5%** from the input. It took **4m 51s** and reported **$0.167792** in API-equivalent usage, matching gateway token buckets. All three generation attempts together total **$0.572654**, excluding interactive curation and review.
+### Native assessment of the frozen GPT-6 Luna draft
 
-Independent review found no consequential defect or lost required capability. The shared DP, span, and boundary-search arguments preserve the scaled learner, exact-zero restoration, guarded conformal ray, horizontal application, scoped geometric obstruction, and unresolved operation-count gap. One minor clarification remains: the general state-predicate wording should charge predicate evaluation or restrict it to efficient predicates. Every actual application uses constant-cost thresholds.
+| Stage                | Model      | Outcome                          |    Time |       Cost |
+| -------------------- | ---------- | -------------------------------- | ------: | ---------: |
+| Correctness/source   | GPT-6 Sol  | All four PASS, unchanged         |  2m 20s | $0.0766120 |
+| Coverage, first call | GPT-6 Sol  | Prose only, no published verdict |  1m 29s | $0.0631580 |
+| Coverage, retry      | GPT-6 Sol  | PASS                             | 12m 34s | $0.1956480 |
+| Coverage comparison  | GPT-6 Luna | PASS                             |  4m 55s | $0.0066834 |
 
-This is a useful edit on the fixed small fixture, with genuine consolidation and a smaller complete payload. It is one sample, not evidence of full-corpus reliability or a complete production cost measurement. No native verification or automatic repair was run. The output remains unchanged, with the review recorded separately under `runs/editor-golden-consolidation-r01/`. Further experiments remain restricted to this fixture.
+The retry required `submit_result` through Pi's Codex `tool_choice: "required"` when submission is the sole tool. The one-call cap had correctly prevented recovery of the initial missing verdict. Explicit tool choices and calls with other tools retain their behavior, as documented in [provider integration](../../docs/pi-alignment.md#provider-integration). The Luna coverage comparison used the same frozen input and submission policy as the successful Sol call.
 
-## GPT-5.6 Luna comparison
+Authentic standalone checks assembled offline satisfy the existing editing predicate. Luna draft + Sol check + Luna coverage cost $0.0929635. Using the successful Sol coverage costs $0.2819281, or $0.3450861 including its failed first submission. These are measured stage combinations, not a fresh native workflow. All generations and assessments reached $0.9610573. Reviews found only minor clarity issues concerning predicate costs, the dead-zone summary, boundary-search direction, and reuse of span finding. Evidence: `runs/editor-golden-luna6-verifier-r01/`, `runs/editor-golden-luna6-coverage-*/`, and `runs/editor-golden-assessment-r01/`.
 
-One `gpt-5.6-luna` call used the same consolidation prompt, input, max reasoning, and one-call allowance. Source commit `d7d40bce24024681336582a45e407d9e1c1119ca` changes only the configured model and removes the runner's duplicate Sol-only assertion. The generator received no prior output, answer key, or review findings.
+### Coverage controls
 
-| Model        | Notes | Body tokens | All mathematical tokens |   Time | Reported API-equivalent cost |
-| ------------ | ----: | ----------: | ----------------------: | -----: | ---------------------------: |
-| GPT-6 Sol    |     4 |       4,172 |                   5,284 | 4m 51s |                    $0.167792 |
-| GPT-5.6 Luna |     4 |       5,433 |                   6,679 | 8m 49s |                    $0.036634 |
+| GPT-6 Luna input              | Verdict                        |   Time |       Cost |
+| ----------------------------- | ------------------------------ | -----: | ---------: |
+| Geometric obstruction omitted | FAIL, intended loss identified | 2m 29s | $0.0052904 |
+| Intact, equally unverified    | PASS                           | 5m 03s | $0.0096164 |
 
-Luna generation was 78.2% cheaper, but took 81.5% longer. Its proof bodies shrank only 4.1%, and the complete mathematical payload grew 9.3% over the input. It factored shared machinery and rewrote all notes, but did not produce a smaller reference by the token measure. This fails the editing objective without requiring another proof audit. The candidate remains mathematically unverified.
+Both inputs used fresh IDs and empty checks, with no mutation label or key. Only the counterexample and corresponding summaries differed. The failure report identified the `H=4, w_i=(5/2)^i` family and its limitation on the quantized-hull branch, without treating it as an impossibility result for the original problem. The pair cost $0.0149068, bringing 11 requests to $0.9759641. This tests one omission, not a general detection rate. Production still checks proofs before coverage. Evidence: `runs/editor-golden-coverage-controls-r01/` and native attempts `editor-golden-coverage-a-r01` / `editor-golden-coverage-b-r01`. The directory's `model-capacity.json` records advertised extended context, not a large-input trial.
 
-The four golden generations total **$0.609288** in reported API-equivalent usage. Dataset curation and interactive reviews remain separate and unpriced. Native assessment is measured separately below. These single samples establish neither general model superiority nor full-corpus cost effectiveness. Raw evidence and measurements are under `runs/editor-golden-luna-r01/`.
+### First native workflow and repairs
 
-## GPT-6 Luna comparison
+Native-r01 used GPT-6 Luna drafting/coverage and GPT-6 Sol correctness with three admitted calls. It ended limited and unaccepted: a WebSocket 1011 failure, a successful retry, and a proof check exhausted the allowance before coverage. The draft had 4,674 body and 5,626 mathematical tokens, a 7.9% payload reduction. Sol and a blind independent reviewer rejected a dropped integer-threshold hypothesis in the ray construction, each giving a fractional-threshold counterexample.
 
-One `gpt-6-luna` call used the same consolidation prompt, input, max reasoning, one-call allowance, and evaluation. Source commit: `8a148328ba77305f8325741791e5c0c89a877115`. It is a separate model condition from GPT-5.6 Luna.
+| Native-r01 request           |   Time |        Cost |
+| ---------------------------- | -----: | ----------: |
+| GPT-6 Luna transport failure | 7m 24s |     Unknown |
+| GPT-6 Luna draft             | 3m 24s | $0.00496034 |
+| GPT-6 Sol proof check        | 4m 14s |   $0.138612 |
 
-The result has 4 notes, **4,312 body tokens and 5,276 total mathematical tokens**, reductions of **23.9%** and **13.6%**. It took **5m 33s** and reported **$0.0096681** in API-equivalent usage. Compared with the Sol sample, generation cost fell 94.2% and elapsed time rose 14.3%, with nearly identical total mathematical size. Gateway and Pi token buckets match. Gateway price is NULL, so the estimate uses the frozen model rates.
+Known cost was $0.14357234, bringing 14 requests to $1.11953644 plus the unpriced failure. Subsequent standalone trials preserved that capped campaign and froze the same checked draft and feedback. A preliminary GPT-6 Luna coverage review found the same defect without additional useful-content loss ($0.0048531, 2m 09s).
 
-Independent review, blinded to model and cost, found no consequential mathematical defect or lost required capability. The proofs preserve the scaled learner, exact-zero compression, guarded conformal ray, horizontal application, scoped geometric obstruction, and unresolved operation-count gap. Two minor clarifications remain: charge arbitrary state-set membership costs in the generic DP statement, and describe the learner statistic as encoding labels in its short summary. The full proof already distinguishes the statistic from an exact sign representative. The generated output remains unchanged.
+| Repair                                      | Passing notes retained | Changed body tokens | Mathematical tokens |   Time |       Cost |
+| ------------------------------------------- | ---------------------: | ------------------: | ------------------: | -----: | ---------: |
+| GPT-6 Luna, appended repair guidance        |                      0 |    4,644 (all four) |               5,634 | 5m 23s | $0.0103194 |
+| GPT-6 Luna, separate repair prompt          |                      3 |               2,723 |               6,565 | 8m 03s | $0.0103761 |
+| GPT-6 Luna, preserve valid passages/support |                      3 |               2,378 |               6,213 | 4m 41s | $0.0072534 |
+| GPT-6 Sol, same preservation prompt/input   |                      3 |               1,865 |               5,629 |    55s | $0.0569080 |
+| GPT-6 Sol check of repaired note            |        3 checks reused |                   — |                   — | 3m 57s | $0.1157880 |
+| GPT-6 Luna coverage of Sol repair           |                      — |                   — |                   — | 2m 24s | $0.0052492 |
 
-This sample supports GPT-6 Luna for further development on the fixture: one call achieved a reviewed reduction comparable to Sol at much lower generation cost. Subsequent native assessment is recorded below. One sample cannot establish reliability or full-corpus economics.
+All three Luna repairs stopped before verification under their preregistered criteria. The first discarded reusable checks. The other two expanded the changed proof from 1,862 tokens, growing the whole payload 7.4% and 1.7% above the fixture. The separate prompt preserved passing IDs, and passage guidance also preserved valid support. In the matched Sol repair, the proof changed only by adding “be an integer”, with consistent summary changes. The final assembled edition passed native checks and coverage: 4,677 body tokens, 5,629 mathematical tokens (7.9% smaller), and 5,745 full-note tokens (7.3% smaller). The only remaining review clarification concerned generic predicate costs.
 
-The five golden generations total **$0.618956**, excluding curation and interactive reviews. Raw artifacts, reference-token measurements, and accounting are under `runs/editor-golden-luna6-r01/`.
+Preliminary coverage plus the first two repairs cost $0.0255486. The successful Sol repair/check and Luna coverage cost $0.1779452. The actual path from native-r01, including rejected repairs, cost $0.35431954 known plus its transport failure. At this point 21 requests totaled $1.33028364 known plus that failure. Offline assembly satisfied `editingResult`, while native-r01 remained limited and no corpus was activated. Evidence: `runs/editor-golden-native-r01/`, `runs/editor-golden-native-r01-protocol/`, `runs/editor-golden-repair-r01-protocol/`, `runs/editor-golden-repair-r02-protocol/`, `runs/editor-golden-repair-r03-protocol/`, and `runs/editor-golden-repair-sol-r01-protocol/`, which reference their native attempt outputs.
 
-## Native assessment costs
+### Fresh native workflows
 
-The unchanged GPT-6 Luna draft then received correctness and source PASS for all four notes from one native Sol/max Verifier call. No correction or external source-model call was needed. Published checks were applied to a copy with `applyChecks` before corpus review. Both Sol/max and Luna/max subsequently returned native coverage PASS against the original corpus. The same candidate satisfies the existing editing acceptance predicate when these authentic results are assembled offline. The research campaign itself remains unchanged.
+| Run        | Draft / correctness / coverage models | Notes | Body tokens | Mathematical tokens | Full-note tokens | Whole task |       Cost |
+| ---------- | ------------------------------------- | ----: | ----------: | ------------------: | ---------------: | ---------: | ---------: |
+| Native-r02 | GPT-6 Luna / GPT-6 Sol / GPT-6 Luna   |     3 |       4,389 |               5,490 |            5,576 |  20m 28.6s | $0.2147969 |
+| Native-r03 | GPT-6 Luna / GPT-6 Luna / GPT-6 Luna  |     4 |       4,855 |               5,901 |            6,017 |  14m 21.7s | $0.0248273 |
 
-| Stage                  | Model      | Outcome                          | Request time | API-equivalent cost |
-| ---------------------- | ---------- | -------------------------------- | -----------: | ------------------: |
-| Draft                  | GPT-6 Luna | 13.6% smaller complete payload   |       5m 33s |          $0.0096681 |
-| Correctness and source | GPT-6 Sol  | All 4 notes PASS, no corrections |       2m 20s |          $0.0766120 |
-| Coverage, first call   | GPT-6 Sol  | Prose only, no published verdict |       1m 29s |          $0.0631580 |
-| Coverage, retry        | GPT-6 Sol  | PASS                             |      12m 34s |          $0.1956480 |
-| Coverage comparison    | GPT-6 Luna | PASS                             |       4m 55s |          $0.0066834 |
+Both fresh runs completed the native gates in three calls within frozen six-call allowances. Sol repair was configured but unused. There were no retries or allowance extensions. Independent review found the useful capabilities and limitations preserved.
 
-The first coverage response omitted `submit_result`, and its one-call cap correctly prevented a recovery call from publishing a verdict. The retry changed only tool selection, using Pi's Codex support for `tool_choice: "required"` when submission is the sole tool and no valid result exists. The [provider contract](../../docs/pi-alignment.md#provider-integration) records this small adapter integration. Explicit caller choices and calls with other tools retain their behavior. No prose-to-verdict parser was added. The Luna comparison used the same coverage input, prompt, schema, reasoning, and required submission policy as the Sol retry.
+| Run/stage               | Request latency |       Cost |
+| ----------------------- | --------------: | ---------: |
+| Native-r02 draft        |       11m 53.3s | $0.0147701 |
+| Native-r02 proof/source |        6m 40.8s | $0.1957540 |
+| Native-r02 coverage     |        1m 53.7s | $0.0042728 |
+| Native-r03 draft        |        315.136s | $0.0094561 |
+| Native-r03 correctness  |        345.415s | $0.0102303 |
+| Native-r03 coverage     |        200.208s | $0.0051409 |
 
-Drafting with Luna, verifying with Sol, and reviewing coverage with Luna totals **$0.0929635** across the three measured stages. Using the successful Sol coverage call instead totals **$0.2819281**. The actual path to the Sol-checked result cost **$0.3450861**, including the unsuccessful first coverage call. All five draft generations and four native assessment calls total **$0.9610573**. These are model-usage estimates from frozen prices, reconciled against gateway token buckets. Interactive curation and independent reviews are separate and unpriced. Stage times exclude operator work and queueing between stages.
+Native-r02 reduced mathematical payload 10.1% and full-note tokens 10.0%. Sol corrected `H/(2B)` to `H/2` through the harmless-correction path, matching the independently found error. Final reviews noted minor summary scope issues, with correct conditions in the full proofs. Native-r03 reduced bodies 14.3%, mathematical payload 3.4%, and full-note tokens 2.9%, without changing the draft's mathematics. Independent review flagged its “integral vertex” summary wording, examined below. Raw runs remain unchanged.
 
-The candidate needed no mathematical revision. The independent and native reviews recorded minor clarity suggestions about state-set membership costs, the dead-zone summary, the one-sided boundary-search interval, and reuse of the algebraic span-finding subroutine. They found no consequential loss or defect. The raw candidate stays unchanged, with feedback retained separately.
+Native-r02 brought 24 requests to $1.54508054 known. After the correctness controls below, native-r03 brought 31 requests to $1.60411534 known. Both totals exclude the same unpriced failure. Evidence: `runs/editor-golden-native-r02/`, `runs/editor-golden-native-r02-protocol/`, `runs/editor-golden-native-r03/`, and `runs/editor-golden-native-r03-protocol/`.
 
-This establishes a cheap successful combination on one valid fixture. The matched controls below test one known defect, with the golden key still withheld from the model. Larger runs remain outside this experiment. Native campaigns and receipts are under `runs/editor-golden-luna6-verifier-r01/`, `runs/editor-golden-luna6-coverage-*/`, and `runs/editor-golden-assessment-r01/`.
+Native-r02 saved 620 full-note reference tokens. At its frozen small-context Sol input rates, editing cost recovery through input savings alone would require about 174 uncached or 1,733 cached whole-corpus reads (about 3,465 uncached Luna reads). Native-r03 saved 179 tokens, requiring about 70 uncached Sol reads. These are illustrative calculations, not measured savings. They exclude cache invalidation, output/reasoning changes, and research utility. Native-r02's `reuse-economics.json` records the calculation.
 
-## Coverage controls
+### Correctness controls
 
-Two further Luna/max calls compared an intact copy of the same draft with a copy lacking the useful geometric obstruction. Both replacements had fresh IDs and empty verification histories. This removes verification status as a cue. The defective copy retained the conditional ray method, its proofs, and its horizontal application. Only the counterexample paragraph and corresponding summary claims were removed. The model received the ordinary original/replacement input, with no mutation label, golden key, or expected verdict.
+Matched native-r02 copies had fresh IDs, empty checks, and equally corrected summary wording. Only the ray note's integer-versus-real threshold hypothesis differed. Inputs excluded prior verdicts, the key, and expected counterexamples. Each GPT-6 Luna arm had one admitted call through `source`.
 
-| Replacement                   | Native coverage verdict        | Request time | API-equivalent cost |
-| ----------------------------- | ------------------------------ | -----------: | ------------------: |
-| Geometric obstruction omitted | FAIL, intended loss identified |       2m 29s |          $0.0052904 |
-| Intact, equally unverified    | PASS                           |       5m 03s |          $0.0096164 |
+| Instructions                     | Input             | Native outcome                         | Whole task |       Cost |
+| -------------------------------- | ----------------- | -------------------------------------- | ---------: | ---------: |
+| Original                         | Real threshold    | Ray note FAIL, other notes PASS        |   5m 33.2s | $0.0097688 |
+| Original                         | Integer threshold | Limited, no published checks           |   4m 27.4s | $0.0079579 |
+| Routine-background clarification | Real threshold    | Ray note FAIL, other notes PASS        |   4m 43.2s | $0.0084091 |
+| Routine-background clarification | Integer threshold | All correctness/source PASS, unchanged |   5m 37.4s | $0.0080717 |
 
-The failure report identified the exact H=4, w_i=(5/2)^i family and reconstructed why polynomially bounded B cannot make this quantized-hull branch universal. It explained why this is a branch limitation rather than an obstruction to the original compression problem. The intact control preserved those capabilities and passed, while correctly treating its absent per-note checks as a separate verification requirement.
+The original sound arm escalated Hadamard's inequality as a premise and exhausted its allowance before source checking. Its recorded correctness response was diagnostic only, with no partial publication. The defective arm rejected the integer-gap error and inconsistent band definitions with a concrete counterexample. The prompt then clarified that routine steps should be checked directly under the task's proof rules, while uncertain/nonroutine premises, forbidden black boxes, and substantive missing proofs retain their obligations. Repeated input/settings bytes and recorded payloads confirmed only stage instructions changed. Both clarified arms met the preregistered criteria in one call, without correction or source calls.
 
-The pair cost **$0.0149068**, bringing all eleven golden-data model calls to **$0.9759641**. Gateway identities and token buckets match Pi. This is one positive/negative pair testing omission of an informative obstruction. It establishes neither a general defect-detection rate nor full-corpus reliability.
+The pairs cost $0.0177267 and $0.0164808. Their cumulative totals were 26 requests/$1.56280724 and 28 requests/$1.57928804 known, plus the earlier failure. One stochastic pair supports further study, not general correctness reliability or a causal estimate. Production defaults remain unchanged. Evidence: `runs/editor-golden-proof-controls-r01-protocol/` and `runs/editor-golden-proof-controls-r02-protocol/`.
 
-These results support testing coverage as a cheap screen before stronger proof verification. Final acceptance still needs both checks. The production editing loop currently checks proofs first. Inputs, preregistration, removed text, and accounting are retained in `runs/editor-golden-coverage-controls-r01/`; the native campaigns are `editor-golden-coverage-a-r01` and `editor-golden-coverage-b-r01`, frozen at source commit `5d3e98dc97836200d319236a25051937eeb4cd97`.
+### Summary controls
 
-A read-only gateway metadata check also advertises an extended context of 872,000 tokens for both GPT-6 Luna and Sol, above their 272,000-token defaults. This is capability metadata, not a large-input experiment. The fixed small-fixture settings remain unchanged, and Xean's output reserve and capacity checks still apply. The receipt is `runs/editor-golden-coverage-controls-r01/model-capacity.json`.
+Native-r03's n3 summary describes reaching an integral vertex, while its proof reaches a rational vertex and scales it. The initial independent review labeled this inaccurate. Native correctness had received no summaries, and coverage passed it. Correctness input now includes target summaries after the shared full-text packet. Extraction and blind reconstruction inputs are unchanged.
 
-## Native workflow trial
+Two GPT-6 Luna calls reused the affected note under a fresh target ID with empty checks and authentic verified support. Both were blinded to the suspected defect and the expected outcome. The second used identical mathematical input and changed only `user.instructions` to require faithful summaries for PASS and correction of harmless inaccuracies.
 
-Source commit `257134aaf6cb384d4a94a41803b8c3d83bb5f77b` adopts the exact consolidation prompt in the built-in Editor, with repair guidance added only on repair invocations. A fresh `xean edit` trial used the same fixture, Luna/max drafting and coverage, Sol/max correctness, and three total admitted calls. The golden key and previous results remained outside the model inputs.
+| Control                                    | Outcome                            | Request latency |       Cost |
+| ------------------------------------------ | ---------------------------------- | --------------: | ---------: |
+| Summary fidelity instruction               | Correctness/source PASS, unchanged |        146.472s | $0.0038019 |
+| Explicit faithful-summary PASS requirement | Correctness/source PASS, unchanged |        162.525s | $0.0027857 |
 
-The campaign ended **limited, without an accepted replacement**. Its first Luna request failed with a WebSocket 1011 transport error after about seven minutes. Pi's retry produced four notes with 4,674 body tokens and 5,626 total mathematical tokens: reductions of **17.5%** and **7.9%**. The third call checked proofs. The allowance then prevented coverage from calling a model; there was no extension or repair run.
-
-Sol passed three notes and rejected the ray construction for dropping the hypothesis that threshold `L` is an integer. An independent reviewer, without seeing the native verdict, found the same defect. Both supplied concrete fractional-threshold counterexamples where the success tests pass but the claimed finite boundary search fails. On the source's integer domain, the independent review found the useful capabilities and scoped obstruction preserved, with no other consequential defect. The raw draft remains unchanged; a local repair is still required.
-
-The three gateway requests took 7m 24s, 3m 24s, and 4m 14s respectively. Successful drafting cost **$0.00496034** and proof verification **$0.138612**, totaling **$0.14357234 known API-equivalent cost**, plus the failed request whose token usage and cost are unknown. All admitted calls match gateway records, and the successful token buckets match Pi. Across all fourteen small-fixture requests, known cost is **$1.11953644**, plus that unpriced failure. Curation and interactive reviews remain separate and unpriced.
-
-This trial measures a failed complete-workflow attempt and a successful detection of a mathematical editing error. The earlier checked candidate remains evidence that a one-draft result is possible; this fresh sample shows that it is not guaranteed. It does not establish a needed number of repair rounds or full-corpus economics. Artifacts, frozen settings, measurements, independent review, and accounting are under `runs/editor-golden-native-r01/`, with preregistration in `runs/editor-golden-native-r01-protocol/`. No historical research corpus was activated or modified.
-
-The integration adds 3 production lines and 21 experiment/operator lines, with no new tests or runner. Types, formatting, documentation checks, and all 103 tests passed. The existing acceptance, combined-feedback repair, and atomic-activation checks remain in place.
-
-## Repair prompt comparison
-
-A standalone Luna/max corpus review of the checked native draft identified the same integer-threshold defect and no additional useful-content loss. Two one-call Editor trials then received exactly the same original notes, checked proposal, and native review. The answer key and independent review stayed outside both inputs. These are staged follow-ups; they do not extend or complete the capped native campaign.
-
-| Repair instructions                                | Passing notes retained | Notes rewritten | Body tokens | All mathematical tokens | Request time | API-equivalent cost |
-| -------------------------------------------------- | ---------------------: | --------------: | ----------: | ----------------------: | -----------: | ------------------: |
-| Consolidation prompt with appended repair guidance |                      0 |               4 |       4,644 |                   5,634 |       5m 23s |          $0.0103194 |
-| Separate repair prompt                             |                      3 |               1 |       5,535 |                   6,565 |       8m 03s |          $0.0103761 |
-
-The first trial fixed the reported hypothesis but discarded all three reusable checks by rewriting their notes, with almost no change in total size. It stopped before verification because it failed the targeted-repair objective. Source commit: `aad77f66fdcc425206455ae8f1b9c29aae977d57`.
-
-The second changed only the repair prompt, leaving the initial consolidation prompt byte-identical. It retained the three passing notes by exact ID. However, the changed note grew from 1,862 to 2,723 body tokens and no longer used the existing exact-compression note as support, repeating more machinery. The complete payload became 7.4% larger than the original fixture, so it also stopped before verification, as preregistered. This establishes note retention on this sample, not an adequate repaired corpus. Source commit: `2f6c859114e5eabe02c8f14db65a3d938e688bf8`. The change removes one production line; no schema, runtime, or test was added.
-
-The shared preliminary review cost $0.0048531 and took 2m 09s. These three calls cost **$0.0255486** in total. All seventeen small-fixture requests now have **$1.14508504 known API-equivalent cost**, plus the earlier unpriced transport failure. Gateway and Pi usage agree for all three follow-up calls. Interactive curation and reviews remain separate and unpriced. Both repair drafts remain mathematically unverified and unaccepted; the planned stronger verification and final coverage calls were not run. All three follow-up jobs are terminal.
-
-The remaining observed problem is expansion within the changed note. Any next comparison should test passage-level preservation and continued use of valid support, while retaining the successful whole-note reuse behavior. Inputs, preregistrations, stopping decisions, and accounting are under `runs/editor-golden-repair-r01-protocol/` and `runs/editor-golden-repair-r02-protocol/`; native outputs are under the corresponding `editor-golden-repair-*` attempt directories.
-
-## Local repair and model comparison
-
-Independent design and mathematical reviews found that the diagnosed defect requires a local hypothesis and summary correction; the existing proofs and both dependencies remain usable. The repair prompt was tightened to preserve unaffected passages, formulas, and valid support verbatim, with expansion allowed where mathematics requires it. This adds no runtime or test lines. The initial consolidation prompt remains unchanged, and all 103 tests pass. Source commit: `b36ce07839dc552ef70f28635c182ab942c743f7`.
-
-Luna/max still expanded the changed note, from 1,862 to 2,378 body tokens, despite retaining the three passing notes and both dependencies. The complete corpus reached 6,213 mathematical tokens, 1.7% above the original fixture, and stopped before verification. A matched Sol/max call then used the identical input, feedback, prompt, schema, and one-call allowance. Its proof text changed only by adding “be an integer”; summaries were updated consistently. It retained the three passing notes and both dependencies.
-
-| Repair model | New proof body | Complete mathematical tokens | Request time | API-equivalent cost |
-| ------------ | -------------: | ---------------------------: | -----------: | ------------------: |
-| GPT-6 Luna   |          2,378 |                        6,213 |       4m 41s |          $0.0072534 |
-| GPT-6 Sol    |          1,865 |                        5,629 |          55s |          $0.0569080 |
-
-The Sol repair subsequently passed one native Sol/max correctness/source call, which checked only the changed note and reused the other three notes' checks. Luna/max then returned corpus PASS against the original fixture, confirming the useful results, methods, scoped geometric obstruction, and open gap. The final result has **4,677 body tokens and 5,629 mathematical tokens**, reductions of **17.4%** and **7.9%**. The actual `fullNote` projection, including status and feedback, decreases from 6,196 to 5,745 tokens, or **7.3%**. All retained support is counted.
-
-| Successful repair stage | Request time | API-equivalent cost |
-| ----------------------- | -----------: | ------------------: |
-| Sol repair              |          55s |          $0.0569080 |
-| Sol proof/source check  |       3m 57s |          $0.1157880 |
-| Luna corpus review      |       2m 24s |          $0.0052492 |
-| Total                   |       7m 16s |      **$0.1779452** |
-
-The complete actual path from the native draft, including all three rejected Luna repair trials, has **$0.35431954 known cost**, plus its initial unpriced transport failure. All twenty-one small-fixture requests total **$1.33028364 known API-equivalent cost**, plus that same failure counted once. The successful stages are not a counterfactual clean-run price: the draft followed the failed transport request. Gateway and Pi identities and usage agree. Interactive curation and reviews remain separate and unpriced.
-
-The authentic standalone outputs satisfy the existing `editingResult` predicate when assembled locally; the original capped campaign remains limited and no research corpus was activated. The corpus review retained a minor clarification about charging arbitrary state-set membership costs; every actual application uses explicit thresholds. It found no consequential defect or lost capability.
-
-This matched sample supports cheap drafting and corpus review, with Sol for precise repairs and proof checking. It does not establish general model superiority or full-corpus economics. The mixture was measured with existing standalone roles. The built-in Editor now supports a separate `editorRepair` profile, falling back to `editor` and then `default` when omitted; the prompts and verification loop are unchanged. Preregistrations and the rejected Luna result are in `runs/editor-golden-repair-r03-protocol/`. The checked edition, final measurements, reconciliation, and successful-stage artifacts are referenced from `runs/editor-golden-repair-sol-r01-protocol/`.
-
-## Native workflow with the configured model mixture
-
-A fresh native `xean edit` run completed in **three calls**, within a frozen six-call allowance, using GPT-6 Luna/max for drafting and coverage and GPT-6 Sol/max for correctness. Source commit: `81b98f70bf8dbc01faab78aa902918c77a849797`. The fixture, prompts, and hidden answer key were unchanged. No retry, separate Editor repair, manual intervention, or extension was needed.
-
-| Measure                     | Original | Checked replacement |
-| --------------------------- | -------: | ------------------: |
-| Notes                       |        3 |                   3 |
-| Proof-body reference tokens |    5,663 |               4,389 |
-| All mathematical tokens     |    6,110 |               5,490 |
-| Full-note projection tokens |    6,196 |               5,576 |
-
-The reductions are **22.5%** in proof bodies, **10.1%** including summaries and support, and **10.0%** in the actual full-note projection. Independent review found all useful capabilities preserved. Both that reviewer and Sol found a local rounding-bound error: `H/(2B)` should be `H/2`. Sol fixed it through the existing harmless-correction path. This was the only proof-body change; summaries were also updated. All notes passed correctness/source and the corpus passed coverage. Independent final review found no consequential new defect, with a minor signed-orthant wording issue in a summary. Native coverage suggested sharpening the summary's scope of the geometric obstruction. The full proofs state both conditions correctly; experimental outputs remain unchanged.
-
-| Stage            | Request time | API-equivalent cost |
-| ---------------- | -----------: | ------------------: |
-| Luna draft       |    11m 53.3s |          $0.0147701 |
-| Sol proof/source |     6m 40.8s |          $0.1957540 |
-| Luna coverage    |     1m 53.7s |          $0.0042728 |
-| Total            |              |      **$0.2147969** |
-
-The whole Nomad task took **20m 28.6s**. All three gateway requests match Pi usage, without unknown costs or discrepancies. All 24 small-fixture requests now total **$1.54508054 known cost**, plus the earlier unpriced failure once. Interactive curation and independent review remain separate and unpriced.
-
-This is native completion from a fresh draft, demonstrating that an iterative Editor repair round is not always needed. It is modest compression with low model cost but substantial latency; proof checking accounts for about 91% of this run's cost. The separate repair-model branch was not exercised live here. Its model choice is supported by the earlier standalone comparison, and deterministic integration tests cover selection, feedback, and check reuse. This development fixture establishes neither full-corpus economics nor general reliability. Further model runs remain restricted to the fixture.
-
-The implementation adds 4 production lines, 4 operator lines, and 19 test lines. All 104 tests, types, formatting, and documentation checks passed. The final native snapshot is in `runs/editor-golden-native-r02/`; preregistration, measurements, independent reviews, accounting, timing, and the report are in `runs/editor-golden-native-r02-protocol/`. No research corpus was activated.
-
-### Cost recovery from shorter inputs
-
-The $0.2147969 edit saves 620 reference tokens per complete `fullNote` read. At the run's frozen small-context Sol input prices, that is about $0.00124 per uncached read or $0.000124 per cached read: roughly **174 uncached or 1,733 cached full-corpus reads** to recover the editing cost through input-token savings alone. Luna input prices require about 3,465 uncached reads. These are hypothetical calculations, not measured downstream savings; reference tokens approximate provider tokens, and the calculation excludes cache invalidation, changes in output/reasoning, and research utility. The evidence is `reuse-economics.json` beside the native-r02 report.
-
-The current result is inexpensive to produce but does not establish a monetary payoff during an ordinary short run. Larger savings, cheaper checking, relief from context limits, or improved research performance would have to justify editing. The next controlled comparison isolates the dominant cost, proof checking, while keeping the fixture and native verification contract fixed.
-
-## Cheap correctness control
-
-Two GPT-6 Luna/max Verifier calls assessed matched copies of the corrected native-r02 corpus with fresh neutral IDs and empty verification histories. Only n3's integer-versus-real threshold hypothesis differed. The signed-orthant summary wording was corrected equally in both arms; the original fixture and hidden key stayed unchanged. Neither arm received earlier verdicts, the answer key, or the expected counterexample. Each had one admitted call and targets through `source`. Source commit: `823f1266290c5d398ac864b347c736e8daeb15a3`.
-
-| Input             | Native outcome                        | Whole task time | API-equivalent cost |
-| ----------------- | ------------------------------------- | --------------: | ------------------: |
-| Real threshold    | n1/n2 PASS; n3 FAIL, published        |        5m 33.2s |          $0.0097688 |
-| Integer threshold | Limited; no published verifier result |        4m 27.4s |          $0.0079579 |
-
-Luna rejected the defective note with the same fractional-threshold counterexample established independently before launch. It did not silently restrict the claim to integer thresholds. The counterexample invalidates the specified-band proof; the referenced `K=L+1` implementation computes a different band when L is noninteger, which also exposes the specification mismatch.
-
-On the sound input, Luna submitted correctness PASS for all notes but listed Hadamard's inequality as an external premise. The subsequent source check was denied by the one-call allowance. The recorded response is diagnostic evidence, not committed verification; the whole worker correctly published no partial checks. No source call or allowance extension ran. The defective arm used the same determinant arguments without escalating that premise.
-
-Both requests cost **$0.0177267** in total, with complete matching gateway/Pi usage. All 26 small-fixture requests total **$1.56280724 known**, plus the previous unpriced failure once. The pair demonstrates detection of one concrete defect at low cost, while inconsistent classification of routine background prevents a complete cheap-verification result. It does not qualify Luna as the default correctness model; retain Sol for proof checking and precise repairs. No runtime change was needed. Frozen inputs, independent design review, outcomes, accounting, and timing are in `runs/editor-golden-proof-controls-r01-protocol/`; both jobs are terminal.
-
-## Routine-background prompt control
-
-The correctness instructions now explicitly check routine mathematical steps under the task's proof rules regardless of retrieval availability. Theorem names alone neither establish a fact nor require a source call. Uncertain or nonroutine external dependencies remain in `premises`, with the restrictions on substantive repairs and forbidden black boxes unchanged. Independent design reviewers supported the clarification. Source commit: `8e38b913e984ca38f461080ec7d47150fa29d40d`.
-
-The two earlier inputs and settings were repeated byte-for-byte. Provider request comparison confirmed that only stage instructions changed: the mathematics, feedback, schema, model, reasoning, and submission policy stayed identical. Both GPT-6 Luna/max arms completed in one call. The integer-threshold corpus received correctness/source PASS for every note, with no changes or external premises. The real-threshold note received FAIL for the integer-gap error and inconsistent band definitions, supported by a fresh concrete counterexample. No correction, source call, retry, or extension ran.
-
-| Input             | Native result                     | Whole task time | API-equivalent cost |
-| ----------------- | --------------------------------- | --------------: | ------------------: |
-| Real threshold    | n1/n2 PASS; n3 FAIL               |        4m 43.2s |          $0.0084091 |
-| Integer threshold | All three correctness/source PASS |        5m 37.4s |          $0.0080717 |
-
-The pair cost **$0.0164808**, with gateway identities and token usage matching Pi. All 28 small-fixture requests total **$1.57928804 known**, plus the earlier unpriced failure once. Interactive curation and review remain separate and unpriced.
-
-This meets the control's criteria and supports further Luna correctness experiments. The observed escalation disappeared while the defective note remained rejected. One stochastic pair establishes neither causation nor general reliability. The sub-cent sound proof check is not a fresh all-Luna editing run or a matched replacement for Sol's earlier check, which also corrected a draft error. The built-in defaults remain unchanged. The change adds no runtime machinery or test lines; all 104 tests, types, formatting, and documentation checks passed. Evidence is under `runs/editor-golden-proof-controls-r02-protocol/`, and both attempts are terminal. No large run was launched.
-
-## Fresh workflow with Luna checking
-
-A fresh native workflow completed in three GPT-6 Luna/max calls for drafting, correctness, and corpus review. Sol was configured for repairs but was not used. The fixed original corpus, six-call allowance, and initial editing prompt were unchanged. The draft saw no earlier results or answer key. Source commit: `56e999a600fead47bf86cafd9a5adff3d14f81fb`.
-
-| Measure                     | Original | Native replacement |
-| --------------------------- | -------: | -----------------: |
-| Notes                       |        3 |                  4 |
-| Proof-body tokens           |    5,663 |              4,855 |
-| All mathematical tokens     |    6,110 |              5,901 |
-| Full-note projection tokens |    6,196 |              6,017 |
-
-Proof bodies shrink **14.3%**, but summaries and dependency references leave only **3.4%** reduction in mathematical payload and **2.9%** in the full-note projection. This is weaker compression than earlier samples. All four notes passed correctness/source, and corpus review passed. Independent review found the useful proofs and limitations preserved, with minor exposition issues. The draft's mathematical fields were not changed by native checks.
-
-| Stage           | Request latency | API-equivalent cost |
-| --------------- | --------------: | ------------------: |
-| Draft           |        315.136s |          $0.0094561 |
-| Correctness     |        345.415s |          $0.0102303 |
-| Corpus coverage |        200.208s |          $0.0051409 |
-| Total           |                 |      **$0.0248273** |
-
-The whole task took **14m 21.7s**. No retry, external source call, correction, or Editor repair ran. Gateway and Pi identities and usage reconcile. All 31 small-fixture requests total **$1.60411534 known**, plus the original unpriced failure once. Interactive curation and reviews remain separate and unpriced.
-
-The independent review identified a false summary phrase: n3 reaches a rational vertex and then scales it, rather than reaching an integral vertex. The full proof is correct. Native correctness did not receive summaries, and corpus review missed this wording. The run remains unchanged as evidence. Correctness now receives target summaries after the shared full-text packet and checks their fidelity using existing verdict/correction rules. Extraction and reconstruction inputs are unchanged. The focused follow-up uses the affected note from this same fixture, not another full generation.
-
-This trial demonstrates low model cost with useful proofs but modest compression and a remaining summary error. Saving its 179 full-note reference tokens would need roughly 70 uncached full-corpus Sol reads to recover the cost through input savings alone at the recorded small-context rate. That is an illustrative calculation, excluding cache invalidation and research utility. Full-corpus economics and general reliability remain unestablished. Frozen evidence and the report are under `runs/editor-golden-native-r03-protocol/`; the native snapshot is under `runs/editor-golden-native-r03/`. The job is terminal and no research corpus was activated.
+Both failed the preregistered expectation of detecting and correcting the alleged inaccuracy. The second explicitly called both summaries faithful. Independent audit found that the supplied argument proves integrality after scaling, so the faithful description is “reaches a vertex, then scales it to obtain an integer representative.” Bounded exact checks found no admissible fractional vertex. These outcomes therefore establish missed wording corrections, not certified mathematical false positives. The audit supports no further paid retry on this oracle. Evidence: `runs/editor-golden-summary-check-r01-protocol/`, `runs/editor-golden-summary-check-r02-protocol/` (including `oracle-audit.md`), and corresponding native snapshots in `runs/editor-golden-summary-check-r01/` and `runs/editor-golden-summary-check-r02/`. The controls bring the cumulative total to the 33 requests and known $1.61070294 reported above.
