@@ -149,9 +149,10 @@ Detailed summaries may explain proof methods. Roles produce all three in their
 normal submission, without a separate summarization call or fixed length ratio.
 Verification receives full notes and dependencies. Summary views change neither
 verification status nor dependency obligations.
-Correctness also receives both target summaries and checks their fidelity to
-the full text. Summaries cannot supply missing proof steps. They follow the
-existing verdict and harmless-correction rules. Completed PASS checks are reused,
+Correctness also receives both target summaries, and PASS requires their fidelity
+to the full text. Harmless summary inaccuracies need a correction before PASS;
+substantive inconsistencies follow the usual verdict rules. Summaries cannot
+supply missing proof steps. Completed PASS checks are reused,
 so this does not automatically re-audit historical summaries. Support, statement
 extraction, and reconstruction packets remain unchanged; the blind prover sees
 only extracted statements.
