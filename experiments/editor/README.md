@@ -4,12 +4,13 @@ Test whether editing produces a smaller, coherent mathematical reference while p
 
 The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 13.6%. Fresh native workflows reduced it by 10.1% with Sol checking and 3.4% with Luna checking. These samples show inexpensive editing with modest compression and substantial latency. General reliability and downstream monetary savings remain unestablished. The latest summary controls returned unchanged PASS despite a preregistered expectation of correction. Independent audit confirmed that the wording exceeds the supplied proof, but did not establish that the stronger assertion is false.
 
-**Current accounting: 35 requests, $1.63044724 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
+**Current accounting: 37 requests, $1.64283524 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
 
 ## Materials and protocol
 
 - [input.json](input.json): the problem and three original notes shown to the model.
 - [golden.md](golden.md): provenance, capability/proof answer key, and known failure cases. The runner never reads it.
+- [reference.json](reference.json): a curated replacement that passed the native proof/source and corpus checks. The runner never loads it. Keep it out of generation and out of grading other candidates. It is one reviewed organization, not a required output or size target.
 - [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), [consolidation.md](prompts/consolidation.md), and [reuse.md](prompts/reuse.md): frozen prompt conditions.
 - [settings.json](settings.json): current GPT-6 Luna/max generation settings, with one admitted call and no literature access.
 - [run.ts](run.ts), [operate.ts](operate.ts), and [job.nomad.hcl](job.nomad.hcl): generation, operations, and the shared native-role job.
@@ -182,4 +183,24 @@ A fresh pair compared the consolidation prompt with one added paragraph asking f
 
 Both payloads shrink about 7.5% from the original. The added instruction saved 51 body tokens but produced longer summaries, leaving essentially identical complete sizes. Primary inspection found that it moved symmetric-span computation into shared support and supplied more quantitative detail in one summary. Those observations are unblinded and do not certify the drafts' mathematics. With no useful size advantage, the treatment stopped before independent proof review or native follow-up and was not adopted. The frozen prompt remains an experimental condition. This one pair establishes neither causal effect nor general prompt equivalence.
 
-The two requests cost $0.0197443, with complete matching gateway/Pi usage, bringing the ledger to the 35 requests and $1.63044724 known above. Both jobs are terminal. Protocol, measurements, draft projections, request comparison, and accounting are under `runs/editor-golden-reuse-r01-protocol/`; raw outputs are under the corresponding `editor-golden-reuse-control-r01/` and `editor-golden-reuse-treatment-r01/` directories. Source commit: `e7c3bbe9d096290af019b26f3050f9cd8ebe1fe3`.
+The two requests cost $0.0197443, with complete matching gateway/Pi usage, bringing the ledger to 35 requests and $1.63044724 known. Both jobs are terminal. Protocol, measurements, draft projections, request comparison, and accounting are under `runs/editor-golden-reuse-r01-protocol/`; raw outputs are under the corresponding `editor-golden-reuse-control-r01/` and `editor-golden-reuse-treatment-r01/` directories. Source commit: `e7c3bbe9d096290af019b26f3050f9cd8ebe1fe3`.
+
+### Curated reference: room for further compression
+
+The primary assistant consolidated the same fixture into a reference, with access to the hidden key and earlier results. Shared optimization, span, boundary, rank-growth, and encoding arguments are proved once. The learner and exact restoration share a note, while each application retains its distinct feasibility and cofactor argument. The failure certificate, horizontal application, geometric obstruction, and computational gap remain explicit. This is supervised curation with unpriced overhead, not a blind generation or a measured automatic drafting cost.
+
+| Measure                                 | Original | Curated reference |
+| --------------------------------------- | -------: | ----------------: |
+| Notes                                   |        3 |                 3 |
+| Proof-body tokens                       |    5,663 |             3,387 |
+| Mathematical tokens                     |    6,110 |             4,105 |
+| Mathematical tokens with normalized IDs |    6,094 |             4,095 |
+| Checked full-note projection            |    6,196 |             4,190 |
+
+The reductions are 40.2% in proof bodies, 32.8% in mathematical payload, and 32.4% in the checked full-note projection. Normalizing IDs leaves the 32.8% reduction intact. The earlier best reviewed automatic Luna draft has 5,060 normalized mathematical tokens, compared with 4,095 here. Detailed summaries remain substantially richer than the original duplicated index summaries. The committed reference uses local IDs, matching the normalized projection, and carries no copied verification history.
+
+One Luna/max correctness/source call passed all three notes without corrections or external premises ($0.0073584, 291.117s request latency). A separate Luna/max corpus review passed against the originals ($0.0050296, 175.741s), finding no consequential loss or defective retained claim. The key, size measurements, authorship, and expected verdict were withheld from these checks. Their authentic results satisfy the existing editing predicate when assembled locally. No native Editor generation or research-corpus activation occurred.
+
+The first review invocation used `noteId` instead of the target field `id` and failed before any model call. That zero-call failure is retained separately. Before the corrected invocation, summaries were clarified to promise polynomial intermediate encoding lengths rather than polynomial total memory. The frozen fixture and golden key are unchanged.
+
+The two model checks cost $0.0123880, with matching gateway/Pi usage. They bring the ledger to 37 requests and $1.64283524 known, plus the same original unpriced failure. All jobs are terminal. The result establishes room for more useful compression on this fixture. Getting the cheap Editor to discover this consolidation automatically remains unresolved. Evidence: `runs/editor-golden-reference-study/`, `runs/editor-golden-reference-r02-protocol/`, `runs/editor-golden-reference-coverage-r01-protocol/`, and their referenced native snapshots. Review source commit: `90f74e6e4e5ce8721c352b98d4f7ca7560fe9cb3`.
