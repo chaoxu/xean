@@ -41,7 +41,15 @@ This is the local profile's limit. The Codex gateway advertises a 272,000 defaul
 
 The evidence supports useful consolidation at low model cost. It does not establish a net monetary saving: some dependency packets and the index grow, editing changes the cache, and the reviewed path took about 17 minutes of request time. Prefer occasional editing when repeated full-proof use or improved organization justifies it. Preserve substantial negative results and complete retained arguments. Use existing targeted repair for concrete findings, without repeatedly regenerating to chase a smaller percentage.
 
-The broader goal remains open on reliability, large-input capacity, downstream usefulness, and total cost. Further prompt-development trials remain stopped. The next authorized trial applies the frozen method to the complete original 289-note corpus, using the gateway-advertised 872,000 context setting. Its separate protocol must establish context fit before launch and preserve failures without automatic extension or escalation. Research corpora remain unchanged until an accepted result is deliberately applied.
+The broader goal remains open on reliability, downstream usefulness, and total cost. Further prompt-development trials remain stopped. The authorized large trial below establishes input capacity and drafting feasibility, with unresolved preservation defects. Research corpora remain unchanged until an accepted result is deliberately applied.
+
+### Large-corpus trial
+
+`editor-large-luna-r01` applied the frozen method to all 289 original notes with the gateway-advertised 872,000 context setting and four call admissions. Two valid drafts reduced mathematical content from 380,335 to 58,562 and then 55,985 reference tokens, including retained dependencies. The latter has five new notes and 41 retained notes. A native encoding-length correction brings it to 56,059 tokens, an 85.3% reduction. Refinement reused 389,888 cached input tokens.
+
+Eight fresh correctness/source checks passed. A provider overload and successful retry exhausted the allowance before corpus review, so the native campaign is `limited` with no accepted result. Targeted independent review found substantive losses: real-margin promise compression, bounded-significand multiscale algorithms, universal subquadratic progress with its original status, and a selected-ray-span obstruction. It also identified two synopsis defects missed by the native check. This proposal is unsuitable for replacement.
+
+The trial cost $0.11348888 known API-equivalent, plus the unpriced overload failure. Source-integration preparation cost $0.00808428 known separately, with one native startup failure retaining unknown usage. Orchestration and independent-review overhead are excluded. Merely restoring the four omitted families and dependencies unchanged would leave 57 notes and an 80.9% reduction, but that arithmetic is not a validated repair or exhaustive review. No additional model calls or corpus activation followed. Evidence is in `runs/editor-large-luna-r01-protocol/`, especially `REPORT.md`, `metrics.json`, `checked-proposal-metrics.json`, `independent-review.md`, and `accounting.json`.
 
 ## Run and collect
 
