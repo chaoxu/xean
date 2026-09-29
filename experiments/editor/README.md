@@ -198,3 +198,29 @@ The complete actual path from the native draft, including all three rejected Lun
 The authentic standalone outputs satisfy the existing `editingResult` predicate when assembled locally; the original capped campaign remains limited and no research corpus was activated. The corpus review retained a minor clarification about charging arbitrary state-set membership costs; every actual application uses explicit thresholds. It found no consequential defect or lost capability.
 
 This matched sample supports cheap drafting and corpus review, with Sol for precise repairs and proof checking. It does not establish general model superiority or full-corpus economics. The mixture was measured with existing standalone roles. The built-in Editor now supports a separate `editorRepair` profile, falling back to `editor` and then `default` when omitted; the prompts and verification loop are unchanged. Preregistrations and the rejected Luna result are in `runs/editor-golden-repair-r03-protocol/`. The checked edition, final measurements, reconciliation, and successful-stage artifacts are referenced from `runs/editor-golden-repair-sol-r01-protocol/`.
+
+## Native workflow with the configured model mixture
+
+A fresh native `xean edit` run completed in **three calls**, within a frozen six-call allowance, using GPT-6 Luna/max for drafting and coverage and GPT-6 Sol/max for correctness. Source commit: `81b98f70bf8dbc01faab78aa902918c77a849797`. The fixture, prompts, and hidden answer key were unchanged. No retry, separate Editor repair, manual intervention, or extension was needed.
+
+| Measure                     | Original | Checked replacement |
+| --------------------------- | -------: | ------------------: |
+| Notes                       |        3 |                   3 |
+| Proof-body reference tokens |    5,663 |               4,389 |
+| All mathematical tokens     |    6,110 |               5,490 |
+| Full-note projection tokens |    6,196 |               5,576 |
+
+The reductions are **22.5%** in proof bodies, **10.1%** including summaries and support, and **10.0%** in the actual full-note projection. Independent review found all useful capabilities preserved. Both that reviewer and Sol found a local rounding-bound error: `H/(2B)` should be `H/2`. Sol fixed it through the existing harmless-correction path. This was the only proof-body change; summaries were also updated. All notes passed correctness/source and the corpus passed coverage. Independent final review found no consequential new defect, with a minor signed-orthant wording issue in a summary. Native coverage suggested sharpening the summary's scope of the geometric obstruction. The full proofs state both conditions correctly; experimental outputs remain unchanged.
+
+| Stage            | Request time | API-equivalent cost |
+| ---------------- | -----------: | ------------------: |
+| Luna draft       |    11m 53.3s |          $0.0147701 |
+| Sol proof/source |     6m 40.8s |          $0.1957540 |
+| Luna coverage    |     1m 53.7s |          $0.0042728 |
+| Total            |              |      **$0.2147969** |
+
+The whole Nomad task took **20m 28.6s**. All three gateway requests match Pi usage, without unknown costs or discrepancies. All 24 small-fixture requests now total **$1.54508054 known cost**, plus the earlier unpriced failure once. Interactive curation and independent review remain separate and unpriced.
+
+This is native completion from a fresh draft, demonstrating that an iterative Editor repair round is not always needed. It is modest compression with low model cost but substantial latency; proof checking accounts for about 91% of this run's cost. The separate repair-model branch was not exercised live here. Its model choice is supported by the earlier standalone comparison, and deterministic integration tests cover selection, feedback, and check reuse. This development fixture establishes neither full-corpus economics nor general reliability. Further model runs remain restricted to the fixture.
+
+The implementation adds 4 production lines, 4 operator lines, and 19 test lines. All 104 tests, types, formatting, and documentation checks passed. The final native snapshot is in `runs/editor-golden-native-r02/`; preregistration, measurements, independent reviews, accounting, timing, and the report are in `runs/editor-golden-native-r02-protocol/`. No research corpus was activated.
