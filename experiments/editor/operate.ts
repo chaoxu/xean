@@ -115,7 +115,15 @@ if (action === "launch") {
       ),
     );
     const allowance = settings.limits?.providerCalls;
-    assert.equal(allowance, 1);
+    assert(
+      allowance === 1 || allowance === 2,
+      "Generation admits one or two model calls",
+    );
+    assert.deepEqual(settings.limits, {
+      concurrency: 1,
+      attempts: 1,
+      providerCalls: allowance,
+    });
     callAllowance = allowance;
   }
   await invoke(["git", "diff", "--exit-code", "HEAD"]);

@@ -15,6 +15,7 @@ import {
 import {
   decode,
   editingSchema,
+  type Editing,
 } from "../../packages/core/src/solve/contracts.ts";
 import {
   closure,
@@ -45,6 +46,7 @@ for (const name of [
   "result.json",
   "records.json",
   "replacement.json",
+  "proposals.json",
 ])
   assert(
     !(await Bun.file(resolve(output, name)).exists()),
@@ -76,6 +78,7 @@ const size = (notes: SolverInput["notes"]) => {
 };
 const startedAt = new Date().toISOString();
 const started = performance.now();
+const proposals: Editing[] = [];
 const outcome: Record<string, unknown> = {
   status: "failed",
   error: null,
@@ -119,10 +122,15 @@ try {
     "utf8",
   );
   const settings = readSettings(JSON.parse(settingsText));
+  const responseAllowance = settings.limits?.providerCalls;
+  assert(
+    responseAllowance === 1 || responseAllowance === 2,
+    "Generation admits one or two model calls",
+  );
   assert.deepEqual(settings.limits, {
     concurrency: 1,
     attempts: 1,
-    providerCalls: 1,
+    providerCalls: responseAllowance,
   });
   settings.usagePrefix =
     process.env.XEAN_USAGE_TAG ?? `editor-golden/${basename(dirname(output))}`;
@@ -141,6 +149,7 @@ try {
     model: profile.model.id,
     reasoning: profile.options.reasoning,
     usagePrefix: settings.usagePrefix,
+    responseAllowance,
   });
   const options = campaignOptions(
     readDeclaration({
@@ -153,7 +162,7 @@ try {
     }),
     runtime,
   );
-  // Only the prompt and response cap differ from the built-in Editor role.
+  // The optional second response refines the same draft within Pi's transcript.
   options.roles = [
     {
       name: "editor",
@@ -168,10 +177,18 @@ try {
             execution,
             context,
             {
-              maxResponses: 1,
+              maxResponses: responseAllowance,
+              continuation:
+                responseAllowance === 2
+                  ? "Revise the submitted replacement as one mathematical reference. Remove derivations that repeat a proved supporting argument, replacing them with the exact substitution and any additional hypothesis checks. Remove repeated setup and proof narration from summaries. Preserve the usable proofs, quantitative guarantees, counterexamples, and scope. Submit one complete replacement, not a patch; all dependencies must resolve within that replacement or the original supplied notes."
+                  : undefined,
               submit(proposal) {
                 retainedNotes(proposal, input.notes);
-                return { done: true, receipt: { validated: true } };
+                proposals.push(structuredClone(proposal));
+                return {
+                  done: responseAllowance === 1,
+                  receipt: { validated: true },
+                };
               },
             },
           ),
@@ -209,7 +226,10 @@ try {
     records.filter((record) => record.kind === "xean.call.started").length,
     settled.length,
   );
-  assert(campaign.providerCalls <= 1, "An arm admits at most one model call");
+  assert(
+    campaign.providerCalls <= responseAllowance,
+    "Generation exceeded its frozen call allowance",
+  );
   Object.assign(outcome, {
     status: campaign.status,
     error:
@@ -246,10 +266,12 @@ try {
     outcome.error = redact(error);
   }
   Object.assign(outcome, {
+    validProposals: proposals.length,
     startedAt,
     finishedAt: new Date().toISOString(),
     elapsedMs: Math.round(performance.now() - started),
   });
+  await save("proposals.json", proposals);
   await save("result.json", outcome);
   console.log(JSON.stringify({ output, ...outcome, result: undefined }));
 }
