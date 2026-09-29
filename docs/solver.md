@@ -74,9 +74,15 @@ theorem note can pass conditionally on source verification without reproducing
 its external proof. Requirements alone checks the original completion criteria.
 Correctness checks the hypotheses of established support at each application
 without asking source verification to establish the same supporting result again.
-Its `premises` array names any nonroutine external claims that still require
-source checking. Source verification and independent review use the same field
-name.
+Correctness checks routine mathematical steps directly under the task's proof
+rules, including exact statements, hypotheses, and applications. A named fact
+does not require source checking merely because it has a name. The report may
+justify a routine inference already used in the note, but cannot supply a
+missing substantive argument. Familiarity alone does not establish a result,
+and forbidden black boxes remain defects. These rules apply with or without
+source retrieval. The `premises` array retains uncertain or nonroutine external
+claims requiring source checking. Source verification and independent review
+use the same field name.
 
 Correctness checks dependent reasoning conditionally on declared support, even
 when that support is checked in the same batch. A failed dependency invalidates
