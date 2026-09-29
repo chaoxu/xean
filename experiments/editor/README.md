@@ -260,3 +260,29 @@ The two earlier inputs and settings were repeated byte-for-byte. Provider reques
 The pair cost **$0.0164808**, with gateway identities and token usage matching Pi. All 28 small-fixture requests total **$1.57928804 known**, plus the earlier unpriced failure once. Interactive curation and review remain separate and unpriced.
 
 This meets the control's criteria and supports further Luna correctness experiments. The observed escalation disappeared while the defective note remained rejected. One stochastic pair establishes neither causation nor general reliability. The sub-cent sound proof check is not a fresh all-Luna editing run or a matched replacement for Sol's earlier check, which also corrected a draft error. The built-in defaults remain unchanged. The change adds no runtime machinery or test lines; all 104 tests, types, formatting, and documentation checks passed. Evidence is under `runs/editor-golden-proof-controls-r02-protocol/`, and both attempts are terminal. No large run was launched.
+
+## Fresh workflow with Luna checking
+
+A fresh native workflow completed in three GPT-6 Luna/max calls for drafting, correctness, and corpus review. Sol was configured for repairs but was not used. The fixed original corpus, six-call allowance, and initial editing prompt were unchanged. The draft saw no earlier results or answer key. Source commit: `56e999a600fead47bf86cafd9a5adff3d14f81fb`.
+
+| Measure                     | Original | Native replacement |
+| --------------------------- | -------: | -----------------: |
+| Notes                       |        3 |                  4 |
+| Proof-body tokens           |    5,663 |              4,855 |
+| All mathematical tokens     |    6,110 |              5,901 |
+| Full-note projection tokens |    6,196 |              6,017 |
+
+Proof bodies shrink **14.3%**, but summaries and dependency references leave only **3.4%** reduction in mathematical payload and **2.9%** in the full-note projection. This is weaker compression than earlier samples. All four notes passed correctness/source, and corpus review passed. Independent review found the useful proofs and limitations preserved, with minor exposition issues. The draft's mathematical fields were not changed by native checks.
+
+| Stage           | Request latency | API-equivalent cost |
+| --------------- | --------------: | ------------------: |
+| Draft           |        315.136s |          $0.0094561 |
+| Correctness     |        345.415s |          $0.0102303 |
+| Corpus coverage |        200.208s |          $0.0051409 |
+| Total           |                 |      **$0.0248273** |
+
+The whole task took **14m 21.7s**. No retry, external source call, correction, or Editor repair ran. Gateway and Pi identities and usage reconcile. All 31 small-fixture requests total **$1.60411534 known**, plus the original unpriced failure once. Interactive curation and reviews remain separate and unpriced.
+
+The independent review identified a false summary phrase: n3 reaches a rational vertex and then scales it, rather than reaching an integral vertex. The full proof is correct. Native correctness did not receive summaries, and corpus review missed this wording. The run remains unchanged as evidence. Correctness now receives target summaries after the shared full-text packet and checks their fidelity using existing verdict/correction rules. Extraction and reconstruction inputs are unchanged. The focused follow-up uses the affected note from this same fixture, not another full generation.
+
+This trial demonstrates low model cost with useful proofs but modest compression and a remaining summary error. Saving its 179 full-note reference tokens would need roughly 70 uncached full-corpus Sol reads to recover the cost through input savings alone at the recorded small-context rate. That is an illustrative calculation, excluding cache invalidation and research utility. Full-corpus economics and general reliability remain unestablished. Frozen evidence and the report are under `runs/editor-golden-native-r03-protocol/`; the native snapshot is under `runs/editor-golden-native-r03/`. The job is terminal and no research corpus was activated.

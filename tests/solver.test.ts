@@ -583,6 +583,13 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
     BACKGROUND_CONTEXT,
   );
   const requirements = calls.get("requirements")!;
+  expect(JSON.parse(calls.get("correctness")!.prompt).summaries).toEqual([
+    {
+      id: "n1",
+      summary: "Claim",
+      detailedSummary: "ORIGINAL-METHOD in the detailed summary",
+    },
+  ]);
   const reconstruction = calls.get("reconstruction")!;
   expect(requirements.tools).toEqual(reconstruction.tools);
   expect(calls.get("correctness")!.tools).not.toEqual(requirements.tools);
@@ -593,6 +600,8 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
   );
   expect(prefix).toContain("ORIGINAL-PROOF");
   expect(reconstruction.prompt.startsWith(prefix)).toBe(true);
+  expect(calls.get("correctness")!.prompt.startsWith(prefix)).toBe(true);
+  expect(calls.get("statement")!.prompt).not.toContain("ORIGINAL-METHOD");
   expect(calls.get("proof")!.prompt).not.toContain("ORIGINAL-PROOF");
   expect(calls.get("proof")!.prompt).not.toContain("ORIGINAL-METHOD");
   expect(reconstruction.prompt).toContain("INDEPENDENT-PROOF");

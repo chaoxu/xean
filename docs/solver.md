@@ -149,6 +149,12 @@ Detailed summaries may explain proof methods. Roles produce all three in their
 normal submission, without a separate summarization call or fixed length ratio.
 Verification receives full notes and dependencies. Summary views change neither
 verification status nor dependency obligations.
+Correctness also receives both target summaries and checks their fidelity to
+the full text. Summaries cannot supply missing proof steps. They follow the
+existing verdict and harmless-correction rules. Completed PASS checks are reused,
+so this does not automatically re-audit historical summaries. Support, statement
+extraction, and reconstruction packets remain unchanged; the blind prover sees
+only extracted statements.
 
 Coordinator and Explorer begin with every note's ID, index summary,
 status, and feedback. They select IDs directly from that complete index.
@@ -760,6 +766,17 @@ honor their exported input/output types and mathematical contracts. A custom
 Verifier supplies the evidence consumed by the solver's acceptance guard.
 The solver still enforces editing availability and exclusive scheduling when
 planning is replaced.
+
+Built-in editing shares `functions.verifier` and its `correctness` profile with
+ordinary verification. Corpus review shares the `requirements` profile.
+Standalone `xean edit` can use its own settings. To isolate cheaper editing
+models inside a library campaign, replace the `xean.editor`, `xean.editVerifier`,
+and `xean.editionReview` entries in `solver.roles` with those from a solver built
+with the editing runtime and the same research backend. Keep these replacements
+fixed before opening the campaign. Completed checks are reused by note identity,
+regardless of model, including checks on retained originals. A stronger ordinary
+Verifier therefore does not automatically repeat them. Final requirements and
+reconstruction remain separate checks.
 
 Individual correctness, requirements, extraction, proof, and comparison
 procedures inside the built-in Verifier are fixed. Their model profiles are
