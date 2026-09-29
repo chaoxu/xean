@@ -4,7 +4,7 @@ Test whether editing produces a smaller, coherent mathematical reference while p
 
 The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 13.6%. Fresh native workflows reduced it by 10.1% with Sol checking and 3.4% with Luna checking. These samples show inexpensive editing with modest compression and substantial latency. General reliability and downstream monetary savings remain unestablished. The latest summary controls returned unchanged PASS despite a preregistered expectation of correction. Independent audit confirmed that the wording exceeds the supplied proof, but did not establish that the stronger assertion is false.
 
-**Current accounting: 37 requests, $1.64283524 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
+**Current gateway-trial accounting: 38 requests, $1.65347624 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation, interactive reviews, and the separate native Opus design review are outside that ledger. Gateway trials are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
 
 ## Materials and protocol
 
@@ -205,4 +205,22 @@ The first review invocation used `noteId` instead of the target field `id` and f
 
 The two model checks cost $0.0123880, with matching gateway/Pi usage. They bring the ledger to 37 requests and $1.64283524 known, plus the same original unpriced failure. All jobs are terminal. The result establishes room for more useful compression on this fixture. Getting the cheap Editor to discover this consolidation automatically remains unresolved. Evidence: `runs/editor-golden-reference-study/`, `runs/editor-golden-reference-r02-protocol/`, `runs/editor-golden-reference-coverage-r01-protocol/`, and their referenced native snapshots. Review source commit: `90f74e6e4e5ce8721c352b98d4f7ca7560fe9cb3`.
 
-The next preregistered development trial, `runs/editor-golden-shared-proof-r01-protocol/`, changes the organization paragraph to request common mathematical arguments, including shared implementation and complexity proofs, followed by application-specific hypothesis checks. It admits one Luna/max generation call. The curated reference and golden key stay outside generation and grading inputs. No numerical target or note organization is prescribed. Any native follow-up requires a useful draft improvement first.
+Smaller total size does not make every full proof read smaller. An offline diagnostic mapped each original capability to its entry note and optional transitive support:
+
+| Capability        | Original entry / with support | Curated entry / with support |
+| ----------------- | ----------------------------: | ---------------------------: |
+| Learner           |                 1,404 / 1,404 |                1,341 / 2,589 |
+| Exact restoration |                 2,251 / 2,251 |                1,341 / 2,589 |
+| Guarded rays      |                 2,546 / 4,795 |                1,604 / 2,852 |
+
+These are full-note payload tokens, excluding the separately supplied index, task, and provider framing. The reader fetches only requested IDs, so the support packets are alternative reads, not automatically incurred costs or observed behavior. Shared statements and detailed summaries may avoid full proof reads. The workload weights remain unknown. Evidence: `runs/editor-golden-reference-r02-protocol/read-sizes.json`.
+
+### Common-proof instruction
+
+One Luna/max generation changed the organization paragraph to request common constructions, implementations, and complexity arguments, followed by application-specific hypothesis checks. The fixture, schema, runner, and settings stayed fixed. The curated reference and golden key were withheld. Recorded payloads differ from the prior consolidation control only in instructions and the derived cache key.
+
+The result has four notes, 4,650 body tokens, and 5,522 mathematical tokens (9.6% smaller). After ID normalization it has 5,338 tokens, exceeding the earlier reviewed automatic draft's 5,060. It introduces a shared active-walk principle but repeats portions of the walk in its applications. With no useful improvement over the best earlier draft, it stopped before native verification and was not adopted. The mathematical result remains unverified. This historical comparison is not a causal estimate.
+
+The call took 357.255s and cost $0.010641, with matched gateway/Pi usage. It brings the ledger to 38 requests and $1.65347624 known, plus the same unpriced failure. Protocol, measurements, request comparison, and accounting are under `runs/editor-golden-shared-proof-r01-protocol/`. Source commit: `58b8b2437481e8fd170e240deafda76dbfe31455`.
+
+A separate native Opus 5.5/max design review recommends holding this prompt fixed and varying the drafter before adding a workflow. It identified the automatic draft's incomplete shared encoding argument as a source of repeated application proofs. The review packet omitted earlier Sol drafting and repair comparisons, so its claims that capability was untested and that the Sol repair branch lacked evidence were rejected against the full record. Its numerical compression threshold was also not adopted. One Sol draft under the current prompt remains a useful distinct comparison. The review took one turn with no tools, reporting $0.8591462 API-equivalent cost separately from the gateway ledger. Subscription charges are unestablished. The raw review and this assessment are under `runs/editor-golden-opus-design-r01/`.
