@@ -135,9 +135,11 @@ For Codex Responses calls whose only tool is `submit_result`, Xean requests
 policy. A golden-data coverage check otherwise returned prose and needed an
 extra call solely for submission. Pi's provider-specific Codex options support
 `required`, but its provider-neutral `SimpleStreamOptions` exposes only `auto`
-and `none`, so this uses the existing payload hook. Tool declarations may live
-in Pi's `additional_tools` input message rather than a top-level array. Calls
-with other tools or a prior valid submission keep automatic selection. Pi still
+and `none`, so this uses the existing payload hook. The initial system message
+declares the invocation's tools with Pi's `toToolDeclaration`, keeping them in
+the top-level `tools` array on every request. Declaring them later can produce
+only `additional_tools` input items, which Codex rejects with `required` after
+a rejected submission. Calls with other tools or a prior valid submission keep automatic selection. Pi still
 validates and executes the submission, and all existing admission and publication
 rules apply.
 The fixed golden-data coverage trials qualified this request on GPT-6 Sol and

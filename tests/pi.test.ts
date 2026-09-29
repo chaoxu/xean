@@ -517,8 +517,8 @@ test("roles hand off valid private submissions and never continue a rejected one
   expect(state.calls[2]?.payload).not.toHaveProperty("tool_choice");
 });
 
-test("Codex requires submission when it is the only tool and preserves explicit choices", async () => {
-  for (const mode of ["submit", "reader", "none", "auto"] as const) {
+test("Codex declares required submission tools across retries and preserves explicit choices", async () => {
+  for (const mode of ["retry", "submit", "reader", "none", "auto"] as const) {
     const payloads: any[] = [];
     const tool = {
       type: "function_call",
@@ -540,21 +540,53 @@ test("Codex requires submission when it is the only tool and preserves explicit 
     runtime.profiles.requirements.options =
       mode === "none" || mode === "auto" ? { toolChoice: mode } : {};
     runtime.models.streamSimple = fixtureModels(async (init) => {
-      payloads.push(await requestBody(init));
+      const payload = await requestBody(init);
+      payloads.push(payload);
+      if (
+        mode === "retry" &&
+        payloads.length === 2 &&
+        payload.tool_choice === "required" &&
+        !payload.tools?.length
+      )
+        return Response.json(
+          {
+            error: {
+              message:
+                "Tool choice 'required' must be specified with 'tools' parameter.",
+              type: "invalid_request_error",
+            },
+          },
+          { status: 400 },
+        );
+      const responseTool = {
+        ...tool,
+        arguments:
+          mode === "retry" && payloads.length === 1
+            ? '{"answer":0}'
+            : tool.arguments,
+      };
       return eventResponse(
-        { type: "response.output_item.added", output_index: 0, item: tool },
-        { type: "response.output_item.done", output_index: 0, item: tool },
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: responseTool,
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: responseTool,
+        },
         {
           type: "response.completed",
           response: {
             id: "resp_submission",
             status: "completed",
-            output: [tool],
+            output: [responseTool],
           },
         },
       );
     }).streamSimple;
-    await ask(
+    const result = await ask(
       runtime,
       "requirements",
       "Judge the supplied notes",
@@ -563,7 +595,11 @@ test("Codex requires submission when it is the only tool and preserves explicit 
       { attemptId: "required-submission", recorder: recording().recorder },
       BACKGROUND_CONTEXT,
       {
-        maxResponses: 1,
+        maxResponses: mode === "retry" ? 2 : 1,
+        submit(value) {
+          if (value.answer === 0) throw new Error("Missing coverage");
+          return { done: true, receipt: { recorded: true } };
+        },
         tools:
           mode === "reader"
             ? [
@@ -580,13 +616,37 @@ test("Codex requires submission when it is the only tool and preserves explicit 
             : [],
       },
     );
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0].tools).toBeUndefined();
-    expect(payloads[0].input[0].type).toBe("additional_tools");
-    expect(payloads[0].tool_choice).toBe(
-      mode === "submit" ? "required" : mode === "none" ? "none" : "auto",
-    );
-    expect(payloads[0].parallel_tool_calls).toBe(false);
+    expect(result).toEqual({ answer: 1 });
+    expect(payloads).toHaveLength(mode === "retry" ? 2 : 1);
+    for (const payload of payloads) {
+      expect(payload.tools.map((tool: { name: string }) => tool.name)).toEqual(
+        mode === "reader" ? ["submit_result", "read_notes"] : ["submit_result"],
+      );
+      expect(
+        payload.input.some(
+          (item: { type: string }) => item.type === "additional_tools",
+        ),
+      ).toBe(false);
+      expect(payload.tool_choice).toBe(
+        mode === "submit" || mode === "retry"
+          ? "required"
+          : mode === "none"
+            ? "none"
+            : "auto",
+      );
+      expect(payload.parallel_tool_calls).toBe(false);
+    }
+    if (mode === "retry") {
+      expect(payloads[1].tools).toEqual(payloads[0].tools);
+      expect(
+        payloads[1].input.find(
+          (item: { type: string }) => item.type === "function_call_output",
+        ),
+      ).toMatchObject({
+        type: "function_call_output",
+        output: "Missing coverage",
+      });
+    }
   }
 });
 
