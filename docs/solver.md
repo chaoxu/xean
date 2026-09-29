@@ -843,7 +843,9 @@ A failed attempt remains distinct from a proved obstruction.
 The audit accounts for every original note while allowing several notes to
 become one result or construction. It identifies useful content with its input
 regime, hypotheses, quantitative and computational guarantees, and status.
-Claims of subsumption identify the covering result and justify its scope.
+Claims of subsumption identify the covering result and justify its scope;
+planned merging may instead preserve the union of distinct capabilities in a
+future shared organization.
 A conditional theorem alone does not replace an algorithm that constructs its
 assumptions. Useful partial results and unresolved approaches retain their gaps.
 Rejected claims can supply useful failure information, but remain rejected.

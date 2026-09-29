@@ -28,12 +28,12 @@ Use GPT-6 Luna/max for an occasional edit of a supplied corpus that fits its con
 
 ```json
 {
-  "maxEditorResponses": 2,
-  "limits": { "concurrency": 1, "attempts": 1, "providerCalls": 4 }
+  "maxEditorResponses": 1,
+  "limits": { "concurrency": 1, "attempts": 1, "providerCalls": 5 }
 }
 ```
 
-Use those settings with native `edit`: audit, independently review the audit, draft, check correctness/sources, and review the whole replacement. Only an approved audit and the last returned draft reach the later stages. Five successful calls cover the initial path when each stage takes one call. A failed audit review schedules another audit/review pair before drafting, so the allowance must cover those pairs as well. A frozen allowance of nine can cover one audit correction pair plus one complete targeted repair, verification, and corpus-review cycle when each stage takes one call; retries, invalid submissions, and additional source obligations consume the same allowance. These are admission limits, not guarantees of acceptance or a number of calls to spend. Historical trials keep their original limits and verdicts.
+Use those settings with native `edit`: audit, independently review the audit, draft, check correctness/sources, and review the whole replacement. Only an approved audit and the last returned draft reach the later stages. Five successful calls cover the initial path when each stage takes one call. A failed audit review schedules another audit/review pair before drafting, so the allowance must cover those pairs as well. A frozen allowance of eleven can cover one audit correction pair plus one complete targeted repair, verification, and corpus-review cycle when each stage takes one call. Two drafting responses add one call to the initial path. Retries, invalid submissions, and additional source obligations consume the same allowance. These are admission limits, not guarantees of acceptance or a number of calls to spend. Historical trials keep their original limits and verdicts.
 
 Keep the one-response library default and leave automatic editing disabled unless explicitly configured. The 200,000-token advice threshold is unqualified by these experiments. The pinned Luna profile has a 272,000-token window and 128,000-token output ceiling. Xean reserves that ceiling plus Pi's 4,096-token safety margin, leaving at most 139,904 estimated input tokens for the entire request. The original notes, retained draft, reasoning, and framing all count.
 
