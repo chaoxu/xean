@@ -2,9 +2,9 @@
 
 Test whether editing produces a smaller, coherent mathematical reference while preserving useful results, complete arguments, methods, scoped limitations, and open gaps. All trials use one frozen three-note fixture. There is no compression target or requirement to preserve each old note. Full-corpus experiments remain stopped.
 
-Two GPT-6 Luna editing responses followed by correctness and corpus checks reduced mathematical payload by **24.4% for $0.03265942 across four calls**. This improves on the best reviewed one-call draft's 13.6%. A manually curated reference achieved 32.8% with unpriced curation overhead. Fresh built-in native workflows achieved 10.1% with Sol checking and 3.4% with Luna checking. General reliability, large-input behavior, and downstream savings remain unestablished.
+Two GPT-6 Luna editing responses followed by correctness and corpus checks reduced mathematical payload by **24.4% for $0.03265942 across four calls**. A fresh native trial produced a 14.4% smaller proposal for $0.03253662, but corpus review rejected an omitted failure explanation and the campaign remained limited. Independent adjudication found the omission minor. A manually curated reference achieved 32.8% with unpriced curation overhead. General reliability, large-input behavior, and downstream savings remain unestablished.
 
-**Reconciled small-fixture gateway ledger: 45 requests, $2.00851196 known API-equivalent usage, plus unknown usage for one of those requests.** The original unpriced transport failure is counted once. Curation, interactive reviews, and the separately priced Opus design review are outside the gateway ledger. All jobs are terminal. No research corpus was activated.
+**Reconciled small-fixture gateway ledger: 49 requests, $2.04104858 known API-equivalent usage, plus unknown usage for one of those requests.** The original unpriced transport failure is counted once. Curation, interactive reviews, and the separately priced Opus design review are outside the gateway ledger. All jobs are terminal. No research corpus was activated.
 
 ## Materials and method
 
@@ -87,11 +87,29 @@ All four revised notes passed native correctness/source checks unchanged ($0.005
 
 The complete four-call path cost **$0.03265942**, with **16m 57.3s summed request latency**, excluding manual handoffs. The checked full-note projection shrank 23.6%, from 6,196 to 4,734 tokens. This is a promising development result for draft refinement before verification. It required no verifier repair loop, but one sample does not establish reliable four-call completion. No further calls are part of this trial.
 
-The normal Editor now exposes the same initial prompt and continuation through optional `maxEditorResponses: 2`. Its default is one, and targeted repair behavior is unchanged. The [solver guide](../../docs/solver.md#corpus-editing) defines response limits, fallback, and publication. This integration still needs a fresh native workflow smoke on the fixed fixture.
+The normal Editor now exposes the same initial prompt and continuation through optional `maxEditorResponses: 2`. Its default is one, and targeted repair behavior is unchanged. The [solver guide](../../docs/solver.md#corpus-editing) defines response limits, fallback, and publication. The fresh native smoke below exercised this integration but did not obtain acceptance.
 
 Smaller notes do not by themselves establish monetary savings. In this result, entry proofs all shrink, but complete support grows for the learner and restoration while rays shrink from 4,795 to 2,710 tokens. The separately supplied index grows from 239 to 465. Whole-corpus input-only cost recovery, including that index, would require about 14 uncached or 133 cached Sol exposures, versus 265 or 2,643 Luna exposures at frozen rates. Actual reading patterns, cache invalidation, and research effects remain unmeasured. See `read-economics.md` and its reproducible measurements in the refinement protocol directory.
 
-Evidence: `runs/editor-golden-refinement-r01-protocol/`, `runs/editor-golden-refinement-verifier-r01-protocol/`, and `runs/editor-golden-refinement-coverage-r01-protocol/`. Experiment support adds 30 net code lines using the existing Pi loop, with zero production/test-suite line change. Eight offline controls exercised successful revision, invalid/prose continuation, errors, truncation, denied calls, and cancellation.
+Evidence: `runs/editor-golden-refinement-r01-protocol/`, `runs/editor-golden-refinement-verifier-r01-protocol/`, and `runs/editor-golden-refinement-coverage-r01-protocol/`. The experiment initially added 30 net code lines using the existing Pi loop. Subsequent native integration added 17 production and 76 test lines, removing one experiment line. Tests cover private refinement, final-only verification, unchanged repair behavior, invalid submissions, and denied call admission. The locked check passed 105 tests and 1,481 assertions, plus types, formatting, and distribution checks.
+
+### Native refinement smoke
+
+`editor-golden-native-refinement-r01` used the built-in `xean edit` workflow at source `f13736d`, with GPT-6 Luna/max, two drafting responses, and a frozen four-call allowance. Its first effective model request exactly matched the earlier reviewed trial. The native workflow then scheduled correctness/source checking and corpus review without manual stage assembly.
+
+| Measure             | Original | First draft | Revised proposal |
+| ------------------- | -------: | ----------: | ---------------: |
+| Notes               |        3 |           4 |                4 |
+| Proof bodies        |    5,663 |       4,870 |            4,274 |
+| Mathematical tokens |    6,110 |       6,012 |            5,228 |
+
+Revision saved 784 mathematical tokens from its first draft (13.0%). The proposal is 14.4% smaller than the original. All four notes passed correctness/source checks unchanged. Corpus review returned **FAIL** because the revised text says denominator clearing is unused but omits why it fails for general real inputs and can violate the required output-height bound for rational inputs. The repair worker was denied admission at the call cap. The campaign is **limited**, its accepted result is null, and no fifth model request or corpus activation occurred.
+
+The four requests cost **$0.03253662 API-equivalent**. The whole native task took **21m 5.2s**, including orchestration. Independent review found no consequential mathematical loss. Follow-up adjudication classified the warning as useful but recoverable exposition: the replacement retains the real-input setting, explicitly avoids the shortcut, and proves the bounded-integer alternative. The corpus review also overstated the issue as a workspace limitation, whereas rational workspace may depend polynomially on input length.
+
+The earlier accepted draft and curated reference also omit the explicit warning. This disagreement motivates checking how corpus review distinguishes consequential knowledge loss from routine exposition. It does not change any recorded verdict or establish reliable acceptance. The next experiment, if undertaken, should isolate that judgment on frozen small inputs, preserving an intact control and a control that removes the substantial geometric obstruction. The failed campaign remains terminal.
+
+Evidence: `runs/editor-golden-native-refinement-r01-protocol/REPORT.md`, `metrics.json`, `accounting.json`, `independent-review.md`, and `adjudication.md`. `metrics.json` is the size authority and keeps the accepted result null. Accounting references those measurements and separately records native campaign status.
 
 ## Verification, repair, and native workflows
 

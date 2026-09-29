@@ -32,6 +32,10 @@ campaigns and exports on their matching runtime. No migration is provided.
   200,000. Editor and corpus review reuse the full-note reader view, while complete
   audit evidence stays in their frozen inputs. Whole-corpus proposals and review
   must fit the selected models.
+- `maxEditorResponses` bounds initial drafting and optional refinement in Pi's
+  existing loop. It defaults to one, including invalid or missing submissions.
+  Only the returned proposal reaches verification. Targeted repairs keep their
+  separate prompt and stop at the first valid repair.
 - Profiles can select a supported `contextWindow` when it differs from Pi's
   catalog default. Capacity checks still reserve the maximum model output.
 - Rejected verification batches report exact expected, missing, unexpected,
