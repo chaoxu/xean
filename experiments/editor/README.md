@@ -11,7 +11,7 @@ The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 
 - [input.json](input.json): the problem and three original notes shown to the model.
 - [golden.md](golden.md): provenance, capability/proof answer key, and known failure cases. The runner never reads it.
 - [reference.json](reference.json): a curated replacement that passed the native proof/source and corpus checks. The runner never loads it. Keep it out of generation and out of grading other candidates. It is one reviewed organization, not a required output or size target.
-- [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), [consolidation.md](prompts/consolidation.md), and [reuse.md](prompts/reuse.md): frozen prompt conditions.
+- [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), [consolidation.md](prompts/consolidation.md), [reuse.md](prompts/reuse.md), and [shared-proof.md](prompts/shared-proof.md): frozen prompt conditions.
 - [settings.json](settings.json): current GPT-6 Luna/max generation settings, with one admitted call and no literature access.
 - [run.ts](run.ts), [operate.ts](operate.ts), and [job.nomad.hcl](job.nomad.hcl): generation, operations, and the shared native-role job.
 
@@ -204,3 +204,5 @@ One Luna/max correctness/source call passed all three notes without corrections 
 The first review invocation used `noteId` instead of the target field `id` and failed before any model call. That zero-call failure is retained separately. Before the corrected invocation, summaries were clarified to promise polynomial intermediate encoding lengths rather than polynomial total memory. The frozen fixture and golden key are unchanged.
 
 The two model checks cost $0.0123880, with matching gateway/Pi usage. They bring the ledger to 37 requests and $1.64283524 known, plus the same original unpriced failure. All jobs are terminal. The result establishes room for more useful compression on this fixture. Getting the cheap Editor to discover this consolidation automatically remains unresolved. Evidence: `runs/editor-golden-reference-study/`, `runs/editor-golden-reference-r02-protocol/`, `runs/editor-golden-reference-coverage-r01-protocol/`, and their referenced native snapshots. Review source commit: `90f74e6e4e5ce8721c352b98d4f7ca7560fe9cb3`.
+
+The next preregistered development trial, `runs/editor-golden-shared-proof-r01-protocol/`, changes the organization paragraph to request common mathematical arguments, including shared implementation and complexity proofs, followed by application-specific hypothesis checks. It admits one Luna/max generation call. The curated reference and golden key stay outside generation and grading inputs. No numerical target or note organization is prescribed. Any native follow-up requires a useful draft improvement first.
