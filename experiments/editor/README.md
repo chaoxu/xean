@@ -61,6 +61,8 @@ Commit `46b5895` adds a preservation audit before rewriting. Each original note 
 
 The design follows established summarization practice: plan or select content before surface generation, use hierarchical selection for multi-document input, make coverage explicit, evaluate atomic claims rather than one binary quality score, and preserve inclusion/exclusion reasons. The local source record is `runs/editor-literature-20260929/` and lists the primary abstracts: [extract-then-generate faithfulness](https://aclanthology.org/2023.findings-emnlp.214/), [FActScore](https://aclanthology.org/2023.emnlp-main.741/), [Multi-News](https://aclanthology.org/P19-1102/), [entity coverage control](https://aclanthology.org/2022.findings-naacl.40/), [content planning](https://arxiv.org/abs/2104.07606), [structured multi-document representation](https://arxiv.org/abs/1806.05655), and [PRISMA 2020](https://pubmed.ncbi.nlm.nih.gov/33782057/). These sources motivate the workflow, not a claim that mathematical-note editing has been solved by a text-summarization benchmark.
 
+The follow-up `editor-golden-audit-one-note-r01` used the one-to-one schema on the golden fixture. Audit and review stages completed, then the isolated worker was cancelled during the Editor call after the provider stopped returning for roughly 18 minutes. It has no accepted replacement; the partial records remain under `runs/editor-golden-audit-one-note-r01/`.
+
 ## Run and collect
 
 From the adjacent Fleet Infra checkout, use locked Bun:
