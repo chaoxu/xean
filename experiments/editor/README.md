@@ -53,7 +53,7 @@ The trial cost $0.11348888 known API-equivalent, plus the unpriced overload fail
 
 ### Audit-first smoke
 
-Commit `46b5895` adds a preservation audit before rewriting. The audit groups every original note exactly once as `retain`, `merge`, `obsolete`, or `dead`, and records the capability and preservation requirements. A separate `editorAuditReview` must pass before Editor runs. The approved audit is supplied to Editor and to the final corpus review; the original notes remain authoritative.
+Commit `46b5895` adds a preservation audit before rewriting. Each original note receives exactly one concise disposition: `retain`, `merge`, `obsolete`, or `dead`, with its capability and preservation requirements. A separate `editorAuditReview` must pass before Editor runs. The approved audit is supplied to Editor and to the final corpus review; the original notes remain authoritative. The later Editor may consolidate notes only after this one-to-one accounting is approved.
 
 `editor-golden-audit-r02` exercised the complete native path on the three-note fixture: audit, audit review, one Editor response, correctness/source verification, and whole-corpus review. All five workers completed and both review gates passed. Known API-equivalent cost was **$0.0232766**. The result contained three notes and 6,786 mathematical tokens versus 6,110 originally, so this smoke is a preservation and workflow qualification rather than a compression result. No corpus was activated. A separate r01 smoke had two audit-review FAIL results before its six-call allowance stopped the Editor; those failures are preserved as evidence that the new gate is active.
 

@@ -36,7 +36,7 @@ const draft = (id: string, text: string, support: string[] = []) => ({
 const pass = { verdict: "PASS" as const, report: "Checked." };
 const auditNotes = (notes: { id: string; text: string }[]): EditorAudit => ({
   entries: notes.map((note) => ({
-    noteIds: [note.id],
+    noteId: note.id,
     disposition: "merge",
     capability: note.text,
     preservation: "Keep useful claims, proofs, and the scoped counterexample.",

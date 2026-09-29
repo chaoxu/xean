@@ -5,17 +5,16 @@ const text = Type.String({ minLength: 1, pattern: "\\S" });
 export const editorAuditSchema = object({
   entries: Type.Array(
     object({
-      noteIds: Type.Array(text, {
-        minItems: 1,
-        uniqueItems: true,
+      noteId: Type.String({
+        ...text,
         description:
-          "Original note IDs considered together. Cover every supplied note exactly once across all entries.",
+          "Exactly one original note ID. Every supplied note must appear in exactly one entry.",
       }),
       disposition: StringEnum(["retain", "merge", "obsolete", "dead"] as const),
       capability: Type.String({
         ...text,
         description:
-          "Useful mathematical knowledge in these notes, including its hypotheses, guarantees, limitations, and unresolved status.",
+          "Useful mathematical knowledge in this note, including its hypotheses, guarantees, limitations, and unresolved status.",
       }),
       preservation: Type.String({
         ...text,
@@ -41,9 +40,7 @@ export function validateEditorAudit(
   const audit = decode(editorAuditSchema, value);
   batchResults(
     ids,
-    audit.entries.flatMap((entry) =>
-      entry.noteIds.map((noteId) => ({ noteId, result: entry })),
-    ),
+    audit.entries.map((entry) => ({ noteId: entry.noteId, result: entry })),
   );
   return audit;
 }

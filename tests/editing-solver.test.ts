@@ -34,7 +34,7 @@ const solverFixture = (editingThresholdTokens: number | null = 200_000) => {
   );
   solver.functions.editorAudit = async ({ notes }) => ({
     entries: notes.map((note) => ({
-      noteIds: [note.id],
+      noteId: note.id,
       disposition: "merge",
       capability: note.text,
       preservation: "Preserve the useful claim and its argument.",
@@ -60,7 +60,7 @@ test("solver edits below the advisory threshold and publishes only the reviewed 
     edits++;
     expect(previous).toBeUndefined();
     expect(notes).toEqual(plans[0]!.notes);
-    expect(audit.entries.flatMap((entry) => entry.noteIds)).toEqual(
+    expect(audit.entries.map((entry) => entry.noteId)).toEqual(
       notes.map((note) => note.id),
     );
     return {

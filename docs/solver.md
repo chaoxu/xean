@@ -903,13 +903,14 @@ editing snapshot stale, so it cannot replace the changed corpus.
 
 The deterministic Coordinator runs the following loop without planning calls:
 
-1. `editorAudit` proposes `{entries, report}`. Each entry groups original
-   `noteIds` with one disposition: `retain`, `merge`, `obsolete`, or `dead`.
-   Its `capability`, `preservation`, and `rationale` describe the useful content,
-   what must survive, and the justification. Code requires every original ID
-   exactly once, with no unknown IDs. Grouping supports consolidation without
-   requiring a new note for each original. Dispositions do not change note
-   status or establish mathematical claims.
+1. `editorAudit` proposes `{entries, report}`. Each entry names exactly one
+   original `noteId` with one disposition: `retain`, `merge`, `obsolete`, or
+   `dead`. Its `capability`, `preservation`, and `rationale` describe the useful
+   content, what must survive, and the justification. Code requires every
+   original ID exactly once, with no unknown IDs. The audit stays one-to-one so
+   rejected-note status and scoped limitations cannot disappear inside a group;
+   the later Editor may still merge notes after the audit passes. Dispositions do
+   not change note status or establish mathematical claims.
 2. `editorAuditReview` checks the audit against the full original corpus.
    PASS permits drafting. FAIL or INCONCLUSIVE returns the findings to
    `editorAudit` for revision before another review. Both roles preserve
