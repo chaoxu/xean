@@ -32,7 +32,12 @@ export function project(view: CampaignView): Note[] {
   for (const event of events) {
     if ("work" in event) {
       const work = event.work;
-      if (work.role === "xean.editor") continue;
+      if (
+        ["xean.editorAudit", "xean.editorAuditReview", "xean.editor"].includes(
+          work.role,
+        )
+      )
+        continue;
       if (work.role === "xean.editionReview") {
         const group = work.id.split("/")[0]!;
         const worklist = view.work.filter(

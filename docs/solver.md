@@ -755,15 +755,15 @@ projected. Keep older campaigns on their original runtime.
 
 Library callers can replace implementations before opening a campaign:
 
-| Replace                                                 | Public entry point                                                                        | What remains built in                                                                  |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Explorer, Verifier, literature                          | Assign `solver.functions.explorer`, `.verifier`, or `.literature` after `createSolver`    | Group scheduling, publication, note projection, and acceptance                         |
-| Editing and corpus review                               | Assign `solver.functions.editor` or `.editionReview` after `createSolver`                 | Exclusive editing, verification, repair scheduling, and corpus activation              |
-| Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan` | Signal handling and group scheduling                                                   |
-| Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                          | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
-| Literature, source checking, independent review backend | Supply a `Research` object or factory to `createSolver`                                   | Built-in role procedures                                                               |
-| Models and providers                                    | Supply `PiRuntime` profiles and native Pi providers                                       | Built-in role procedures                                                               |
-| Standalone reconstruction or review                     | Call or replace `.reconstruct` or `.review` on the returned function set                  | Kernel publication when wrapped as a role                                              |
+| Replace                                                 | Public entry point                                                                                               | What remains built in                                                                  |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Explorer, Verifier, literature                          | Assign `solver.functions.explorer`, `.verifier`, or `.literature` after `createSolver`                           | Group scheduling, publication, note projection, and acceptance                         |
+| Editing and corpus review                               | Assign `solver.functions.editorAudit`, `.editorAuditReview`, `.editor`, or `.editionReview` after `createSolver` | Exclusive editing, verification, repair scheduling, and corpus activation              |
+| Planning                                                | Assign `solver.functions.coordinator`, accepting `CoordinationInput` and returning `Plan`                        | Signal handling and group scheduling                                                   |
+| Signal handling and scheduling                          | Supply `XeanOptions.coordinator`                                                                                 | Kernel admission, durable publication, lifecycle, and the selected acceptance callback |
+| Literature, source checking, independent review backend | Supply a `Research` object or factory to `createSolver`                                                          | Built-in role procedures                                                               |
+| Models and providers                                    | Supply `PiRuntime` profiles and native Pi providers                                                              | Built-in role procedures                                                               |
+| Standalone reconstruction or review                     | Call or replace `.reconstruct` or `.review` on the returned function set                                         | Kernel publication when wrapped as a role                                              |
 
 Replacing a planning function also replaces its validation policy, including the
 single-Explorer restriction. Replacement functions are trusted code and must
@@ -773,10 +773,11 @@ The solver still enforces editing availability and exclusive scheduling when
 planning is replaced.
 
 Built-in editing shares `functions.verifier` and its `correctness` profile with
-ordinary verification. Corpus review shares the `requirements` profile.
+ordinary verification. Audit review and corpus review share the `requirements` profile.
 Standalone `xean edit` can use its own settings. To isolate cheaper editing
-models inside a library campaign, replace the `xean.editor`, `xean.editVerifier`,
-and `xean.editionReview` entries in `solver.roles` with those from a solver built
+models inside a library campaign, replace the `xean.editorAudit`,
+`xean.editorAuditReview`, `xean.editor`, `xean.editVerifier`, and
+`xean.editionReview` entries in `solver.roles` with those from a solver built
 with the editing runtime and the same research backend. Keep these replacements
 fixed before opening the campaign. Completed checks are reused by note identity,
 regardless of model, including checks on retained originals. A stronger ordinary
@@ -802,7 +803,7 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts role explorer
 ```
 
 The role name may also be `coordinator`, `verifier`, `reconstruct`, `literature`,
-`editor`, or `editionReview`. Its input
+`editorAudit`, `editorAuditReview`, `editor`, or `editionReview`. Its input
 uses the exported TypeScript contract and includes `task`. A completed standalone
 role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
@@ -820,8 +821,10 @@ claiming to solve the original task. The library exposes this operation as
 
 Editor periodically reorganizes a frozen corpus into a clearer mathematical
 account for continued research. It receives every full note, its status, and
-verification feedback. Every note and dependency chain may be rewritten,
-including verified notes. There is no preset length or note-count target.
+verification feedback. It first audits what should happen to each original
+note. A separate review checks that plan before rewriting begins. Every note
+and dependency chain may be rewritten, including verified notes. There is no
+preset length or note-count target.
 
 The replacement is judged as a whole by the useful knowledge it carries forward:
 important results, relevant alternative approaches, informative counterexamples
@@ -836,6 +839,17 @@ the research with additional results.
 Useful negative results identify the failed method, obstruction, and scope in
 summaries as well as full text, so Explorer can recognize ruled-out approaches.
 A failed attempt remains distinct from a proved obstruction.
+
+The audit accounts for every original note while allowing several notes to
+become one result or construction. It identifies useful content with its input
+regime, hypotheses, quantitative and computational guarantees, and status.
+Claims of subsumption identify the covering result and justify its scope.
+A conditional theorem alone does not replace an algorithm that constructs its
+assumptions. Useful partial results and unresolved approaches retain their gaps.
+Rejected claims can supply useful failure information, but remain rejected.
+An obsolete intermediate lemma may disappear when its useful applications
+survive. Audit approval concerns the plan's coverage. The replacement still
+needs mathematical verification and whole-corpus review against the originals.
 
 Claims kept as established knowledge retain their precise hypotheses and
 guarantees, complete arguments, and declared support. Counterexamples retain
@@ -889,7 +903,19 @@ editing snapshot stale, so it cannot replace the changed corpus.
 
 The deterministic Coordinator runs the following loop without planning calls:
 
-1. Editor proposes `{notes, retained, report}`. New notes use the ordinary
+1. `editorAudit` proposes `{entries, report}`. Each entry groups original
+   `noteIds` with one disposition: `retain`, `merge`, `obsolete`, or `dead`.
+   Its `capability`, `preservation`, and `rationale` describe the useful content,
+   what must survive, and the justification. Code requires every original ID
+   exactly once, with no unknown IDs. Grouping supports consolidation without
+   requiring a new note for each original. Dispositions do not change note
+   status or establish mathematical claims.
+2. `editorAuditReview` checks the audit against the full original corpus.
+   PASS permits drafting. FAIL or INCONCLUSIVE returns the findings to
+   `editorAudit` for revision before another review. Both roles preserve
+   their complete results as ordinary durable work.
+3. Editor receives the approved audit and original corpus, then proposes
+   `{notes, retained, report}`. New notes use the ordinary
    draft schema and receive fresh identities and checks. Existing notes named
    in `support` and their dependencies are included automatically. `retained`
    names additional unchanged notes to keep, also with their dependencies. Editor may reuse
@@ -897,11 +923,12 @@ The deterministic Coordinator runs the following loop without planning calls:
    structure, or rewrite them with fresh checks. New proofs can depend on existing
    notes and earlier new notes. Removed notes remain provenance, not
    hidden mathematical premises.
-2. The existing Verifier checks every proposed note through correctness and
+4. The existing Verifier checks every proposed note through correctness and
    sources, reusing checks on unchanged notes. Its findings remain attached to
    the proposal. Mathematical repairs use new IDs, and the permanent
    source-verdict rule remains in effect.
-3. `editionReview` then compares the whole old and new corpora, including when
+5. `editionReview` then compares the whole old and new corpora against the
+   approved audit, including when
    mathematical checks failed or remain unresolved. It reads their actual
    status and feedback and checks useful coverage, meaningful consolidation,
    claims of supersession, and independence from removed proofs. It allows
@@ -913,7 +940,9 @@ The deterministic Coordinator runs the following loop without planning calls:
    explanation requires no substantive new argument. A failure must identify
    the useful capability, substantial obstruction, hypothesis, or guarantee
    the replacement no longer supplies. Earlier PASS checks do not excuse
-   missing arguments or lost hypotheses found during review.
+   missing arguments or lost hypotheses found during review. The audit is a
+   coverage checklist, not a mathematical premise, and its earlier approval
+   does not excuse a useful result omitted from the plan.
    If any note is unverified or corpus review is not PASS, Editor receives both
    the recorded mathematical checks and corpus-review findings in one repair
    pass. Repairs retain unaffected notes by their exact IDs, fix defects, and
@@ -921,17 +950,18 @@ The deterministic Coordinator runs the following loop without planning calls:
    findings and affected dependencies. Within a changed note, unaffected passages
    and valid support remain unchanged, with expansion only where a mathematical
    repair requires it. Further consolidation waits for another editing operation.
-4. Only a fully verified proposal with a passing corpus review completes
+6. Only a fully verified proposal with a passing corpus review completes
    standalone editing with
    `{notes, deprecated, review}`. `notes` is the checked replacement revision.
    `deprecated` lists original IDs absent from it. The original snapshot and
    every proposal/check remain in the durable records. Reopening a completed
    campaign reuses its result.
 
-The Editor uses `editor` for its initial proposal and `editorRepair` when given a
+The audit uses the `editor` profile. The Editor uses `editor` for its initial
+proposal and `editorRepair` when given a
 previous proposal to repair. An omitted `editorRepair` falls back to `editor`,
 then `default`. Each configured profile is a complete override; individual fields
-are not merged. Corpus review reuses the
+are not merged. Audit review and corpus review reuse the
 `requirements` profile with its own instructions and corpus input. It checks
 whether the replacement is adequate for continued research, not whether the
 original research task is solved. Editing does not grant requirements or
@@ -952,7 +982,7 @@ ordinary planning with their diagnostic. A call cap retains the editing phase
 and committed progress for an explicit allowance extension. Standalone editing
 uses the same loop and returns its checked revision to the caller.
 
-Each editing proposal and review currently receives complete input in one
+Each audit, editing proposal, and review currently receives complete input in one
 model context and returns one complete result. Use models whose context and
 output capacity fit the corpus. Capacity errors retain prior committed work and
 never truncate proofs. Automatic partitioning is not implemented. Existing
@@ -960,15 +990,15 @@ campaign call limits, extension, pause, cancellation, and whole-worker recovery
 apply. The loop has no arbitrary wall-clock deadline. Model-based corpus review
 is a judgment of usefulness and coverage, not a formal losslessness guarantee.
 
-Editor and corpus review use the same full-text view as `read_notes`: IDs, both
+Audit, Editor, and their reviews use the same full-text view as `read_notes`: IDs, both
 summaries, complete texts, support, status, passed stages, and feedback on failed
 or unresolved checks.
 The frozen worker inputs retain every check and source quotation. Verifier uses
 that complete evidence, while the reading view omits its audit records. No note
 text is shortened or omitted.
 
-Initial editing uses Pi's existing structured-result loop with the full original
-corpus. `maxEditorResponses` defaults to one, so an invalid or missing submission
+Initial rewriting uses Pi's existing structured-result loop with the full original
+corpus and approved audit. `maxEditorResponses` defaults to one, so an invalid or missing submission
 fails without another response to correct it. With a value of two, the first
 valid draft stays in the same transcript and Editor is asked to revise the whole
 replacement before returning it. The configured cap counts all responses, not
@@ -978,10 +1008,11 @@ The last valid proposal can be returned at the response cap, after a prose-only
 continuation, or when another response would exceed context capacity. This is
 not evidence that refinement occurred. Provider errors, truncated output, denied
 calls, and cancellation remain failures with no partial publication. The kernel's
-provider-call allowance is independent and includes retries. Two drafting
-responses followed by self-contained correctness and corpus review require four
-successful calls in the measured small-fixture case. Source obligations or
-retries may require more, and no allowance is extended automatically.
+provider-call allowance is independent and includes retries. With one audit,
+one passing audit review, two drafting responses, one self-contained correctness
+batch, and one corpus review, the successful path requires six calls. Source
+obligations, failed reviews, or retries may require more, and no allowance is
+extended automatically.
 
 Repair passes receive the previous proposal and corpus review, use `editorRepair`,
 and stop at the first valid repair. They do not apply `maxEditorResponses` or

@@ -77,6 +77,8 @@ export function createSolver(
   };
   const functions: ReturnType<typeof createRoles> = {
     explorer: async (...args) => load().explorer(...args),
+    editorAudit: async (...args) => load().editorAudit(...args),
+    editorAuditReview: async (...args) => load().editorAuditReview(...args),
     editor: async (...args) => load().editor(...args),
     editionReview: async (...args) => load().editionReview(...args),
     coordinator: async (...args) => load().coordinator(...args),
@@ -90,6 +92,8 @@ export function createSolver(
       "explorer",
       "verifier",
       "literature",
+      "editorAudit",
+      "editorAuditReview",
       "editor",
       "editVerifier",
       "editionReview",
@@ -257,9 +261,13 @@ export function createEditor(
       ...input,
     }),
     roles: solver.roles.filter((role) =>
-      ["xean.editor", "xean.editVerifier", "xean.editionReview"].includes(
-        role.name,
-      ),
+      [
+        "xean.editorAudit",
+        "xean.editorAuditReview",
+        "xean.editor",
+        "xean.editVerifier",
+        "xean.editionReview",
+      ].includes(role.name),
     ),
     coordinator: {
       name: "xean.edit",

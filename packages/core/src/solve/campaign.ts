@@ -25,6 +25,8 @@ const declarationSchema = Type.Union([
     kind: Type.Literal("xean.role"),
     role: StringEnum([
       "explorer",
+      "editorAudit",
+      "editorAuditReview",
       "editor",
       "editionReview",
       "coordinator",

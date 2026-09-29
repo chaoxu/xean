@@ -24,14 +24,27 @@ const draft = (id: string, text: string) => ({
   detailedSummary: text,
   support: [],
 });
-const solverFixture = (editingThresholdTokens: number | null = 200_000) =>
-  createSolver(
+const solverFixture = (editingThresholdTokens: number | null = 200_000) => {
+  const solver = createSolver(
     task,
     () => {
       throw new Error("Replaced roles need no model runtime");
     },
     { editingThresholdTokens },
   );
+  solver.functions.editorAudit = async ({ notes }) => ({
+    entries: notes.map((note) => ({
+      noteIds: [note.id],
+      disposition: "merge",
+      capability: note.text,
+      preservation: "Preserve the useful claim and its argument.",
+      rationale: "Combine shared reasoning.",
+    })),
+    report: "Consolidate the collection.",
+  });
+  solver.functions.editorAuditReview = async () => pass;
+  return solver;
+};
 
 test("solver edits below the advisory threshold and publishes only the reviewed corpus", async () => {
   const solver = solverFixture();
@@ -43,10 +56,13 @@ test("solver edits below the advisory threshold and publishes only the reviewed 
     plans.push(input);
     return { work: input.editingAvailable ? [{ kind: "editor" }] : [] };
   };
-  solver.functions.editor = async ({ notes, previous }) => {
+  solver.functions.editor = async ({ notes, previous, audit }) => {
     edits++;
     expect(previous).toBeUndefined();
     expect(notes).toEqual(plans[0]!.notes);
+    expect(audit.entries.flatMap((entry) => entry.noteIds)).toEqual(
+      notes.map((note) => note.id),
+    );
     return {
       retained: [],
       notes: [draft("n1", "Short proof")],
@@ -178,6 +194,12 @@ test("stale or unverified editing cannot activate even with a passing corpus rev
   let edits = 0;
   let checks = 0;
   let reviews = 0;
+  let audits = 0;
+  const audit = solver.functions.editorAudit;
+  solver.functions.editorAudit = async (...args) => {
+    audits++;
+    return audit(...args);
+  };
   solver.functions.coordinator = async ({
     notes,
     failures,
@@ -205,17 +227,11 @@ test("stale or unverified editing cannot activate even with a passing corpus rev
   });
   solver.functions.editor = async ({ notes, previous, review }) => {
     edits++;
-    if (edits === 1)
-      return {
-        retained: [],
-        notes: [draft("n1", "Stale replacement")],
-        report: "Stale.",
-      };
     expect(notes.map((note) => note.text)).toEqual([
       "Original claim",
       "External discovery",
     ]);
-    if (edits === 2)
+    if (edits === 1)
       return {
         retained: notes.map((note) => note.id),
         notes: [],
@@ -272,7 +288,8 @@ test("stale or unverified editing cannot activate even with a passing corpus rev
     expect(failed.status).toBe("running");
     expect(failed.state).toBeNull();
     expect(failed.result).toBeNull();
-    expect(edits).toBe(3);
+    expect(audits).toBe(2);
+    expect(edits).toBe(2);
     expect(checks).toBe(1);
     expect(reviews).toBe(1);
     const notes = project(failed);

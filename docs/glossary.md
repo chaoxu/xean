@@ -60,7 +60,10 @@ INCONCLUSIVE verdict. Independent review and catalog closure remain separate
 from solver acceptance.
 
 Editor rewrites an entire corpus into a proposed replacement collection of
-ordinary notes. Corpus review (`editionReview`) judges its useful coverage
+ordinary notes. An editing audit (`editorAudit`) accounts for every original
+note and proposes what to retain, merge, or omit. Audit review
+(`editorAuditReview`) checks the preservation plan before rewriting. Corpus
+review (`editionReview`) judges the resulting collection's useful coverage
 after normal correctness and source checks, even when some remain unsuccessful,
 so repairs receive mathematical and coverage findings together. A corpus revision
 is the complete verified replacement collection approved by corpus review, returned by standalone

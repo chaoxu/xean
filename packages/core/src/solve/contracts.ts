@@ -5,6 +5,7 @@ import {
   type TSchema,
 } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
+import type { EditorAudit } from "./editor-audit.ts";
 
 export const defaultReasoning = "max";
 export const declarationVersion = 10;
@@ -223,10 +224,20 @@ export const editingSchema = object({
 });
 export type Editing = Static<typeof editingSchema>;
 export type EditorInput = SolverInput & {
+  audit: EditorAudit;
+  auditReview: EditionReview;
   previous?: Note[];
   review?: EditionReview;
 };
-export type EditionReviewInput = SolverInput & { previous: Note[] };
+export type EditorAuditInput = SolverInput & {
+  previous?: EditorAudit;
+  review?: EditionReview;
+};
+export type EditorAuditReviewInput = SolverInput & { audit: EditorAudit };
+export type EditionReviewInput = SolverInput & {
+  previous: Note[];
+  audit: EditorAudit;
+};
 export type VerifierInput = SolverInput & {
   targets: { id: string; through: VerificationStage }[];
   evidence?: SourceEvidence[];

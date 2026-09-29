@@ -34,6 +34,8 @@ export type {
   Verdict,
   ExplorerInput,
   EditorInput,
+  EditorAuditInput,
+  EditorAuditReviewInput,
   EditionReviewInput,
   EditionReview,
   Editing,
@@ -50,6 +52,11 @@ export type {
   Exploration,
   Plan,
 } from "./contracts.ts";
+export {
+  editorAuditSchema,
+  validateEditorAudit,
+  type EditorAudit,
+} from "./editor-audit.ts";
 export { decode, taskSchema, verificationStages } from "./contracts.ts";
 export {
   declarationVersion,

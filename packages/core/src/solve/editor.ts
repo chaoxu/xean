@@ -5,6 +5,8 @@ import {
   decode,
   editionReviewSchema,
   type EditorInput,
+  type EditorAuditInput,
+  type EditorAuditReviewInput,
   type EditionReviewInput,
   type Note,
   type SolverInput,
@@ -18,6 +20,7 @@ import {
   retainedNotes,
   sourceEvidence,
 } from "./notes.ts";
+import { validateEditorAudit, type EditorAudit } from "./editor-audit.ts";
 
 export type EditingResult = {
   notes: Note[];
@@ -32,11 +35,24 @@ export function projectEditing(input: SolverInput, worklist: readonly Work[]) {
   let notes: Note[] = [];
   let step: string | undefined;
   let review: EditionReview | undefined;
+  let audit: EditorAudit | undefined;
+  let auditReview: EditionReview | undefined;
   for (const work of worklist
     .filter((work) => work.status === "completed")
     .sort((a, b) => a.publicationId! - b.publicationId!)) {
     step = work.role;
-    if (step === "xean.editor") {
+    if (step === "xean.editorAudit") {
+      audit = validateEditorAudit(
+        original.map((note) => note.id),
+        work.result,
+      );
+      auditReview = undefined;
+    } else if (step === "xean.editorAuditReview") {
+      if (!audit) throw new Error("Editing audit review requires an audit");
+      auditReview = decode(editionReviewSchema, work.result);
+    } else if (step === "xean.editor") {
+      if (auditReview?.verdict !== "PASS")
+        throw new Error("Editing requires an approved audit");
       const result = decode(editingSchema, work.result);
       const retained = retainedNotes(result, all);
       if (!work.attemptId)
@@ -64,7 +80,7 @@ export function projectEditing(input: SolverInput, worklist: readonly Work[]) {
       review = decode(editionReviewSchema, work.result);
     } else throw new Error(`Unknown editing role: ${step}`);
   }
-  return { original, all, notes, step, review };
+  return { original, all, notes, step, review, audit, auditReview };
 }
 type EditingState = ReturnType<typeof projectEditing>;
 
@@ -72,6 +88,7 @@ export function editingResult(state: EditingState): EditingResult | undefined {
   if (
     state.step !== "xean.editionReview" ||
     state.review?.verdict !== "PASS" ||
+    state.auditReview?.verdict !== "PASS" ||
     !state.notes.length ||
     state.notes.some((note) => !note.verified)
   )
@@ -114,14 +131,36 @@ export function editingDecision(
     };
   }
   let role: string;
-  let value: EditorInput | VerifierInput | EditionReviewInput;
+  let value:
+    | EditorAuditInput
+    | EditorAuditReviewInput
+    | EditorInput
+    | VerifierInput
+    | EditionReviewInput;
   const verified = state.notes.every((note) => note.verified);
-  if (!state.step || state.review) {
+  if (
+    !state.audit ||
+    (state.auditReview && state.auditReview.verdict !== "PASS")
+  ) {
+    role = "xean.editorAudit";
+    value = {
+      task: input.task,
+      notes: state.original,
+      ...(state.audit
+        ? { previous: state.audit, review: state.auditReview }
+        : {}),
+    };
+  } else if (!state.auditReview) {
+    role = "xean.editorAuditReview";
+    value = { task: input.task, notes: state.original, audit: state.audit };
+  } else if (state.step === "xean.editorAuditReview" || state.review) {
     role = "xean.editor";
     value = {
       task: input.task,
       notes: state.original,
-      ...(state.step
+      audit: state.audit,
+      auditReview: state.auditReview,
+      ...(state.notes.length
         ? {
             previous: state.notes,
             ...(state.review ? { review: state.review } : {}),
@@ -141,7 +180,12 @@ export function editingDecision(
     };
   } else {
     role = "xean.editionReview";
-    value = { task: input.task, notes: state.notes, previous: state.original };
+    value = {
+      task: input.task,
+      notes: state.notes,
+      previous: state.original,
+      audit: state.audit,
+    };
   }
   return { state: null, dispatch: [{ id, role, input: json(value) }] };
 }

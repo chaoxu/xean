@@ -20,6 +20,8 @@ import {
   type Check,
   type Editing,
   type EditorInput,
+  type EditorAuditInput,
+  type EditorAuditReviewInput,
   type EditionReviewInput,
   type EditionReview,
   type Exploration,
@@ -33,6 +35,11 @@ import {
   type ReconstructionInput,
   type VerificationStage,
 } from "./contracts.ts";
+import {
+  editorAuditSchema,
+  validateEditorAudit,
+  type EditorAudit,
+} from "./editor-audit.ts";
 import {
   closure,
   corpusStats,
@@ -237,6 +244,64 @@ export function createRoles(
   };
   return {
     reconstruct,
+    async editorAudit(
+      input: EditorAuditInput,
+      execution: Execution,
+      context: Context,
+    ): Promise<EditorAudit> {
+      input = structuredClone(input);
+      const instructions = input.previous
+        ? "You are revising a preservation audit for a mathematical research corpus. The original notes are authoritative. The field previous is the prior audit and review contains the independent findings. Correct every material omission or unjustified subsumption before any rewriting begins. Preserve useful partial, unresolved, and rejected approaches with their exact status and scope. Return only the revised audit."
+        : "You are planning a mathematical corpus edit before any rewriting. Read the exact task, proof requirements, and every original note with its support, status, and verification feedback. Account for every original note exactly once across grouped entries. For each group, state its useful capabilities, exact input regime and hypotheses, quantitative and computational guarantees, usable construction or proof, scoped obstruction or counterexample, and unresolved status where present. Choose retain when the source should remain unchanged, merge when several notes can share a result or construction, obsolete only when a concrete covering result has matching hypotheses and guarantees, and dead only for material with no reusable content. Rejected or unverified status does not make useful partial progress disposable. Similar topics do not establish subsumption, and a conditional theorem does not replace an algorithm that constructs its assumptions. If coverage is uncertain, retain the source. The audit is editorial guidance, not a mathematical premise. Return only the audit, with no replacement notes.";
+      const value = {
+        task: input.task,
+        notes: input.notes.map(fullNote),
+        ...(input.previous ? { previous: input.previous } : {}),
+        ...(input.review ? { review: input.review } : {}),
+      };
+      return ask(
+        runtime,
+        "editor",
+        instructions,
+        value,
+        editorAuditSchema,
+        execution,
+        context,
+        {
+          submit(result) {
+            validateEditorAudit(
+              input.notes.map((note) => note.id),
+              result,
+            );
+            return { done: true, receipt: { validated: true } };
+          },
+        },
+      );
+    },
+    async editorAuditReview(
+      input: EditorAuditReviewInput,
+      execution: Execution,
+      context: Context,
+    ): Promise<EditionReview> {
+      input = structuredClone(input);
+      validateEditorAudit(
+        input.notes.map((note) => note.id),
+        input.audit,
+      );
+      return ask(
+        runtime,
+        "requirements",
+        "Review the proposed preservation audit against the complete original mathematical corpus before any rewriting. Check every original note and every grouped disposition. Verify that useful positive results, restricted-input algorithms, stronger bounds, reusable constructions, scoped counterexamples and obstructions, failed approaches, limitations, and open gaps are accounted for with exact hypotheses, guarantees, computational bounds, and status. Require a concrete covering result and matching scope for obsolete or merged material. Similar topics do not establish subsumption. A conditional theorem does not replace construction of its assumptions. Unverified or rejected status does not make useful partial progress disposable; preserve the failure or gap without asserting the claim. PASS approves only the audit coverage plan, not any future proof or the original research task. FAIL must identify original notes and the capability at risk with an actionable correction. Use INCONCLUSIVE when the source evidence is insufficient.",
+        {
+          task: input.task,
+          notes: input.notes.map(fullNote),
+          audit: input.audit,
+        },
+        editionReviewSchema,
+        execution,
+        context,
+      );
+    },
     async editor(
       input: EditorInput,
       execution: Execution,
@@ -256,10 +321,12 @@ export function createRoles(
         input.previous ? "editorRepair" : "editor",
         input.previous
           ? "You are repairing a proposed collection of mathematical research notes. The field previous contains the current proposal with its mathematical verification feedback. The field notes contains the original collection for reference, and review, when present, compares the useful knowledge in the two collections. Repair the current proposal using both sets of findings.\n\nKeep unaffected notes unchanged by their exact IDs, including their proofs and summaries. Rewriting them discards completed verification and requires checking them again. Within a changed note, preserve unaffected passages, formulas, and valid support references verbatim. Make the smallest mathematically sufficient correction, updating summaries and references only where needed. Reuse valid supporting arguments instead of reproducing them. Expand or reorganize a passage only when correctness or missing useful knowledge requires it. Further consolidation and stylistic rewriting are outside this repair pass. Follow the supplied task’s proof rules. Preserve useful methods, scoped negative results, conditional and unresolved status, exact hypotheses, and quantitative and computational guarantees. Every established claim needs a complete argument in the returned collection and its declared support.\n\nReturn one complete replacement proposal using the supplied schema. Put only changed or added notes in notes, with fresh local IDs n1, n2, and so on, in dependency order. Put unchanged notes in retained using their exact existing IDs; unchanged notes from previous are available for retention and support. Notes marked dead cannot be retained or used as support. Retained notes keep their dependencies unchanged; using a replacement dependency requires a fresh note ID. Include support on every new note, using [] when empty. Support may name an earlier new note or an existing note by exact ID; referenced existing notes and their dependency closure are retained automatically. A mathematically changed note inherits no checks. Explain the repairs in report. Producing a repaired reference does not establish that the research problem is solved."
-          : "You are editing a collection of mathematical research notes about a stated problem. Produce a shorter, coherent replacement by consolidating the supplied mathematics. Another mathematician must be able to continue the research using the replacement without consulting removed notes. Read the supplied problem, its proof requirements, and all notes with their dependencies and verification feedback.\n\nPreserve useful results, constructions, proof techniques, conditional approaches, scoped counterexamples, and open gaps. Preserve their exact hypotheses and quantitative and computational guarantees. A useful method must remain understandable and usable, including the argument that makes it work. A useful obstruction must retain its construction, the approach it rules out, and the limits of that conclusion.\n\nOrganize the replacement around shared mathematical arguments. When proofs use the same construction or reasoning under different hypotheses, extract the common argument at exactly the generality needed by those uses. Prove it once, including shared implementation and complexity arguments. Derive each application by verifying its hypotheses and proving the steps that differ. The common argument must replace those derivations in its applications. Combine a construction and its direct consequences when separate notes would repeat the setup. Use compact mathematical statements and proofs, retaining every distinction that changes a conclusion or computational guarantee. Edit the supplied material rather than adding stronger results, new constructions, or overview notes merely to extend it. A new statement or proof is useful here when it replaces existing arguments and simplifies the collection. Old note boundaries need not survive.\n\nEvery established claim needs a complete argument in the replacement and its declared support, using only background permitted by the task or properly sourced premises. Preserve unresolved status where appropriate. Keep summaries concise: state the useful result or method, its assumptions and guarantees, and its limitations. Develop proofs once in the full notes. Explain substantive omissions and editorial choices in the report.\n\nCount all retained notes and dependencies as part of the replacement. If an unchanged proof is retained, refer to it rather than adding another account of the same mathematics. Reuse sound existing notes when their full dependency closure serves the new organization. Rewrite shared foundations when doing so removes repetition across the collection. There is no prescribed length or note count.\n\nReturn one complete proposal using the supplied output schema. New or mathematically changed notes use fresh local IDs n1, n2, and so on, in dependency order. Include support on every note, using [] when empty. Support may name an earlier new note or an existing note by exact ID. Referenced existing notes and their complete dependency closure are included automatically. retained names additional existing notes to keep unchanged. Rewritten notes inherit no verification. Producing a reference does not establish that the research problem is solved.\n",
+          : "You are editing a collection of mathematical research notes using the approved preservation audit. Produce a coherent replacement by consolidating the supplied mathematics. Another mathematician must be able to continue the research using the replacement without consulting removed notes. Read the exact task, all original notes, their statuses and verification feedback, and every audit entry. The audit is a coverage checklist, not a mathematical premise, and its approved dispositions must be realized in the replacement.\n\nPreserve every useful capability named by the audit: input regimes, exact hypotheses, quantitative and computational guarantees, usable constructions and proofs, scoped counterexamples and obstructions, failed approaches, limitations, and open gaps. Keep unresolved or rejected status accurate. A generic theorem does not replace an implementation that constructs its assumptions. If the audit is uncertain, retain the source material.\n\nOrganize the replacement around shared mathematical arguments. When proofs use the same construction or reasoning under different hypotheses, extract the common argument at exactly the generality needed by those uses. Prove it once, including shared implementation and complexity arguments. Derive each application by verifying its hypotheses and proving the steps that differ. Combine a construction and its direct consequences when separate notes would repeat the setup. Use compact mathematical statements and proofs, retaining every distinction that changes a conclusion or computational guarantee. Do not add stronger results or overview notes merely to extend the corpus.\n\nEvery established claim needs a complete argument in the replacement and its declared support, using only task-permitted background or properly sourced premises. Keep summaries concise and explain substantive editorial choices in the report. Count all retained notes and dependencies. Return one complete proposal using the supplied output schema. New or mathematically changed notes use fresh local IDs n1, n2, and so on, in dependency order. Existing notes named in support and their complete dependency closure are included automatically. retained names additional unchanged notes by exact ID. Rewritten notes inherit no verification.\n",
         {
           ...input,
           notes: input.notes.map(fullNote),
+          audit: input.audit,
+          auditReview: input.auditReview,
           ...(input.previous ? { previous: input.previous.map(fullNote) } : {}),
         },
         editingSchema,
@@ -293,12 +360,13 @@ export function createRoles(
       return ask(
         runtime,
         "requirements",
-        "Judge the replacement corpus as a whole: does it carry forward the useful mathematical knowledge needed to continue research on the exact task in a clearer, self-contained form? This check does not ask whether the research task has been solved. Read all old and new notes with their actual statuses and verification feedback. Systematically compare the useful mathematical capabilities of the original and replacement corpora, reporting all material losses and defects together without a per-note ledger or requiring every lemma to survive. Assess useful coverage even when mathematical checks failed or remain unresolved; do not treat those claims as established. Return actionable findings so Editor can repair mathematical defects and coverage together. Your verdict does not activate a replacement or override per-note checks. Assess important results, relevant alternative approaches, informative counterexamples and failed approaches, limitations, and open gaps, preserving their exact scope and quantitative and computational guarantees. For useful negative results, check that summaries and full text identify the failed method, obstruction, and scope, distinguishing failed attempts from proved obstructions. Every note and dependency chain may be rewritten. Allow different proofs, shared lemmas, consolidation, and removal of obsolete intermediate results and unhelpful detail. No one-to-one mapping, derivation of every old lemma, or separate replacement for every omitted claim is required. Treat omitted motivation or routine details as nonblocking when the retained statements and arguments suffice for correct reuse and recovering the explanation requires no substantive new argument. For FAIL, identify the useful capability, substantial obstruction, hypothesis, or guarantee that is no longer available, and explain why the retained corpus does not supply it. Check the scope of claimed subsumption. Claims kept as established knowledge need complete arguments in the replacement notes and their declared support, without reliance on removed proofs or an editorial report. Earlier correctness and source checks do not excuse newly noticed gaps or lost hypotheses. Judge simplification including all retained support. There is no preset length or note-count target. Modest consolidation is acceptable, and optional further shortening is not a reason to reject an adequate replacement. PASS requires useful knowledge preserved, sound retained arguments, and clearer organization or simpler proofs. FAIL requires a consequential loss of useful knowledge, incorrect subsumption, a missing argument, or a hidden dependency. Use INCONCLUSIVE when unsure, with actionable feedback for Editor.",
+        "Judge the replacement corpus as a whole against the approved preservation audit: does it carry forward the useful mathematical knowledge needed to continue research on the exact task in a clearer, self-contained form? This check does not ask whether the research task has been solved. Read all old and new notes, the audit, and their actual statuses and verification feedback. Systematically compare the useful mathematical capabilities of the original and replacement corpora, reporting all material losses and defects together without requiring every lemma to survive. Assess useful coverage even when mathematical checks failed or remain unresolved; do not treat those claims as established. The audit is a checklist, not a mathematical premise, and approval of it does not excuse a capability it missed. Return actionable findings so Editor can repair mathematical defects and coverage together. Your verdict does not activate a replacement or override per-note checks. Assess important results, restricted-input algorithms, stronger bounds, reusable constructions, informative counterexamples and failed approaches, limitations, and open gaps, preserving their exact scope and quantitative and computational guarantees. For useful negative results, check that summaries and full text identify the failed method, obstruction, and scope, distinguishing failed attempts from proved obstructions. Every note and dependency chain may be rewritten. Allow different proofs, shared lemmas, consolidation, and removal of obsolete intermediate results and unhelpful detail. Treat omitted motivation or routine details as nonblocking when the retained statements and arguments suffice for correct reuse and recovering the explanation requires no substantive new argument. For FAIL, identify the useful capability, substantial obstruction, hypothesis, or guarantee that is no longer available, and explain why the retained corpus does not supply it. Check the scope of claimed subsumption. Claims kept as established knowledge need complete arguments in the replacement and their declared support, without reliance on an editorial report. Earlier PASS checks do not excuse missing arguments or lost hypotheses found during review. Judge simplification including all retained support. There is no preset length or note-count target. PASS requires useful knowledge preserved, sound retained arguments, and clearer organization or simpler proofs. FAIL requires a consequential loss of useful knowledge, incorrect subsumption, a missing argument, or a hidden dependency. Use INCONCLUSIVE when unsure, with actionable feedback for Editor.",
         {
           // Keep the original corpus before the changing replacement for caching.
           task: input.task,
           previous: input.previous.map(fullNote),
           notes: input.notes.map(fullNote),
+          audit: input.audit,
         },
         editionReviewSchema,
         execution,

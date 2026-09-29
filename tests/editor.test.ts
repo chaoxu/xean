@@ -24,6 +24,7 @@ import {
 } from "../packages/core/src/solve/research.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 import { fullNote } from "../packages/core/src/solve/reader.ts";
+import type { EditorAudit } from "../packages/core/src/solve/editor-audit.ts";
 
 const draft = (id: string, text: string, support: string[] = []) => ({
   id,
@@ -33,6 +34,16 @@ const draft = (id: string, text: string, support: string[] = []) => ({
   support,
 });
 const pass = { verdict: "PASS" as const, report: "Checked." };
+const auditNotes = (notes: { id: string; text: string }[]): EditorAudit => ({
+  entries: notes.map((note) => ({
+    noteIds: [note.id],
+    disposition: "merge",
+    capability: note.text,
+    preservation: "Keep useful claims, proofs, and the scoped counterexample.",
+    rationale: "Consolidate repeated reasoning without losing the capability.",
+  })),
+  report: "Consolidate the collection.",
+});
 
 function editorRuntime(
   respond: (
@@ -43,6 +54,15 @@ function editorRuntime(
     },
     prompt: string,
   ) => unknown,
+  auditRespond?: (
+    role: "audit" | "review",
+    input: {
+      notes: ReturnType<typeof fullNote>[];
+      previous?: EditorAudit;
+      audit?: EditorAudit;
+      review?: typeof pass | { verdict: "FAIL"; report: string };
+    },
+  ) => unknown,
 ) {
   return fixtureRuntime((context, _options, selected) => {
     const input = JSON.parse(
@@ -50,11 +70,16 @@ function editorRuntime(
         context.messages.find((message) => message.role === "user")!.content,
       ),
     );
-    const value = respond(
-      selected.id,
-      input,
-      String(context.messages[0]!.content),
-    );
+    const auditRole =
+      selected.id === "editor" && !input.audit
+        ? "audit"
+        : selected.id === "requirements" && !input.previous
+          ? "review"
+          : undefined;
+    const value = auditRole
+      ? (auditRespond?.(auditRole, input) ??
+        (auditRole === "audit" ? auditNotes(input.notes) : pass))
+      : respond(selected.id, input, String(context.messages[0]!.content));
     return fauxAssistantMessage(
       [fauxToolCall("submit_result", value as never)],
       { stopReason: "toolUse" },
@@ -89,6 +114,8 @@ test("editing refines privately, combines proof and coverage feedback, and reuse
   const sourced: string[] = [];
   let drafts = 0;
   let reviews = 0;
+  let audits = 0;
+  let auditReviews = 0;
   const correctness = (notes: Pick<Note, "id" | "text">[]) => ({
     results: notes.map((note) => ({
       noteId: note.id,
@@ -107,82 +134,118 @@ test("editing refines privately, combines proof and coverage feedback, and reuse
       return notes.map((note) => ({ noteId: note.id, result: pass }));
     },
   };
-  const runtime = editorRuntime((role, data, prompt) => {
-    if (role === "editor" || role === "editorRepair") {
-      drafts++;
-      expect(role).toBe(drafts <= 2 ? "editor" : "editorRepair");
-      expect(data.previous !== undefined).toBe(drafts > 2);
-      expect(data.notes.map((note) => note.text)).toEqual(
-        original.notes.map((note) => note.text),
-      );
-      expect(data.notes.every((note) => !("checks" in note))).toBe(true);
-      if (drafts === 1)
-        return {
-          retained: [],
-          report: "Private first draft.",
-          notes: [draft("n1", "First draft never sent to verification")],
-        };
-      if (drafts === 2)
-        return {
-          retained: [],
-          report: "Combine the old chain.",
-          notes: [
-            draft("n1", "New base"),
-            draft("n2", "Defective proof", ["n1"]),
-          ],
-        };
-      expect(drafts).toBe(3);
-      expect(
-        data.previous?.find((note) => note.text === "Defective proof")?.dead,
-      ).toBe(true);
-      expect(data.previous?.find((note) => note.dead)?.feedback).toEqual([
-        "correctness: Missing boundary case",
-      ]);
-      expect(data.review).toEqual({
-        verdict: "FAIL",
-        report: "Lost counterexample",
-      });
-      const base = data.previous!.find((note) => note.text === "New base")!;
-      expect(base.verified).toBe(true);
-      return {
-        retained: [],
-        report:
-          "Fix the proof and restore the counterexample with the checked base.",
-        notes: [
-          draft("n1", "Repaired proof", [base.id]),
-          draft("n2", "Counterexample and limitation"),
-        ],
-      };
-    }
-    if (role === "correctness") {
-      judged.push(data.notes.map((note) => note.text));
-      return correctness(data.notes);
-    }
-    if (role === "requirements") {
-      reviews++;
-      expect(data.notes.every((note) => note.verified)).toBe(reviews > 1);
-      if (reviews === 1)
-        expect(data.notes.find((note) => note.dead)?.feedback).toEqual([
+  const runtime = editorRuntime(
+    (role, data, prompt) => {
+      if (role === "editor" || role === "editorRepair") {
+        expect(auditReviews).toBe(2);
+        expect(data.auditReview).toEqual(pass);
+        expect(data.audit).toEqual(auditNotes(original.notes));
+        drafts++;
+        expect(role).toBe(drafts <= 2 ? "editor" : "editorRepair");
+        expect(data.previous !== undefined).toBe(drafts > 2);
+        expect(data.notes.map((note) => note.text)).toEqual(
+          original.notes.map((note) => note.text),
+        );
+        expect(data.notes.every((note) => !("checks" in note))).toBe(true);
+        if (drafts === 1)
+          return {
+            retained: [],
+            report: "Private first draft.",
+            notes: [draft("n1", "First draft never sent to verification")],
+          };
+        if (drafts === 2)
+          return {
+            retained: [],
+            report: "Combine the old chain.",
+            notes: [
+              draft("n1", "New base"),
+              draft("n2", "Defective proof", ["n1"]),
+            ],
+          };
+        expect(drafts).toBe(3);
+        expect(
+          data.previous?.find((note) => note.text === "Defective proof")?.dead,
+        ).toBe(true);
+        expect(data.previous?.find((note) => note.dead)?.feedback).toEqual([
           "correctness: Missing boundary case",
         ]);
-      expect(
-        data.previous?.map(({ id, text, support }) => ({ id, text, support })),
-      ).toEqual(
-        original.notes.map(({ id, text, support }) => ({ id, text, support })),
-      );
-      expect(data.notes.every((note) => !("checks" in note))).toBe(true);
-      expect(prompt).toContain(
-        "does not ask whether the research task has been solved",
-      );
-      return reviews === 1
-        ? { verdict: "FAIL", report: "Lost counterexample" }
+        expect(data.review).toEqual({
+          verdict: "FAIL",
+          report: "Lost counterexample",
+        });
+        const base = data.previous!.find((note) => note.text === "New base")!;
+        expect(base.verified).toBe(true);
+        return {
+          retained: [],
+          report:
+            "Fix the proof and restore the counterexample with the checked base.",
+          notes: [
+            draft("n1", "Repaired proof", [base.id]),
+            draft("n2", "Counterexample and limitation"),
+          ],
+        };
+      }
+      if (role === "correctness") {
+        judged.push(data.notes.map((note) => note.text));
+        return correctness(data.notes);
+      }
+      if (role === "requirements") {
+        reviews++;
+        expect(data.audit).toEqual(auditNotes(original.notes));
+        expect(data.notes.every((note) => note.verified)).toBe(reviews > 1);
+        if (reviews === 1)
+          expect(data.notes.find((note) => note.dead)?.feedback).toEqual([
+            "correctness: Missing boundary case",
+          ]);
+        expect(
+          data.previous?.map(({ id, text, support }) => ({
+            id,
+            text,
+            support,
+          })),
+        ).toEqual(
+          original.notes.map(({ id, text, support }) => ({
+            id,
+            text,
+            support,
+          })),
+        );
+        expect(data.notes.every((note) => !("checks" in note))).toBe(true);
+        expect(prompt).toContain(
+          "does not ask whether the research task has been solved",
+        );
+        return reviews === 1
+          ? { verdict: "FAIL", report: "Lost counterexample" }
+          : pass;
+      }
+      throw new Error(`Unexpected call: ${role}`);
+    },
+    (role, data) => {
+      expect(drafts).toBe(0);
+      if (role === "audit") {
+        audits++;
+        if (audits === 2) {
+          expect(data.previous).toEqual(auditNotes(original.notes));
+          expect(data.review).toEqual({
+            verdict: "FAIL",
+            report: "State the negative result's exact scope.",
+          });
+        }
+        return auditNotes(data.notes);
+      }
+      auditReviews++;
+      expect(data.audit).toEqual(auditNotes(original.notes));
+      return auditReviews === 1
+        ? {
+            verdict: "FAIL",
+            report: "State the negative result's exact scope.",
+          }
         : pass;
-    }
-    throw new Error(`Unexpected call: ${role}`);
-  });
+    },
+  );
   const options = {
     ...createEditor(input, runtime, { maxEditorResponses: 2 }, research),
-    limits: { providerCalls: 3 },
+    limits: { providerCalls: 7 },
   };
   let engine = await Xean.open(await openXeanStorage(path), options);
   try {
@@ -199,7 +262,14 @@ test("editing refines privately, combines proof and coverage feedback, and reuse
       limited.work
         .filter((work) => work.status === "completed")
         .map((work) => work.role),
-    ).toEqual(["xean.editor", "xean.editVerifier"]);
+    ).toEqual([
+      "xean.editorAudit",
+      "xean.editorAuditReview",
+      "xean.editorAudit",
+      "xean.editorAuditReview",
+      "xean.editor",
+      "xean.editVerifier",
+    ]);
     await engine.close();
     engine = await Xean.open(await openXeanStorage(path), options);
     await engine.extendCalls(12, "finish-editing");
@@ -230,6 +300,8 @@ test("editing refines privately, combines proof and coverage feedback, and reuse
     expect(new Set(sourced).size).toBe(sourced.length);
     expect(drafts).toBe(3);
     expect(reviews).toBe(2);
+    expect(audits).toBe(2);
+    expect(auditReviews).toBe(2);
     expect(input).toEqual(original);
     // A completed revision is valid input to another run, without reusing new-note IDs.
     const nextRuntime = editorRuntime((role, data) =>
@@ -358,6 +430,8 @@ test("Editor response limits preserve only valid completed submissions", async (
     const input = {
       task: { problem: "P", completionCriteria: "Prove P" },
       notes: [],
+      audit: auditNotes([]),
+      auditReview: pass,
     };
     const valid = {
       retained: [],

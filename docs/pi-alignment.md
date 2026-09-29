@@ -44,8 +44,9 @@ whose argv, stdin, process cancellation, and separate-output contract remains
 necessary. Pi's shell surface does not supply that contract.
 
 Standalone and Coordinator-directed corpus editing share the same roles, note
-checks, and kernel transactions. A deterministic loop schedules rewriting, verification,
-and corpus review from committed worker results. Completed drafts and checks
+checks, and kernel transactions. A deterministic loop schedules a preservation
+audit, audit review, rewriting, verification, and corpus review from committed
+worker results. Completed audits, drafts, and checks
 therefore survive between repair iterations without a second scheduler or
 private-progress checkpoints. Pi's text estimator supplies approximate active
 corpus size at ordinary planning calls. Corpus replacement policy belongs to the solver,
