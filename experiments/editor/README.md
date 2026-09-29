@@ -4,7 +4,7 @@ Test whether editing produces a smaller, coherent mathematical reference while p
 
 The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 13.6%. Fresh native workflows reduced it by 10.1% with Sol checking and 3.4% with Luna checking. These samples show inexpensive editing with modest compression and substantial latency. General reliability and downstream monetary savings remain unestablished. The latest summary controls returned unchanged PASS despite a preregistered expectation of correction. Independent audit confirmed that the wording exceeds the supplied proof, but did not establish that the stronger assertion is false.
 
-**Current accounting: 33 requests, $1.61070294 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
+**Current accounting: 35 requests, $1.63044724 known API-equivalent usage, plus unknown usage for one of those requests.** The unpriced request was an original transport failure and is counted once. Curation and interactive independent review are separate and unpriced. All recorded jobs are terminal, and no research corpus was activated. Further experiments remain restricted to this fixture. State a specific next question and independently establish any intended defect before another call.
 
 ## Materials and protocol
 
@@ -57,8 +57,6 @@ The former large-run drivers and templates remain in commit `23f19fa9188c119ca0f
 ## Outcomes
 
 All model conditions below use max reasoning. Each table records request time unless marked as whole-task time.
-
-The preregistered next pair, `runs/editor-golden-reuse-r01-protocol/`, compares consolidation with one added within-call editing pass: replace repeated derivations with precise applications of existing support, and keep proof tours out of summaries. It uses fresh one-call GPT-6 Luna arms at the same source commit. The input, settings, schema, and hidden key stay fixed. A shorter result must retain both usable proofs and useful detailed summaries before native follow-up. Results are pending.
 
 ### Generation comparisons
 
@@ -171,4 +169,17 @@ Two GPT-6 Luna calls reused the affected note under a fresh target ID with empty
 | Summary fidelity instruction               | Correctness/source PASS, unchanged |        146.472s | $0.0038019 |
 | Explicit faithful-summary PASS requirement | Correctness/source PASS, unchanged |        162.525s | $0.0027857 |
 
-Both failed the preregistered expectation of detecting and correcting the alleged inaccuracy. The second explicitly called both summaries faithful. Independent audit found that the supplied argument proves integrality after scaling, so the faithful description is “reaches a vertex, then scales it to obtain an integer representative.” Bounded exact checks found no admissible fractional vertex. These outcomes therefore establish missed wording corrections, not certified mathematical false positives. The audit supports no further paid retry on this oracle. Evidence: `runs/editor-golden-summary-check-r01-protocol/`, `runs/editor-golden-summary-check-r02-protocol/` (including `oracle-audit.md`), and corresponding native snapshots in `runs/editor-golden-summary-check-r01/` and `runs/editor-golden-summary-check-r02/`. The controls bring the cumulative total to the 33 requests and known $1.61070294 reported above.
+Both failed the preregistered expectation of detecting and correcting the alleged inaccuracy. The second explicitly called both summaries faithful. Independent audit found that the supplied argument proves integrality after scaling, so the faithful description is “reaches a vertex, then scales it to obtain an integer representative.” Bounded exact checks found no admissible fractional vertex. These outcomes therefore establish missed wording corrections, not certified mathematical false positives. The audit supports no further paid retry on this oracle. Evidence: `runs/editor-golden-summary-check-r01-protocol/`, `runs/editor-golden-summary-check-r02-protocol/` (including `oracle-audit.md`), and corresponding native snapshots in `runs/editor-golden-summary-check-r01/` and `runs/editor-golden-summary-check-r02/`. The controls brought the cumulative total to 33 requests and $1.61070294 known.
+
+### Within-call editing pass
+
+A fresh pair compared the consolidation prompt with one added paragraph asking for a final pass: replace repeated derivations with precise applications of supporting results, and keep proof tours out of summaries. Both used the same source commit, fixed input, schema, and GPT-6 Luna/max settings. Each admitted one call. Recorded requests differed only in instructions and the cache key derived from those instructions.
+
+| Prompt                | Body tokens | Mathematical tokens | Draft full-note tokens |     Time |       Cost |
+| --------------------- | ----------: | ------------------: | ---------------------: | -------: | ---------: |
+| Consolidation control |       4,712 |               5,650 |                  5,746 | 6m 20.4s | $0.0095361 |
+| Added editing pass    |       4,661 |               5,651 |                  5,747 | 5m 52.1s | $0.0102082 |
+
+Both payloads shrink about 7.5% from the original. The added instruction saved 51 body tokens but produced longer summaries, leaving essentially identical complete sizes. Primary inspection found that it moved symmetric-span computation into shared support and supplied more quantitative detail in one summary. Those observations are unblinded and do not certify the drafts' mathematics. With no useful size advantage, the treatment stopped before independent proof review or native follow-up and was not adopted. The frozen prompt remains an experimental condition. This one pair establishes neither causal effect nor general prompt equivalence.
+
+The two requests cost $0.0197443, with complete matching gateway/Pi usage, bringing the ledger to the 35 requests and $1.63044724 known above. Both jobs are terminal. Protocol, measurements, draft projections, request comparison, and accounting are under `runs/editor-golden-reuse-r01-protocol/`; raw outputs are under the corresponding `editor-golden-reuse-control-r01/` and `editor-golden-reuse-treatment-r01/` directories. Source commit: `e7c3bbe9d096290af019b26f3050f9cd8ebe1fe3`.
