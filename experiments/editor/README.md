@@ -224,3 +224,24 @@ The whole Nomad task took **20m 28.6s**. All three gateway requests match Pi usa
 This is native completion from a fresh draft, demonstrating that an iterative Editor repair round is not always needed. It is modest compression with low model cost but substantial latency; proof checking accounts for about 91% of this run's cost. The separate repair-model branch was not exercised live here. Its model choice is supported by the earlier standalone comparison, and deterministic integration tests cover selection, feedback, and check reuse. This development fixture establishes neither full-corpus economics nor general reliability. Further model runs remain restricted to the fixture.
 
 The implementation adds 4 production lines, 4 operator lines, and 19 test lines. All 104 tests, types, formatting, and documentation checks passed. The final native snapshot is in `runs/editor-golden-native-r02/`; preregistration, measurements, independent reviews, accounting, timing, and the report are in `runs/editor-golden-native-r02-protocol/`. No research corpus was activated.
+
+### Cost recovery from shorter inputs
+
+The $0.2147969 edit saves 620 reference tokens per complete `fullNote` read. At the run's frozen small-context Sol input prices, that is about $0.00124 per uncached read or $0.000124 per cached read: roughly **174 uncached or 1,733 cached full-corpus reads** to recover the editing cost through input-token savings alone. Luna input prices require about 3,465 uncached reads. These are hypothetical calculations, not measured downstream savings; reference tokens approximate provider tokens, and the calculation excludes cache invalidation, changes in output/reasoning, and research utility. The evidence is `reuse-economics.json` beside the native-r02 report.
+
+The current result is inexpensive to produce but does not establish a monetary payoff during an ordinary short run. Larger savings, cheaper checking, relief from context limits, or improved research performance would have to justify editing. The next controlled comparison isolates the dominant cost, proof checking, while keeping the fixture and native verification contract fixed.
+
+## Cheap correctness control
+
+Two GPT-6 Luna/max Verifier calls assessed matched copies of the corrected native-r02 corpus with fresh neutral IDs and empty verification histories. Only n3's integer-versus-real threshold hypothesis differed. The signed-orthant summary wording was corrected equally in both arms; the original fixture and hidden key stayed unchanged. Neither arm received earlier verdicts, the answer key, or the expected counterexample. Each had one admitted call and targets through `source`. Source commit: `823f1266290c5d398ac864b347c736e8daeb15a3`.
+
+| Input             | Native outcome                        | Whole task time | API-equivalent cost |
+| ----------------- | ------------------------------------- | --------------: | ------------------: |
+| Real threshold    | n1/n2 PASS; n3 FAIL, published        |        5m 33.2s |          $0.0097688 |
+| Integer threshold | Limited; no published verifier result |        4m 27.4s |          $0.0079579 |
+
+Luna rejected the defective note with the same fractional-threshold counterexample established independently before launch. It did not silently restrict the claim to integer thresholds. The counterexample invalidates the specified-band proof; the referenced `K=L+1` implementation computes a different band when L is noninteger, which also exposes the specification mismatch.
+
+On the sound input, Luna submitted correctness PASS for all notes but listed Hadamard's inequality as an external premise. The subsequent source check was denied by the one-call allowance. The recorded response is diagnostic evidence, not committed verification; the whole worker correctly published no partial checks. No source call or allowance extension ran. The defective arm used the same determinant arguments without escalating that premise.
+
+Both requests cost **$0.0177267** in total, with complete matching gateway/Pi usage. All 26 small-fixture requests total **$1.56280724 known**, plus the previous unpriced failure once. The pair demonstrates detection of one concrete defect at low cost, while inconsistent classification of routine background prevents a complete cheap-verification result. It does not qualify Luna as the default correctness model; retain Sol for proof checking and precise repairs. No runtime change was needed. Frozen inputs, independent design review, outcomes, accounting, and timing are in `runs/editor-golden-proof-controls-r01-protocol/`; both jobs are terminal.
