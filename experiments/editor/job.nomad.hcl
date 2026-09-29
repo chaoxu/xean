@@ -8,11 +8,11 @@ variable "role" {
 variable "image" { type = string }
 variable "call_allowance" { type = number }
 
-job "xean-editor-golden" {
+job "xean-editor" {
   type = "batch"
   datacenters = ["lab"]
   meta {
-    fleet_run_kind = "xean-editor-golden"
+    fleet_run_kind = "xean-editor"
     fleet_owner = "xean"
     source_commit = var.source_commit
     logical_call_allowance = "${var.call_allowance}"
@@ -65,7 +65,29 @@ job "xean-editor-golden" {
         }
       }
       env {
+        CODEX_HOME = "/local"
         NODE_EXTRA_CA_CERTS = "/usr/local/share/ca-certificates/lab-root.crt"
+      }
+      template {
+        destination = "local/config.toml"
+        change_mode = "noop"
+        perms = "0644"
+        data = <<EOF
+model_provider = "xean_codex_lb"
+approval_policy = "never"
+sandbox_mode = "read-only"
+web_search = "live"
+
+[model_providers.xean_codex_lb]
+name = "Xean codex-lb"
+base_url = "https://codex-lb.lab/backend-api/codex"
+wire_api = "responses"
+env_key = "XEAN_API_KEY"
+supports_websockets = true
+supports_standalone_web_search = true
+http_headers = { "X-Codex-LB-Required-Capability" = "usage_tag_v1" }
+env_http_headers = { "X-Codex-LB-Usage-Tag" = "XEAN_CODEX_USAGE_TAG" }
+EOF
       }
       volume_mount {
         volume = "runs"

@@ -16,10 +16,7 @@ const role =
     : "";
 const prompt = role ? undefined : selection;
 assert(action && ["launch", "status", "collect", "cancel"].includes(action));
-assert(
-  id && /^editor-golden-[a-z0-9-]+$/.test(id),
-  "Expected editor-golden-<attempt>",
-);
+assert(id && /^editor-[a-z0-9-]+$/.test(id), "Expected editor-<attempt>");
 const root = resolve(import.meta.dir, "../..");
 const fleet = resolve(root, "../fleet-infra");
 const local = resolve(root, "runs", id);
@@ -81,7 +78,7 @@ if (action === "launch") {
     assert(inputFile && settingsFile && process.argv.length === 7);
     const input = JSON.parse(await readFile(resolve(inputFile), "utf8"));
     const settings = JSON.parse(await readFile(resolve(settingsFile), "utf8"));
-    settings.usagePrefix = `editor-golden/${id}`;
+    settings.usagePrefix = `editor/${id}`;
     readDeclaration({
       version: declarationVersion,
       kind: role === "edit" ? "xean.edit" : "xean.role",
@@ -98,7 +95,7 @@ if (action === "launch") {
     assert.deepEqual(settings.limits, {
       concurrency: 1,
       attempts: 1,
-      providerCalls: role === "edit" ? callAllowance : 1,
+      providerCalls: callAllowance,
     });
     roleFiles = { "input.json": json(input), "settings.json": json(settings) };
   } else {
@@ -188,7 +185,7 @@ if (action === "launch") {
     archiveHash,
     image,
     at: new Date().toISOString(),
-    usagePrefix: `editor-golden/${id}`,
+    usagePrefix: `editor/${id}`,
   });
   await remote(`
 const check=Bun.spawnSync(["docker","image","inspect","--format","{{.Id}}",${JSON.stringify(image)}],{stdout:"pipe",stderr:"pipe"});
@@ -227,7 +224,7 @@ const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependenc
   );
   payload.Job.ID = payload.Job.Name = jobId;
   const env = payload.Job.TaskGroups[0].Tasks[0].Env;
-  env.XEAN_USAGE_TAG = `editor-golden/${id}`;
+  env.XEAN_USAGE_TAG = `editor/${id}`;
   env.XEAN_SOURCE_COMMIT = commit;
   await invoke(
     [resolve(fleet, "bin/fleet-nomad"), "job", "validate", "-json", "-"],

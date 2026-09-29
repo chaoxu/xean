@@ -1,6 +1,6 @@
 # Editor experiment
 
-Test whether editing produces a smaller, coherent mathematical reference while preserving useful results, complete arguments, methods, scoped limitations, and open gaps. All trials use one frozen three-note fixture. There is no compression target or requirement to preserve each old note. Full-corpus experiments remain stopped.
+Test whether editing produces a smaller, coherent mathematical reference while preserving useful results, complete arguments, methods, scoped limitations, and open gaps. Prompt development uses one frozen three-note fixture. There is no compression target or requirement to preserve each old note. A separately frozen large-corpus trial is now authorized to test the selected method at scale, with its own settings, call allowance, and ledger.
 
 Two GPT-6 Luna editing responses followed by correctness and corpus checks reduced mathematical payload by **24.4% for $0.03265942 across four calls**. A fresh native trial produced a 14.4% smaller proposal for $0.03253662, but corpus review rejected an omitted failure explanation and the campaign remained limited. Independent adjudication found the omission minor. A manually curated reference achieved 32.8% with unpriced curation overhead. General reliability, large-input behavior, and downstream savings remain unestablished.
 
@@ -41,7 +41,7 @@ This is the local profile's limit. The Codex gateway advertises a 272,000 defaul
 
 The evidence supports useful consolidation at low model cost. It does not establish a net monetary saving: some dependency packets and the index grow, editing changes the cache, and the reviewed path took about 17 minutes of request time. Prefer occasional editing when repeated full-proof use or improved organization justifies it. Preserve substantial negative results and complete retained arguments. Use existing targeted repair for concrete findings, without repeatedly regenerating to chase a smaller percentage.
 
-The broader goal remains open on reliability, large-input capacity, downstream usefulness, and total cost. Stop paid development trials here. A further experiment should answer a named unresolved decision, with its input scope and stopping rule fixed before launch.
+The broader goal remains open on reliability, large-input capacity, downstream usefulness, and total cost. Further prompt-development trials remain stopped. The next authorized trial applies the frozen method to the complete original 289-note corpus, using the gateway-advertised 872,000 context setting. Its separate protocol must establish context fit before launch and preserve failures without automatic extension or escalation. Research corpora remain unchanged until an accepted result is deliberately applied.
 
 ## Run and collect
 
@@ -65,7 +65,7 @@ For native stages, replace the prompt argument with `verifier`, `editionReview`,
 | `editor`        | `{task, notes: originalNotes, previous: checkedReplacement, review: coverageVerdict}` for repair. Retained IDs reuse checks. Rewritten notes need fresh verification.                       |
 | `edit`          | The fixed `input.json`, through the built-in `xean edit` workflow. Only its completed result establishes native workflow acceptance.                                                        |
 
-Standalone roles admit one call each. A native workflow fixes a finite positive `limits.providerCalls` before launch. The tested `{concurrency: 1, attempts: 1, providerCalls: 6}` allows an initial cycle and a repair cycle with one drafting response, only if every stage takes one call. With two initial drafting responses, those cycles require four and seven calls respectively. Acceptance stops earlier. Retries, invalid submissions, and source obligations can exhaust the allowance, with no automatic extension.
+Standalone role trials normally admit one call each. A source-integration smoke may reserve a correctness call and a native Codex source call. Every role or native workflow fixes a finite positive `limits.providerCalls` before launch. The tested `{concurrency: 1, attempts: 1, providerCalls: 6}` allows an initial cycle and a repair cycle with one drafting response, only if every stage takes one call. With two initial drafting responses, those cycles require four and seven calls respectively. Acceptance stops earlier. Retries, invalid submissions, and source obligations can exhaust the allowance, with no automatic extension. Codex source verification uses the native configuration supplied by the Nomad template and the same injected credential. A native Codex admission can contain several provider requests, all of which belong in usage accounting.
 
 The tested mixed profile uses GPT-6 Luna/max by default with complete GPT-6 Sol/max `correctness` and `editorRepair` profiles. Native-r03 instead used Luna correctness. Profiles replace whole profiles, so preserve gateway and credential fields when overriding a model. Repair selection falls back `editorRepair` → `editor` → `default`. See [solver configuration](../../docs/solver.md) for editing-only composition and check reuse across models. These experiments do not change production defaults.
 
