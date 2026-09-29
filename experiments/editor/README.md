@@ -245,3 +245,18 @@ Luna rejected the defective note with the same fractional-threshold counterexamp
 On the sound input, Luna submitted correctness PASS for all notes but listed Hadamard's inequality as an external premise. The subsequent source check was denied by the one-call allowance. The recorded response is diagnostic evidence, not committed verification; the whole worker correctly published no partial checks. No source call or allowance extension ran. The defective arm used the same determinant arguments without escalating that premise.
 
 Both requests cost **$0.0177267** in total, with complete matching gateway/Pi usage. All 26 small-fixture requests total **$1.56280724 known**, plus the previous unpriced failure once. The pair demonstrates detection of one concrete defect at low cost, while inconsistent classification of routine background prevents a complete cheap-verification result. It does not qualify Luna as the default correctness model; retain Sol for proof checking and precise repairs. No runtime change was needed. Frozen inputs, independent design review, outcomes, accounting, and timing are in `runs/editor-golden-proof-controls-r01-protocol/`; both jobs are terminal.
+
+## Routine-background prompt control
+
+The correctness instructions now explicitly check routine mathematical steps under the task's proof rules regardless of retrieval availability. Theorem names alone neither establish a fact nor require a source call. Uncertain or nonroutine external dependencies remain in `premises`, with the restrictions on substantive repairs and forbidden black boxes unchanged. Independent design reviewers supported the clarification. Source commit: `8e38b913e984ca38f461080ec7d47150fa29d40d`.
+
+The two earlier inputs and settings were repeated byte-for-byte. Provider request comparison confirmed that only stage instructions changed: the mathematics, feedback, schema, model, reasoning, and submission policy stayed identical. Both GPT-6 Luna/max arms completed in one call. The integer-threshold corpus received correctness/source PASS for every note, with no changes or external premises. The real-threshold note received FAIL for the integer-gap error and inconsistent band definitions, supported by a fresh concrete counterexample. No correction, source call, retry, or extension ran.
+
+| Input             | Native result                     | Whole task time | API-equivalent cost |
+| ----------------- | --------------------------------- | --------------: | ------------------: |
+| Real threshold    | n1/n2 PASS; n3 FAIL               |        4m 43.2s |          $0.0084091 |
+| Integer threshold | All three correctness/source PASS |        5m 37.4s |          $0.0080717 |
+
+The pair cost **$0.0164808**, with gateway identities and token usage matching Pi. All 28 small-fixture requests total **$1.57928804 known**, plus the earlier unpriced failure once. Interactive curation and review remain separate and unpriced.
+
+This meets the control's criteria and supports further Luna correctness experiments. The observed escalation disappeared while the defective note remained rejected. One stochastic pair establishes neither causation nor general reliability. The sub-cent sound proof check is not a fresh all-Luna editing run or a matched replacement for Sol's earlier check, which also corrected a draft error. The built-in defaults remain unchanged. The change adds no runtime machinery or test lines; all 104 tests, types, formatting, and documentation checks passed. Evidence is under `runs/editor-golden-proof-controls-r02-protocol/`, and both attempts are terminal. No large run was launched.
