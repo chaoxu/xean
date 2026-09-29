@@ -10,11 +10,13 @@ The best reviewed GPT-6 Luna draft reduced the complete mathematical payload by 
 
 - [input.json](input.json): the problem and three original notes shown to the model.
 - [golden.md](golden.md): provenance, capability/proof answer key, and known failure cases. The runner never reads it.
-- [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), and [consolidation.md](prompts/consolidation.md): frozen prompt conditions.
+- [baseline.md](prompts/baseline.md), [reference.md](prompts/reference.md), [consolidation.md](prompts/consolidation.md), and [reuse.md](prompts/reuse.md): frozen prompt conditions.
 - [settings.json](settings.json): current GPT-6 Luna/max generation settings, with one admitted call and no literature access.
 - [run.ts](run.ts), [operate.ts](operate.ts), and [job.nomad.hcl](job.nomad.hcl): generation, operations, and the shared native-role job.
 
 The input has 5,663 proof-body tokens, 6,110 mathematical tokens including summaries and support, and 7,511 tokens in its complete JSON. Counts use `o200k_base` as a common reference tokenizer. Mathematical counts include retained dependency closure and exclude historical verification records. The original `fullNote` projection, including status and feedback, has 6,196 tokens. Provider usage is measured separately and includes reasoning.
+
+The historical fixture has identical index and detailed summaries. Edited detailed summaries may add useful hypotheses and bounds, so their growth is not necessarily waste. Assess that middle view's utility alongside complete-payload size.
 
 Each generation uses the existing Pi request path, schema, and dependency validation for one call and one draft. It has no automatic repair or verification. Compare its output with the hidden key afterward: check usable capabilities and complete arguments, scoped negatives, dependency closure, and consolidation of repeated exposition. Equivalent valid proofs and different organizations are welcome. Generation completion, native acceptance, and independent review are separate outcomes.
 
@@ -55,6 +57,8 @@ The former large-run drivers and templates remain in commit `23f19fa9188c119ca0f
 ## Outcomes
 
 All model conditions below use max reasoning. Each table records request time unless marked as whole-task time.
+
+The preregistered next pair, `runs/editor-golden-reuse-r01-protocol/`, compares consolidation with one added within-call editing pass: replace repeated derivations with precise applications of existing support, and keep proof tours out of summaries. It uses fresh one-call GPT-6 Luna arms at the same source commit. The input, settings, schema, and hidden key stay fixed. A shorter result must retain both usable proofs and useful detailed summaries before native follow-up. Results are pending.
 
 ### Generation comparisons
 
