@@ -908,8 +908,12 @@ The deterministic Coordinator runs the following loop without planning calls:
    obsolete lemmas to disappear. Modest consolidation is acceptable when the
    corpus contains distinct useful results. An omission must lose useful research
    knowledge to count as a coverage failure. An absent old lemma alone is
-   insufficient. Earlier PASS checks do not excuse missing arguments or lost
-   hypotheses found during review.
+   insufficient. Routine explanations may remain implicit when the retained
+   statements and arguments suffice for correct reuse and recovering the
+   explanation requires no substantive new argument. A failure must identify
+   the useful capability, substantial obstruction, hypothesis, or guarantee
+   the replacement no longer supplies. Earlier PASS checks do not excuse
+   missing arguments or lost hypotheses found during review.
    If any note is unverified or corpus review is not PASS, Editor receives both
    the recorded mathematical checks and corpus-review findings in one repair
    pass. Repairs retain unaffected notes by their exact IDs, fix defects, and
