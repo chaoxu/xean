@@ -2,9 +2,9 @@
 
 Test whether editing produces a smaller, coherent mathematical reference while preserving useful results, complete arguments, methods, scoped limitations, and open gaps. All trials use one frozen three-note fixture. There is no compression target or requirement to preserve each old note. Full-corpus experiments remain stopped.
 
-The best reviewed automatic GPT-6 Luna draft reduced mathematical payload by 13.6%. A manually curated reference achieved 32.8%, showing room for further consolidation, but cheap automatic generation has not reproduced it. Fresh native workflows achieved 10.1% with Sol checking and 3.4% with Luna checking. General reliability and downstream savings remain unestablished.
+Two GPT-6 Luna editing responses followed by correctness and corpus checks reduced mathematical payload by **24.4% for $0.03265942 across four calls**. This improves on the best reviewed one-call draft's 13.6%. A manually curated reference achieved 32.8% with unpriced curation overhead. Fresh built-in native workflows achieved 10.1% with Sol checking and 3.4% with Luna checking. General reliability, large-input behavior, and downstream savings remain unestablished.
 
-**Reconciled gateway ledger through the cofactor controls: 41 requests, $1.97585254 known API-equivalent usage, plus unknown usage for one of those requests.** The original unpriced transport failure is counted once. Curation, interactive reviews, and the separately priced Opus design review are outside the gateway ledger. No research corpus was activated.
+**Reconciled small-fixture gateway ledger: 45 requests, $2.00851196 known API-equivalent usage, plus unknown usage for one of those requests.** The original unpriced transport failure is counted once. Curation, interactive reviews, and the separately priced Opus design review are outside the gateway ledger. All jobs are terminal. No research corpus was activated.
 
 ## Materials and method
 
@@ -69,6 +69,25 @@ All conditions use max reasoning. Times below are generation elapsed times, roun
 The added editing pass saved 51 body tokens but expanded summaries, leaving complete size unchanged. Its matched requests differed only in instructions and their derived cache key. The common-proof instruction requested shared constructions, implementations, and complexity arguments with application-specific checks. Luna still repeated parts of its shared walk. Holding that prompt fixed and changing to Sol yielded 4,491 body tokens and a larger complete payload, at substantially higher cost. Recorded Luna/Sol requests differed only in model and the derived cache key. Neither improved on the earlier reviewed draft, so both stopped before native verification. Normalized mathematical sizes were 5,338 (Luna), 5,440 (Sol), and 5,060 (earlier reviewed draft).
 
 Evidence: `runs/editor-golden-comparison-r01/`, `runs/editor-golden-consolidation-r01/`, `runs/editor-golden-luna-r01/`, `runs/editor-golden-luna6-r01/`, `runs/editor-golden-reuse-r01-protocol/`, `runs/editor-golden-shared-proof-r01-protocol/`, and `runs/editor-golden-shared-proof-sol-r01-protocol/`. These contain or reference raw outputs, frozen settings, measurements, request comparisons, and accounting.
+
+## Draft refinement
+
+One additional Luna response revised a complete first draft in Pi's existing transcript. The initial request exactly matched the earlier one-call shared-proof condition. Only after submission did a generic continuation request a complete revision. The key, curated reference, earlier trials, measurements, and external reviews were withheld.
+
+| Measure                             | Original | First draft | Revised draft |
+| ----------------------------------- | -------: | ----------: | ------------: |
+| Notes                               |        3 |           4 |             4 |
+| Proof bodies                        |    5,663 |       4,573 |         3,920 |
+| Mathematical tokens                 |    6,110 |       5,460 |         4,619 |
+| Mathematical tokens, normalized IDs |    6,094 |       5,300 |         4,459 |
+
+The second pass saved 841 mathematical tokens from its own first draft (15.4%), including 653 body tokens. Both proofs and summaries became shorter. The pair cost $0.02106042 and took 638.159s. Its second request included 52,795 input tokens, of which 6,912 were cached, so retained conversation cost is included.
+
+All four revised notes passed native correctness/source checks unchanged ($0.00574590), followed by corpus-review PASS ($0.00585310). The authentic standalone results satisfy `editingResult` when assembled locally. Independent review found no consequential defect or lost useful capability. Minor issues concern a misattributed proof implication and an omitted rounding tie rule. The shared span routine also leaves empty-set handling implicit, while all supplied applications contain zero. The frozen output remains unchanged.
+
+The complete four-call path cost **$0.03265942**, with **16m 57.3s summed request latency**, excluding manual handoffs. The checked full-note projection shrank 23.6%, from 6,196 to 4,734 tokens. This is a promising development result for draft refinement before verification. It required no verifier repair loop, but one sample does not establish reliable four-call completion. Production role behavior and the one-call default remain unchanged. No further calls are part of this trial.
+
+Evidence: `runs/editor-golden-refinement-r01-protocol/`, `runs/editor-golden-refinement-verifier-r01-protocol/`, and `runs/editor-golden-refinement-coverage-r01-protocol/`. Experiment support adds 30 net code lines using the existing Pi loop, with zero production/test-suite line change. Eight offline controls exercised successful revision, invalid/prose continuation, errors, truncation, denied calls, and cancellation.
 
 ## Verification, repair, and native workflows
 
