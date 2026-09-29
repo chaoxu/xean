@@ -13,6 +13,6 @@
   "limits": {
     "concurrency": 1,
     "attempts": 1,
-    "providerCalls": 2
+    "providerCalls": 1
   }
 }
