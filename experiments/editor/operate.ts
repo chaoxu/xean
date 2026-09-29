@@ -203,6 +203,8 @@ for(const [name,bytes]of Object.entries(${JSON.stringify(roleFiles)}))await writ
 assert.equal(createHash("sha256").update(await readFile(root+"/source.tar")).digest("hex"),${JSON.stringify(archiveHash)});
 for(const [args,cwd]of [[["tar","-xf",root+"/source.tar","-C",root+"/source"],root],[[process.execPath,"install","--ignore-scripts","--frozen-lockfile"],root+"/source"]]){
 const child=Bun.spawn(args,{cwd,stdout:"pipe",stderr:"pipe"});const error=new Response(child.stderr).text();await new Response(child.stdout).text();assert.equal(await child.exited,0,await error);}
+await mkdir(root+"/codex",{mode:0o700});
+await writeFile(root+"/codex/config.toml",await readFile(root+"/source/experiments/editor/codex.toml"),{flag:"wx",mode:0o600});
 const {recordInstall,verifyInstall}=await import(root+"/source/scripts/dependencies.ts");await recordInstall(root+"/source");await verifyInstall(root+"/source");`);
   const payload = JSON.parse(
     await invoke(

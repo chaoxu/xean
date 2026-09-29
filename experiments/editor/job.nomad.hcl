@@ -65,29 +65,8 @@ job "xean-editor" {
         }
       }
       env {
-        CODEX_HOME = "/local"
+        CODEX_HOME = "/runs/_xean/${var.run_id}/codex"
         NODE_EXTRA_CA_CERTS = "/usr/local/share/ca-certificates/lab-root.crt"
-      }
-      template {
-        destination = "local/config.toml"
-        change_mode = "noop"
-        perms = "0644"
-        data = <<EOF
-model_provider = "xean_codex_lb"
-approval_policy = "never"
-sandbox_mode = "read-only"
-web_search = "live"
-
-[model_providers.xean_codex_lb]
-name = "Xean codex-lb"
-base_url = "https://codex-lb.lab/backend-api/codex"
-wire_api = "responses"
-env_key = "XEAN_API_KEY"
-supports_websockets = true
-supports_standalone_web_search = true
-http_headers = { "X-Codex-LB-Required-Capability" = "usage_tag_v1" }
-env_http_headers = { "X-Codex-LB-Usage-Tag" = "XEAN_CODEX_USAGE_TAG" }
-EOF
       }
       volume_mount {
         volume = "runs"
