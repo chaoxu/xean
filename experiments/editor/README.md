@@ -22,6 +22,25 @@ Afterward, check the hidden key's useful capabilities, full arguments, scoped ne
 
 Change one factor at a time and commit before launch. Freeze inputs, prompts, settings, and reasoning. Keep the key outside generation and assessment inputs. For blinded comparisons, also withhold prior judgments of the tested claim, authorship, and expected outcomes. Independently establish a control's intended defect before spending a call on it. Record failed requests, invalid submissions, and stopping decisions. Single samples on this development fixture do not establish general reliability or causal effects.
 
+## Current operating recommendation
+
+Use GPT-6 Luna/max for an occasional edit of a supplied corpus that fits its context. Start with [settings.json](settings.json), retain its complete provider profile, and change these fields for the tested initial refinement path:
+
+```json
+{
+  "maxEditorResponses": 2,
+  "limits": { "concurrency": 1, "attempts": 1, "providerCalls": 4 }
+}
+```
+
+Use those settings with native `edit`: draft, revise once, check correctness/sources, and review the whole replacement. Only the last returned draft reaches verification. Four successful calls cover this initial path. A frozen allowance of seven can also cover one complete targeted repair, verification, and corpus-review cycle if each stage takes one call. Retries, invalid submissions, and additional source obligations consume the same allowance. These are admission limits, not guarantees of acceptance or a number of calls to spend. Historical trials keep their original limits and verdicts.
+
+Keep the one-response library default and leave automatic editing disabled unless explicitly configured. The 200,000-token advice threshold is unqualified by these experiments. The pinned Luna profile has a 272,000-token window and 128,000-token output ceiling. Xean reserves that ceiling plus Pi's 4,096-token safety margin, leaving at most 139,904 estimated input tokens for the entire request. The original notes, retained draft, reasoning, and framing all count. A context override changes the local estimator, not the provider's capability. Do not infer large-input support from this fixture.
+
+The evidence supports useful consolidation at low model cost. It does not establish a net monetary saving: some dependency packets and the index grow, editing changes the cache, and the reviewed path took about 17 minutes of request time. Prefer occasional editing when repeated full-proof use or improved organization justifies it. Preserve substantial negative results and complete retained arguments. Use existing targeted repair for concrete findings, without repeatedly regenerating to chase a smaller percentage.
+
+The broader goal remains open on reliability, large-input capacity, downstream usefulness, and total cost. Stop paid development trials here. A further experiment should answer a named unresolved decision, with its input scope and stopping rule fixed before launch.
+
 ## Run and collect
 
 From the adjacent Fleet Infra checkout, use locked Bun:
@@ -44,7 +63,7 @@ For native stages, replace the prompt argument with `verifier`, `editionReview`,
 | `editor`        | `{task, notes: originalNotes, previous: checkedReplacement, review: coverageVerdict}` for repair. Retained IDs reuse checks. Rewritten notes need fresh verification.                       |
 | `edit`          | The fixed `input.json`, through the built-in `xean edit` workflow. Only its completed result establishes native workflow acceptance.                                                        |
 
-Standalone roles admit one call each. A native workflow fixes a finite positive `limits.providerCalls` before launch. The tested `{concurrency: 1, attempts: 1, providerCalls: 6}` allows an initial cycle and a repair cycle only if every stage takes one call. Acceptance stops earlier. Retries, invalid submissions, and source obligations can exhaust the allowance, with no automatic extension.
+Standalone roles admit one call each. A native workflow fixes a finite positive `limits.providerCalls` before launch. The tested `{concurrency: 1, attempts: 1, providerCalls: 6}` allows an initial cycle and a repair cycle with one drafting response, only if every stage takes one call. With two initial drafting responses, those cycles require four and seven calls respectively. Acceptance stops earlier. Retries, invalid submissions, and source obligations can exhaust the allowance, with no automatic extension.
 
 The tested mixed profile uses GPT-6 Luna/max by default with complete GPT-6 Sol/max `correctness` and `editorRepair` profiles. Native-r03 instead used Luna correctness. Profiles replace whole profiles, so preserve gateway and credential fields when overriding a model. Repair selection falls back `editorRepair` → `editor` → `default`. See [solver configuration](../../docs/solver.md) for editing-only composition and check reuse across models. These experiments do not change production defaults.
 

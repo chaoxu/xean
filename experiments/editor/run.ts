@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import type { Usage } from "@earendil-works/pi-ai";
 import { Xean, openXeanStorage } from "../../packages/core/src/index.ts";
 import {
   campaignOptions,
@@ -59,24 +58,6 @@ const save = (name: string, value: unknown) =>
     mode: 0o600,
   });
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-const size = (notes: SolverInput["notes"]) => {
-  const text = notes.map((note) => note.text).join("\n");
-  const mathematics = JSON.stringify(
-    notes.map(({ id, summary, detailedSummary, text, support }) => ({
-      id,
-      summary,
-      detailedSummary,
-      text,
-      support,
-    })),
-  );
-  return {
-    notes: notes.length,
-    bodyBytes: Buffer.byteLength(text),
-    bodyUtf16Chars: text.length,
-    mathematicalPayloadBytes: Buffer.byteLength(mathematics),
-  };
-};
 const startedAt = new Date().toISOString();
 const started = performance.now();
 const proposals: Editing[] = [];
@@ -85,7 +66,6 @@ const outcome: Record<string, unknown> = {
   error: null,
   result: null,
   calls: null,
-  usage: null,
   verification: "not_run",
 };
 let engine: Xean | undefined;
@@ -117,7 +97,6 @@ try {
     input.notes.map((note) => note.id),
     input.notes,
   );
-  outcome.before = size(input.notes);
   const settingsText = await readFile(
     resolve(import.meta.dir, "settings.json"),
     "utf8",
@@ -200,27 +179,12 @@ try {
     options,
   );
   const campaign = cancelled ? await engine.cancel() : await engine.run();
+  outcome.calls = campaign.providerCalls;
   const records = await engine.records();
   await save("records.json", records);
   const settled = records.filter(
     (record) => record.kind === "xean.call.settled",
   );
-  const usage = settled.map(
-    (record) => (record.data as { usage: Usage | null }).usage,
-  );
-  const known = usage.filter((value): value is Usage => value != null);
-  Object.assign(outcome, {
-    calls: campaign.providerCalls,
-    usage: {
-      knownCalls: known.length,
-      unknownCalls: settled.length - known.length,
-      input: known.reduce((sum, value) => sum + value.input, 0),
-      output: known.reduce((sum, value) => sum + value.output, 0),
-      cacheRead: known.reduce((sum, value) => sum + value.cacheRead, 0),
-      cacheWrite: known.reduce((sum, value) => sum + value.cacheWrite, 0),
-      reportedCostUsd: known.reduce((sum, value) => sum + value.cost.total, 0),
-    },
-  });
   assert.equal(
     records.filter((record) => record.kind === "xean.call.started").length,
     settled.length,
@@ -250,7 +214,6 @@ try {
       notes,
     );
     await save("replacement.json", { task: input.task, notes });
-    outcome.after = size(notes);
   }
 } catch (error) {
   outcome.status = "failed";
