@@ -3,9 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import {
   createEditor,
+  campaignOptions,
+  declarationVersion,
   type EditingResult,
   type EditorInput,
   type Note,
@@ -59,7 +62,7 @@ function editorRuntime(
   });
 }
 
-test("editing combines proof and coverage feedback before repair and reuses checks", async () => {
+test("editing refines privately, combines proof and coverage feedback, and reuses checks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-editing-"));
   const path = join(directory, "campaign.sqlite");
   const input = {
@@ -107,13 +110,19 @@ test("editing combines proof and coverage feedback before repair and reuses chec
   const runtime = editorRuntime((role, data, prompt) => {
     if (role === "editor" || role === "editorRepair") {
       drafts++;
-      expect(role).toBe(drafts === 1 ? "editor" : "editorRepair");
-      expect(data.previous !== undefined).toBe(drafts > 1);
+      expect(role).toBe(drafts <= 2 ? "editor" : "editorRepair");
+      expect(data.previous !== undefined).toBe(drafts > 2);
       expect(data.notes.map((note) => note.text)).toEqual(
         original.notes.map((note) => note.text),
       );
       expect(data.notes.every((note) => !("checks" in note))).toBe(true);
       if (drafts === 1)
+        return {
+          retained: [],
+          report: "Private first draft.",
+          notes: [draft("n1", "First draft never sent to verification")],
+        };
+      if (drafts === 2)
         return {
           retained: [],
           report: "Combine the old chain.",
@@ -122,7 +131,7 @@ test("editing combines proof and coverage feedback before repair and reuses chec
             draft("n2", "Defective proof", ["n1"]),
           ],
         };
-      expect(drafts).toBe(2);
+      expect(drafts).toBe(3);
       expect(
         data.previous?.find((note) => note.text === "Defective proof")?.dead,
       ).toBe(true);
@@ -172,8 +181,8 @@ test("editing combines proof and coverage feedback before repair and reuses chec
     throw new Error(`Unexpected call: ${role}`);
   });
   const options = {
-    ...createEditor(input, runtime, {}, research),
-    limits: { providerCalls: 2 },
+    ...createEditor(input, runtime, { maxEditorResponses: 2 }, research),
+    limits: { providerCalls: 3 },
   };
   let engine = await Xean.open(await openXeanStorage(path), options);
   try {
@@ -219,7 +228,7 @@ test("editing combines proof and coverage feedback before repair and reuses chec
       ["Repaired proof", "Counterexample and limitation"],
     ]);
     expect(new Set(sourced).size).toBe(sourced.length);
-    expect(drafts).toBe(2);
+    expect(drafts).toBe(3);
     expect(reviews).toBe(2);
     expect(input).toEqual(original);
     // A completed revision is valid input to another run, without reusing new-note IDs.
@@ -338,4 +347,62 @@ test("replacement support retains its closure without reviving rejected or forwa
       notes,
     ),
   ).toThrow("Cannot retain dead");
+});
+
+test("Editor response limits preserve only valid completed submissions", async () => {
+  for (const [maxEditorResponses, providerCalls, status, responses] of [
+    [undefined, 1, "blocked", 1],
+    [2, 2, "completed", 2],
+    [2, 1, "limited", 1],
+  ] as const) {
+    const input = {
+      task: { problem: "P", completionCriteria: "Prove P" },
+      notes: [],
+    };
+    const valid = {
+      retained: [],
+      report: "Edited",
+      notes: [draft("n1", "Valid draft")],
+    };
+    let calls = 0;
+    const runtime = editorRuntime((role) => {
+      expect(role).toBe("editor");
+      calls++;
+      return maxEditorResponses && calls === 1
+        ? valid
+        : {
+            ...valid,
+            notes: [draft("n1", "Invalid support", ["missing"])],
+          };
+    });
+    const engine = await Xean.open(
+      new MemoryStorage(),
+      campaignOptions(
+        {
+          version: declarationVersion,
+          kind: "xean.role",
+          role: "editor",
+          task: input.task,
+          input,
+          settings: {
+            profiles: { default: { provider: "openai", model: "unused" } },
+            ...(maxEditorResponses ? { maxEditorResponses } : {}),
+            limits: { providerCalls },
+          },
+        },
+        runtime,
+      ),
+    );
+    try {
+      const campaign = await engine.run();
+      expect(campaign.status).toBe(status);
+      expect(calls).toBe(responses);
+      expect(campaign.result).toEqual(status === "completed" ? valid : null);
+      expect(campaign.work[0]!.result).toEqual(
+        status === "completed" ? valid : null,
+      );
+    } finally {
+      await engine.close();
+    }
+  }
 });

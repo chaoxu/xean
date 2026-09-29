@@ -52,6 +52,11 @@ corpus size at ordinary planning calls. Corpus replacement policy belongs to the
 and requires no Pi patch. Whole-corpus model capacity remains a limit of the
 initial implementation, as described in the solver guide.
 
+Optional initial-draft refinement reuses Pi's transcript and Xean's existing
+`ask` response cap and validated-submission handoff. It adds no role or scheduler.
+The last valid draft remains private until the worker returns. Provider failure
+and cancellation retain the existing whole-worker publication rules.
+
 ## Durable integration
 
 Store adapts native `createSession`. Its typed campaign document uses full bases

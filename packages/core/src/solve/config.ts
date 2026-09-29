@@ -59,6 +59,7 @@ export const settingsSchema = object({
   }),
   maxExplorerResponses: Type.Optional(positiveIntegerSchema),
   maxExplorerReads: Type.Optional(positiveIntegerSchema),
+  maxEditorResponses: Type.Optional(positiveIntegerSchema),
   editingThresholdTokens: Type.Optional(
     Type.Union([positiveIntegerSchema, Type.Null()]),
   ),

@@ -43,6 +43,7 @@ export function createSolver(
   const maxExplorerReads = settings.maxExplorerReads ?? 4;
   const options: RoleOptions = {
     maxExplorerResponses: maxExplorerReads + 4,
+    maxEditorResponses: 1,
     literature: false,
     maxExplorerReads,
     ...settings,
@@ -51,6 +52,8 @@ export function createSolver(
     throw new Error("maxExplorerResponses must be a positive integer");
   if (!Check(positiveIntegerSchema, options.maxExplorerReads))
     throw new Error("maxExplorerReads must be a positive integer");
+  if (!Check(positiveIntegerSchema, options.maxEditorResponses))
+    throw new Error("maxEditorResponses must be a positive integer");
   if (
     options.editingThresholdTokens != null &&
     !Check(positiveIntegerSchema, options.editingThresholdTokens)

@@ -37,13 +37,13 @@ const apiKey = "xean-offline-fixture-key";
 
 test("configuration and library limits share safe integer boundaries", async () => {
   const profiles = { default: { provider: "openai", model: "unused" } };
-  const solver = (maxExplorerResponses: number) =>
+  const solver = (maxExplorerResponses: number, maxEditorResponses = 1) =>
     createSolver(
       { problem: "Exact task", completionCriteria: "Complete proof" },
       () => {
         throw new Error("Numeric validation needs no model runtime");
       },
-      { maxExplorerResponses },
+      { maxExplorerResponses, maxEditorResponses },
     );
   const open = (limits: Partial<Limits>) =>
     Xean.open(new MemoryStorage(), { ...solver(1), limits });
@@ -52,6 +52,10 @@ test("configuration and library limits share safe integer boundaries", async () 
     expect(() =>
       readSettings({ profiles, maxExplorerResponses: value }),
     ).toThrow();
+    expect(() =>
+      readSettings({ profiles, maxEditorResponses: value }),
+    ).toThrow();
+    expect(() => solver(1, value)).toThrow();
     expect(() =>
       readSettings({
         profiles: { default: { ...profiles.default, contextWindow: value } },
@@ -80,6 +84,10 @@ test("configuration and library limits share safe integer boundaries", async () 
     }
   }
   expect(() => solver(maximum)).not.toThrow();
+  expect(() => solver(1, maximum)).not.toThrow();
+  expect(readSettings({ profiles, maxEditorResponses: maximum })).toMatchObject(
+    { maxEditorResponses: maximum },
+  );
   const retired = { deadline: Date.now() + 60_000 };
   expect(() => readSettings({ profiles, limits: retired })).toThrow();
   await expect(open(retired as Partial<Limits>)).rejects.toThrow(
@@ -1069,6 +1077,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     return reply("submit_result", plan);
   };
   const roles = createRoles(runtime, offlineResearch, {
+    maxEditorResponses: 1,
     maxExplorerReads: 1,
     maxExplorerResponses: 4,
     literature: true,

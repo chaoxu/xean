@@ -24,6 +24,7 @@ import {
 } from "../../packages/core/src/solve/notes.ts";
 import { ask } from "../../packages/core/src/solve/pi.ts";
 import { fullNote } from "../../packages/core/src/solve/reader.ts";
+import { editorContinuation } from "../../packages/core/src/solve/roles.ts";
 import { json } from "../../packages/core/src/json.ts";
 import { verifyInstall } from "../../scripts/dependencies.ts";
 
@@ -179,9 +180,7 @@ try {
             {
               maxResponses: responseAllowance,
               continuation:
-                responseAllowance === 2
-                  ? "Revise the submitted replacement as one mathematical reference. Remove derivations that repeat a proved supporting argument, replacing them with the exact substitution and any additional hypothesis checks. Remove repeated setup and proof narration from summaries. Preserve the usable proofs, quantitative guarantees, counterexamples, and scope. Submit one complete replacement, not a patch; all dependencies must resolve within that replacement or the original supplied notes."
-                  : undefined,
+                responseAllowance === 2 ? editorContinuation : undefined,
               submit(proposal) {
                 retainedNotes(proposal, input.notes);
                 proposals.push(structuredClone(proposal));

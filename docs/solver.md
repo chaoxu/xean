@@ -684,6 +684,10 @@ from `xean/pi` directly with Pi's `models.setProvider()`.
 `maxExplorerReads` is a positive safe integer and defaults to four.
 `maxExplorerResponses` is a positive safe integer and defaults to
 `maxExplorerReads + 4`. An explicit response limit overrides that default.
+`maxEditorResponses` is a positive safe integer and defaults to one. It bounds
+initial editing responses, including invalid or missing submissions. Set it to
+two to request a complete revision after the first draft, as described under
+[corpus editing](#corpus-editing). It does not change targeted repair passes.
 The [read contract](#roles-and-acceptance) defines admission and the final-response
 restriction. `literature` defaults to false. `limits`
 uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
@@ -693,7 +697,7 @@ Token and dollar budgets remain out of scope. Set `usagePrefix` to a
 unique campaign label when using codex-lb. The frozen settings retain it, and each
 call appends the kernel attempt ID. The smoke assigns a timestamped prefix.
 Configuration and library entry points share bounded integer schemas for limits,
-call grants, and Explorer read and response counts. Settings, declarations, and
+call grants, and role read and response counts. Settings, declarations, and
 commands are validated strictly, without converting strings or truncating numbers.
 
 Install and authenticate the Codex CLI for research. To configure its model and
@@ -959,10 +963,26 @@ The frozen worker inputs retain every check and source quotation. Verifier uses
 that complete evidence, while the reading view omits its audit records. No note
 text is shortened or omitted.
 
-Each Editor pass uses Pi's existing structured-result call with the full original
-corpus. Repair passes also receive the previous proposal and the last corpus review.
-There is no separate feedback digest, retrieval tool, or recursive editing runtime.
-Corpus review returns only a verdict and report.
+Initial editing uses Pi's existing structured-result loop with the full original
+corpus. `maxEditorResponses` defaults to one, so an invalid or missing submission
+fails without another response to correct it. With a value of two, the first
+valid draft stays in the same transcript and Editor is asked to revise the whole
+replacement before returning it. The configured cap counts all responses, not
+just valid submissions. Only the final returned proposal reaches verification.
+
+The last valid proposal can be returned at the response cap, after a prose-only
+continuation, or when another response would exceed context capacity. This is
+not evidence that refinement occurred. Provider errors, truncated output, denied
+calls, and cancellation remain failures with no partial publication. The kernel's
+provider-call allowance is independent and includes retries. Two drafting
+responses followed by self-contained correctness and corpus review require four
+successful calls in the measured small-fixture case. Source obligations or
+retries may require more, and no allowance is extended automatically.
+
+Repair passes receive the previous proposal and corpus review, use `editorRepair`,
+and stop at the first valid repair. They do not apply `maxEditorResponses` or
+request further consolidation. There is no separate feedback digest, retrieval
+tool, or recursive editing runtime. Corpus review returns only a verdict and report.
 
 An independent Codex review consumes the exact task and the full exported
 argument, without solver verdicts:
