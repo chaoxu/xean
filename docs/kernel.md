@@ -251,13 +251,19 @@ interrupt several concurrent workers.
 Omitted limits and explicitly undefined known fields use these defaults.
 Unknown fields and invalid values are rejected.
 
+These are operational safeguards for admitted work, not a campaign call budget.
+A campaign remains runnable regardless of its accumulated provider-call count.
+An outer experiment runner can stop scheduling after its own explicit round limit;
+that limit does not create a second call ceiling inside the campaign.
+
 The kernel imposes no wall-clock deadline on campaigns or roles. Elapsed time
 does not stop kernel admission or publication. Settings reject the retired
 `deadline` field. Experiment and smoke runners add no such cutoff. Existing
 dependency timeouts remain provider behavior and are tuned from measured data.
 
 Token and dollar budgets are outside the planned scope. Usage records support
-observation and comparisons but never stop admission or publication. Pi's
+observation and comparisons but never stop admission or publication. A call count
+or usage total is never a reason to drain, pause, or reject work. Pi's
 internal HTTP or WebSocket retry attempts count within their logical call. Each
 fresh call through the recorder records another admission, and roles must use
 that integration for the kernel to account for calls.

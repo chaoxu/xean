@@ -1,7 +1,10 @@
 # Xean
 
 Xean coordinates durable mathematical work over Pi. The kernel handles campaign
-admission, atomic publication, limits, and recovery policy. The solver adds notes,
+admission, atomic publication, operational limits, and recovery policy. Model-call
+counts and token or cost usage are retained as observations; they never stop a
+campaign. An outer experiment runner may impose an explicit round limit. The
+solver adds notes,
 exploration, verification, and exact-task acceptance. Pi supplies model and tool
 execution, private conversation recovery, task dispatch, storage records, and
 atomic batches. Built-in model roles retain completed reads and submissions
@@ -147,9 +150,13 @@ bun run xean status /absolute/run-directory/campaign.sqlite
 This reads committed state without model calls or recovery. The compact report
 omits proofs and transcripts. See [checking status](docs/solver.md#checking-status)
 for frozen and remote runs, verification progress, and observation freshness.
-Agents should start with `status` and its `nextAction` and `verificationIssues`.
-Use `inspect` for notes, `inspect --records` for execution records, and `export`
-for the accepted proof only when those details are needed. Commands emit JSON
+Agents should start with `status`. Branch on its committed campaign state,
+verification fields, and bounded work summaries; treat `nextAction` as advisory
+text rather than a scheduler instruction. Use `pause`, `resume`, or `cancel` as
+explicit lifecycle controls, then read `status` again to confirm the committed
+state. Call and usage totals are observational and cannot block a new campaign or
+continue one. Use `inspect` for notes, `inspect --records` for execution records,
+and `export` for the accepted proof only when those details are needed. Commands emit JSON
 except `export`, which emits Markdown, and help/version output. Xean Lab handles
 discovery and submission across supervised experiments in its separate repository.
 

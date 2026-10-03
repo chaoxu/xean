@@ -25,6 +25,24 @@ const diagnostic = Type.Union([
   Type.String({ maxLength: textLimit }),
   Type.Null(),
 ]);
+const phase = Type.Union([
+  Type.Literal("running"),
+  Type.Literal("draining"),
+  Type.Literal("paused"),
+  Type.Literal("blocked"),
+  Type.Literal("terminal"),
+]);
+const action = Type.Union([
+  Type.Literal("pause"),
+  Type.Literal("resume"),
+  Type.Literal("cancel"),
+]);
+const errorCode = Type.Union([
+  Type.Literal("campaign_error"),
+  Type.Literal("campaign_blocked"),
+  Type.Literal("campaign_cancelled"),
+  Type.Null(),
+]);
 const page = <T extends TSchema>(item: T) =>
   Type.Object({
     items: Type.Array(item, { maxItems: itemLimit }),
@@ -49,6 +67,9 @@ export const statusSchema = Type.Script(
     Count: count,
     Counts: counts,
     Diagnostic: diagnostic,
+    Phase: phase,
+    Actions: Type.Array(action, { maxItems: 2 }),
+    ErrorCode: errorCode,
     Activity: page(workSchema),
     Failures: page(
       Type.Object({ ...workSchema.properties, error: diagnostic }),
@@ -64,7 +85,8 @@ export const statusSchema = Type.Script(
     ),
   },
   `{
-  status: string, error: Diagnostic, work: Counts, pendingSignals: Count,
+  status: string, phase: Phase, allowedActions: Actions,
+  error: Diagnostic, errorCode: ErrorCode, work: Counts, pendingSignals: Count,
   acceptedNoteId: string | null, activity: Activity, failures: Failures,
   notes?: Counts, verification?: Record<string, Counts>,
   nextAction?: string, verificationIssues?: Issues,
@@ -185,6 +207,31 @@ export function statusReport({
   const solver = isSolverCampaign(campaign);
   const result = campaign.result as { noteId?: unknown } | null;
   const imported = notes?.filter((note) => note.imported).length ?? 0;
+  const phase = {
+    running: "running",
+    pausing: "draining",
+    paused: "paused",
+    blocked: "blocked",
+    cancelled: "terminal",
+    completed: "terminal",
+  }[campaign.status] as
+    "running" | "draining" | "paused" | "blocked" | "terminal";
+  const allowedActions = {
+    running: ["pause", "cancel"],
+    pausing: ["cancel"],
+    paused: ["resume", "cancel"],
+    blocked: ["resume", "cancel"],
+    cancelled: [],
+    completed: [],
+  }[campaign.status] as ("pause" | "resume" | "cancel")[];
+  const errorCode =
+    campaign.status === "blocked"
+      ? "campaign_blocked"
+      : campaign.status === "cancelled"
+        ? "campaign_cancelled"
+        : campaign.error
+          ? "campaign_error"
+          : null;
   const nextAction = {
     blocked:
       "Resolve the reported Coordinator failure, then resume the campaign.",
@@ -228,7 +275,10 @@ export function statusReport({
   }
   return {
     status: campaign.status,
+    phase,
+    allowedActions,
     error: statusText(campaign.error),
+    errorCode,
     ...(nextAction ? { nextAction } : {}),
     ...(issues.length
       ? { verificationIssues: preview(issues, (issue) => issue) }

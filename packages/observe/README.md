@@ -6,6 +6,10 @@ snapshot publisher, and theme assets. It uses Xean's public inspection,
 note-projection, and `xean/report` APIs. Core and CLI do not depend on it, and
 it does not depend on the CLI.
 
+Observe is read-only. Recorded model-call, token, and cost data describe what has
+run; they do not impose a campaign stop or a polling decision. Campaign lifecycle
+controls remain with the Xean CLI or active owner.
+
 The dashboard reads local campaigns through `inspectCampaign` and remote runs
 through exported JSON. Inspection never starts recovery or calls a model.
 The dashboard and publisher run separately from solver execution, including
@@ -138,6 +142,18 @@ are clipped.
 Remove `?view=status` when those details are needed. Check a long run on request
 or at a suitable interval, such as ten minutes, rather than reading every refresh.
 Detailed notes require a current local campaign database or a published observation.
+Use the run's matching source checkout and runtime for historical campaigns.
+
+Compact status is the routine agent read. Its activity, failure, and usage-group
+lists are bounded and report omitted entries explicitly; an omitted count means
+the view is incomplete, not that the omitted entries are absent. Request the full
+view only when the additional notes, checks, task text, or logs are needed, and
+use the run's matching reader for historical campaigns.
+
+Runs launched before snapshot publishing retain their original runner. Observe
+shows their task, round markers, and Nomad logs until a result export appears.
+Detailed notes during execution require a compatible local campaign database
+or an observation snapshot.
 Snapshots use `xean-observe/v4` and include committed index and detailed summaries,
 full note text and checks, worker outcomes and note links, and native
 usage counts. Private model reasoning and complete request bodies stay in the

@@ -532,11 +532,12 @@ ChatGPT Web Explorer because those paths do not enforce closed-book execution.
 These campaigns use `xean.solve.offline` and require the same runner and flag
 when reopening for execution. CLI inspection and accepted-argument export
 support online, closed-book, and direct-library campaigns. The
-[experiment protocol](steinitz-run.md) keeps round allowances private to the
+[experiment protocol](steinitz-run.md) keeps explicit round limits private to the
 runner and operators, with no remaining-round information in role inputs.
 The bounded runner opts into the CLI's live owner control. Guidance, note
-submissions, and lifecycle commands reach the active owner. Round allowances
-remain an outer-runner setting. Observation is a separate application. Use its
+submissions, and lifecycle commands reach the active owner. Round limits remain
+an outer-runner setting; they do not authorize a campaign call ceiling.
+Observation is a separate application. Use its
 [snapshot publisher](../packages/observe/README.md#snapshot-publishing) when a
 remote dashboard needs live exports.
 
@@ -609,6 +610,11 @@ accepted resume keeps the owner socket available for lifecycle and input command
 Responses lost after submission are not automatically replayed. Terminal campaigns
 cannot be resumed; `run` reopens completed results without executing work.
 
+The live control socket returns rejected commands as JSON
+`{"error":{"code":"...","message":"..."}}`. Stable codes are
+`owner_changed`, `owner_stopping`, and `command_rejected`; the message is a
+diagnostic for operators.
+
 Opening an interrupted campaign for execution or mutation performs the kernel's
 normal attempt recovery and can write recovery records. Read-only inspection
 preserves the interrupted state. The active owner holds a separate ownership lock
@@ -637,8 +643,13 @@ operator. Historical campaigns keep their original readers and report fields.
 Opening them with current `main` is not an upgrade procedure.
 
 The CLI report includes `observedAt`, campaign state, work counts, pending
-signals, imported and generated note counts, and `acceptedNoteId`. A solver
-campaign is internally accepted only when `status` is `completed`. Standalone
+signals, imported and generated note counts, and `acceptedNoteId`. The stable
+`phase` and `allowedActions` fields let an agent choose lifecycle controls
+without parsing prose: `phase` is `running`, `draining`, `paused`, `blocked`,
+or `terminal`, and actions are `pause`, `resume`, or `cancel`. `errorCode` is
+`campaign_error`, `campaign_blocked`, `campaign_cancelled`, or `null`; the
+human-readable `error` remains a bounded diagnostic. A solver campaign is
+internally accepted only when `status` is `completed`. Standalone
 role and review campaigns can complete with a FAIL or INCONCLUSIVE result.
 
 `verification` counts each note's effective committed verdict at each stage.
@@ -647,7 +658,12 @@ no verdict or import trust at that stage, including checks not required for
 that note. These counts differ from fully verified notes, which also require
 verified dependencies. Earlier judgments remain in the full inspection.
 
-When present, `nextAction` suggests how to continue from the reported state.
+When present, `nextAction` suggests how to continue from the reported state. It is
+advisory text for a human or agent and does not schedule work. Lifecycle controls
+are explicit: `pause` stops new admission, `resume` continues a paused campaign,
+and `cancel` prevents late publication. Read `status` after a control command or
+interruption to observe the committed result. `status` and `inspect` are read-only
+and do not acquire ownership, recover work, or resume a campaign.
 `verificationIssues.items` lists unresolved checks for claimed, unaccepted
 candidates and their support as `{noteId, stage, verdict, report}`.
 `verificationIssues.omitted` counts entries left out of the preview. Supporting
@@ -664,7 +680,11 @@ explicit `omitted` count. Diagnostics are previews of at most 500 characters,
 ending in an ellipsis when shortened. Full proofs, prompts, and logs stay out
 of this report.
 
-Call totals include unsettled calls and settled calls without measured usage.
+Call totals include unsettled calls and settled calls without measured usage. They
+are observational evidence only: accumulated calls, token counts, and usage do
+not stop admission, drain work, or require a grant or extension. A campaign can
+continue regardless of its accumulated call count, subject to its lifecycle state,
+operational attempt/concurrency limits, and any explicit outer-runner round limit.
 `calls.byModel` retains native numeric field names and shows at most ten groups,
 with `byModelOmitted` for the remainder. Overlapping usage fields are not added
 into a new token total. Price estimates and provider-bill reconciliation remain

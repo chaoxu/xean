@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { Xean, inspectCampaign, openXeanStorage } from "xean";
-import { serveControl } from "../packages/cli/src/control.ts";
+import { serveControl, socketPath } from "../packages/cli/src/control.ts";
 
 async function cli(...args: string[]) {
   const child = Bun.spawn(
@@ -128,6 +128,33 @@ test("conditional controls reject foreign owners and wait for admitted lifecycle
   });
   const server = await serveControl(await realpath(database), engine, ownerId);
   try {
+    const response = await fetch("http://xean/command", {
+      unix: socketPath(await realpath(database)),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "pause",
+        records: false,
+        expectedOwnerId: "predecessor",
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "owner_changed",
+        message: "Campaign owner changed",
+      },
+    });
+    const malformed = await fetch("http://xean/command", {
+      unix: socketPath(await realpath(database)),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "unknown" }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({
+      error: { code: "command_rejected", message: expect.any(String) },
+    });
     const rejected = await cli(
       "pause",
       database,

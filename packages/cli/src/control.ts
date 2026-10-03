@@ -9,6 +9,22 @@ import { statusText } from "xean/report";
 export type OwnerCommand =
   SolverCommand | { kind: "pause" | "resume" | "cancel" };
 
+export type ControlErrorCode =
+  "owner_stopping" | "owner_changed" | "command_rejected";
+
+export type ControlErrorBody = {
+  error: { code: ControlErrorCode; message: string };
+};
+
+class ControlError extends Error {
+  constructor(
+    readonly code: ControlErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export async function controlCommand(engine: Xean, command: OwnerCommand) {
   switch (command.kind) {
     case "pause":
@@ -87,11 +103,16 @@ export async function requestOwner(
     return undefined;
   }
   const value = await response.json();
-  if (!response.ok)
+  if (!response.ok) {
+    const error = (value as Partial<ControlErrorBody>).error;
     throw new Error(
-      (value as { error?: string }).error ??
-        `Owner rejected command: HTTP ${response.status}`,
+      typeof error === "object" && error !== null && "message" in error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : `Owner rejected command: HTTP ${response.status}`,
     );
+  }
   return value;
 }
 
@@ -124,7 +145,15 @@ export async function serveControl(
     unix: path,
     async fetch(request, server) {
       if (stopping)
-        return Response.json({ error: "Owner is stopping" }, { status: 503 });
+        return Response.json(
+          {
+            error: {
+              code: "owner_stopping",
+              message: "Owner is stopping",
+            },
+          } satisfies ControlErrorBody,
+          { status: 503 },
+        );
       if (
         request.method !== "POST" ||
         new URL(request.url).pathname !== "/command"
@@ -134,9 +163,9 @@ export async function serveControl(
         const { expectedOwnerId, ...command } =
           (await request.json()) as OwnerCommand & { expectedOwnerId?: string };
         if (expectedOwnerId !== undefined && expectedOwnerId !== ownerId)
-          throw new Error("Campaign owner changed");
+          throw new ControlError("owner_changed", "Campaign owner changed");
         if (command.kind === "resume" && stopping)
-          throw new Error("Owner is stopping");
+          throw new ControlError("owner_stopping", "Owner is stopping");
         if (["pause", "resume", "cancel"].includes(command.kind))
           server.timeout(request, 0);
         const operation = controlCommand(engine, command);
@@ -145,8 +174,15 @@ export async function serveControl(
           await operation.finally(() => resumes.delete(operation)),
         );
       } catch (error) {
+        const code: ControlErrorCode =
+          error instanceof ControlError ? error.code : "command_rejected";
         return Response.json(
-          { error: error instanceof Error ? error.message : String(error) },
+          {
+            error: {
+              code,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          } satisfies ControlErrorBody,
           { status: 400 },
         );
       }

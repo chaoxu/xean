@@ -358,15 +358,39 @@ test("status preserves committed verification and native usage with bounded oper
       expect(accepted.acceptedNoteId).toBe(
         status === "completed" ? checked.id : null,
       );
+      expect(accepted.phase).toBe(
+        status === "running"
+          ? "running"
+          : status === "paused"
+            ? "paused"
+            : status === "blocked"
+              ? "blocked"
+              : "terminal",
+      );
+      expect(accepted.allowedActions).toEqual(
+        status === "running"
+          ? ["pause", "cancel"]
+          : status === "paused" || status === "blocked"
+            ? ["resume", "cancel"]
+            : [],
+      );
+      expect(accepted.errorCode).toBe(
+        status === "blocked"
+          ? "campaign_blocked"
+          : status === "cancelled"
+            ? "campaign_cancelled"
+            : null,
+      );
       if (status === "blocked")
         expect(accepted.nextAction).toContain("Coordinator failure");
     }
     expect(observedCampaign({ status: "running" }).status.nextAction).toBe(
       undefined,
     );
-    expect(observedCampaign({ status: "pausing" }).status.nextAction).toContain(
-      "owner is still active",
-    );
+    const draining = observedCampaign({ status: "pausing" }).status;
+    expect(draining.nextAction).toContain("owner is still active");
+    expect(draining.phase).toBe("draining");
+    expect(draining.allowedActions).toEqual(["cancel"]);
     for (const malformed of [
       { ...check, source: { ...check.source, passages: "not an array" } },
       { ...check, reconstruction: { ...check.reconstruction, proof: 7 } },
@@ -409,6 +433,9 @@ test("status preserves committed verification and native usage with bounded oper
       ).toEqual(report);
     expect(report).toMatchObject({
       status: "running",
+      phase: "running",
+      allowedActions: ["pause", "cancel"],
+      errorCode: null,
       pendingSignals: 2,
       work: { queued: 0, active: 0, completed: 0, failed: 0, cancelled: 0 },
       notes: {
