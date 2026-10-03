@@ -29,11 +29,14 @@ is provided. Existing releases and tags remain historical archives.
   detailed summaries or full notes through `read_notes`. `maxExplorerReads`
   defaults to four batched calls per invocation, and `maxExplorerResponses`
   defaults to that allowance plus four. Explicit limits override these defaults.
-  The one-response ChatGPT profile disables reads. Remove the `explorer` mode
-  setting and Explorer-input `support` selection. Mathematical dependencies
-  remain declared by the resulting notes.
+  The one-response ChatGPT profile disables reads. Omit readers from empty
+  frozen indexes, and keep private submission IDs outside published-note reads.
+  Remove the `explorer` mode setting and Explorer-input `support` selection.
+  Mathematical dependencies remain declared by the resulting notes.
 - Verify note summaries against their full mathematics while keeping blind
-  reconstruction independent of the original proofs and summaries. Record
+  reconstruction independent of the original proofs and summaries. Allow PASS
+  corrections to restore summaries to unchanged full statements and proofs,
+  while retaining every stage's checks and final historical verdicts. Record
   external premises as exact standalone claims and pass approved statements
   unchanged to reconstruction. Keep conditional antecedents within the claim.
   Source checkers receive the summaries they may correct, and literature can
@@ -44,6 +47,9 @@ is provided. Existing releases and tags remain historical archives.
   useful support. Harmless corrections preserve that rejection, and substantive
   repairs require a new note. Reject verification requests with no pending check.
   Supply recorded source verdicts and bound evidence to requirements checking.
+  Guide Coordinator to establish supporting lemmas through source checking and
+  request final reconstruction for the complete solution, avoiding whole-task
+  requirements checks on each supporting lemma.
   Clarify how imported candidates declare supporting assumptions for reconstruction.
 - Add an optional Codex worker for concrete implementation assignments. Coordinator
   selects notes and their support, and Codex uses native tools in a retained
@@ -51,6 +57,8 @@ is provided. Existing releases and tags remain historical archives.
   Closed-book experiments reject the worker. Standalone Codex work, review, and
   literature initialize only their required runtime. Independent reviews return
   findings and evidence without the unused whole-note correction field.
+  `export --bundle` retains the accepted argument, result, and contributing Codex
+  workspaces with file hashes and original-path mappings.
 - Use Pi's native Anthropic provider for Claude subscription OAuth or API
   credentials and its native Google provider for Gemini API profiles. Remove the
   Claude Code subprocess provider. Research remains Codex-only. Preserve custom
@@ -71,6 +79,14 @@ is provided. Existing releases and tags remain historical archives.
   library. Move shared reports from `xean-cli/report` to `xean/report`, covering
   online, closed-book, and direct-library solver campaigns. Compact reports add
   note origins, accepted note identity, verification summaries, and work details.
+  Show suggested next actions and unresolved candidate checks without changing
+  scheduling or acceptance.
+- Add `doctor SETTINGS` to check local dependencies, settings, frozen model
+  names, credential availability, executables, and directory permissions without
+  making model calls. Live authentication and provider qualification remain separate.
+- Add a correctness-prompt screen with frozen cases, settings, source hashes,
+  and per-case results and usage. Preparation makes no model calls. Explicit
+  execution screens expected verdicts while semantic review remains independent.
 - Add conditional owner IDs to reject stale lifecycle commands. Validate the
   control socket and its private directory, and let commands wait for the active
   owner without an HTTP idle timeout. Expose uninitialized inspection after
@@ -95,13 +111,15 @@ is provided. Existing releases and tags remain historical archives.
   immutable attempts, keyed call grants, and exact source, image, and Bun
   identities. It supervises the observer publisher separately. The bounded
   Nomad runner provides writable storage for its control socket.
-- Pin matching Pi/Chord packages to `7fbbd5f4a1d9` with the frozen model catalog
+- Pin matching Pi/Chord packages to `a276dabe5791` with the frozen model catalog
   and recorded artifact and patch hashes. Remove the unused `pi-agent-core`
   dependency. Installation receipts include the operating system and architecture,
   requiring clean setup after copying a checkout across platforms. Distribution
   checks validate example settings and tasks against the public schemas and
   require enabled patches to match their provenance. Fleet checks support
   focused test files, and Lab shares a zero-call integration smoke.
+  Adopt Pi's Anthropic inline tool definitions and model-capacity retry handling
+  with unchanged model and reasoning settings.
 
 Qualification receipts and provider limitations are recorded in
 [verification](docs/kernel-smoke.md). Historical checks apply to their recorded

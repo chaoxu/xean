@@ -1,5 +1,5 @@
 diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
-index 106f2b9..0e0f84f 100644
+index 38571b3..b9a874e 100644
 --- a/dist/api/anthropic-messages.js
 +++ b/dist/api/anthropic-messages.js
 @@ -2,6 +2,7 @@ import Anthropic, {} from "@anthropic-ai/sdk";
@@ -344,7 +344,7 @@ index 4d58c97..411839b 100644
              output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
                  ? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 68aa055..721258a 100644
+index b141efd..0691d10 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -370,6 +370,8 @@ export interface UserMessage {
@@ -436,7 +436,7 @@ index 82e105c..02215e1 100644
  export function parseJsonWithRepair(json) {
      try {
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
-index 38781fb..20ad7f6 100644
+index a13c9b8..e601a81 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
 @@ -19,6 +19,19 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
@@ -459,7 +459,7 @@ index 38781fb..20ad7f6 100644
  ]);
  const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // Generic provider load, HTTP status, and server-side transient failures.
-@@ -58,7 +71,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+@@ -59,7 +72,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      "socket connection was closed",
      "timed? out",
      "timeout",
@@ -468,7 +468,7 @@ index 38781fb..20ad7f6 100644
      // WebSocket transports can report close/error text instead of HTTP/fetch text.
      "websocket.?closed",
      "websocket.?error",
-@@ -66,6 +79,10 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+@@ -67,6 +80,10 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // "stream ended without ..." and "Anthropic stream ended before message_stop"
      // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
      "ended without",
@@ -479,7 +479,7 @@ index 38781fb..20ad7f6 100644
      "stream ended before message_stop",
      "stream ended before a terminal response event",
      "http2 request did not get a response",
-@@ -101,11 +118,15 @@ function sleep(ms, signal) {
+@@ -102,11 +119,15 @@ function sleep(ms, signal) {
              reject(new RetrySleepAbortError());
              return;
          }
@@ -498,7 +498,7 @@ index 38781fb..20ad7f6 100644
      });
  }
  /**
-@@ -180,11 +201,19 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
+@@ -181,11 +202,19 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
   * before restarting the assistant turn.
   */
  export function isRetryableAssistantError(message) {

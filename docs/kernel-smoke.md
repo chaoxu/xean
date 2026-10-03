@@ -66,7 +66,46 @@ as `argument.md` and preserves failed-attempt artifacts. A snapshot left by a
 failed assertion is not a successful smoke. Record provider limitations with the
 source revision.
 
-## 2026-10-02 candidate qualification
+## 2026-10-02 workflow and Pi refresh
+
+The subsequent candidate pins Pi `a276dabe5791` and retains the previous frozen
+model catalog and all model/reasoning settings. Empty published-note indexes
+omit readers. Coordinator guidance avoids whole-task checks on supporting
+lemmas, and the existing PASS correction path can restore summaries to unchanged
+full mathematics. These prompt changes have deterministic contract coverage,
+without a new model-backed capability or savings claim.
+
+On macOS ARM64 with Fleet Bun 1.4.2, the full check passed 144 tests and 2,007
+assertions. Two clean upstream builds produced matching hashes for all four Pi
+packages. All 19 installed patched files matched independent patch application
+to the new artifacts. Pi's 12 tool-change payload tests passed without network
+model requests. CLI help/version, README initialization/status, deterministic
+completion/reopening, and the README's observer configuration passed without
+model calls. Receipts are under `runs/pi-upgrade-20261002-9fba660/`.
+
+The further Pi refresh reproduced all four artifacts and matched all 19 installed
+patched files at `a276dabe5791`. Both patches stayed unchanged, and the same 144
+tests and 2,007 assertions passed. These receipts are under
+`runs/pi-upgrade-20261002-a276dabe/`, before the subsequent developer-tool changes.
+
+The six-problem paired comparison completed with six internally accepted and six
+independently reviewed PASS arguments in each arm. The priced solver subtotals
+were $97.77 for v2 and $118.82 for v3. Including independent review, they were
+$110.79 and $133.22. Another 247 solver/review gateway rows have unknown prices,
+so complete costs remain unknown. Each output received one independent review
+invocation, without reruns. This small selected set establishes neither broad
+capability equivalence nor a cost advantage. The source-frozen campaigns and final
+accounting remain under `runs/golden-six-20261002/`, with the hashes in
+`final-accounting-handoff.json`. The earlier interim analysis is preserved.
+
+The earlier live and cross-platform receipts below retain their original source
+and Pi identities. They do not qualify changed provider behavior. Before publication,
+qualify a clean archive of the final source on both target platforms and smoke the
+affected provider paths. The prepared archive's qualification record identifies
+its exact source and evidence. Preserve campaigns' frozen runtimes. Preparation
+does not publish a numbered release or tag.
+
+## Earlier 2026-10-02 candidate qualification
 
 The initial receipts below qualify Xean
 `b1515e787a327f9fbe950705c7b597fddbaf6a42`, Pi `7fbbd5f4a1d9`, and Fleet

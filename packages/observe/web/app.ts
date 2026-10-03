@@ -495,6 +495,29 @@ function detailView(run: Run) {
     </p>
     ${run.stale ? html`<p class="error">Stale campaign data: showing the last successful observation. The latest read failed.</p>` : ""}
     ${run.error ? html`<pre class="error">${run.error}</pre>` : ""}${snapshot?.status.error ? html`<pre class="error">${snapshot.status.error}</pre>` : ""}
+    ${snapshot?.status.nextAction ? html`<p>${snapshot.status.nextAction}</p>` : ""}
+    ${
+      snapshot?.status.verificationIssues
+        ? html`<section>
+            <h2>Candidate verification</h2>
+            <p>
+              Recorded checks that have not passed for claimed solutions or
+              their supporting notes.
+            </p>
+            <ul>
+              ${snapshot.status.verificationIssues.items.map(
+                (issue) =>
+                  html`<li>
+                    <code>${issue.noteId}</code>: ${issue.stage} —
+                    ${issue.verdict}
+                    ${issue.report ? html`<pre>${issue.report}</pre>` : ""}
+                  </li>`,
+              )}
+            </ul>
+            ${snapshot.status.verificationIssues.omitted ? html`<p>${snapshot.status.verificationIssues.omitted} further checks omitted.</p>` : ""}
+          </section>`
+        : ""
+    }
     <section>
       <h2>Problem</h2>
       ${

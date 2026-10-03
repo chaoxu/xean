@@ -9,6 +9,7 @@ import type {
 } from "./index.ts";
 import {
   isSolverCampaign,
+  closure,
   project,
   stagePassed,
   verdict,
@@ -53,11 +54,20 @@ export const statusSchema = Type.Script(
       Type.Object({ ...workSchema.properties, error: diagnostic }),
     ),
     Models: Type.Array(modelSchema, { maxItems: itemLimit }),
+    Issues: page(
+      Type.Object({
+        noteId: Type.String(),
+        stage: Type.String(),
+        verdict: Type.String(),
+        report: diagnostic,
+      }),
+    ),
   },
   `{
   status: string, error: Diagnostic, work: Counts, pendingSignals: Count,
   acceptedNoteId: string | null, activity: Activity, failures: Failures,
   notes?: Counts, verification?: Record<string, Counts>,
+  nextAction?: string, verificationIssues?: Issues,
   calls: {
     admitted: Count, allowance: Count | null, limitReached: boolean,
     settled: Count, unknownUsage: Count, unsettled: Count,
@@ -175,9 +185,59 @@ export function statusReport({
   const solver = isSolverCampaign(campaign);
   const result = campaign.result as { noteId?: unknown } | null;
   const imported = notes?.filter((note) => note.imported).length ?? 0;
+  const nextAction = {
+    blocked: campaign.callLimitReached
+      ? "Resolve the reported Coordinator failure and extend the call allowance before resuming."
+      : "Resolve the reported Coordinator failure, then resume the campaign.",
+    limited:
+      "Admitted work has drained. Extend the call allowance to admit more work.",
+    pausing:
+      "Check whether the owner is still active. An active owner will finish draining; an interrupted owner requires recovery.",
+    paused: "Resume the campaign when ready.",
+    cancelled: "This campaign is cancelled. Start a new campaign to continue.",
+    completed: solver
+      ? "Export the accepted argument. Independent review remains a separate step."
+      : "This campaign completed.",
+    running: campaign.callLimitReached
+      ? "The call allowance is exhausted. Check owner/process health while admitted work drains, or extend the allowance."
+      : undefined,
+  }[campaign.status];
+  const issues: {
+    noteId: string;
+    stage: string;
+    verdict: string;
+    report: string | null;
+  }[] = [];
+  const candidates = new Set(
+    notes
+      ?.filter((note) => note.candidate && !note.accepted)
+      .map((note) => note.id),
+  );
+  for (const note of closure([...candidates], notes ?? [])) {
+    for (const stage of verificationStages) {
+      if (
+        !candidates.has(note.id) &&
+        (stage === "requirements" ||
+          (stage === "reconstruction" && note.imported))
+      )
+        continue;
+      if (stagePassed(note, stage)) continue;
+      const result = verdict(note, stage);
+      issues.push({
+        noteId: note.id,
+        stage,
+        verdict: result?.verdict ?? "unchecked",
+        report: statusText(result?.report),
+      });
+    }
+  }
   return {
     status: campaign.status,
     error: statusText(campaign.error),
+    ...(nextAction ? { nextAction } : {}),
+    ...(issues.length
+      ? { verificationIssues: preview(issues, (issue) => issue) }
+      : {}),
     work,
     pendingSignals: campaign.pendingSignals,
     acceptedNoteId:

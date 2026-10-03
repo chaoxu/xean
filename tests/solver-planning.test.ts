@@ -127,6 +127,9 @@ test("API planning requires work while replaced roles preserve lazy runtime and 
       ),
     );
     expect(input.capabilities.explorer).toBe(true);
+    expect(getDeclaredTools(context.messages).map(({ name }) => name)).toEqual([
+      "submit_result",
+    ]);
     if (calls === 1) return reply({ work: [] });
     expect(context.messages.at(-1)).toMatchObject({
       role: "toolResult",

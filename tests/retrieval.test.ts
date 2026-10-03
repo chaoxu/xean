@@ -96,6 +96,61 @@ test("Explorer receives automatic summaries and keeps its prefix stable across r
   ).toThrow();
 });
 
+test("an empty published index omits reads while retaining private submissions", async () => {
+  const notes: Note[] = [];
+  const first = { ...draft, text: "A self-contained lemma.", support: [] };
+  const second = {
+    ...draft,
+    id: "n2",
+    text: "The new lemma proves the task.",
+    support: ["n1"],
+  };
+  let responses = 0;
+  const runtime = fixtureRuntime((context) => {
+    responses++;
+    expect(getDeclaredTools(context.messages).map(({ name }) => name)).toEqual([
+      "submit_result",
+    ]);
+    const inputs = context.messages
+      .filter((message) => message.role === "user")
+      .slice(0, 2)
+      .map((message) => JSON.parse(String(message.content)));
+    expect(inputs).toEqual([
+      { task },
+      {
+        notes: [],
+        guidance: "Continue",
+        allowance: { reads: 0, responses: 3 },
+      },
+    ]);
+    if (responses === 1) {
+      notes.push(note("late", "Published after the frozen invocation"));
+      return reply(
+        fauxToolCall("submit_result", { notes: [first], candidate: false }),
+      );
+    }
+    expect(responses).toBe(2);
+    expect(JSON.stringify(context.messages)).toContain(first.text);
+    return reply(
+      fauxToolCall("submit_result", { notes: [second], candidate: true }),
+    );
+  });
+  const result = await invoke(
+    createSolver(task, runtime, {
+      maxExplorerReads: 4,
+      maxExplorerResponses: 3,
+    }).functions.explorer,
+    { task, notes, guidance: "Continue" },
+    execution,
+  );
+  expect(result).toEqual({
+    kind: "notes",
+    notes: [first, second],
+    candidate: true,
+  });
+  expect(responses).toBe(2);
+});
+
 test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
   const notes = [note("live", "Live lemma"), note("dead", "Rejected lemma")];
   const fullText = "FULL-live\n".repeat(6000);

@@ -128,6 +128,9 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
         break;
       case "correctness":
         expect(input).not.toHaveProperty("sources");
+        expect(input.instructions).toContain("otherwise warrants PASS");
+        expect(input.instructions).toContain("Copy text exactly");
+        expect(input.instructions).toContain("unmet task criterion");
         expect(input.notes.map((note: Note) => note.text)).toEqual([
           "ESTABLISHED-SUPPORT",
           "CANDIDATE-SECRET",
@@ -137,7 +140,11 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           premises: note.text.includes("CANDIDATE")
             ? ["Fixture premise"]
             : ["Established premise"],
-          correction: content(`${note.text} corrected`),
+          correction: {
+            ...content(`${note.text} corrected`),
+            // Restore the support's summaries without rewriting its argument.
+            ...(note.text.startsWith("ESTABLISHED") ? { text: note.text } : {}),
+          },
         }));
         break;
       case "requirements":
@@ -243,9 +250,13 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           problem: "Exact task",
           completionCriteria: "Complete proof",
         });
-        return notes.map(({ id, text, premises }) => {
+        return notes.map(({ id, text, summary, detailedSummary, premises }) => {
           sourceTexts.push(text);
-          if (text.startsWith("ESTABLISHED"))
+          if (text.startsWith("ESTABLISHED")) {
+            expect({ text, summary, detailedSummary }).toEqual({
+              ...content("ESTABLISHED-SUPPORT corrected"),
+              text: "ESTABLISHED-SUPPORT",
+            });
             return {
               noteId: id,
               result: bindCodex(
@@ -267,6 +278,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
                 premises,
               ),
             };
+          }
           expect(evidence?.[0]).toMatchObject({
             id: "support-source/0",
             statement: "Established premise",
@@ -331,7 +343,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       [true, true],
     ]);
     expect(sourceTexts).toEqual([
-      "ESTABLISHED-SUPPORT corrected",
+      "ESTABLISHED-SUPPORT",
       "CANDIDATE-SECRET corrected",
       "CANDIDATE-SECRET corrected",
     ]);
@@ -348,7 +360,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
         revision,
       })),
     ).toEqual([
-      { ...content("ESTABLISHED-SUPPORT corrected twice"), revision: 1 },
+      { ...content("ESTABLISHED-SUPPORT twice"), revision: 1 },
       { ...content("CANDIDATE-SECRET final"), revision: 3 },
     ]);
     expect(verifications[0]!.input).toMatchObject({

@@ -199,7 +199,7 @@ test("status preserves committed verification and native usage with bounded oper
     const check = checked.checks[0]!;
     const inconclusive = { verdict: "INCONCLUSIVE", report: body } as const;
     const verificationNotes: Note[] = [
-      history.notes[0]!,
+      { ...history.notes[0]!, candidate: false },
       {
         ...checked,
         verified: false,
@@ -272,6 +272,52 @@ test("status preserves committed verification and native usage with bounded oper
         unchecked: 3,
       },
     });
+    expect(verification.verificationIssues?.items).toContainEqual({
+      noteId: "unresolved",
+      stage: "source",
+      verdict: "INCONCLUSIVE",
+      report: body.slice(0, 499) + "…",
+    });
+    expect(
+      verification.verificationIssues?.items.some(
+        (issue) =>
+          issue.noteId === "input/example/n1" &&
+          issue.stage === "reconstruction",
+      ),
+    ).toBe(false);
+    const dependency = {
+      ...checked,
+      id: "dependency",
+      candidate: false,
+      accepted: false,
+      support: [],
+      checks: [
+        {
+          noteId: "dependency",
+          correctness: check.correctness,
+          source: check.source,
+        },
+      ],
+    };
+    expect(
+      statusReport({
+        ...snapshot,
+        notes: [
+          dependency,
+          { ...checked, accepted: false, support: [dependency.id] },
+        ],
+      }).verificationIssues,
+    ).toEqual({
+      items: [
+        {
+          noteId: "dependency",
+          stage: "reconstruction",
+          verdict: "unchecked",
+          report: null,
+        },
+      ],
+      omitted: 0,
+    });
     for (const status of [
       "running",
       "paused",
@@ -289,7 +335,20 @@ test("status preserves committed verification and native usage with bounded oper
       expect(accepted.acceptedNoteId).toBe(
         status === "completed" ? checked.id : null,
       );
+      if (status === "blocked")
+        expect(accepted.nextAction).toContain("Coordinator failure");
     }
+    expect(
+      observedCampaign({ status: "blocked", callLimitReached: true }).status
+        .nextAction,
+    ).toContain("extend the call allowance before resuming");
+    expect(
+      observedCampaign({ status: "running", callLimitReached: true }).status
+        .nextAction,
+    ).toContain("drains");
+    expect(observedCampaign({ status: "pausing" }).status.nextAction).toContain(
+      "owner is still active",
+    );
     for (const malformed of [
       { ...check, source: { ...check.source, passages: "not an array" } },
       { ...check, reconstruction: { ...check.reconstruction, proof: 7 } },

@@ -11,7 +11,6 @@ import {
 import {
   campaignOptions,
   declarationVersion,
-  isSolverCampaign,
   loadDeclaration,
   piRuntime,
   readCommand,
@@ -29,6 +28,8 @@ import {
   type OwnerCommand,
 } from "./control.ts";
 import { campaignReport, statusReport, usageRecord } from "xean/report";
+import { doctor } from "./doctor.ts";
+import { exportArgument } from "./export.ts";
 
 async function print(value: unknown): Promise<void> {
   await Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
@@ -51,7 +52,8 @@ const program = new Command("xean")
   )
   .configureHelp({ showGlobalOptions: true })
   .hook("preAction", async (_program, action) => {
-    await verifyInstall(resolve(import.meta.dir, "../../.."));
+    if (action.name() !== "doctor")
+      await verifyInstall(resolve(import.meta.dir, "../../.."));
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
       ![
@@ -177,6 +179,15 @@ async function sendCommand(target: string, command: OwnerCommand) {
   });
 }
 
+program.command("doctor <settings>").action(async (settings: string) => {
+  const report = await doctor(
+    settings,
+    program.opts<{ campaignDir: string }>().campaignDir,
+    () => verifyInstall(resolve(import.meta.dir, "../../..")),
+  );
+  await print(report);
+  if (!report.ok) process.exitCode = 1;
+});
 program
   .command("init <task> <campaign> <settings>")
   .action(async (task: string, campaign: string, settings: string) => {
@@ -262,17 +273,19 @@ program
       await runCampaign(campaign, declaration);
     },
   );
-program.command("export <campaign>").action(async (target: string) => {
-  const { campaign } = await inspectCampaign(campaignPath(target), false);
-  const result = campaign.result as { argument?: string } | null;
-  if (
-    !isSolverCampaign(campaign) ||
-    campaign.status !== "completed" ||
-    !result?.argument
+program
+  .command("export <campaign>")
+  .option(
+    "--bundle <NEW_DIRECTORY>",
+    "Write the accepted argument and retained worker artifacts",
   )
-    throw new Error("No accepted argument");
-  await Bun.write(Bun.stdout, result.argument + "\n");
-});
+  .action(async (target: string, flags: { bundle?: string }) => {
+    const { campaign } = await inspectCampaign(campaignPath(target), false);
+    await Bun.write(
+      Bun.stdout,
+      (await exportArgument(campaign, flags.bundle)) + "\n",
+    );
+  });
 for (const kind of ["submit", "guide", "correct"] as const) {
   program
     .command(`${kind} <campaign> <file>`)

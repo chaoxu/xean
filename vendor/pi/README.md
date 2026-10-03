@@ -1,7 +1,7 @@
 # Pi artifacts
 
 Xean consumes the packages listed in [provenance.json](provenance.json)
-from Pi commit `7fbbd5f4a1d982bb02d63472dde0774fa639f99b`.
+from Pi commit `a276dabe57911253350bffb93cb7d7aff6a73261`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
 Pi's internal dependencies. Their upstream package version is `1.0.0`.
@@ -93,3 +93,10 @@ These are local extensions, not upstream guarantees. The
 [alignment notes](../../docs/pi-alignment.md#durable-integration) record their
 contracts and removal criteria. Unpatched artifacts remain reproducible;
 the patch separately identifies the code executed by Xean.
+
+The 2026-10-02 refresh to `a276dabe5791` retains the same patch behavior.
+Upstream now handles Anthropic inline tool definitions and model-capacity
+retries. Those changes do not replace Xean's accounting, transport, or Harness
+extensions. Both patches are byte-identical to the preceding `9fba660cf1ca` build.
+The latest Bedrock thinking-replay and Kitty image-conversion fixes are outside
+Xean's configured providers and package dependencies.

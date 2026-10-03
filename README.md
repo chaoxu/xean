@@ -67,6 +67,8 @@ and architecture. Run it again after changing those inputs or copying a checkout
 to another platform. `bun run xean --version` reports the package version.
 Keep the exact source commit, lockfile, and runtime version with each campaign.
 Package versions alone do not identify a `main` revision.
+After updating the checkout, start new campaigns with the new runtime. Continue
+existing campaigns from their original checkout and settings.
 
 Check the installation without credentials or model calls:
 
@@ -98,16 +100,45 @@ Xean owns the Pi adapter and research workflow. The service operator owns browse
 login, installation, patches, and process management.
 
 ```sh
+bun run xean doctor examples/solver-settings.json
 bun run xean init examples/tree-task.json tree examples/solver-settings.json
 bun run xean run tree
 bun run xean status tree
 bun run xean export tree
 ```
 
+`doctor` checks the local installation, settings, credential availability, Codex
+executable, and directory permissions without making model calls. It does not
+validate credentials with a provider or check browser sessions and Codex login.
+
+For your own problem, copy [the task file](examples/tree-task.json) and replace
+its `problem` and `completionCriteria`. State the exact hypotheses, desired
+conclusion, and permitted background. Copy the settings file to choose your
+provider, model, and credential environment-variable names, then pass those
+files to `init`. Initialization freezes both files without making model calls.
+Editing them afterward does not change that campaign. `run` performs the model
+work, `status` inspects it, and `export` prints an accepted argument with its
+supporting proofs.
+
 Campaigns live under `.xean/` by default. Only `campaign.status: "completed"`
 establishes an accepted argument. `export` requires that accepted result.
+Use `bun run xean export tree --bundle tree-export` to also save the argument,
+checks, and contributing Codex artifacts in a new directory with a hash manifest.
+Retained programs still require their original dependencies and services.
 See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
 cancellation, explicit database paths, and other model providers.
+
+To view this example in the optional observer, save `observe.json` beside the
+repository's README with:
+
+```json
+[{ "id": "tree", "directory": ".xean/tree" }]
+```
+
+Run `bun packages/observe/src/server.ts observe.json` and open
+<http://127.0.0.1:8797>. The dashboard reads the campaign without running models
+or acquiring solver ownership. See [Observe's guide](packages/observe/README.md)
+for remote runs and snapshot publishing.
 
 For a status request, use the campaign's matching source checkout and runtime:
 
@@ -122,9 +153,10 @@ for frozen and remote runs, verification progress, and observation freshness.
 For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
 persistent writable data directory and the provider's credentials. Use one
 owner process per campaign. `SIGINT` and `SIGTERM` close the owner and retain
-committed work for recovery. The command prints the campaign state when it
-finishes, including paused, blocked, or waiting states. Inspect that state before
-deciding whether a supervisor should restart it.
+committed work for recovery. A normal return prints the campaign state, including
+paused, blocked, or waiting states. An interrupted command prints no final JSON.
+Use `status` afterward to inspect committed state before deciding whether a
+supervisor should restart it.
 
 The [MIT license](LICENSE) covers Xean. Bundled dependencies retain their own
 licenses.
@@ -183,6 +215,9 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts --help
 
 Closed-book experiments use the
 [bounded runner](docs/solver.md#closed-book-experiments).
+Correctness-prompt changes can use the
+[screen on frozen cases](docs/solver.md#current-verification), which prepares
+inputs without model calls unless `--run` is supplied.
 
 The [deterministic kernel example](examples/deterministic.ts) makes no model calls:
 

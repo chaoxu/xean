@@ -78,6 +78,10 @@ proof and comparison. Dependencies are established through `source` even when
 the requested target stops earlier. Requests from one decision share a verifier
 batch at the highest requested stage for each target. Standalone Verifier input
 uses `targets: [{id, through}]` alongside the exact task and selected notes.
+For supporting lemmas and partial results, Coordinator normally stops at
+`source`. It targets a claimed complete solution through `reconstruction` for
+final acceptance. Supporting lemmas are reconstructed as dependencies, without
+separate requirements checks asking each lemma to solve the whole task.
 Correctness judges supporting and partial claims on their own terms. A cited
 theorem note can pass conditionally on source verification without reproducing
 its external proof. Requirements alone checks the original completion criteria.
@@ -200,6 +204,9 @@ and a `level` of `detailed` or `full`. Reads include verification state, support
 IDs, and failure feedback. Independent IDs should be batched. Full text is never
 truncated, and support IDs can be read in further calls. Read the full note when
 a summary omits material detail.
+Neither role exposes the reader when its frozen index is empty. Private
+Explorer submissions remain in its conversation, not in the reader's published
+snapshot, and must not be requested by their local IDs.
 
 An Explorer work request contains only `kind: "explorer"` and `guidance`.
 The library builds its frozen `ExplorerInput` from the exact task, the full
@@ -215,7 +222,8 @@ requests consume no reads. Several calls in one response each consume a read.
 The local guard enforces the allowance before executing a call, including when
 the model requests several calls at once. The allowance must be at least one,
 so Explorer can obtain details absent from the summaries. Coordinator's own
-reader has no per-invocation read allowance.
+reader has no per-invocation read allowance. An empty frozen index gives Explorer
+an effective read allowance of zero without changing its response allowance.
 
 `maxExplorerResponses` bounds completed responses, including read requests,
 rejected submissions, and responses without a submission. Reading is disabled when its allowance is
@@ -244,7 +252,15 @@ unchanged. A change to a claim, assumptions, argument, or dependencies requires
 a new note. Original worker results and command receipts remain immutable.
 
 A verdict may include `correction: {summary, detailedSummary, text}` containing
-the complete note and consistent summaries with harmless edits. Only the stage's final PASS applies it, including after any
+the complete note and consistent summaries with harmless edits. When the check
+otherwise warrants PASS, a checker may restore a summary to the hypotheses,
+conclusion, bounds, conditionality, and limitations already explicit in the
+authoritative full text. For this repair it copies `text` exactly and explains
+the mismatch in its report. Missing assumptions or proof steps in the full note,
+and unmet task criteria, still require substantive work and cannot be repaired
+through summary edits. This is the trusted checker's correction policy, not a
+mechanical test of mathematical equivalence. Historical FAIL verdicts remain final.
+Only the stage's final PASS applies a correction, including after any
 source-evidence or reconstruction checks that can downgrade a verdict. Later
 stages use the corrected text privately. The complete verifier result publishes
 `Check.correction: {revision, summary, detailedSummary, text}` atomically with its checks. Projection merges
@@ -278,7 +294,7 @@ Explorer places the task and each note's ID and summary in separate messages
 before mutable state, feedback, guidance, and allowances. This preserves earlier
 message boundaries when new notes are appended. Its system prompt and tool
 definitions stay the same across read allowances and after reading is disabled
-on providers that support the reader.
+within an invocation that has a nonempty index and a provider that supports the reader.
 OpenAI's default prompt cache key is stable for the same model, system, and
 tools while transport sessions remain separate. Caller-supplied keys and
 disabled caching are preserved. Cache reuse depends on the provider and eligible
@@ -452,8 +468,8 @@ The result's `workspace` field and each full note record the artifact directory.
 Artifact filenames and rerun commands belong in note text, while `support`
 contains mathematical note IDs. Keep the artifact tree with the campaign and
 restore its recorded paths when moving a run. Files remain external to SQLite:
-verification reads the evidence in notes, and argument export includes note
-text without collecting artifact files. Directories survive failed and
+verification reads the evidence in notes, and plain argument export includes
+note text without collecting artifact files. Directories survive failed and
 cancelled invocations too. Recovery starts a fresh directory and repeats the
 whole worker under the [kernel recovery contract](kernel.md#results-and-execution-failures).
 
@@ -489,13 +505,14 @@ remote dashboard needs live exports.
 
 ## Running
 
-Commander 15.0.0 supplies argument validation and help. Use `xean --help` or
-`xean <command> --help` for the command's arguments and options.
+Use `bun run xean --help` or `bun run xean <command> --help` for the command's
+arguments and options.
 
 After [installation](../README.md#install-and-run), use `bun run xean` from the
 source checkout. For example:
 
 ```sh
+bun run xean doctor SETTINGS.json
 bun run xean init TASK.json tree SETTINGS.json
 bun run xean run tree
 bun run xean guide tree GUIDANCE.txt --id next-route
@@ -524,6 +541,17 @@ change the campaign root. An absolute path, a path containing a separator, or a
 name ending in `.sqlite` or `.db` selects a database directly. Paths are relative
 to the calling directory, including the default `.xean` root.
 
+`doctor SETTINGS` checks the installation receipt, settings and frozen model
+names, provider credential availability, Codex executables, and permissions for
+the campaign root and configured Codex workspace, using the nearest existing
+parent when a directory has not been created. It returns `{ok, checks}` as JSON.
+Each check has a `name`, `status` (`ok`, `error`, or `unchecked`), and `message`.
+An error makes `ok` false and exits with status 1. Unchecked items do not fail
+the command. Credential values remain private.
+It creates no campaigns or probe files and makes no model or Codex requests.
+It does not validate live credentials, browser sessions, or Codex login. Use the
+[provider smoke procedure](kernel-smoke.md#live-provider-checks) to qualify those paths.
+
 `init TASK CAMPAIGN SETTINGS` creates the frozen campaign declaration and initial
 state without model calls. `run CAMPAIGN` opens that campaign, uses its stored
 task and settings, and prints its state and notes as JSON. Only
@@ -535,6 +563,22 @@ database connections, including while a campaign is running. `inspect --records`
 returns campaign state and journal records from the same SQLite snapshot.
 `status` supplies the [compact report](#checking-status) from the same coherent
 snapshot.
+
+`export CAMPAIGN --bundle NEW_DIRECTORY` also writes an artifact bundle and keeps
+the usual argument on stdout. The new directory contains `argument.md` with the
+exact accepted text, `result.json` with the accepted result and its checks,
+`manifest.json`, and a README. Only retained workspaces from completed workers
+whose notes contribute to the accepted dependency chain are copied under
+`artifacts/`. The manifest maps original paths to bundled paths and records file
+hashes, sizes, and executable bits.
+
+The destination must be new, have an existing parent directory, and sit outside
+the copied workspaces. Missing workspaces, mismatched frozen inputs, symbolic
+links, and special files are rejected. Notes and rerun commands retain their
+original text. Use the path mappings when running the retained programs with
+their original dependencies and external services.
+Campaign databases, settings, transcripts, and runtime environments stay outside
+the bundle. Keep those separately to continue or inspect the original campaign.
 
 `pause` stops new admission and waits for admitted work to finish. `run` leaves a
 paused campaign paused; use `resume` to continue it. `cancel` interrupts active
@@ -582,6 +626,15 @@ role and review campaigns can complete with a FAIL or INCONCLUSIVE result.
 no verdict or import trust at that stage, including checks not required for
 that note. These counts differ from fully verified notes, which also require
 verified dependencies. Earlier judgments remain in the full inspection.
+
+When present, `nextAction` suggests how to continue from the reported state.
+`verificationIssues.items` lists unresolved checks for claimed, unaccepted
+candidates and their support as `{noteId, stage, verdict, report}`.
+`verificationIssues.omitted` counts entries left out of the preview. Supporting
+notes are checked on their own claims, without asking them to meet the whole
+task's requirements. Imported support is assumed during reconstruction unless
+it is itself the candidate. These fields describe committed state and do not
+schedule work or establish acceptance.
 
 `activity` shows active work before queued work, with each worker's ID, role,
 status, and attempt count. Use `inspect` for its frozen input. Results become
@@ -919,10 +972,10 @@ the calling directory before execution enters its working directory. Bare
 command names use `PATH`. The optional `profile` selects
 a native Codex profile. Codex resolves login and provider settings normally from
 `CODEX_HOME` or `~/.codex`. Ordinary Pi role credentials remain separate.
-Current Codex profiles use `$CODEX_HOME/NAME.config.toml` with top-level settings.
-The retired `[profiles.NAME]` layout is rejected by the deployed CLI. Follow the
-[native profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles)
-and smoke-test the configured research path before a long run.
+Configure profiles for the installed Codex version using its
+[native profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles).
+Xean forwards the selected profile without managing its file format. Smoke-test
+the exact command and profile before a long run.
 
 To enable the [Codex worker](#codex-worker), add a separate configuration:
 
@@ -1079,6 +1132,30 @@ Use the [development check](../README.md#development-on-fleet) and
 candidate. The suite exercises source-verdict finality, conditional dependency
 checks, imported support, correction races, batch identity, and reconstruction
 throughout the generated dependency chain.
+
+For correctness-prompt changes, the [prompt screen](../scripts/prompt-eval.ts)
+uses [known cases](../examples/prompt-cases.json) covering a valid proof, a false
+claim, and a summary that overstates a valid proof. Run it from the source
+checkout:
+
+```sh
+bun scripts/prompt-eval.ts examples/solver-settings.json runs/prompt-preview
+bun scripts/prompt-eval.ts examples/solver-settings.json runs/prompt-baseline --run
+```
+
+The default command makes no model calls. It copies settings, cases, and role
+inputs into a new output directory and records source hashes and the Bun version
+in `manifest.json`. Existing output directories are rejected. `--run` executes
+the cases through the standalone Verifier, retaining process output, results,
+failures, and timings, plus campaign databases and usage when available. Source
+and saved-input hashes are checked before and after each case. A detected change
+stops the remaining cases. These runs use the current checkout, not a bundled runtime.
+
+Screen one prompt change at a time in separate baseline and candidate directories,
+with identical cases, model settings, and allowances. Inspect the reports and
+corrected summaries independently. An automated `matched` result only checks the
+expected verdict and submission shape, not mathematical or summary quality.
+Keep cases used for tuning separate from held-out evaluation.
 
 Historical mathematical benchmarks and provider smokes retain their original
 source, settings, and artifacts under local `runs/` directories. Earlier versions

@@ -9,12 +9,24 @@ prevent further delegation.
 ## Sources and availability
 
 The Pi/Chord packages are pinned to
-[`7fbbd5f4a1d9`](https://github.com/earendil-works/pi/tree/7fbbd5f4a1d982bb02d63472dde0774fa639f99b),
-two commits after the Pi `1.0.0` release. The intervening changes affect changelogs
-and the coding-agent UI, leaving Xean's runtime packages unchanged. Pi Durable
+[`a276dabe5791`](https://github.com/earendil-works/pi/tree/a276dabe57911253350bffb93cb7d7aff6a73261),
+the main revision checked on 2026-10-02 after the Pi `1.0.0` release. It adds
+Anthropic inline tool definitions that preserve the initial cache prefix,
+retry classification for model-capacity errors, and provider fixes, including
+Bedrock Claude thinking replay after system or tool changes. Its Kitty image
+conversion changes affect Pi's TUI and coding agent. Xean uses neither those
+packages nor Bedrock profiles. Pi Durable,
+Chord, and telemetry source are unchanged from the previous pin. Pi Durable
 remains experimental. The
 [artifact record](../vendor/pi/provenance.json) identifies the source, frozen
 model catalog, reproducible builds, and retained patches.
+
+This refresh preserves the frozen model catalog and Xean's model/reasoning
+settings. The upstream changes replace none of the retained local patches.
+Both patches are byte-identical to the preceding `9fba660cf1ca` build and apply
+to the new artifacts. Native tool-change handling remains Pi's
+responsibility. Xean's frozen read allowances and complete-result publication
+remain application policy.
 
 The [public durable types][types] and [Session implementation][session] supply
 transactions, documents, records, typed IDs, snapshots, conversation forks, and
@@ -228,8 +240,14 @@ ends, `allowed_tools` restricts calls to the remaining tools without changing
 their definitions. These controls are covered through Pi's native request
 conversion with a local transport fixture. They have not been live-qualified on
 the public API. Codex Responses currently uses local read enforcement without
-these payload additions. Pi exposes neither a provider-neutral tool allowlist
-nor per-message cache boundaries; native equivalents would remove these hooks.
+these payload additions. Pi's native `configure({ tools })` changes tool
+availability. Anthropic can represent removals inline while preserving initial
+definitions, but OpenAI Responses replaces the request-level tool list, changing
+the cache prefix. A provider-neutral restriction that preserves tool declarations
+and per-message cache controls would remove the corresponding payload hooks.
+Read admission would remain necessary to bound multiple calls in one response.
+Removing a reader before its admitted task finishes also prevents Pi from
+resolving that tool for safe replay after interruption.
 
 Role conversations begin with a native system entry declaring their complete tool
 catalog and executable tools in their selected extension. This keeps the provider request's
@@ -355,7 +373,7 @@ framework remain deferred. Invocation-specific extensions are registered today
 to bind frozen inputs, tools, and call accounting. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/packages/durable/docs/spec.md
+[types]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/docs/spec.md
