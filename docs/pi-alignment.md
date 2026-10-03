@@ -3,30 +3,21 @@
 Pi supplies model execution, durable transactions, and task execution. Xean supplies campaign
 policy and the mathematical workflow. The [kernel contract](kernel.md) defines
 publication and recovery, and the [solver guide](solver.md) defines mathematical
-acceptance. This document records native API ownership and the gaps that still
-prevent further delegation.
+acceptance. This document records which Pi APIs Xean uses and why local code remains.
 
 ## Sources and availability
 
 The Pi/Chord packages are pinned to
-[`a276dabe5791`](https://github.com/earendil-works/pi/tree/a276dabe57911253350bffb93cb7d7aff6a73261),
-the main revision checked on 2026-10-02 after the Pi `1.0.0` release. It adds
-Anthropic inline tool definitions that preserve the initial cache prefix,
-retry classification for model-capacity errors, and provider fixes, including
-Bedrock Claude thinking replay after system or tool changes. Its Kitty image
-conversion changes affect Pi's TUI and coding agent. Xean uses neither those
-packages nor Bedrock profiles. Pi Durable,
-Chord, and telemetry source are unchanged from the previous pin. Pi Durable
-remains experimental. The
-[artifact record](../vendor/pi/provenance.json) identifies the source, frozen
-model catalog, reproducible builds, and retained patches.
-
-This refresh preserves the frozen model catalog and Xean's model/reasoning
-settings. The upstream changes replace none of the retained local patches.
-Both patches are byte-identical to the preceding `9fba660cf1ca` build and apply
-to the new artifacts. Native tool-change handling remains Pi's
-responsibility. Xean's frozen read allowances and complete-result publication
-remain application policy.
+[`83692682f095`](https://github.com/earendil-works/pi/tree/83692682f095528f8b71652ddacff7075e36e893),
+the main revision checked on 2026-10-03 after the Pi `1.0.1` release.
+The four consumed packages have unchanged runtime source since the preceding
+`a276dabe5791` pin. The intervening main commits change documentation and the
+Nix workflow. This refresh preserves the frozen model catalog, reasoning settings,
+and the retained provider and Harness controls. The obsolete scheduler wakeup
+on every document update has been removed. Each patched file was compared with an independently patched
+upstream artifact. The [artifact record](../vendor/pi/provenance.json) identifies
+the source, model catalog, reproducible builds, and patch hashes.
+Pi Durable remains experimental.
 
 The [public durable types][types] and [Session implementation][session] supply
 transactions, documents, records, typed IDs, snapshots, conversation forks, and
@@ -94,6 +85,11 @@ without a Storage write.
 Migration-only commits notify observers. Pi also rejects `now()` and
 `report()` on ended invocations and cleans up failed Harness opening independently
 of caller cancellation.
+Native invocation commits reject ended, interrupted, non-running, and abort-marked
+attempts before call admission or request recording. Call settlement uses Session
+commits so accounting survives cancellation. Scheduler wakeups follow native task
+changes, extension installation, and explicit resume. Document-only streaming
+updates do not need to rerun campaign admission.
 The task projection avoids repeated full scans. Completed Coordinator payloads
 stay durable but leave the resident cache.
 `StorageRejected` guarantees a failed batch made no durable change and leaves
@@ -171,6 +167,9 @@ finalizes prepared statements before ownership is released. Reassess this patch
 when Pi supports Bun connections or upstream provides the required WAL control.
 
 Native paging bounds each read, but consumers must also bound retained data.
+Campaign inspection uses native task-kind filters to omit generation and tool
+tasks. Role hooks read their exact assistant and tool-result entries through Pi,
+reconstructing the full conversation for continuation and read-allowance checks.
 Status projects call metadata per page. Exports reverse Pi's newest-first scans
 to retain chronological order. Native scans lack entry-kind and field projection.
 Historical worker inputs/results stay in immutable task records. Coordinator
@@ -196,9 +195,9 @@ idempotency-comparison values consistent.
 
 ## Provider integration
 
-Role profiles keep their selected model objects and credentials. Registering
-models with the host preserves models already supplied by other roles, including
-custom IDs absent from a provider's catalog. Generation resolves that native
+Role profiles keep their selected model objects and credentials. Each invocation
+registers only its selected provider and model with the host, preserving models
+already supplied by other roles, including custom IDs absent from the provider's catalog. Generation resolves that native
 catalog before Xean's stream hook supplies the selected profile's request.
 
 `auditedStream` uses Pi's awaited `onPayload` hook to record the effective request
@@ -209,15 +208,22 @@ accounting failures remain terminal. `onResponse` runs at HTTP headers and does
 not cover Codex WebSockets. Telemetry cannot replace durable admission or
 settlement. Context capacity belongs in the fail-closed generation request hook.
 
-Pi stores conversation messages and tool results incrementally. Xean's full
-request and settlement records add duplication, but preserve evidence absent
-from that transcript: payload-hook changes, intermediate retry responses, and
-outcomes settled before native assistant publication. The request record captures
-the logical payload before transport-specific conversion such as WebSocket
-continuation deltas. Removing those bodies safely needs native durable request artifacts,
-atomic response settlement, and read-only context reconstruction at a saved
-cutoff. Native generation checkpoints alone are temporary. Keep Codex and opaque
-role records, whose outputs have no equivalent Pi transcript.
+Pi stores conversation messages and tool results incrementally. Mathematical
+recovery uses those native records, tasks, and documents. The full bodies in
+`xean.call.request` and `xean.call.settled` serve a separate audit contract:
+they retain payload-hook changes, intermediate retry responses, and outcomes
+settled before native assistant publication. They record the logical payload
+before transport-specific conversion such as WebSocket continuation deltas.
+The compact report needs only call identity, settlement, and nullable usage.
+
+Replacing Pi-backed call bodies with native conversation/generation references
+would reduce duplication without changing mathematical recovery. It would give
+up exact transformed-request evidence and response bodies lost before native
+publication. This is a retention-policy choice, rather than a prerequisite for
+using Pi. Codex and opaque roles still need their own records because they have
+no equivalent native transcript. Full inspection currently scans Xean's root
+entries, so a switch to native references must also expose the corresponding
+conversation entries through explicit inspection.
 
 The Pi AI patch preserves failed-response usage, typed provider errors, explicit
 zero counts, retry-listener cleanup, cache-session isolation, and the existing
@@ -245,7 +251,7 @@ replaces only that generated default with a model/system/tools hash, preserving
 caller keys and disabled caching. Native selective replay and an independent
 cache-key option would remove these integrations.
 
-Explorer supplies the task and each index entry as separate user messages,
+Explorer and Coordinator supply the task and each index entry as separate user messages,
 followed by mutable note states, feedback, guidance, and allowances. Pi preserves
 those message boundaries during Responses conversion. Xean keeps tool definitions
 stable when the read allowance is exhausted. Native schema validation precedes
@@ -341,7 +347,10 @@ same transaction that creates it. Pi's first-writer-wins memos cannot replace
 this mapping after a terminal failure or atomically create the conversation.
 Each conversation has a separate progress document owned by the outer task.
 This keeps completed stages available during worker recovery and gives a retried
-conversation fresh submissions and read allowance. Pi retires these documents
+conversation fresh submissions and read allowance. The progress document uses
+`checkpointWhen` to replace its current-only base on each update. Pi discards
+superseded revisions instead of retaining cumulative copies of submitted notes.
+Pi retires these documents
 and evicts their cached values when the outer task becomes terminal. Published
 results and native transcripts remain durable.
 
@@ -362,9 +371,21 @@ through the call-admission and settlement wrapper.
 
 ## Next adoption opportunities
 
-Revisit these when compatible upstream APIs reduce the overall implementation
-or an observed failure justifies a change. The linked closed issues record why
-publication waiting, catalog merging, and capacity handoff remain as implemented.
+These opportunities include available native APIs with different semantics,
+optional retention policies, and missing upstream controls. The linked closed
+issues record why publication waiting, catalog merging, and capacity handoff
+remain as implemented.
+
+- **Provider records:** a compact ledger could refer to native conversation
+  entries and retain usage/error receipts, replacing duplicate Pi request and
+  response bodies. This requires the audit-contract choice described above,
+  not a new storage engine.
+- **Response retries:** Pi Durable already persists retry backoff and failed
+  assistant entries. Xean instead uses Pi AI's retry helper to retain selected
+  completed reasoning while excluding failed text and tool calls. Adoption of
+  native durable retries must preserve this behavior, browser non-replay, and
+  terminal treatment of admission/accounting failures. The native retry policy
+  is Harness-wide and native context excludes failed assistants.
 
 - **Durable execution:** replace the local Harness extensions with upstream
   admission, domain settlement, and pause controls when available. Preserve
@@ -398,7 +419,7 @@ framework remain deferred. Invocation-specific extensions are registered today
 to bind frozen inputs, tools, and call accounting. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/a276dabe57911253350bffb93cb7d7aff6a73261/packages/durable/docs/spec.md
+[types]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/docs/spec.md

@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 13;
+export const declarationVersion = 14;
 const text = Type.String({
   minLength: 1,
   // Reject non-whitespace ASCII controls without rewriting mathematical text.
@@ -71,10 +71,18 @@ export const explorationSchema = object({
   candidate: Type.Boolean(),
 });
 export type Exploration = Static<typeof explorationSchema>;
+const correctionSchema = object({
+  summary: Type.Union([noteContentSchema.properties.summary, Type.Null()]),
+  detailedSummary: Type.Union([
+    noteContentSchema.properties.detailedSummary,
+    Type.Null(),
+  ]),
+  text: Type.Union([noteContentSchema.properties.text, Type.Null()]),
+});
 export const verdictSchema = object({
   verdict: StringEnum(["PASS", "FAIL", "INCONCLUSIVE"] as const),
   report: text,
-  correction: Type.Optional(noteContentSchema),
+  correction: Type.Optional(correctionSchema),
 });
 export type Verdict = Static<typeof verdictSchema>;
 const premisesSchema = Type.Array(text, {
@@ -96,7 +104,7 @@ const passageSchema = object({
 export const sourceSchema = object({
   ...verdictSchema.properties,
   // Codex structured output requires every field; null means no correction.
-  correction: Type.Union([noteContentSchema, Type.Null()]),
+  correction: Type.Union([correctionSchema, Type.Null()]),
   passages: Type.Array(
     Type.Union([
       passageSchema,

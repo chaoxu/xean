@@ -3,18 +3,15 @@ import { existsSync } from "node:fs";
 import { realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { ROOT_CONVERSATION_ID, type Cursor } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage, type XeanOptions } from "xean";
 import { chatGptWebProviderId } from "xean/pi";
-import { serveControl } from "xean-cli/control";
+import { ownerReceipt, serveControl } from "xean-cli/control";
 import { verifyInstall } from "./dependencies.ts";
 import {
   createSolver,
   codexResearch,
   declarationVersion,
   piRuntime,
-  project,
   readSettings,
   decode,
   taskSchema,
@@ -183,40 +180,6 @@ if (import.meta.main) {
   }, 30_000);
   const write = (name: string, value: unknown) =>
     Bun.write(resolve(directory, name), JSON.stringify(value, null, 2) + "\n");
-  const exportRecords = async () => {
-    // The campaign is quiescent here. Pi pages newest first; retain only page
-    // cursors so export can revisit them in chronological order.
-    const page = (cursor?: Cursor) =>
-      storage.scanEntries(
-        { conversationId: ROOT_CONVERSATION_ID },
-        64,
-        cursor,
-        BACKGROUND_CONTEXT,
-      );
-    const cursors: (Cursor | undefined)[] = [];
-    let cursor: Cursor | undefined;
-    do {
-      cursors.push(cursor);
-      cursor = (await page(cursor)).next;
-    } while (cursor);
-    const output = Bun.file(resolve(directory, "records.json")).writer();
-    try {
-      output.write("[");
-      let separator = "\n";
-      for (const cursor of cursors.reverse()) {
-        for (const record of (await page(cursor)).items.toReversed()) {
-          output.write(
-            separator + JSON.stringify(record, null, 2).replace(/^/gm, "  "),
-          );
-          separator = ",\n";
-        }
-        await output.flush();
-      }
-      output.write(separator === "\n" ? "]\n" : "\n]\n");
-    } finally {
-      await output.end();
-    }
-  };
   try {
     control = await serveControl(await realpath(database), engine);
     if (values.resume) await resumeExperiment(engine, roundLimit);
@@ -232,26 +195,19 @@ if (import.meta.main) {
         campaign = await engine.inspect();
       }
       clearInterval(heartbeat);
-      await write("result.json", {
+      const result = {
+        ...ownerReceipt(campaign),
         outcome:
           campaign.status === "completed"
             ? "accepted"
             : hitRoundLimit
               ? "round_limit"
               : campaign.status,
+        roundLimit,
         rounds: rounds(),
-        campaign,
-        notes: project(campaign),
-      });
-      await exportRecords();
-      console.log(
-        JSON.stringify({
-          status: campaign.status,
-          roundLimit,
-          rounds: rounds(),
-          calls: campaign.providerCalls,
-        }),
-      );
+      };
+      await write("result.json", result);
+      console.log(JSON.stringify(result));
     }
   } finally {
     clearInterval(heartbeat);

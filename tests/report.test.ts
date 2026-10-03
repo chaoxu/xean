@@ -285,7 +285,7 @@ test("status preserves committed verification and native usage with bounded oper
           issue.stage === "reconstruction",
       ),
     ).toBe(false);
-    const dependency = {
+    const dependency: Note = {
       ...checked,
       id: "dependency",
       candidate: false,
@@ -317,6 +317,30 @@ test("status preserves committed verification and native usage with bounded oper
         },
       ],
       omitted: 0,
+    });
+    const reconstructionReport = `Independent proof incomplete: the equality case is missing.\n\n${body}`;
+    dependency.checks.push({
+      noteId: dependency.id,
+      reconstruction: {
+        verdict: "INCONCLUSIVE",
+        report: reconstructionReport,
+        statement: "Exact claim.",
+        proof: "Partial independent proof.",
+      },
+    });
+    expect(
+      statusReport({
+        ...snapshot,
+        notes: [
+          dependency,
+          { ...checked, accepted: false, support: [dependency.id] },
+        ],
+      }).verificationIssues?.items,
+    ).toContainEqual({
+      noteId: dependency.id,
+      stage: "reconstruction",
+      verdict: "INCONCLUSIVE",
+      report: reconstructionReport.slice(0, 499) + "…",
     });
     for (const status of [
       "running",

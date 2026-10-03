@@ -1,21 +1,21 @@
 #!/usr/bin/env bun
-import { rename, rm, writeFile } from "node:fs/promises";
+import { rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { Database } from "bun:sqlite";
 import { inspectCampaign } from "xean";
 import { usageRecord } from "xean/report";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
-import { snapshot } from "./snapshot.ts";
+import { readSummary, snapshot } from "./snapshot.ts";
 
 /** Read independently of the campaign owner and atomically replace its export. */
 export async function publish(directory: string): Promise<void> {
   const value = snapshot(
     await inspectCampaign(join(directory, "campaign.sqlite"), usageRecord),
   );
-  const { observedAt, status, usageAvailable } = value;
   for (const [name, content] of [
     ["observation.json", value],
-    ["status.json", { observedAt, status, usageAvailable }],
+    ["status.json", readSummary(value)],
   ] as const) {
     const file = join(directory, name);
     const temporary = `${file}.${crypto.randomUUID()}.tmp`;
@@ -35,23 +35,54 @@ export function observe(
   directory: string,
   onError: (error: unknown) => void = console.error,
 ) {
+  const path = join(directory, "campaign.sqlite");
+  let database: Database | undefined;
+  let identity: string | undefined;
+  let publishedVersion: number | undefined;
+  const update = async () => {
+    try {
+      const file = await stat(path, { bigint: true });
+      const currentIdentity = `${file.dev}:${file.ino}`;
+      if (!database || currentIdentity !== identity) {
+        database?.close();
+        database = undefined;
+        database = new Database(path, { readonly: true, create: false });
+        identity = currentIdentity;
+        publishedVersion = undefined;
+      }
+      // Keep this connection outside a read transaction so WAL commits remain visible.
+      const version = database
+        .query<{ data_version: number }, []>("PRAGMA data_version")
+        .get()!.data_version;
+      if (version === publishedVersion) return;
+      await publish(directory);
+      // A commit during publication must trigger another read on the next tick.
+      publishedVersion = version;
+    } catch (error) {
+      database?.close();
+      database = undefined;
+      throw error;
+    }
+  };
   let pending: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
-  const tick = () => {
-    if (pending) return;
-    pending = publish(directory)
+  const tick = () =>
+    (pending ??= update()
       .catch(onError)
       .finally(() => {
         pending = undefined;
-      });
-  };
-  tick();
+      }));
+  void tick();
   const timer = setInterval(tick, 10_000);
   return () =>
     (stopping ??= (async () => {
       clearInterval(timer);
-      await pending;
-      await publish(directory).catch(onError);
+      try {
+        await pending;
+        await update().catch(onError);
+      } finally {
+        database?.close();
+      }
     })());
 }
 

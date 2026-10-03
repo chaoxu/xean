@@ -100,25 +100,22 @@ export function fixtureRuntime(
   return {
     profiles,
     models: {
-      getProviders() {
-        const models = Object.values(profiles).map((profile) => profile.model);
-        return [...new Set(models.map((model) => model.provider))].map((id) =>
-          createProvider({
-            id,
-            name: id,
-            auth: {},
-            // Profiles may supply models absent from a provider's catalog.
-            models: [],
-            api: {
-              stream() {
-                throw new Error("Use the audited fixture stream");
-              },
-              streamSimple() {
-                throw new Error("Use the audited fixture stream");
-              },
+      getProvider(id: string) {
+        return createProvider({
+          id,
+          name: id,
+          auth: {},
+          // Profiles may supply models absent from a provider's catalog.
+          models: [],
+          api: {
+            stream() {
+              throw new Error("Use the audited fixture stream");
             },
-          }),
-        );
+            streamSimple() {
+              throw new Error("Use the audited fixture stream");
+            },
+          },
+        });
       },
       streamSimple(
         selected: Model<string>,

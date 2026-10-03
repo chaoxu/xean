@@ -117,7 +117,7 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, o
       );
       expect(result.stderr.toString()).toBe("");
       expect(result.exitCode).toBe(0);
-      return JSON.parse(result.stdout.toString()).campaign;
+      return JSON.parse(result.stdout.toString());
     };
     for (const args of [
       ["review", "task.json", "argument.md", "review.sqlite", "settings.json"],
@@ -132,7 +132,10 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, o
       const campaign = run(...args);
       expect(campaign.status).toBe("completed");
       expect(campaign.providerCalls).toBe(1);
-      expect(campaign.task.settings.usagePrefix).toBe("frozen");
+      expect(campaign.campaign).toBeUndefined();
+      expect(
+        run("inspect", args.at(-2)!).campaign.task.settings.usagePrefix,
+      ).toBe("frozen");
       expect(run(...args)).toEqual(campaign);
     }
     const tags = (await Bun.file(invocations).text())
@@ -197,21 +200,19 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
       }),
     );
     const init = ["init", "task.json", "example", "settings.json"];
-    for (const args of [
-      ["--records", "--usage-prefix", "lab/attempt-1", ...init],
-      [...init, "--records"],
-    ]) {
+    for (const args of [["--usage-prefix", "lab/attempt-1", ...init], init]) {
       const result = run(...args);
       expect(result.code).toBe(0);
       const report = JSON.parse(result.stdout);
-      expect(Array.isArray(report.records)).toBe(true);
-      expect(report.campaign.providerCalls).toBe(0);
-      expect(report.campaign.task.settings.usagePrefix).toBeUndefined();
+      expect(report.providerCalls).toBe(0);
+      expect(report.campaign).toBeUndefined();
     }
-    const plain = run(...init);
-    expect(plain.code).toBe(0);
-    expect(JSON.parse(plain.stdout).records).toBeUndefined();
+    const detailed = JSON.parse(run("inspect", "example", "--records").stdout);
+    expect(Array.isArray(detailed.records)).toBe(true);
+    expect(detailed.campaign.task.settings.usagePrefix).toBeUndefined();
+    expect(run(...init, "--records").code).not.toBe(0);
 
+    const noteText = "Note".repeat(262_144);
     await writeFile(
       join(directory, "notes.json"),
       JSON.stringify({
@@ -219,7 +220,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
         notes: [
           {
             id: "n1",
-            text: "Note",
+            text: noteText,
             summary: "Summary",
             detailedSummary: "Note",
             support: [],
@@ -237,12 +238,24 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     expect(report.campaign).toMatchObject({
       providerCalls: 0,
     });
-    expect(report.notes[0].text).toBe("Note");
+    expect(report.notes[0].text).toBe(noteText);
     expect(report.campaign.inputs.at(-1).value).toEqual({
       kind: "guide",
       id: "initial",
       text: "Try induction.\n",
     });
+    for (const args of [
+      init,
+      ["pause", "example"],
+      ["run", "example"],
+      ["cancel", "example"],
+    ]) {
+      const receipt = run(...args);
+      expect(receipt.code).toBe(0);
+      expect(receipt.stdout.length).toBeLessThan(512);
+      expect(JSON.parse(receipt.stdout).providerCalls).toBe(0);
+      expect(receipt.stdout).not.toContain(noteText);
+    }
 
     const rejected = run("export", "example");
     expect(rejected.code).not.toBe(0);
@@ -259,7 +272,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
 
     const help = run("run", "--help");
     expect(help.code).toBe(0);
-    expect(help.stdout).toContain("--records");
+    expect(help.stdout).not.toContain("--records");
     expect(help.stdout).toContain("--key-stdin");
     expect(help.stdout).toContain("--usage-prefix");
   } finally {

@@ -145,19 +145,25 @@ export class Store {
       saved.value.version !== campaignVersion
     )
       throw new Error("Unsupported Xean campaign version");
-    const tasks = new Map<TaskId, PiTask>();
-    let cursor: Cursor | undefined;
-    do {
-      const page = await storage.scanTasks({}, 256, cursor, context);
-      for (const task of page.items) {
-        if (!isXeanTask(task)) continue;
-        if (task.version !== taskVersion) {
-          throw new Error(`Unsupported Xean task ${task.kind}@${task.version}`);
+    const records: PiTask[] = [];
+    for (const kind of [WORKER, COORDINATOR]) {
+      let cursor: Cursor | undefined;
+      do {
+        const page = await storage.scanTasks({ kind }, 256, cursor, context);
+        for (const task of page.items) {
+          if (task.version !== taskVersion) {
+            throw new Error(
+              `Unsupported Xean task ${task.kind}@${task.version}`,
+            );
+          }
+          records.push(resident(task as PiTask));
         }
-        tasks.set(task.id, resident(task as PiTask));
-      }
-      cursor = page.next;
-    } while (cursor);
+        cursor = page.next;
+      } while (cursor);
+    }
+    const tasks = new Map(
+      records.sort((a, b) => a.id - b.id).map((task) => [task.id, task]),
+    );
     const state = (saved?.value as CampaignState | undefined) ?? initial!;
     validate?.(state, [...tasks.values()]);
     const session = runtime

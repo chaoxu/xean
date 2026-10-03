@@ -28,6 +28,7 @@ import {
   type ToolRegistration,
   type ConversationId,
   type TaskId,
+  type ToolTaskInput,
   type HookApi,
   type Extension,
 } from "@earendil-works/pi-durable";
@@ -80,6 +81,7 @@ const Progress = defineDocFamily({
   scope: "task",
   family: true,
   version: 1,
+  checkpointWhen: () => true,
   initial: (
     _seed: null,
   ): {
@@ -142,15 +144,13 @@ export async function ask<S extends TSchema>(
     )
     .digest("hex");
   const { registry, models } = host;
-  for (const provider of runtime.models.getProviders()) {
-    const selected = Object.values(runtime.profiles)
-      .map((profile) => profile.model)
-      .filter((model) => model.provider === provider.id);
+  const provider = runtime.models.getProvider(profile.model.provider);
+  if (provider) {
     const catalog = new Map(
       [
         ...models.getModels(provider.id),
         ...provider.getModels(),
-        ...selected,
+        profile.model,
       ].map((model) => [model.id, model]),
     );
     models.setProvider({
@@ -380,10 +380,11 @@ export async function ask<S extends TSchema>(
     hooks: [
       hook(ToolTask, {
         async beforeTool(_call, api, ctx) {
-          const history = await messages(api, ctx);
-          const assistant = history.findLast(
-            (message) => message.role === "assistant",
-          ) as AssistantMessage;
+          const assistant = await host.commit(async (tx) => {
+            const task = (await tx.task(api.taskId))!;
+            const { assistant } = task.input as ToolTaskInput;
+            return (await tx.entry(assistant))!.model![0] as AssistantMessage;
+          }, ctx);
           if (
             assistant.content.filter(
               (part) =>
@@ -454,15 +455,12 @@ export async function ask<S extends TSchema>(
           };
         },
         async afterTools(_assistant, resultIds, api, ctx) {
-          const state = await progress(api, ctx);
-          const { messages: history, entries } = await host.context(
-            api.conversationId,
+          const entries = await host.commit(
+            (tx) => Promise.all(resultIds.map((id) => tx.entry(id))),
             ctx,
           );
-          const count = responses(history);
           const submitted = entries
-            .filter((entry) => resultIds.includes(entry.id))
-            .flatMap((entry) => entry.model ?? [])
+            .flatMap((entry) => entry!.model ?? [])
             .find(
               (result): result is ToolResultMessage =>
                 result.role === "toolResult" &&
@@ -470,6 +468,11 @@ export async function ask<S extends TSchema>(
                 !result.isError,
             );
           if (submitted?.details === true) return { terminate: true };
+          const state = await progress(api, ctx);
+          const count =
+            options.maxResponses === undefined
+              ? 0
+              : responses(await messages(api, ctx));
           if (count >= (options.maxResponses ?? Infinity)) {
             if (state.value === undefined)
               throw new Error(

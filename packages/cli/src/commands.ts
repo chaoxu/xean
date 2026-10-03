@@ -22,7 +22,7 @@ import {
 import { verifyInstall } from "../../../scripts/dependencies.ts";
 import { version } from "../../../package.json";
 import {
-  ownerReport,
+  ownerReceipt,
   controlCommand,
   requestOwner,
   serveControl,
@@ -39,7 +39,6 @@ const program = new Command("xean")
   .description("Run and inspect durable mathematical work")
   .version(version)
   .option("--campaign-dir <dir>", "Directory for named campaigns", ".xean")
-  .option("--records", "Include durable call and attempt records")
   .option("--owner-id <id>", "Identify this execution owner")
   .option("--expected-owner-id <id>", "Require this live owner for a command")
   .option(
@@ -64,13 +63,11 @@ const program = new Command("xean")
   });
 
 type Flags = {
-  records?: boolean;
   keyStdin?: boolean;
   usagePrefix?: string;
   ownerId?: string;
   expectedOwnerId?: string;
 };
-const records = () => program.opts<Flags>().records === true;
 const read = (path: string) => Bun.file(resolve(path)).json();
 const readText = (path: string) => Bun.file(resolve(path)).text();
 
@@ -129,7 +126,6 @@ async function runCampaign(
       await realpath(campaignPath(target)),
       {
         kind: "resume",
-        records: records(),
       },
       expectedOwnerId,
     );
@@ -156,7 +152,7 @@ async function runCampaign(
       process.off("SIGTERM", interrupt);
       await shutdown;
     }
-    if (!shutdown) await print(await ownerReport(engine, records()));
+    if (!shutdown) await print(ownerReceipt(await engine.inspect()));
   });
 }
 
@@ -190,7 +186,7 @@ program
       settings: await read(settings),
     });
     await withCampaign(campaign, { declaration }, async (engine) => {
-      await print(await ownerReport(engine, records()));
+      await print(ownerReceipt(await engine.inspect()));
     });
   });
 for (const method of ["run", "resume"] as const)
@@ -200,30 +196,39 @@ for (const method of ["run", "resume"] as const)
 for (const kind of ["pause", "cancel"] as const)
   program
     .command(`${kind} <campaign>`)
-    .action((campaign: string) =>
-      sendCommand(campaign, { kind, records: records() }),
-    );
+    .action((campaign: string) => sendCommand(campaign, { kind }));
 program
   .command("inspect <campaign>")
+  .option("--records", "Include durable call and attempt records")
   .option(
     "--allow-uninitialized",
     "Report a campaign whose initialization has not committed as null",
   )
-  .action(async (campaign: string, flags: { allowUninitialized?: boolean }) => {
-    try {
-      const snapshot = await inspectCampaign(campaignPath(campaign), records());
-      await print(
-        campaignReport(records() ? snapshot : { campaign: snapshot.campaign }),
-      );
-    } catch (error) {
-      if (
-        !flags.allowUninitialized ||
-        !(error instanceof UninitializedCampaignError)
-      )
-        throw error;
-      await print({ campaign: null });
-    }
-  });
+  .action(
+    async (
+      campaign: string,
+      flags: { allowUninitialized?: boolean; records?: boolean },
+    ) => {
+      try {
+        const snapshot = await inspectCampaign(
+          campaignPath(campaign),
+          flags.records === true,
+        );
+        await print(
+          campaignReport(
+            flags.records ? snapshot : { campaign: snapshot.campaign },
+          ),
+        );
+      } catch (error) {
+        if (
+          !flags.allowUninitialized ||
+          !(error instanceof UninitializedCampaignError)
+        )
+          throw error;
+        await print({ campaign: null });
+      }
+    },
+  );
 program.command("status <campaign>").action(async (campaign: string) => {
   const report = statusReport(
     await inspectCampaign(campaignPath(campaign), usageRecord),

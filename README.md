@@ -42,7 +42,7 @@ Matching Pi packages are pinned to one exact source commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. The `main` branch contains the unreleased
 3.0 candidate. New campaigns use campaign format 12 and solver declaration
-version 13. Observer snapshots use `xean-observe/v4`. Historical campaigns require
+version 14. Observer snapshots use `xean-observe/v4`. Historical campaigns require
 their original source revision and runtime, and historical snapshots require
 their matching observer. No migration is provided. Existing releases and tags
 remain historical archives.
@@ -121,8 +121,8 @@ Editing them afterward does not change that campaign. `run` performs the model
 work, `status` inspects it, and `export` prints an accepted argument with its
 supporting proofs.
 
-Campaigns live under `.xean/` by default. Only `campaign.status: "completed"`
-establishes an accepted argument. `export` requires that accepted result.
+Campaigns live under `.xean/` by default. A solver campaign accepts an argument
+only when its status is `completed`. `export` requires that accepted result.
 See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
 cancellation, explicit database paths, and other model providers.
 
@@ -157,7 +157,8 @@ For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
 persistent writable data directory and the provider's credentials. Use one
 owner process per campaign. `SIGINT` and `SIGTERM` close the owner and retain
 committed work for recovery. A normal return prints the campaign state, including
-paused, blocked, or waiting states. An interrupted command prints no final JSON.
+paused, blocked, or waiting states, as a compact receipt with `status`, `error`,
+`providerCalls`, and `pendingSignals`. An interrupted command prints no final JSON.
 Use `status` afterward to inspect committed state before deciding whether a
 supervisor should restart it.
 

@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  defineDoc,
   defineTask,
   Harness,
   MemoryStorage,
@@ -15,6 +16,7 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let admissions = 0;
+  let passes = 0;
   let executions = 0;
   const reports: unknown[] = [];
   const task = defineTask<
@@ -49,6 +51,7 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
       models: createModels(),
       onReport: (error) => reports.push(error),
       admitTasks: async (tx, candidates) => {
+        passes++;
         const candidate = candidates[0];
         if (!candidate) return [];
         await tx.appendEntry(ROOT_CONVERSATION_ID, {
@@ -108,6 +111,21 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
       status: "terminal",
       outcome: { status: "completed", result: null },
     });
+    const settledPasses = passes;
+    await harness.commit(
+      (tx) =>
+        tx.doc(
+          defineDoc({
+            kind: "private-progress",
+            scope: "session",
+            version: 1,
+            initial: () => ({ partial: "streaming" }),
+          }),
+        ),
+      context,
+    );
+    await harness.waitForQuiescence(context);
+    expect(passes).toBe(settledPasses);
     expect(reports).toEqual([]);
   } finally {
     release.resolve();

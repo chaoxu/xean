@@ -1,10 +1,10 @@
 # Pi artifacts
 
 Xean consumes the packages listed in [provenance.json](provenance.json)
-from Pi commit `a276dabe57911253350bffb93cb7d7aff6a73261`.
+from Pi commit `83692682f095528f8b71652ddacff7075e36e893`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
-Pi's internal dependencies. Their upstream package version is `1.0.0`.
+Pi's internal dependencies. Their upstream package version is `1.0.1`.
 The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
@@ -94,9 +94,9 @@ These are local extensions, not upstream guarantees. The
 contracts and removal criteria. Unpatched artifacts remain reproducible;
 the patch separately identifies the code executed by Xean.
 
-The 2026-10-02 refresh to `a276dabe5791` retains the same patch behavior.
-Upstream now handles Anthropic inline tool definitions and model-capacity
-retries. Those changes do not replace Xean's accounting, transport, or Harness
-extensions. Both patches are byte-identical to the preceding `9fba660cf1ca` build.
-The latest Bedrock thinking-replay and Kitty image-conversion fixes are outside
-Xean's configured providers and package dependencies.
+The 2026-10-03 refresh to `83692682f095` uses Pi `1.0.1` packages. The consumed
+packages' runtime source is unchanged from `a276dabe5791`. The AI patch retains
+identical bytes. The durable patch removes the obsolete wakeup on every document
+commit, so streaming partials no longer rerun campaign admission. The two commits
+after the `v1.0.1` tag update changelogs and the Nix release workflow. The frozen
+model catalog and remaining patch guarantees are unchanged.

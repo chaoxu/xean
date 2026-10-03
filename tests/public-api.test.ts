@@ -31,7 +31,8 @@ test("built-in planner sees replacement Codex and keeps literature opt-in", asyn
     fixtureRuntime((context) => {
       const input = JSON.parse(
         String(
-          context.messages.find((message) => message.role === "user")!.content,
+          context.messages.findLast((message) => message.role === "user")!
+            .content,
         ),
       );
       capabilities.push({

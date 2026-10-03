@@ -151,6 +151,42 @@ test("an empty published index omits reads while retaining private submissions",
   expect(responses).toBe(2);
 });
 
+test("Coordinator keeps task and summaries ahead of changing states and guidance", async () => {
+  const notes = [note("live", "Live lemma")];
+  const runtime = fixtureRuntime((context) => {
+    const messages = context.messages.filter(
+      (message) => message.role === "user",
+    );
+    expect(
+      messages.slice(0, -1).map((message) => String(message.content)),
+    ).toEqual([
+      JSON.stringify({ task }),
+      JSON.stringify({ id: "live", summary: "Live lemma" }),
+    ]);
+    const input = JSON.parse(String(messages.at(-1)!.content));
+    expect(input.notes[0]).not.toHaveProperty("summary");
+    expect(input).not.toHaveProperty("task");
+    expect(input.notes[0].verified).toBe(notes[0]!.verified);
+    expect(input.guidance).toEqual([String(notes[0]!.verified)]);
+    return reply(
+      fauxToolCall("submit_result", {
+        work: [{ kind: "explorer", guidance: "Continue" }],
+      }),
+    );
+  });
+  for (const verified of [true, false]) {
+    notes[0]!.verified = verified;
+    await invoke(createSolver(task, runtime).functions.coordinator, {
+      task,
+      notes,
+      guidance: [String(verified)],
+      failures: [],
+      literatureUsed: false,
+      explorerUsed: false,
+    });
+  }
+});
+
 test("retrieval freezes batched reads and rejects invalid IDs and dead dependencies", async () => {
   const notes = [note("live", "Live lemma"), note("dead", "Rejected lemma")];
   const fullText = "FULL-live\n".repeat(6000);
@@ -211,9 +247,22 @@ test("retrieval freezes batched reads and rejects invalid IDs and dead dependenc
           details.map(({ detailedSummary }: Note) => detailedSummary),
         ).toEqual(["DETAIL-live", "DETAIL-dead"]);
         expect(details[0]).not.toHaveProperty("text");
-        expect(details[0]).toMatchObject({ verified: true, dead: false });
-        expect(details[1]).toMatchObject({ verified: false, dead: true });
-        expect(JSON.stringify(details[1].feedback)).toContain(
+        expect(details).toEqual([
+          { id: "live", detailedSummary: "DETAIL-live" },
+          { id: "dead", detailedSummary: "DETAIL-dead" },
+        ]);
+        const states = JSON.parse(
+          String(
+            context.messages.find(
+              (message) =>
+                message.role === "user" &&
+                String(message.content).includes('"allowance":'),
+            )!.content,
+          ),
+        ).notes;
+        expect(states[0]).toMatchObject({ verified: true, dead: false });
+        expect(states[1]).toMatchObject({ verified: false, dead: true });
+        expect(JSON.stringify(states[1].feedback)).toContain(
           "Counterexample at zero.",
         );
         return reply(

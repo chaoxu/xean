@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import {
   fauxToolCall,
   Type,
 } from "@earendil-works/pi-ai";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { defineTool, MemoryStorage } from "@earendil-works/pi-durable";
 import { ask } from "../packages/core/src/solve/pi.ts";
 import {
   Xean,
@@ -25,6 +26,76 @@ import {
   codexResearch,
 } from "../packages/core/src/solve/index.ts";
 import { fixtureRuntime, invoke } from "./fixtures/pi.ts";
+
+test("mixed tool batches reject duplicate submissions and finish without rereading history", async () => {
+  let calls = 0;
+  let reads = 0;
+  let submissions = 0;
+  let contextReads = 0;
+  const runtime = fixtureRuntime((input) => {
+    if (calls++ > 0) {
+      const results = input.messages.filter(
+        (message) => message.role === "toolResult",
+      );
+      expect(results).toHaveLength(3);
+      expect(results.every((result) => result.isError)).toBe(true);
+      expect(JSON.stringify(results)).toContain("Submit exactly once");
+    }
+    return fauxAssistantMessage(
+      [
+        fauxToolCall("submit_result", { answer: 7 }),
+        ...(calls === 1 ? [fauxToolCall("submit_result", { answer: 8 })] : []),
+        fauxToolCall("read_fixture", {}),
+      ],
+      { stopReason: "toolUse" },
+    );
+  });
+  const result = await invoke((_input, execution, context) => {
+    const host = execution.durable!;
+    return ask(
+      runtime,
+      "explorer",
+      "Return the answer",
+      {},
+      Type.Object({ answer: Type.Number() }),
+      {
+        ...execution,
+        durable: {
+          ...host,
+          context(...args) {
+            contextReads++;
+            return host.context(...args);
+          },
+        },
+      },
+      context,
+      {
+        maxResponses: 2,
+        tools: [
+          defineTool({
+            name: "read_fixture",
+            description: "Read a fixture",
+            parameters: Type.Object({}),
+            replay: "safe",
+            async execute() {
+              reads++;
+              return { content: [{ type: "text", text: "Fixture" }] };
+            },
+          }),
+        ],
+        submit() {
+          submissions++;
+          return { done: true, receipt: { recorded: true } };
+        },
+      },
+    );
+  }, null);
+  expect(result).toEqual({ answer: 7 });
+  expect(calls).toBe(2);
+  expect(reads).toBe(1);
+  expect(submissions).toBe(1);
+  expect(contextReads).toBe(1);
+});
 
 test("concurrent Pi runtimes retain each other's custom models", async () => {
   const calls: string[] = [];
@@ -286,6 +357,14 @@ test("Explorer resumes private native work before one complete shared publicatio
       value: { notes: [{ id: "n1" }] },
     });
     expect(savedProgress?.value.reads).toHaveLength(1);
+    {
+      using reader = new Database(path, { readonly: true });
+      expect(
+        reader
+          .query("SELECT kind FROM document_revisions WHERE document_id = ?")
+          .all(progressId),
+      ).toEqual([{ kind: "base" }]);
+    }
     await engine.close();
     await running;
     expect(transcripts).toHaveLength(2);

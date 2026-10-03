@@ -95,13 +95,14 @@ export type Snapshot = ReturnType<typeof snapshot>;
 const summarySchema = Type.Object({
   observedAt: Type.String(),
   usageAvailable: Type.Boolean(),
+  task: Type.Union([taskSchema, Type.Null()]),
   status: statusSchema,
 });
 export function readSummary(value: unknown) {
   if (!Value.Check(summarySchema, value))
     throw new Error("Malformed compact observation");
-  const { observedAt, usageAvailable, status } = value;
-  const summary = structuredClone({ observedAt, usageAvailable, status });
+  const { observedAt, usageAvailable, task, status } = value;
+  const summary = structuredClone({ observedAt, usageAvailable, task, status });
   Value.Clean(summarySchema, summary);
   return summary;
 }

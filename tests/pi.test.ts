@@ -1043,7 +1043,7 @@ test("roles bound context, preserve frozen note reads, and verify imported depen
     if (turn >= 5) throw new Error(JSON.stringify(input.messages.at(-1)));
     if (turn++ === 0) {
       const prompt = JSON.parse(
-        String(input.messages.find((m) => m.role === "user")!.content),
+        String(input.messages.findLast((m) => m.role === "user")!.content),
       );
       expect(prompt.capabilities).toEqual({
         explorer: true,

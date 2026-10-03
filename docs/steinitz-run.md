@@ -26,15 +26,31 @@ and verification artifacts before continuing.
 
 Use this script for this experiment, including any restart. The general CLI
 does not enforce the experiment's round allowance. Retain the round files beside
-the database. The script writes the result, projected notes, and journal. Reopen
-verification belongs to the [test and smoke procedure](kernel-smoke.md).
+the database. The script writes a compact execution receipt to `result.json`.
+Pi retains notes and the journal in `campaign.sqlite`. Use CLI `inspect` or
+`inspect --records` for explicit exports, and the separate
+[snapshot publisher](../packages/observe/README.md#snapshot-publishing) for remote
+observation. Reopen verification belongs to the
+[test and smoke procedure](kernel-smoke.md).
 The runner uses the public solver and kernel APIs without introducing a kernel
 round limit.
 
-The committed `nomad/bounded-solve.nomad.hcl` takes `run_id` and `source_commit`
-and runs on jupiter using an existing immutable
-Lab image, fleet-locked Bun, and an isolated directory under the existing run
-volume.
+The committed `nomad/bounded-solve.nomad.hcl` takes `run_id`, `source_commit`,
+and `installation`. It runs on jupiter using an existing immutable Lab image
+and one qualified installation at `/srv/xean-lab/runs/_runtime/INSTALLATION`.
+The installation retains the complete `source/` tree with locked dependencies
+and `runtime/bun` with `runtime/bun-runtime.toml`. New campaigns reuse it by
+identity. Their inputs and results live separately under `_xean/RUN_ID`.
+Record the source, dependency and runtime hashes with the submission.
+
+The optional `codex_configs` map supplies native TOML files without credentials:
+`config.toml` and, for each configured named profile, `NAME.config.toml`.
+Nomad writes those files into the allocation's Codex home. Codex
+plugin caches and Bun scratch stay in the allocation instead of the archive.
+Credentials still arrive through the job environment. Lab and deployment tools
+own these installations and their retention. Ordinary Lab campaigns already
+share the worker image. Historical campaigns retain their original job specs,
+source paths and runtimes.
 
 ## September 23 run
 

@@ -39,7 +39,7 @@ test.each([false, true])(
         expect(selected.id).toBe("coordinator");
         const input = JSON.parse(
           String(
-            context.messages.find((message) => message.role === "user")!
+            context.messages.findLast((message) => message.role === "user")!
               .content,
           ),
         );
@@ -123,7 +123,8 @@ test("API planning requires work while replaced roles preserve lazy runtime and 
     calls++;
     const input = JSON.parse(
       String(
-        context.messages.find((message) => message.role === "user")!.content,
+        context.messages.findLast((message) => message.role === "user")!
+          .content,
       ),
     );
     expect(input.capabilities.explorer).toBe(true);

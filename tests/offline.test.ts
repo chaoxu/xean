@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { inspectCampaign } from "../packages/core/src/index.ts";
 import { offlineResearch } from "../scripts/bounded-solve.ts";
 import {
   declarationVersion,
@@ -92,21 +93,28 @@ test("closed-book runner honors omitted literature defaults and reopens without 
       expect(result.exitCode).toBe(0);
       return {
         result: await Bun.file(join(directory, "result.json")).json(),
-        records: await Bun.file(join(directory, "records.json")).json(),
+        inspection: await inspectCampaign(
+          join(directory, "campaign.sqlite"),
+          true,
+        ),
       };
     };
     const first = await run();
     expect(first.result).toMatchObject({
       outcome: "round_limit",
       rounds: 0,
-      campaign: { status: "paused", providerCalls: 0 },
+      status: "paused",
+      providerCalls: 0,
     });
-    expect(first.records.length).toBeGreaterThan(0);
+    expect(first.inspection.records!.length).toBeGreaterThan(0);
+    expect(first.result.campaign).toBeUndefined();
+    expect(first.result.notes).toBeUndefined();
+    expect(await Bun.file(join(directory, "records.json")).exists()).toBe(
+      false,
+    );
     const reopened = await run();
     expect(reopened.result.outcome).toBe("paused");
-    expect(reopened.result.campaign).toEqual(first.result.campaign);
-    expect(reopened.result.notes).toEqual(first.result.notes);
-    expect(reopened.records).toEqual(first.records);
+    expect(reopened.inspection).toEqual(first.inspection);
     expect(await Bun.file(join(directory, "observation.json")).exists()).toBe(
       false,
     );

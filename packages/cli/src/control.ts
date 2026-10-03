@@ -2,30 +2,27 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Xean } from "xean";
+import type { Campaign, Xean } from "xean";
 import { submitCommand, type SolverCommand } from "xean/solve";
-import { campaignReport } from "xean/report";
+import { statusText } from "xean/report";
 
 export type OwnerCommand =
-  SolverCommand | { kind: "pause" | "resume" | "cancel"; records: boolean };
+  SolverCommand | { kind: "pause" | "resume" | "cancel" };
 
 export async function controlCommand(engine: Xean, command: OwnerCommand) {
   switch (command.kind) {
     case "pause":
     case "resume":
     case "cancel":
-      await engine[command.kind]();
-      return ownerReport(engine, command.records);
+      return ownerReceipt(await engine[command.kind]());
     default:
       return submitCommand(engine, command);
   }
 }
 
-export async function ownerReport(engine: Xean, records: boolean) {
-  const snapshot = records
-    ? await engine.inspectWithRecords()
-    : { campaign: await engine.inspect() };
-  return campaignReport(snapshot);
+export function ownerReceipt(campaign: Campaign) {
+  const { status, error, providerCalls, pendingSignals } = campaign;
+  return { status, error: statusText(error), providerCalls, pendingSignals };
 }
 
 /** The caller resolves the database's real path before choosing its socket. */

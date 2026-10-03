@@ -7,12 +7,26 @@ private work across interruptions through Pi Durable conversations. Explorer
 selects its own note reads, and the CLI and observer share public reports from
 the core library.
 
-Start fresh campaigns with campaign format 12, solver declaration version 13,
-and observer snapshot format `xean-observe/v4`. Notes and harmless corrections
-now require `summary`, `detailedSummary`, and authoritative full `text`, changing
+Start fresh campaigns with campaign format 12, solver declaration version 14,
+and observer snapshot format `xean-observe/v4`. Notes require
+`summary`, `detailedSummary`, and authoritative full `text`. Verifier corrections
+use null for unchanged fields, retaining their exact bytes without model output. These changes affect
 the public APIs, CLI inputs, and stored solver records. Historical campaigns and
 exports require their original source revision, runtime, and reader. No migration
 is provided. Existing releases and tags remain historical archives.
+
+- Pin matching Pi `1.0.1` packages at `83692682f095`, preserving frozen model data
+  and verified patches. Let Pi replace superseded private-progress revisions,
+  gate invocation writes, and wake scheduling on task changes.
+  The bounded runner now writes only a compact result receipt, leaving notes and
+  records in Pi's database for explicit inspection. Remote observation uses the
+  snapshot publisher instead of reading raw runner exports.
+- Read individual Pi entries in tool hooks and filter native task scans by kind.
+  Return compact execution receipts from CLI lifecycle commands, with full data
+  available through `inspect`. Observe polls SQLite's change counter and publishes
+  only after changes, retaining the last publication timestamp on unchanged polls.
+  Keep note metadata in the initial index and use stable task/summary prefixes
+  for both Explorer and Coordinator.
 
 - Resume built-in Pi roles from completed generations, tool results, and private
   submissions after interruption, retaining frozen inputs and read/response

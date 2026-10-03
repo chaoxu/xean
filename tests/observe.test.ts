@@ -23,7 +23,11 @@ import {
   readRun,
   type Run,
 } from "../packages/observe/src/read.ts";
-import { api, readSources } from "../packages/observe/src/server.ts";
+import {
+  api,
+  readSources,
+  type RunStatus,
+} from "../packages/observe/src/server.ts";
 
 async function fakeNomad(
   directory: string,
@@ -133,10 +137,8 @@ if (args[0] === "job") {
       errorLog: "worker stderr\n",
     });
     expect(first[2]?.error).toBeUndefined();
-    expect(first[3]?.error).toContain("No observation, result, or task file");
-    expect(first[0]?.error).not.toContain(
-      "No observation, result, or task file",
-    );
+    expect(first[3]?.error).toContain("No observation or task file");
+    expect(first[0]?.error).not.toContain("No observation or task file");
     await writeFile(mode, "allocs");
     clock.mockReturnValue(Date.now() + 10_001);
     const failed = await read();
@@ -341,33 +343,15 @@ test("the external observer reads coherent live snapshots without changing a loc
     }
     await writeFile(observationFile, JSON.stringify(published));
     const resultFile = join(exported, "result.json");
-    await writeFile(
-      resultFile,
-      JSON.stringify({
-        ...committed,
-        campaign: { ...committed.campaign, status: "completed" },
-      }),
-    );
+    await writeFile(resultFile, "receipt contents are not read");
     await utimes(observationFile, 1, 1);
     await utimes(resultFile, 2, 2);
-    expect(await exportedRun()).toMatchObject({
-      kind: "export",
-      snapshot: { status: { status: "completed" } },
-    });
-    // Only the selected artifact is parsed; errors never fall back to old evidence.
+    expect((await exportedRun()).snapshot).toEqual(published);
+    // Execution receipts neither supply campaign details nor invalidate observations.
     await writeFile(observationFile, "{invalid JSON");
-    await utimes(observationFile, 1, 1);
-    expect((await exportedRun()).error).toBeUndefined();
-    await utimes(observationFile, 3, 3);
+    expect((await exportedRun()).snapshot).toBeUndefined();
     expect((await exportedRun()).error).toBeString();
     await writeFile(observationFile, JSON.stringify(published));
-    for (const modified of [2, 3]) {
-      await utimes(observationFile, modified, modified);
-      expect(await exportedRun()).toMatchObject({
-        kind: "snapshot",
-        snapshot: published,
-      });
-    }
     expect(after.snapshot?.status.calls.byModel[0]?.reportedUsage).toEqual({
       input_tokens: 0,
       output_tokens: 9,
@@ -402,6 +386,7 @@ test("the external observer reads coherent live snapshots without changing a loc
         observedAt: saved.observedAt,
         status: saved.status,
         usageAvailable: saved.usageAvailable,
+        task: saved.task,
       }),
     );
     const receipt = {
@@ -453,6 +438,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       expect(single).toEqual(compact[2]);
       expect(single.observedAt).toBe(published.observedAt);
       expect(single.stale).toBe(false);
+      expect(single.problem).toBe(published.task.problem);
       expect(single.snapshot).toEqual({
         status: published.status,
         usageAvailable: true,
@@ -478,13 +464,10 @@ test("the external observer reads coherent live snapshots without changing a loc
       await writeFile(statusFile, "invalid compact status");
       for (let i = 0; i < 2; i++) {
         const failed = await refresh();
-        expect(failed[2]).toMatchObject({
-          stale: true,
-          kind: rows[2]!.kind,
-          observedAt: rows[2]!.observedAt,
-          snapshot: rows[2]!.snapshot,
-          process: { log: "new-work\n" },
-        });
+        // Full evidence expires with the refresh; only compact status is retained.
+        expect(failed[2]?.snapshot).toBeUndefined();
+        expect(failed[2]?.stale).toBeUndefined();
+        expect(failed[2]?.process?.log).toBe("new-work\n");
         expect(failed[2]?.error).toBeString();
         expect(failed[0]).not.toHaveProperty("stale");
         expect(failed[1]?.snapshot).toBeUndefined();
@@ -537,7 +520,7 @@ test("the external observer reads coherent live snapshots without changing a loc
   }
 });
 
-test("observer accepts generic campaign databases and exports", async () => {
+test("observer accepts generic campaign databases and published snapshots", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-observe-generic-"));
   const engine = await Xean.open(
     await openXeanStorage(join(directory, "campaign.sqlite")),
@@ -551,7 +534,10 @@ test("observer accepts generic campaign databases and exports", async () => {
     const value = await engine.inspectWithRecords();
     const exported = join(directory, "exported");
     await mkdir(exported);
-    await writeFile(join(exported, "result.json"), JSON.stringify(value));
+    await writeFile(
+      join(exported, "observation.json"),
+      JSON.stringify(snapshot(value)),
+    );
     for (const path of [directory, exported]) {
       const observed = await readRun(
         { id: "generic", directory: path },
@@ -577,7 +563,7 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
     await writeFile(
       join(directory, "task.json"),
       JSON.stringify({
-        problem: "An older running campaign",
+        problem: "A run awaiting its publisher",
         completionCriteria: "Exact task",
       }),
     );
@@ -585,7 +571,7 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
       join(directory, "round-1.json"),
       JSON.stringify({ round: 1 }),
     );
-    const run = await readRun({ id: "old", directory }, directory);
+    const run = await readRun({ id: "unpublished", directory }, directory);
     expect(run.kind).toBe("heartbeat");
     expect(run.snapshot).toBeUndefined();
     expect(run.heartbeat?.rounds).toBe(1);
@@ -602,7 +588,7 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
     for (const failed of ["stdout", "stderr"] as const) {
       await fakeNomad(directory, failed);
       const unavailable = await readRun(
-        { id: "old", directory, job: "fixture-job" },
+        { id: "unpublished", directory, job: "fixture-job" },
         directory,
       );
       expect(unavailable.error).toContain("Unsupported observation");
@@ -685,14 +671,14 @@ test("source refresh reloads membership and retains stale evidence only for the 
       return readSources(await Bun.file(config).json(), directory);
     }, directory);
     const request = (suffix = "") =>
-      handle(new Request(`http://127.0.0.1/api/runs${suffix}`));
+      handle(new Request(`http://127.0.0.1/api/runs${suffix}?view=status`));
     const refresh = async (sources: unknown) => {
       await writeFile(config, JSON.stringify(sources));
       clock.mockReturnValue(Date.now() + 10_001);
-      return (await (await request()).json()) as Run[];
+      return (await (await request()).json()) as RunStatus[];
     };
     const [initial, concurrent] = await Promise.all([request(), request()]);
-    const original = (await initial.json()) as Run[];
+    const original = (await initial.json()) as RunStatus[];
     expect(await concurrent.json()).toEqual(original);
     expect(reloads).toBe(1);
     await writeFile(join(directory, "first/task.json"), "invalid");
@@ -703,11 +689,11 @@ test("source refresh reloads membership and retains stale evidence only for the 
       heartbeat: original[0]!.heartbeat,
       observedAt: original[0]!.observedAt,
     });
-    expect(reordered[0]?.heartbeat?.task.problem).toBe("second");
-    expect(reordered[0]?.stale).toBeUndefined();
+    expect(reordered[0]?.problem).toBe("second");
+    expect(reordered[0]?.stale).toBe(false);
     const relocated = await refresh([{ ...first, directory: "missing" }]);
     expect(relocated[0]?.heartbeat).toBeUndefined();
-    expect(relocated[0]?.stale).toBeUndefined();
+    expect(relocated[0]?.stale).toBe(false);
     expect((await request("/second")).status).toBe(404);
     const added = await refresh([second, { id: "third", directory: "second" }]);
     expect(added.map((run) => run.id)).toEqual(["second", "third"]);
@@ -820,11 +806,8 @@ console.log(JSON.stringify({artifacts:{kind:"heartbeat",at:"2026-10-01T00:00:00Z
     await writeFile(join(directory, "fail"), "bad");
     clock.mockReturnValue(Date.now() + observationInterval + 1);
     const retained = await (await request("/remote")).json();
-    expect(retained).toMatchObject({
-      heartbeat: late.heartbeat,
-      observedAt: late.observedAt,
-      stale: true,
-    });
+    expect(retained.heartbeat).toBeUndefined();
+    expect(retained.stale).toBeUndefined();
     expect(retained.error).toContain("fixture failure");
   } finally {
     await writeFile(join(directory, "release"), "done");
@@ -911,19 +894,26 @@ process.exit(await child.exited);
     } finally {
       await engine.close();
     }
-    for (const [file, kind, value] of [
-      ["result.json", "export", exported],
-      ["observation.json", "snapshot", snapshot(exported)],
-    ] as const) {
-      await writeFile(join(directory, file), JSON.stringify(value));
-      expect(await readRun(remote, directory)).toMatchObject({
-        kind,
-        review: { state: "reviewed", receipt: changed },
-      });
-    }
+    await writeFile(
+      join(directory, "result.json"),
+      JSON.stringify({ status: "running", providerCalls: 0 }),
+    );
+    const unpublished = await readRun(remote, directory);
+    expect(unpublished.error).toBeUndefined();
+    expect(unpublished.kind).toBe("heartbeat");
+    expect(unpublished.snapshot).toBeUndefined();
+    expect(unpublished.review).toEqual({ state: "reviewed", receipt: changed });
+    await writeFile(
+      join(directory, "observation.json"),
+      JSON.stringify(snapshot(exported)),
+    );
+    expect(await readRun(remote, directory)).toMatchObject({
+      kind: "snapshot",
+      review: { state: "reviewed", receipt: changed },
+    });
     expect(
       (await readRun(source, directory, undefined, undefined, true)).error,
-    ).toContain("matching snapshot publisher");
+    ).toContain("snapshot publisher");
     await writeFile(
       join(directory, "observation.json"),
       "invalid snapshot".repeat(100_000),
@@ -945,7 +935,7 @@ process.exit(await child.exited);
     await utimes(join(directory, "status.json"), 1, 1);
     expect(
       (await readRun(source, directory, undefined, undefined, true)).error,
-    ).toContain("matching snapshot publisher");
+    ).toContain("snapshot publisher");
     const unavailable = await readRun(remote, directory);
     expect(unavailable.error).toBeString();
     expect(unavailable.snapshot).toBeUndefined();

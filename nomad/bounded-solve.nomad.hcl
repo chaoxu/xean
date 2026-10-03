@@ -1,5 +1,12 @@
 variable "source_commit" { type = string }
 variable "run_id" { type = string }
+# One qualified source/dependency/Bun installation, shared by new campaigns.
+variable "installation" { type = string }
+# Native Codex configuration without credentials. Credentials arrive in Env.
+variable "codex_configs" {
+  type = map(string)
+  default = { "config.toml" = "# Native Codex configuration.\n" }
+}
 variable "round_limit" {
   type = number
   default = 20
@@ -7,10 +14,6 @@ variable "round_limit" {
 variable "resume" {
   type = bool
   default = false
-}
-variable "source_directory" {
-  type = string
-  default = "source"
 }
 variable "image" {
   type = string
@@ -33,6 +36,7 @@ job "xean-bounded-template" {
     fleet_owner = "xean"
     source_repo = "local:xean"
     source_commit = var.source_commit
+    installation = var.installation
     round_limit = "${var.round_limit}"
   }
   constraint {
@@ -58,11 +62,11 @@ job "xean-bounded-template" {
       config {
         image = var.image
         force_pull = false
-        command = "/runs/_xean/${var.run_id}/runtime/bun"
+        command = "/runs/_runtime/${var.installation}/runtime/bun"
         args = concat([
-          "--config=/runs/_xean/${var.run_id}/runtime/bun-runtime.toml",
+          "--config=/runs/_runtime/${var.installation}/runtime/bun-runtime.toml",
           "--no-install", "--no-env-file",
-          "/runs/_xean/${var.run_id}/${var.source_directory}/scripts/bounded-solve.ts",
+          "/runs/_runtime/${var.installation}/source/scripts/bounded-solve.ts",
           "/runs/_xean/${var.run_id}",
           "--round-limit", "${var.round_limit}",
         ], var.offline ? ["--offline"] : [], var.resume ? ["--resume"] : [])
@@ -80,10 +84,22 @@ job "xean-bounded-template" {
           }
         }
       }
+      dynamic "template" {
+        for_each = var.codex_configs
+        content {
+          data = template.value
+          destination = "local/${template.key}"
+          perms = "0600"
+          uid = 1000
+          gid = 1000
+          change_mode = "noop"
+        }
+      }
       env {
         TMPDIR = "/tmp"
         HOME = "/tmp"
-        CODEX_HOME = "/runs/_xean/${var.run_id}/runtime/codex-home"
+        CODEX_HOME = "/local"
+        BUN_INSTALL_CACHE_DIR = "/tmp/bun-cache"
         NODE_EXTRA_CA_CERTS = "/usr/local/share/ca-certificates/lab-root.crt"
       }
       volume_mount {

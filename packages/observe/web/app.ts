@@ -4,6 +4,7 @@ import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { Run } from "../src/read.ts";
+import type { RunStatus } from "../src/server.ts";
 
 const app = document.querySelector<HTMLElement>("#app")!;
 const connection = document.querySelector<HTMLElement>("#connection")!;
@@ -12,22 +13,20 @@ type Note = Snapshot["notes"][number];
 type Check = Note["checks"][number];
 type Patch = Record<string, string | number | null>;
 const pageSize = 50;
-let runs: Run[] = [];
-let pending = false;
+let runs: RunStatus[] = [];
+let selected: Run | undefined;
+let pending: AbortController | undefined;
 let params = new URLSearchParams(location.hash.slice(1));
 const renderedMath = new WeakMap<HTMLElement, string>();
 const count = (value: number | undefined | null) =>
   value == null ? "Unknown" : value.toLocaleString();
 const task = (run: Run) => run.snapshot?.task ?? run.heartbeat?.task;
-const state = (run: Run) =>
+const state = (run: Run | RunStatus) =>
   run.snapshot?.status.status ?? (run.error ? "Unavailable" : "Unknown");
-const age = (run: Run) => {
+const age = (run: { observedAt: string }) => {
   const seconds = Math.max(
     0,
-    Math.floor(
-      (Date.now() - Date.parse(run.snapshot?.observedAt ?? run.observedAt)) /
-        1000,
-    ),
+    Math.floor((Date.now() - Date.parse(run.observedAt)) / 1000),
   );
   return `${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`} ago`;
 };
@@ -62,6 +61,7 @@ function href(patch: Patch) {
 }
 function replace(patch: Patch) {
   history.replaceState(null, "", href(patch));
+  params = new URLSearchParams(location.hash.slice(1));
   draw();
 }
 function disclosure(key: string, label: string, body: () => TemplateResult) {
@@ -490,8 +490,8 @@ function detailView(run: Run) {
       ${badge(state(run))}
     </div>
     <p class="muted">
-      ${run.kind === "database" ? "Live database snapshot" : run.kind === "snapshot" ? "Published snapshot" : run.kind === "export" ? "Exported result" : run.kind === "heartbeat" ? "Run heartbeat" : "No campaign evidence"},
-      ${age(run)}${snapshot?.kind ? `, ${snapshot.kind}` : ""}
+      ${run.kind === "database" ? "Live database snapshot" : run.kind === "snapshot" ? "Published snapshot" : run.kind === "heartbeat" ? "Run heartbeat" : "No campaign evidence"},
+      ${age(snapshot ?? run)}${snapshot?.kind ? `, ${snapshot.kind}` : ""}
     </p>
     ${run.stale ? html`<p class="error">Stale campaign data: showing the last successful observation. The latest read failed.</p>` : ""}
     ${run.error ? html`<pre class="error">${run.error}</pre>` : ""}${snapshot?.status.error ? html`<pre class="error">${snapshot.status.error}</pre>` : ""}
@@ -634,7 +634,7 @@ function indexView() {
   const filtered = runs.filter(
     (run) =>
       (!query ||
-        `${run.id}\n${task(run)?.problem ?? ""}\n${run.source}`
+        `${run.id}\n${run.problem ?? ""}\n${run.source}`
           .toLocaleLowerCase()
           .includes(query)) &&
       (selectedFilter === "all" ||
@@ -675,13 +675,11 @@ function indexView() {
                     href=${href({ run: run.id, view: null, note: null, work: null, notePage: null, workPage: null, open: null })}
                     >${run.id}</a
                   >
-                  <p class="excerpt">
-                    ${task(run)?.problem ?? "No task available"}
-                  </p>
+                  <p class="excerpt">${run.problem ?? "No task available"}</p>
                 </td>
                 <td>${state(run)}</td>
                 <td>${count(run.snapshot?.status.calls.admitted)}</td>
-                <td>${count(run.snapshot?.notes.length)}</td>
+                <td>${count(run.snapshot?.status.notes?.total)}</td>
                 <td>
                   ${run.kind ?? "Unavailable"}<br /><span class="muted"
                     >${age(run)}</span
@@ -695,15 +693,13 @@ function indexView() {
     ${!filtered.length ? html`<p class="muted">No matching configured runs.</p>` : ""}`;
 }
 function draw() {
-  params = new URLSearchParams(location.hash.slice(1));
   const id = params.get("run");
-  const selected = runs.find((run) => run.id === id);
   render(
-    selected
+    id && selected?.id === id
       ? keyed(selected.id, detailView(selected))
       : id
-        ? html`<h1>Run unavailable</h1>
-            <p>The configured sources no longer include <code>${id}</code>.</p>
+        ? html`<h1>${pending ? "Loading run" : "Run unavailable"}</h1>
+            <p><code>${id}</code></p>
             <a href="#">All runs</a>`
         : indexView(),
     app,
@@ -729,17 +725,48 @@ function draw() {
 }
 async function refresh() {
   if (pending) return;
-  pending = true;
+  const controller = new AbortController();
+  pending = controller;
+  const id = params.get("run");
+  draw();
   try {
-    const response = await fetch("/api/runs");
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    runs = (await response.json()) as Run[];
-    draw();
+    const response = await fetch(
+      id ? `/api/runs/${encodeURIComponent(id)}` : "/api/runs?view=status",
+      { signal: controller.signal },
+    );
+    if (id && response.status === 404) selected = undefined;
+    else {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const value = await response.json();
+      if (controller.signal.aborted) return;
+      if (id) {
+        const run = value as Run;
+        selected =
+          run.error &&
+          !run.snapshot &&
+          !run.heartbeat &&
+          selected?.source === run.source &&
+          (selected.snapshot || selected.heartbeat)
+            ? {
+                ...run,
+                kind: selected.kind,
+                observedAt: selected.observedAt,
+                snapshot: selected.snapshot,
+                heartbeat: selected.heartbeat,
+                stale: true,
+              }
+            : run;
+      } else runs = value as RunStatus[];
+    }
     connection.textContent = `Checked ${new Date().toLocaleTimeString()}. Evidence ages show when campaign data was observed.`;
   } catch (error) {
-    connection.textContent = `Refresh failed: ${error}. Showing the last received data.`;
+    if (!controller.signal.aborted)
+      connection.textContent = `Refresh failed: ${error}. Showing the last received data.`;
   } finally {
-    pending = false;
+    if (pending === controller) {
+      pending = undefined;
+      draw();
+    }
   }
 }
 document
@@ -751,7 +778,13 @@ document.querySelector(".skip-link")!.addEventListener("click", (event) => {
 });
 window.addEventListener("hashchange", () => {
   const before = params;
-  draw();
+  params = new URLSearchParams(location.hash.slice(1));
+  if (before.get("run") !== params.get("run")) {
+    pending?.abort();
+    pending = undefined;
+    selected = undefined;
+    void refresh();
+  } else draw();
   if (
     ["note", "work"].some(
       (key) => params.get(key) && params.get(key) !== before.get(key),

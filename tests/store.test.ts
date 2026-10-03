@@ -59,7 +59,7 @@ test("Store observes native completion during recovery refresh", async () => {
   let store = await Store.open(storage, initial, runtime);
   store.harness.pause();
   try {
-    const [workerId, signalId] = await store.mutate(
+    const [workerId, signalId, laterWorkerId] = await store.mutate(
       async (tx) =>
         [
           await tx.newTask("xean.worker", {
@@ -68,6 +68,11 @@ test("Store observes native completion during recovery refresh", async () => {
             input: null,
           }),
           await tx.newTask("xean.coordinator", { kind: "input", value: null }),
+          await tx.newTask("xean.worker", {
+            id: "later-work",
+            role: "fixture",
+            input: null,
+          }),
         ] as const,
     );
     await store.close();
@@ -109,6 +114,11 @@ test("Store observes native completion during recovery refresh", async () => {
       return value;
     };
     store = await Store.open(storage, undefined, runtime);
+    expect(await store.mutate((tx) => tx.tasks.map(({ id }) => id))).toEqual([
+      workerId,
+      signalId,
+      laterWorkerId,
+    ]);
     expect((await read(signalId, context))?.state.status).toBe("terminal");
     expect(
       await store.mutate(

@@ -1,7 +1,7 @@
 # Xean kernel
 
 Xean coordinates durable work over Pi's storage and execution APIs. The current
-foundation pins matching Pi 1.0.0 packages to one source commit and uses the
+foundation pins matching Pi 1.0.1 packages to one source commit and uses the
 public `pi-durable` storage contract.
 The [glossary](glossary.md) defines the shared terminology and code spellings.
 
@@ -330,7 +330,7 @@ Xean's campaign state and campaign document use format version 12. Earlier forma
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 13. The durable patch
+version 1. Solver declarations independently use version 14. The durable patch
 adds Harness policy hooks, pause, and quiescence, exposes native task-record
 mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.

@@ -16,37 +16,33 @@ export async function readArtifacts(directory: string, compact = false) {
       at: info.mtime.toISOString(),
     };
   };
-  const [observation, result, summary] = await Promise.all([
+  const [observation, summary] = await Promise.all([
     find("observation.json"),
-    find("result.json"),
     compact ? find("status.json") : undefined,
   ]);
-  const useObservation =
-    observation && (!result || observation.modified >= result.modified);
-  const latest = useObservation ? observation : result;
   if (compact) {
-    if (summary && (!latest || summary.modified >= latest.modified))
+    if (summary && (!observation || summary.modified >= observation.modified))
       return {
         kind: "status" as const,
         value: await summary.file.json(),
         at: summary.at,
       };
-    if (latest)
+    if (observation)
       throw new Error(
-        "Compact status is missing or older than campaign artifacts; use the run's matching snapshot publisher",
+        "Compact status is missing or older than the observation; run the snapshot publisher",
       );
-  } else if (latest)
+  } else if (observation)
     return {
-      kind: useObservation ? ("snapshot" as const) : ("export" as const),
-      value: await latest.file.json(),
-      at: latest.at,
+      kind: "snapshot" as const,
+      value: await observation.file.json(),
+      at: observation.at,
     };
   const task = await find("task.json");
   if (!task)
     throw new Error(
       compact
-        ? "No compact status or task file; use the run's matching snapshot publisher"
-        : "No observation, result, or task file in this run",
+        ? "No compact status or task file; run the snapshot publisher"
+        : "No observation or task file in this run",
     );
   const rounds = (await readdir(directory)).flatMap((name) => {
     const match = /^round-(\d+)\.json$/.exec(name);

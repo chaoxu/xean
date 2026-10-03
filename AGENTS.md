@@ -27,7 +27,10 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
 - Use runtime-native APIs, Pi, and maintained libraries for standard behavior. Before adding runtime
   machinery, inspect the pinned Pi/Chord implementation and record any missing
   guarantee in the alignment notes. Check ownership, publication, cleanup, and
-  whether consumers retain histories despite native paging.
+  whether consumers retain histories despite native paging. Trace each datum
+  from creation through persistence, reads, caching, and retirement. Reassess
+  the requirement behind each workaround as well as upstream support. Distinguish
+  missing native guarantees from defaults or consumers we have misconfigured.
 - Express application semantics through native documents and tasks. Do not
   rebuild Pi's lifecycle, ownership, recovery, or storage behavior.
 - Pin matching Pi packages to one tested commit with verified artifact hashes

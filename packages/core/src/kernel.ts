@@ -480,19 +480,6 @@ export class Xean {
     });
   }
 
-  private current(tx: Transaction, item: Reserved): PiTask | undefined {
-    const task = tx.tasks.find((t) => t.id === item.task.id);
-    if (
-      this.closing ||
-      !task ||
-      task.state.status !== "running" ||
-      task.state.checkpoint.attemptId !== item.attemptId ||
-      stopped(tx.state.status)
-    )
-      return undefined;
-    return task;
-  }
-
   private async execute(
     task: PiTask,
     runtime: Runtime,
@@ -513,8 +500,7 @@ export class Xean {
     const calls: Calls = { pending: new Set() };
     const telemetry = this.options.telemetry ?? NOOP_TELEMETRY_CONTEXT;
     try {
-      if (!(await this.store.mutate((tx) => Boolean(this.current(tx, item)))))
-        return;
+      await runtime.commit(() => undefined, nativeContext);
       await telemetry.startSpan(
         {
           name: item.task.kind,
@@ -529,7 +515,7 @@ export class Xean {
             attemptId: item.attemptId,
             inputId: task.state.checkpoint?.inputId,
             attempt,
-            recorder: this.recorder(item, context, calls),
+            recorder: this.recorder(item, runtime, context, calls),
             telemetry: span,
             durable: {
               taskId: runtime.taskId,
@@ -753,6 +739,7 @@ export class Xean {
 
   private recorder(
     item: Reserved,
+    runtime: Runtime,
     context: Context,
     calls: Calls,
   ): CallRecorder {
@@ -767,24 +754,17 @@ export class Xean {
           calls.pending.delete(completion.promise);
           completion.resolve();
         };
-        let id: EntryId;
+        let id!: EntryId;
         try {
-          const admitted = await this.mutate(async (tx) => {
-            const task = this.current(tx, item);
-            if (
-              !task ||
-              task.state.status !== "running" ||
-              context.abortSignal?.aborted
-            )
-              throw new Error("Worker attempt is no longer active");
+          await this.store.mutateTask(runtime, async (tx) => {
+            context.abortSignal?.throwIfAborted();
             tx.state.providerCalls++;
-            return await tx.entry(
+            id = await tx.entry(
               "xean.call.started",
               { attemptId: item.attemptId, model },
               item.task.id,
             );
           });
-          id = admitted;
         } catch (error) {
           finish();
           throw error;
@@ -799,9 +779,8 @@ export class Xean {
               );
             requestRecorded = true;
             payload = json(payload);
-            await this.mutate(async (tx) => {
-              if (!this.current(tx, item) || context.abortSignal?.aborted)
-                throw new Error("Worker attempt is no longer active");
+            await this.store.mutateTask(runtime, async (tx) => {
+              context.abortSignal?.throwIfAborted();
               await tx.entry(
                 "xean.call.request",
                 { callId: id, payload },

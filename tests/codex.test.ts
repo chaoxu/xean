@@ -70,7 +70,11 @@ test.each(["research", "workspace"])(
 );
 
 test("Codex source bindings require exact premises and independent evidence", () => {
-  for (const wireSchema of [sourceSchema, reviewSchema])
+  for (const wireSchema of [
+    sourceSchema,
+    reviewSchema,
+    sourceSchema.properties.correction.anyOf[0],
+  ])
     expect(new Set(Object.keys(wireSchema.properties))).toEqual(
       new Set(wireSchema.required),
     );
@@ -126,21 +130,21 @@ test("Codex source bindings require exact premises and independent evidence", ()
     bindCodex(
       {
         ...source,
-        value: {
+        value: decode(sourceSchema, {
           ...source.value,
           correction: {
             summary: "Edited",
-            detailedSummary: "Harmless edit",
-            text: "Harmless edit",
+            detailedSummary: null,
+            text: null,
           },
-        },
+        }),
       },
       ["P"],
     ).correction,
   ).toEqual({
     summary: "Edited",
-    detailedSummary: "Harmless edit",
-    text: "Harmless edit",
+    detailedSummary: null,
+    text: null,
   });
   expect(verified).toMatchObject({
     kind: "codex-report",
@@ -401,7 +405,8 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
       expect(selected.id).toBe("coordinator");
       const input = JSON.parse(
         String(
-          context.messages.find((message) => message.role === "user")!.content,
+          context.messages.findLast((message) => message.role === "user")!
+            .content,
         ),
       );
       expect(input.capabilities.codex).toBe(true);

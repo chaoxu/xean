@@ -42,6 +42,7 @@ function runStatus(run: Run) {
   return {
     id: run.id,
     source: run.source,
+    problem: snapshot?.task?.problem ?? heartbeat?.task.problem ?? null,
     kind: run.kind,
     observedAt: snapshot?.observedAt ?? run.observedAt,
     stale: run.stale ?? false,
@@ -69,6 +70,8 @@ function runStatus(run: Run) {
     error: statusText(run.error) ?? undefined,
   };
 }
+
+export type RunStatus = ReturnType<typeof runStatus>;
 
 export function api(
   sources: Source[] | (() => Promise<Source[]>),
@@ -100,6 +103,9 @@ export function api(
     void batch.sources.then(
       () => {
         batch.expiresAt = Date.now() + observationInterval;
+        setTimeout(() => {
+          if (current === batch) current = undefined;
+        }, observationInterval).unref();
       },
       () => {
         if (current === batch) current = undefined;
@@ -143,22 +149,21 @@ export function api(
       const state = known.get(key);
       const retained = state?.run;
       const result =
+        compact &&
         run.error &&
-        !run.snapshot &&
         !run.summary &&
         !run.heartbeat &&
-        (retained?.snapshot || retained?.summary || retained?.heartbeat)
+        (retained?.summary || retained?.heartbeat)
           ? {
               ...run,
               kind: retained.kind,
               observedAt: retained.observedAt,
-              snapshot: retained.snapshot,
               summary: retained.summary,
               heartbeat: retained.heartbeat,
               stale: true,
             }
           : run;
-      if (state?.fingerprint === fingerprint) state.run = result;
+      if (compact && state?.fingerprint === fingerprint) state.run = result;
       return result;
     });
     batch.runs.set(key, pending);

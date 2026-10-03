@@ -54,7 +54,10 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     calls.push(selected.id);
     const input = JSON.parse(
       String(
-        context.messages.find((message) => message.role === "user")!.content,
+        context.messages.findLast(
+          (message) =>
+            message.role === "user" && String(message.content).startsWith("{"),
+        )!.content,
       ),
     );
     const batch = (judge: (note: Note) => unknown) => ({
@@ -66,7 +69,10 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     let result: unknown;
     switch (selected.id) {
       case "coordinator": {
-        if (context.messages.length > 5)
+        if (
+          context.messages.filter((message) => message.role === "assistant")
+            .length > 1
+        )
           throw new Error(JSON.stringify(context.messages.at(-1)));
         const candidate = input.notes.at(-1);
         const verify = (through: string, notes = [candidate.id]) => ({
@@ -134,7 +140,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       case "correctness":
         expect(input).not.toHaveProperty("sources");
         expect(input.instructions).toContain("otherwise warrants PASS");
-        expect(input.instructions).toContain("Copy text exactly");
+        expect(input.instructions).toContain("null for each unchanged field");
         expect(input.instructions).toContain("unmet task criterion");
         expect(input.notes.map((note: Note) => note.text)).toEqual([
           "ESTABLISHED-SUPPORT",
@@ -148,7 +154,7 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
           correction: {
             ...content(`${note.text} corrected`),
             // Restore the support's summaries without rewriting its argument.
-            ...(note.text.startsWith("ESTABLISHED") ? { text: note.text } : {}),
+            ...(note.text.startsWith("ESTABLISHED") ? { text: null } : {}),
           },
         }));
         break;
@@ -678,6 +684,12 @@ test("verifier stages share unchanged prefixes while the blind proof sees only s
 
 test("batched reconstruction proves the dependency chain, trusts imported support, and reuses conditional checks", async () => {
   const pass = { verdict: "PASS" as const, report: "Checked." };
+  const diagnostic = [
+    "Independent proof incomplete: the equality case is missing.",
+    "Original argument: SECRET-s supplies the equality argument.",
+    "Independent proof: the local equality step was not reconstructed.",
+    "Statement and premises: the inputs are faithful.",
+  ].join("\n\n");
   const task = { problem: "Exact task", completionCriteria: "Complete proof" };
   const notes: Note[] = (
     [
@@ -722,11 +734,20 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     calls.push(selected.id);
     const input = JSON.parse(
       String(
-        context.messages.find((message) => message.role === "user")!.content,
+        context.messages.findLast(
+          (message) =>
+            message.role === "user" && String(message.content).startsWith("{"),
+        )!.content,
       ),
     );
     let result: unknown;
     if (selected.id === "coordinator") {
+      if (!retry)
+        expect(
+          input.notes.find((note: Note) => note.id === "s").feedback,
+        ).toContain(
+          `reconstruction: Independent proof was incomplete. ${diagnostic}`,
+        );
       result = {
         work: [
           { kind: "verifier", notes: [target], through: "reconstruction" },
@@ -735,6 +756,9 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
     } else {
       if (selected.id === "proof") {
         expect(JSON.stringify(context.messages)).not.toContain("SECRET-");
+        expect(JSON.stringify(context.messages)).not.toContain(
+          "the equality case is missing",
+        );
         expect(input.support.map((note: Note) => note.id)).toEqual(
           retry ? ["base", "theorem"] : ["theorem"],
         );
@@ -755,6 +779,11 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
                   }
                 : {
                     ...pass,
+                    ...(selected.id === "reconstruction" &&
+                    note.id === "s" &&
+                    !retry
+                      ? { report: diagnostic }
+                      : {}),
                     ...(selected.id === "correctness"
                       ? {
                           premises: [],
@@ -791,6 +820,10 @@ test("batched reconstruction proves the dependency chain, trusts imported suppor
         if (turn === 3) results[0].noteId = "unknown";
         if (turn > 4)
           throw new Error("Batch validation did not accept the valid retry");
+      } else if (selected.id === "reconstruction") {
+        expect(input.instructions).toMatch(
+          /Original argument:.*Independent proof:.*Statement and premises:/s,
+        );
       } else if (selected.id === "requirements") {
         expect(input.sources).toContainEqual({
           noteId: "imported",

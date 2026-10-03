@@ -52,18 +52,22 @@ const initialized = await run("init", [
   campaignPath,
   settingsPath,
 ]);
-assert.equal(initialized.campaign.providerCalls, 0);
+assert.equal(initialized.providerCalls, 0);
 const args = ["run", campaignPath];
-const live = await run("live", [...args, "--key-stdin", "--records"], true);
+const receipt = await run("live", [...args, "--key-stdin"], true);
+const inspect = ["inspect", campaignPath, "--records"];
+const live = await run("inspection", inspect);
+assert.equal(receipt.providerCalls, live.campaign.providerCalls);
 assert.equal(
   live.campaign.status,
   "completed",
   live.campaign.error ?? "Solver did not accept an argument",
 );
 assert.ok(live.notes.some((note: { accepted: boolean }) => note.accepted));
-const resume = await run("resume", [...args, "--records"]);
+await run("reopened", args);
+const reopened = await run("reopened-inspection", inspect);
 assert.deepEqual(
-  resume,
+  reopened,
   live,
   "Completed reopen must make no calls or change records",
 );
@@ -78,6 +82,6 @@ console.log(
     calls: live.campaign.providerCalls,
     notes: live.notes.length,
     noteId: live.campaign.result.noteId,
-    resumedUnchanged: true,
+    reopenedUnchanged: true,
   }),
 );

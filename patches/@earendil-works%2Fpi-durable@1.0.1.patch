@@ -240,15 +240,6 @@ index 4e2d00f..44721ec 100644
      /** Wait for every invocation signalled by `#seal()`. Writes nothing. */
      async join() {
          await Promise.allSettled([...this.#invocations.values()].map((invocation) => invocation.done));
-@@ -277,7 +305,7 @@ export class TaskScheduler {
-         // Also retries, with the next commit of any kind, a cascade whose commit failed.
-         if (this.#cascadePending)
-             this.#scheduleReconcile();
--        if (!changed)
-+        if (!changed && this.#policy.admitTasks === undefined)
-             return;
-         this.#resolveIdleWaiters();
-         this.#kick();
 @@ -303,6 +331,7 @@ export class TaskScheduler {
       */
      async #reconcile() {

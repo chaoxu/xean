@@ -72,15 +72,18 @@ function recordCheck<Stage extends VerificationStage>(
   result: NonNullable<Check[Stage]>,
 ): void {
   check[stage] = result;
-  const correction = result.correction;
+  if (result.verdict !== "PASS" || result.correction === undefined) return;
+  const correction = {
+    text: result.correction.text ?? note.text,
+    summary: result.correction.summary ?? note.summary,
+    detailedSummary: result.correction.detailedSummary ?? note.detailedSummary,
+  };
+  Assert(noteContentSchema, correction);
   if (
-    result.verdict === "PASS" &&
-    correction !== undefined &&
-    (correction.text !== note.text ||
-      correction.summary !== note.summary ||
-      correction.detailedSummary !== note.detailedSummary)
+    correction.text !== note.text ||
+    correction.summary !== note.summary ||
+    correction.detailedSummary !== note.detailedSummary
   ) {
-    Assert(noteContentSchema, correction);
     Object.assign(note, correction);
     check.correction = { revision: note.revision, ...correction };
   }
@@ -362,10 +365,11 @@ export function createRoles(
     ): Promise<Plan> {
       const ready = pi();
       input = structuredClone(input);
-      const { notes, explorerUsed, ...state } = input;
+      const { notes, task, explorerUsed, ...state } = input;
+      const index = notes.map(noteInfo);
       const prompt = {
         ...state,
-        notes: notes.map(noteInfo),
+        notes: index.map(({ summary: _summary, ...state }) => state),
         capabilities: {
           explorer: canExplore(singleShotExplorer(ready), explorerUsed),
           codex: functions.codex !== unconfiguredCodex,
@@ -382,6 +386,10 @@ export function createRoles(
         execution,
         context,
         {
+          prefix: [
+            { task },
+            ...index.map(({ id, summary }) => ({ id, summary })),
+          ],
           tools: notes.length ? [noteReader(notes)] : [],
           submit(plan) {
             for (const request of plan.work)

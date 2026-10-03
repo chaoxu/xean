@@ -230,8 +230,9 @@ verification status nor dependency obligations.
 Coordinator and Explorer begin with every note's ID, index summary,
 status, and feedback. They select IDs directly from that complete index.
 Their only retrieval tool, `read_notes`, takes up to 20 unique `ids`
-and a `level` of `detailed` or `full`. Reads include verification state, support
-IDs, and failure feedback. Independent IDs should be batched. Full text is never
+and a `level` of `detailed` or `full`. Reads return the ID and detailed summary,
+plus authoritative text at `full`. Verification state, support IDs, and feedback
+remain in the frozen initial index. Independent IDs should be batched. Full text is never
 truncated, and support IDs can be read in further calls. Read the full note when
 a summary omits material detail.
 Neither role exposes the reader when its frozen index is empty. Private
@@ -285,11 +286,13 @@ checks and verification status, increment the revision, and leave dependencies
 unchanged. A change to a claim, assumptions, argument, or dependencies requires
 a new note. Original worker results and command receipts remain immutable.
 
-A verdict may include `correction: {summary, detailedSummary, text}` containing
-the complete note and consistent summaries with harmless edits. When the check
+A verifier verdict may include `correction: {summary, detailedSummary, text}` containing
+a complete replacement for each changed field and null for each unchanged field.
+Code preserves unchanged bytes and validates the merged note. External caller
+correction commands still supply all three fields as complete strings. When the check
 otherwise warrants PASS, a checker may restore a summary to the hypotheses,
 conclusion, bounds, conditionality, and limitations already explicit in the
-authoritative full text. For this repair it copies `text` exactly and explains
+authoritative full text. For this repair it leaves `text` null and explains
 the mismatch in its report. Missing assumptions or proof steps in the full note,
 and unmet task criteria, still require substantive work and cannot be repaired
 through summary edits. This is the trusted checker's correction policy, not a
@@ -318,15 +321,15 @@ once in the same conversation and session. A second omission fails the invocatio
 After a valid submission, a response without a tool call hands off the submitted
 result instead. A rejected submission receives its validation error, not the
 role's continuation prompt.
-The follow-up remains subject to response, context, and call limits and
+The follow-up remains subject to response and context limits and
 cancellation. Only validated `submit_result` arguments count as results.
 
 Verifier requests put the shared task, support, and note text before the stage
 instructions under a common system prompt. Stages keep their required result
 schemas, so different tools, models, or changed notes can limit cache reuse.
-Explorer places the task and each note's ID and summary in separate messages
+Explorer and Coordinator place the task and each note's ID and summary in separate messages
 before mutable state, feedback, guidance, and allowances. This preserves earlier
-message boundaries when new notes are appended. Its system prompt and tool
+message boundaries when new notes are appended. Explorer's system prompt and tool
 definitions stay the same across read allowances and after reading is disabled
 within an invocation that has a nonempty index and a provider that supports the reader.
 OpenAI's default prompt cache key is stable for the same model, system, and
@@ -585,8 +588,10 @@ It does not validate live credentials, browser sessions, or Codex login. Use the
 
 `init TASK CAMPAIGN SETTINGS` creates the frozen campaign declaration and initial
 state without model calls. `run CAMPAIGN` opens that campaign, uses its stored
-task and settings, and prints its state and notes as JSON. Only
-`campaign.status: "completed"` means an accepted argument. `export` prints the
+task and settings, and prints a compact JSON receipt with `status`, `error`,
+`providerCalls`, and `pendingSignals`. Initialization and lifecycle commands
+return the same receipt. Only `status: "completed"` for a solver campaign means
+an accepted argument. Use `inspect` for full state and notes. `export` prints the
 accepted argument with all its supporting proofs. Initialization, inspection,
 export, offline input commands, and reopening completed work do not construct
 the Pi model runtime. `inspect`, `status`, and `export` use independent read-only
@@ -597,8 +602,8 @@ snapshot.
 
 `pause` stops new admission and waits for admitted work to finish. `run` leaves a
 paused campaign paused; use `resume` to continue it. `cancel` interrupts active
-work and prevents late publication. All three lifecycle commands accept
-`--records`. Offline `resume` owns execution and accepts `--key-stdin`; live
+work and prevents late publication. Execution records are available through
+`inspect --records`. Offline `resume` owns execution and accepts `--key-stdin`; live
 `resume` waits for the active owner's execution and uses its credentials. An
 accepted resume keeps the owner socket available for lifecycle and input commands.
 Responses lost after submission are not automatically replayed. Terminal campaigns
@@ -1077,6 +1082,9 @@ role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
 closure remain distinct.
 
+Standalone execution returns a compact receipt. Use `inspect ROLE.sqlite` to
+read its result, or `inspect REVIEW.sqlite` for an independent review's verdict.
+
 Standalone Coordinator input includes `explorerUsed`. Set it to `false` when no
 Explorer work has been attempted and to `true` after an attempt. An API Explorer
 remains available in either case, while the built-in browser Explorer is one-shot.
@@ -1112,7 +1120,7 @@ The library is in `packages/core`, and the optional `xean-cli` app is in
 library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 13, with distinct solver, standalone-role, and review kinds. Only this
+version 14, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

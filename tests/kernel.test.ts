@@ -267,8 +267,10 @@ test("cancellation preserves committed work and rejects a late result", async ()
     roles: [
       {
         name: "worker",
-        async run(input, _execution, context) {
+        async run(input, execution, context) {
           if (input === "a") return "committed";
+          const model = { provider: "fixture", api: "fixture", id: "fixture" };
+          const call = await execution.recorder.begin(model);
           context.abortSignal!.addEventListener(
             "abort",
             () => aborted.resolve(),
@@ -276,6 +278,18 @@ test("cancellation preserves committed work and rejects a late result", async ()
           );
           started.resolve();
           await release.promise;
+          try {
+            await expect(
+              Promise.resolve(execution.recorder.begin(model)).then((late) =>
+                late.settle(measured, measured.usage),
+              ),
+            ).rejects.toThrow();
+            await expect(
+              Promise.resolve(call.recordRequest({ input })),
+            ).rejects.toThrow();
+          } finally {
+            await call.settle(measured, measured.usage);
+          }
           return "must not publish";
         },
       },
@@ -299,6 +313,10 @@ test("cancellation preserves committed work and rejects a late result", async ()
       status: "cancelled",
       result: null,
     });
+    expect(cancelled.providerCalls).toBe(1);
+    expect(
+      (await engine.records()).filter((r) => r.kind === "xean.call.settled"),
+    ).toHaveLength(1);
   } finally {
     release.resolve();
     await engine.close();

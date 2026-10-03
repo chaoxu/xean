@@ -142,9 +142,14 @@ test("conditional controls reject foreign owners and wait for admitted lifecycle
       await Bun.sleep(12_000);
       return pause();
     };
-    expect(
-      (await cli("pause", database, "--expected-owner-id", ownerId)).code,
-    ).toBe(0);
+    const paused = await cli("pause", database, "--expected-owner-id", ownerId);
+    expect(paused.code).toBe(0);
+    expect(JSON.parse(paused.stdout)).toEqual({
+      status: "paused",
+      error: null,
+      providerCalls: 0,
+      pendingSignals: 1,
+    });
     expect((await engine.inspect()).status).toBe("paused");
     await server.close();
     await engine.close();

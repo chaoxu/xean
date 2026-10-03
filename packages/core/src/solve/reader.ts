@@ -1,7 +1,6 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { object, type Note } from "./contracts.ts";
-import { noteInfo } from "./notes.ts";
 
 const readSchema = object({
   ids: Type.Array(Type.String({ minLength: 1 }), {
@@ -19,14 +18,14 @@ export function noteReader(notes: Note[]): ToolRegistration<typeof readSchema> {
     name: "read_notes",
     replay: "safe",
     description:
-      "Read detailed summaries or authoritative full notes by ID from the supplied index, with status and feedback. Batch up to 20 IDs. Dead notes are diagnostic only. Full notes retain support IDs for further reads.",
+      "Read detailed summaries or authoritative full notes by ID. Status, feedback, and support IDs are in the supplied frozen index. Batch up to 20 IDs. Dead notes are diagnostic only.",
     parameters: readSchema,
     async execute({ ids, level }) {
       const values = ids.map((id) => {
         const note = byId.get(id);
         if (!note) throw new Error(`Unknown note: ${id}`);
         return {
-          ...noteInfo(note),
+          id: note.id,
           detailedSummary: note.detailedSummary,
           ...(level === "full" ? { text: note.text } : {}),
         };

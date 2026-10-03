@@ -24,16 +24,20 @@ bun packages/observe/src/publish.ts /absolute/run-directory --watch
 ```
 
 The first command writes `observation.json` and a compact `status.json` from
-the same inspection. `--watch` refreshes them every
-ten seconds and publishes once more on SIGINT or SIGTERM. Each read opens and
-closes its own read-only snapshot while the solver retains ownership. Deploy
+the same inspection. `--watch` checks for database changes every ten seconds
+and publishes only after a change. Shutdown checks once more after any pending
+publication. Failed exports are retried on the next check. The watcher uses
+SQLite's connection-local change counter without retaining a read transaction,
+and reopens its connection if the database file is replaced. Actual inspection
+still opens and closes a coherent Pi snapshot while the solver retains ownership.
+The export timestamp remains unchanged while the database is unchanged, so its
+age measures the last publication, not process liveness. Deploy
 the watcher as a separate supervised process with access to the run directory.
 A run manager such as Xean Lab may start and join this process for each attempt.
-The solver remains independent of the publisher. Without a watcher,
-remote artifact readers retain completed exports and process logs.
-Artifact readers choose the newer snapshot or result export by file modification
-time, preferring the snapshot on ties. A stopped publisher cannot hide a later
-completed result.
+The solver remains independent of the publisher. Remote campaign details require
+`observation.json`, and compact reads require `status.json`. Execution receipts
+in `result.json` are separate from observations. Before publication, task and
+round files provide a heartbeat. Process logs remain available independently.
 
 The workspace binaries are `xean-observe` for the dashboard and
 `xean-observe-publish` for snapshots. The commands above retain the selected Bun
@@ -88,22 +92,25 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/observe/src/server.ts /absolut
 
 Open <http://127.0.0.1:8797>. The listener is local, with a read-only JSON API at
 `/api/runs` and `/api/runs/RUN_ID`. Configured IDs are the only addressable runs.
-Each source shares its own in-flight read and ten-second cache. Individual run
-requests wait only for that source. Configuration reloads independently, so a
-stalled source cannot prevent its removal. SSH and Nomad observation subprocesses
+The run list polls compact status, including the problem text for search and
+excerpts. Opening a run fetches its details and polls only that run. Returning
+to the list releases those details. Each source shares its own in-flight read
+and ten-second cache. Full snapshots expire from the server cache after ten
+seconds. Individual run requests wait only for that source. Configuration reloads
+independently, so a stalled source cannot prevent its removal. SSH and Nomad observation subprocesses
 time out after ten seconds and are cancelled on server shutdown. These limits
 apply to read-only observation commands. Invalid configuration leaves the browser's last received view visible
 with an error. Removing a selected run makes its URL unavailable.
 Within each refresh, runs with the same Nomad job and task share one process
 observation. Failed process reads are retried on the next refresh.
 
-The browser pauses polling while hidden and preserves the last received view
-when a refresh fails. After an individual run read fails, the API retains its
-last successful campaign observation in memory, marks it `stale`, and returns
-the new diagnostic and current process observation. The evidence timestamp stays
-unchanged; a successful read replaces it and clears the stale marker. An initial
-failure has no cached evidence. The reader never substitutes an older disk artifact
-for a malformed selected artifact. Each run displays the age and source of its evidence.
+The browser pauses polling while hidden. A source-read failure preserves the
+selected run's last received evidence and marks it stale. HTTP or network failures
+keep the view visible with a refresh error. The API retains only
+compact status across refreshes, with the same stale marker and original evidence
+timestamp. Fresh diagnostics and process observations remain visible. A successful
+read replaces stale evidence, and an initial failure has no cached evidence.
+The reader never substitutes an older disk artifact for a malformed selected artifact. Each run displays the age and source of its evidence.
 Nomad's process status is separate from the campaign's last observed state.
 An old snapshot saying `running` alone does not establish process liveness.
 
@@ -116,39 +123,32 @@ curl -fsS 'http://127.0.0.1:8797/api/runs/RUN_ID?view=status'
 ```
 
 `/api/runs?view=status` returns the same view for every configured run. Local
-databases use the public status report; artifact readers read only `status.json`
-and do not load full observations, result exports, or round histories. A missing
-status file, or one older than the full snapshot or result, requires the run's
-matching snapshot publisher. If that historical publisher lacks compact output,
-use the run's frozen CLI `status` reader. Heartbeat-only runs use task metadata
-and round filenames.
+databases use the public status report. Artifact readers load only `status.json`
+and compare its timestamp with the observation. A missing or older status file
+requires a publication. Heartbeat-only runs use task metadata and round filenames.
 Compact and full reads cache evidence separately and share process observations.
-The compact view includes campaign status, accepted note ID,
+The compact view includes the problem text, campaign status, accepted note ID,
 note and verification counts, bounded worker activity and failures, and recorded
-usage. `usageAvailable` distinguishes missing usage records from zero calls.
+usage. Published compact artifacts include the task for this projection.
+`usageAvailable` distinguishes missing usage records from zero calls.
 Evidence `observedAt` and `stale`, sampled process status, and external review
 verdict remain separate. Heartbeat-only sources provide a round count. Proofs,
-task text, logs, and review reports are omitted, and diagnostics are clipped.
+completion criteria, logs, and review reports are omitted, and diagnostics
+are clipped.
 Remove `?view=status` when those details are needed. Check a long run on request
 or at a suitable interval, such as ten minutes, rather than reading every refresh.
-Use the run's matching source checkout and runtime for historical campaigns.
-
-Runs launched before snapshot publishing retain their original runner. Observe
-shows their task, round markers, and Nomad logs until a result export appears.
-Detailed notes during execution require a compatible local campaign database
-or an observation snapshot.
+Detailed notes require a current local campaign database or a published observation.
 Snapshots use `xean-observe/v4` and include committed index and detailed summaries,
 full note text and checks, worker outcomes and note links, and native
 usage counts. Private model reasoning and complete request bodies stay in the
-campaign journal. Exported results without embedded records show usage as
+campaign journal. Snapshots created without usage records show usage as
 unavailable. Gateway billing reconciliation remains separate.
 
 Run search filters the configured source list. Notes can be searched and filtered
 by status, with paged lists to keep large corpora readable. Run, note, and work
 URLs support browser history and direct links. A note shows its detailed summary,
 supporting notes, and dependents. Full text and structured checks render when
-opened. Refresh preserves the selected view and open disclosures. Historical
-snapshots require their matching observer version.
+opened. Refresh preserves the selected view and open disclosures.
 
 An optional `review` source field names a receipt file relative to the run
 directory. The same contract works locally and over SSH:

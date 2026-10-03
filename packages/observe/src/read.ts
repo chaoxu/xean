@@ -3,9 +3,9 @@ import { resolve } from "node:path";
 import { execa } from "execa";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { campaignVersion, inspectCampaign } from "xean";
+import { inspectCampaign } from "xean";
 import { decode, taskSchema, type Task } from "xean/solve";
-import { statusReport, usageRecord } from "xean/report";
+import { usageRecord } from "xean/report";
 import { readEvidence, readReview } from "./artifacts.ts";
 import {
   readSnapshot,
@@ -48,7 +48,7 @@ export type Source = Static<typeof sourceSchema>;
 export type Run = {
   id: string;
   source: string;
-  kind?: "database" | "snapshot" | "export" | "heartbeat" | "status";
+  kind?: "database" | "snapshot" | "heartbeat" | "status";
   observedAt: string;
   /** Campaign evidence retained from a previous successful read. */
   stale?: boolean;
@@ -109,13 +109,9 @@ export async function readRun(
     if (db) {
       run.kind = "database";
       const inspection = await inspectCampaign(db, usageRecord);
-      if (compact)
-        run.summary = {
-          observedAt: run.observedAt,
-          usageAvailable: inspection.records !== undefined,
-          status: statusReport(inspection),
-        };
-      else run.snapshot = snapshot(inspection);
+      const value = snapshot(inspection, run.observedAt);
+      if (compact) run.summary = readSummary(value);
+      else run.snapshot = value;
     } else {
       const evidence = source.host
         ? (JSON.parse(
@@ -149,10 +145,6 @@ export async function readRun(
         run.summary = readSummary(artifacts.value);
       } else if (artifacts.kind === "snapshot") {
         run.snapshot = readSnapshot(artifacts.value);
-      } else if (artifacts.kind === "export") {
-        if (artifacts.value.campaign?.version !== campaignVersion)
-          throw new Error("Unsupported campaign export");
-        run.snapshot = readSnapshot(snapshot(artifacts.value, artifacts.at));
       } else
         run.heartbeat = {
           ...artifacts.value,
