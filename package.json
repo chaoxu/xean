@@ -21,7 +21,7 @@
     "@earendil-works/pi-ai": "file:vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-pi-ai-1.0.0.tgz",
     "@earendil-works/pi-durable": "file:vendor/pi/7fbbd5f4a1d982bb02d63472dde0774fa639f99b/earendil-works-pi-durable-1.0.0.tgz",
     "execa": "10.0.1",
-    "typebox": "1.3.27"
+    "typebox": "1.3.34"
   },
   "dependencies": {
     "@earendil-works/chord": "catalog:",
