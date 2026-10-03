@@ -178,6 +178,36 @@ may survive an inconclusive dependency, but acceptance waits for the whole chain
 The existing Pi capacity check applies to each batch without truncation or
 automatic splitting.
 
+For reconstruction FAIL or INCONCLUSIVE, the comparison report starts with the
+specific blocking reason, followed by three labeled assessments:
+
+- `Original argument:` assesses whether the claim and argument are justified,
+  defective, or unresolved even when the independent proof is incomplete.
+  It checks intermediate conclusions at their stated strength, explains the
+  effect of disputed steps, and distinguishes mathematical defects from
+  ambiguous or harmless wording. Relevant secondary issues remain visible
+  alongside the main blocker.
+- `Independent proof:` assesses whether the extracted statement was proved
+  correctly. It identifies any missing or invalid step, distinguishes a local
+  gap from an unresolved dependency, and checks whether the original supplies
+  a step the independent attempt missed.
+- `Statement and premises:` identifies extraction or assumption problems, or
+  confirms that the inputs are faithful. Source uncertainty is tied to the
+  supplied approval record, distinguishing a missing or conflicting record
+  from an unsupported application. The comparison uses recorded source approval
+  without requiring its own retrieval of the publication.
+
+Source authority is checked before choosing any verdict. A listed external
+premise requires a `source-check` record with PASS or a `caller-import` record.
+Its presence in the premise list alone does not establish approval. A missing
+or conflicting required record is an input problem that by itself gives
+INCONCLUSIVE, reported with the affected note ID.
+
+The report separates a defect in the original from a failed independent attempt
+or faulty input. It records findings and unresolved obligations. Coordinator
+chooses the follow-up work. The existing report appears in note inspection and
+verification feedback, with a bounded preview in compact status and Observe.
+
 A full self-contained batch normally needs five model requests: correctness,
 requirements, statement extraction, independent proof, and comparison. External premises add one Codex
 invocation, whose internal searches and model requests remain Codex's responsibility.

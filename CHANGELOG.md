@@ -46,6 +46,10 @@ is provided. Existing releases and tags remain historical archives.
   retain useful unsuccessful searches with their remaining uncertainty.
   Reject non-whitespace ASCII controls in structured verifier text through native
   tool validation, and extract the note's result when it applies an external theorem.
+  Lead unresolved reconstruction reports with the blocking reason and separate
+  assessments of the original argument, independent proof, and supplied inputs.
+  Check the original despite an incomplete independent proof, retain secondary
+  issues, and distinguish missing source approval from an invalid application.
 - Make requirements FAIL final for its note ID while retaining the note as
   useful support. Harmless corrections preserve that rejection, and substantive
   repairs require a new note. Reject verification requests with no pending check.
