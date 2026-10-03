@@ -5,9 +5,15 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { campaignVersion, inspectCampaign } from "xean";
 import { decode, taskSchema, type Task } from "xean/solve";
-import { usageRecord } from "xean/report";
+import { statusReport, usageRecord } from "xean/report";
 import { readEvidence, readReview } from "./artifacts.ts";
-import { readSnapshot, snapshot, type Snapshot } from "./snapshot.ts";
+import {
+  readSnapshot,
+  readSummary,
+  snapshot,
+  type Snapshot,
+  type Summary,
+} from "./snapshot.ts";
 
 // Only disposable observation subprocesses have this refresh timeout.
 export const observationInterval = 10_000;
@@ -42,11 +48,12 @@ export type Source = Static<typeof sourceSchema>;
 export type Run = {
   id: string;
   source: string;
-  kind?: "database" | "snapshot" | "export" | "heartbeat";
+  kind?: "database" | "snapshot" | "export" | "heartbeat" | "status";
   observedAt: string;
   /** Campaign evidence retained from a previous successful read. */
   stale?: boolean;
   snapshot?: Snapshot;
+  summary?: Summary;
   heartbeat?: {
     task: Task;
     rounds: number;
@@ -79,6 +86,7 @@ export async function readRun(
   fleet: string,
   processObservation?: ReturnType<typeof readProcess>,
   signal?: AbortSignal,
+  compact = false,
 ): Promise<Run> {
   processObservation ??= source.job
     ? readProcess(source, fleet, signal)
@@ -100,7 +108,14 @@ export async function readRun(
         );
     if (db) {
       run.kind = "database";
-      run.snapshot = snapshot(await inspectCampaign(db, usageRecord));
+      const inspection = await inspectCampaign(db, usageRecord);
+      if (compact)
+        run.summary = {
+          observedAt: run.observedAt,
+          usageAvailable: inspection.records !== undefined,
+          status: statusReport(inspection),
+        };
+      else run.snapshot = snapshot(inspection);
     } else {
       const evidence = source.host
         ? (JSON.parse(
@@ -120,17 +135,19 @@ export async function readRun(
                 {
                   ...observationProcess,
                   cancelSignal: signal,
-                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readEvidence(${JSON.stringify(source.directory)}, ${JSON.stringify(source.review)})));`,
+                  input: `${await Bun.file(new URL("./artifacts.ts", import.meta.url)).text()}\nawait Bun.write(Bun.stdout, JSON.stringify(await readEvidence(${JSON.stringify(source.directory)}, ${JSON.stringify(source.review)}, ${compact})));`,
                 },
               )
             ).stdout,
           ) as Awaited<ReturnType<typeof readEvidence>>)
-        : await readEvidence(source.directory);
+        : await readEvidence(source.directory, undefined, compact);
       review = evidence.review;
       if ("error" in evidence) throw new Error(evidence.error);
       const { artifacts } = evidence;
       run.kind = artifacts.kind;
-      if (artifacts.kind === "snapshot") {
+      if (artifacts.kind === "status") {
+        run.summary = readSummary(artifacts.value);
+      } else if (artifacts.kind === "snapshot") {
         run.snapshot = readSnapshot(artifacts.value);
       } else if (artifacts.kind === "export") {
         if (artifacts.value.campaign?.version !== campaignVersion)

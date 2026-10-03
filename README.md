@@ -107,9 +107,10 @@ bun run xean status tree
 bun run xean export tree
 ```
 
-`doctor` checks the local installation, settings, credential availability, Codex
-executable, and directory permissions without making model calls. It does not
-validate credentials with a provider or check browser sessions and Codex login.
+`doctor` checks the local installation, settings, credential availability, and Codex
+executables without making model calls. It returns `{ok,message}` as JSON and
+stops at the first setup problem. It does not validate credentials with a provider
+or check browser sessions and Codex login.
 
 For your own problem, copy [the task file](examples/tree-task.json) and replace
 its `problem` and `completionCriteria`. State the exact hypotheses, desired
@@ -122,9 +123,6 @@ supporting proofs.
 
 Campaigns live under `.xean/` by default. Only `campaign.status: "completed"`
 establishes an accepted argument. `export` requires that accepted result.
-Use `bun run xean export tree --bundle tree-export` to also save the argument,
-checks, and contributing Codex artifacts in a new directory with a hash manifest.
-Retained programs still require their original dependencies and services.
 See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
 cancellation, explicit database paths, and other model providers.
 
@@ -149,6 +147,11 @@ bun run xean status /absolute/run-directory/campaign.sqlite
 This reads committed state without model calls or recovery. The compact report
 omits proofs and transcripts. See [checking status](docs/solver.md#checking-status)
 for frozen and remote runs, verification progress, and observation freshness.
+Agents should start with `status` and its `nextAction` and `verificationIssues`.
+Use `inspect` for notes, `inspect --records` for execution records, and `export`
+for the accepted proof only when those details are needed. Commands emit JSON
+except `export`, which emits Markdown, and help/version output. Xean Lab handles
+discovery and submission across supervised experiments in its separate repository.
 
 For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
 persistent writable data directory and the provider's credentials. Use one
@@ -217,7 +220,7 @@ Closed-book experiments use the
 [bounded runner](docs/solver.md#closed-book-experiments).
 Correctness-prompt changes can use the
 [screen on frozen cases](docs/solver.md#current-verification), which prepares
-inputs without model calls unless `--run` is supplied.
+inputs and commands for the existing Verifier CLI without making model calls.
 
 The [deterministic kernel example](examples/deterministic.ts) makes no model calls:
 

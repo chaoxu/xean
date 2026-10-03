@@ -12,16 +12,22 @@ export async function publish(directory: string): Promise<void> {
   const value = snapshot(
     await inspectCampaign(join(directory, "campaign.sqlite"), usageRecord),
   );
-  const file = join(directory, "observation.json");
-  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, JSON.stringify(value) + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    });
-    await rename(temporary, file);
-  } finally {
-    await rm(temporary, { force: true });
+  const { observedAt, status, usageAvailable } = value;
+  for (const [name, content] of [
+    ["observation.json", value],
+    ["status.json", { observedAt, status, usageAvailable }],
+  ] as const) {
+    const file = join(directory, name);
+    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(content) + "\n", {
+        mode: 0o600,
+        flag: "wx",
+      });
+      await rename(temporary, file);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 }
 

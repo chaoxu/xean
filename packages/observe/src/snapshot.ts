@@ -92,6 +92,20 @@ export function snapshotFromReport(
 }
 export type Snapshot = ReturnType<typeof snapshot>;
 
+const summarySchema = Type.Object({
+  observedAt: Type.String(),
+  usageAvailable: Type.Boolean(),
+  status: statusSchema,
+});
+export function readSummary(value: unknown) {
+  if (!Value.Check(summarySchema, value))
+    throw new Error("Malformed compact observation");
+  const summary = structuredClone(value);
+  Value.Clean(summarySchema, summary);
+  return summary;
+}
+export type Summary = ReturnType<typeof readSummary>;
+
 const count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const verdict = Type.Script(
   `{ verdict: "PASS" | "FAIL" | "INCONCLUSIVE", report: string }`,

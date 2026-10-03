@@ -37,7 +37,8 @@ export function readSources(value: unknown, directory: string): Source[] {
 }
 
 function runStatus(run: Run) {
-  const { snapshot, process, review, heartbeat } = run;
+  const { process, review, heartbeat } = run;
+  const snapshot = run.summary ?? run.snapshot;
   return {
     id: run.id,
     source: run.source,
@@ -80,8 +81,8 @@ export function api(
     processes: Map<string, ReturnType<typeof readProcess>>;
     expiresAt: number;
   };
-  const identity = (source: Source) =>
-    JSON.stringify([source.id, source.host ?? null, source.directory]);
+  const identity = (source: Source, compact: boolean) =>
+    JSON.stringify([source.id, source.host ?? null, source.directory, compact]);
   let current: Refresh | undefined;
   let known = new Map<string, { fingerprint: string; run?: Run }>();
   const inFlight = new Map<string, Promise<Run>>();
@@ -106,10 +107,14 @@ export function api(
     );
     return batch;
   };
-  const read = (source: Source, batch: Refresh): Promise<Run> => {
-    let pending = batch.runs.get(source.id);
+  const read = (
+    source: Source,
+    batch: Refresh,
+    compact: boolean,
+  ): Promise<Run> => {
+    const key = identity(source, compact);
+    let pending = batch.runs.get(key);
     if (pending) return pending;
-    const key = identity(source);
     const fingerprint = known.get(key)!.fingerprint;
     let observation = inFlight.get(fingerprint);
     if (!observation) {
@@ -123,9 +128,13 @@ export function api(
           batch.processes.get(processKey) ?? readProcess(source, fleet, signal);
         batch.processes.set(processKey, processObservation);
       }
-      observation = readRun(source, fleet, processObservation, signal).finally(
-        () => inFlight.delete(fingerprint),
-      );
+      observation = readRun(
+        source,
+        fleet,
+        processObservation,
+        signal,
+        compact,
+      ).finally(() => inFlight.delete(fingerprint));
       inFlight.set(fingerprint, observation);
     }
     pending = observation.then((run) => {
@@ -134,13 +143,15 @@ export function api(
       const result =
         run.error &&
         !run.snapshot &&
+        !run.summary &&
         !run.heartbeat &&
-        (retained?.snapshot || retained?.heartbeat)
+        (retained?.snapshot || retained?.summary || retained?.heartbeat)
           ? {
               ...run,
               kind: retained.kind,
               observedAt: retained.observedAt,
               snapshot: retained.snapshot,
+              summary: retained.summary,
               heartbeat: retained.heartbeat,
               stale: true,
             }
@@ -148,7 +159,7 @@ export function api(
       if (state?.fingerprint === fingerprint) state.run = result;
       return result;
     });
-    batch.runs.set(source.id, pending);
+    batch.runs.set(key, pending);
     return pending;
   };
   return async (request: Request): Promise<Response> => {
@@ -192,15 +203,16 @@ export function api(
       return new Response("Not found", { status: 404 });
     if (batch.runs.size === 0) {
       const next: typeof known = new Map();
-      for (const source of configured) {
-        const key = identity(source);
-        const fingerprint = JSON.stringify(source);
-        next.set(key, { fingerprint, run: known.get(key)?.run });
-      }
+      for (const source of configured)
+        for (const compact of [false, true]) {
+          const key = identity(source, compact);
+          const fingerprint = JSON.stringify([source, compact]);
+          next.set(key, { fingerprint, run: known.get(key)?.run });
+        }
       known = next;
     }
     const runs = await Promise.all(
-      selected.map((source) => read(source, batch)),
+      selected.map((source) => read(source, batch, view === "status")),
     );
     const values = view === "status" ? runs.map(runStatus) : runs;
     return Response.json(id === undefined ? values : values[0], {

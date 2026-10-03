@@ -2,7 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 /** This module also runs over SSH. It only reads selected JSON artifacts. */
-export async function readArtifacts(directory: string) {
+export async function readArtifacts(directory: string, compact = false) {
   const find = async (name: string) => {
     const file = join(directory, name);
     const info = await stat(file).catch((error: NodeJS.ErrnoException) => {
@@ -16,14 +16,26 @@ export async function readArtifacts(directory: string) {
       at: info.mtime.toISOString(),
     };
   };
-  const [observation, result] = await Promise.all([
+  const [observation, result, summary] = await Promise.all([
     find("observation.json"),
     find("result.json"),
+    compact ? find("status.json") : undefined,
   ]);
   const useObservation =
     observation && (!result || observation.modified >= result.modified);
   const latest = useObservation ? observation : result;
-  if (latest)
+  if (compact) {
+    if (summary && (!latest || summary.modified >= latest.modified))
+      return {
+        kind: "status" as const,
+        value: await summary.file.json(),
+        at: summary.at,
+      };
+    if (latest)
+      throw new Error(
+        "Compact status is missing or older than campaign artifacts; use the run's matching snapshot publisher",
+      );
+  } else if (latest)
     return {
       kind: useObservation ? ("snapshot" as const) : ("export" as const),
       value: await latest.file.json(),
@@ -31,7 +43,11 @@ export async function readArtifacts(directory: string) {
     };
   const task = await find("task.json");
   if (!task)
-    throw new Error("No observation, result, or task file in this run");
+    throw new Error(
+      compact
+        ? "No compact status or task file; use the run's matching snapshot publisher"
+        : "No observation, result, or task file in this run",
+    );
   const rounds = (await readdir(directory)).flatMap((name) => {
     const match = /^round-(\d+)\.json$/.exec(name);
     return match ? [Number(match[1])] : [];
@@ -44,17 +60,21 @@ export async function readArtifacts(directory: string) {
     value: {
       task: await task.file.json(),
       rounds: rounds.length,
-      lastRound: await last?.file.json(),
+      lastRound: compact ? undefined : await last?.file.json(),
     },
     at: last?.at ?? task.at,
   };
 }
 
 /** One remote invocation carries independently available campaign and review evidence. */
-export async function readEvidence(directory: string, receipt?: string) {
+export async function readEvidence(
+  directory: string,
+  receipt?: string,
+  compact = false,
+) {
   const [review, evidence] = await Promise.all([
     readReview(directory, receipt),
-    readArtifacts(directory).then(
+    readArtifacts(directory, compact).then(
       (artifacts) => ({ artifacts }),
       (error: unknown) => ({ error: String(error) }),
     ),

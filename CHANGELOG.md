@@ -57,8 +57,6 @@ is provided. Existing releases and tags remain historical archives.
   Closed-book experiments reject the worker. Standalone Codex work, review, and
   literature initialize only their required runtime. Independent reviews return
   findings and evidence without the unused whole-note correction field.
-  `export --bundle` retains the accepted argument, result, and contributing Codex
-  workspaces with file hashes and original-path mappings.
 - Use Pi's native Anthropic provider for Claude subscription OAuth or API
   credentials and its native Google provider for Gemini API profiles. Remove the
   Claude Code subprocess provider. Research remains Codex-only. Preserve custom
@@ -81,12 +79,15 @@ is provided. Existing releases and tags remain historical archives.
   note origins, accepted note identity, verification summaries, and work details.
   Show suggested next actions and unresolved candidate checks without changing
   scheduling or acceptance.
+  Apply Pi's native SQLite busy timeout before opening campaign state, so
+  concurrent observer startup does not abort solver WAL recovery. Competing
+  campaign owners still fail immediately.
 - Add `doctor SETTINGS` to check local dependencies, settings, frozen model
-  names, credential availability, executables, and directory permissions without
+  names, credential availability, and executables without
   making model calls. Live authentication and provider qualification remain separate.
-- Add a correctness-prompt screen with frozen cases, settings, source hashes,
-  and per-case results and usage. Preparation makes no model calls. Explicit
-  execution screens expected verdicts while semantic review remains independent.
+- Prepare small correctness-prompt cases with frozen settings and source hashes.
+  The helper emits commands for the existing standalone Verifier; it makes no
+  model calls. Expected outcomes stay separate from model inputs and semantic review.
 - Add conditional owner IDs to reject stale lifecycle commands. Validate the
   control socket and its private directory, and let commands wait for the active
   owner without an HTTP idle timeout. Expose uninitialized inspection after

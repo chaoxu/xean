@@ -16,6 +16,7 @@ import {
   readCommand,
   readDeclaration,
   readSettings,
+  isSolverCampaign,
   type Declaration,
 } from "xean/solve";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
@@ -29,7 +30,6 @@ import {
 } from "./control.ts";
 import { campaignReport, statusReport, usageRecord } from "xean/report";
 import { doctor } from "./doctor.ts";
-import { exportArgument } from "./export.ts";
 
 async function print(value: unknown): Promise<void> {
   await Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
@@ -180,10 +180,8 @@ async function sendCommand(target: string, command: OwnerCommand) {
 }
 
 program.command("doctor <settings>").action(async (settings: string) => {
-  const report = await doctor(
-    settings,
-    program.opts<{ campaignDir: string }>().campaignDir,
-    () => verifyInstall(resolve(import.meta.dir, "../../..")),
+  const report = await doctor(settings, () =>
+    verifyInstall(resolve(import.meta.dir, "../../..")),
   );
   await print(report);
   if (!report.ok) process.exitCode = 1;
@@ -273,19 +271,18 @@ program
       await runCampaign(campaign, declaration);
     },
   );
-program
-  .command("export <campaign>")
-  .option(
-    "--bundle <NEW_DIRECTORY>",
-    "Write the accepted argument and retained worker artifacts",
+program.command("export <campaign>").action(async (target: string) => {
+  const { campaign } = await inspectCampaign(campaignPath(target), false);
+  const result = campaign.result as { argument?: string } | null;
+  if (
+    !isSolverCampaign(campaign) ||
+    campaign.status !== "completed" ||
+    typeof result?.argument !== "string" ||
+    !result.argument
   )
-  .action(async (target: string, flags: { bundle?: string }) => {
-    const { campaign } = await inspectCampaign(campaignPath(target), false);
-    await Bun.write(
-      Bun.stdout,
-      (await exportArgument(campaign, flags.bundle)) + "\n",
-    );
-  });
+    throw new Error("No accepted argument");
+  await Bun.write(Bun.stdout, result.argument + "\n");
+});
 for (const kind of ["submit", "guide", "correct"] as const) {
   program
     .command(`${kind} <campaign> <file>`)

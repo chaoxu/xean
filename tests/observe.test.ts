@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
-import { readSnapshot, snapshot } from "../packages/observe/src/snapshot.ts";
+import {
+  readSnapshot,
+  readSummary,
+  snapshot,
+} from "../packages/observe/src/snapshot.ts";
 import { observe, publish } from "../packages/observe/src/publish.ts";
 import {
   observationInterval,
@@ -256,6 +260,11 @@ test("the external observer reads coherent live snapshots without changing a loc
       observedAt: published.observedAt,
     });
     expect(published.schema).toBe("xean-observe/v4");
+    const summary = await Bun.file(join(directory, "status.json")).json();
+    expect(summary).toEqual({
+      ...readSummary(published),
+      observedAt: summary.observedAt,
+    });
     expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
     expect(after.snapshot?.notes[0]?.detailedSummary).toContain("twice $2n$");
     const history = await engine.inspect();
@@ -378,6 +387,15 @@ test("the external observer reads coherent live snapshots without changing a loc
     saved.status.argument = "Extra saved proof";
     saved.status.calls.privateBody = "Extra saved proof";
     await writeFile(observationFile, JSON.stringify(saved));
+    const statusFile = join(exported, "status.json");
+    await writeFile(
+      statusFile,
+      JSON.stringify({
+        observedAt: saved.observedAt,
+        status: saved.status,
+        usageAvailable: saved.usageAvailable,
+      }),
+    );
     const receipt = {
       reviewer: "Independent reviewer",
       reviewedAt: "2026-10-01T00:00:00Z",
@@ -413,8 +431,9 @@ test("the external observer reads coherent live snapshots without changing a loc
     };
     try {
       await writeFile(observationFile, "{invalid JSON");
+      await utimes(observationFile, 3, 3);
       await fakeNomad(directory, undefined, "solver", "new-work");
-      // Both views reuse the same evidence, even after its source changes.
+      // Compact reads use the sidecar even when the full observation is invalid.
       const compact = await (
         await handle(new Request("http://127.0.0.1/api/runs?view=status"))
       ).json();
@@ -447,6 +466,8 @@ test("the external observer reads coherent live snapshots without changing a loc
         receipt.report,
       ])
         expect(JSON.stringify(compact)).not.toContain(text);
+      expect(compact[0].snapshot.status).toEqual(rows[0]?.snapshot?.status);
+      await writeFile(statusFile, "invalid compact status");
       for (let i = 0; i < 2; i++) {
         const failed = await refresh();
         expect(failed[2]).toMatchObject({
@@ -471,6 +492,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       expect(stale.snapshot).toEqual(single.snapshot);
       const recovered = { ...published, notes: [] };
       await writeFile(observationFile, JSON.stringify(recovered));
+      await writeFile(statusFile, JSON.stringify(readSummary(recovered)));
       await fakeNomad(directory, "stderr");
       const refreshed = await refresh();
       expect(refreshed[2]?.snapshot).toEqual(recovered);
@@ -715,11 +737,11 @@ test("stalled observation processes do not block individual reads or configurati
         join(directory, "bin", name),
         `#!${process.execPath}
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
-appendFileSync(${JSON.stringify(join(directory, `${name}-started`))}, "ready");
 process.on("SIGTERM", () => {
   writeFileSync(${JSON.stringify(join(directory, `${name}-stopped`))}, "stopped");
   process.exit(0);
 });
+appendFileSync(${JSON.stringify(join(directory, `${name}-started`))}, "ready");
 while (!existsSync(${JSON.stringify(join(directory, "release"))})) await Bun.sleep(10);
 if (existsSync(${JSON.stringify(join(directory, "fail"))})) { console.error("fixture failure"); process.exit(1); }
 console.log(JSON.stringify({artifacts:{kind:"heartbeat",at:"2026-10-01T00:00:00Z",value:{task:{problem:"Remote task",completionCriteria:"Proof"},rounds:1}}}));
@@ -891,12 +913,36 @@ process.exit(await child.exited);
         review: { state: "reviewed", receipt: changed },
       });
     }
-    await writeFile(join(directory, "observation.json"), "invalid snapshot");
+    expect(
+      (await readRun(source, directory, undefined, undefined, true)).error,
+    ).toContain("matching snapshot publisher");
+    await writeFile(
+      join(directory, "observation.json"),
+      "invalid snapshot".repeat(100_000),
+    );
+    await writeFile(
+      join(directory, "status.json"),
+      JSON.stringify(readSummary(snapshot(exported))),
+    );
+    const compact = await readRun(
+      remote,
+      directory,
+      undefined,
+      undefined,
+      true,
+    );
+    expect(compact.error).toBeUndefined();
+    expect(compact.summary?.status).toEqual(snapshot(exported).status);
+    expect(compact.snapshot).toBeUndefined();
+    await utimes(join(directory, "status.json"), 1, 1);
+    expect(
+      (await readRun(source, directory, undefined, undefined, true)).error,
+    ).toContain("matching snapshot publisher");
     const unavailable = await readRun(remote, directory);
     expect(unavailable.error).toBeString();
     expect(unavailable.snapshot).toBeUndefined();
     expect(unavailable.review).toEqual({ state: "reviewed", receipt: changed });
-    expect((await Bun.file(calls).text()).trim().split("\n")).toHaveLength(4);
+    expect((await Bun.file(calls).text()).trim().split("\n")).toHaveLength(5);
     expect(() =>
       readSources([{ ...source, review: "/arbitrary/file" }], directory),
     ).toThrow("relative path");

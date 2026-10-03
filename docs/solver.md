@@ -542,12 +542,9 @@ name ending in `.sqlite` or `.db` selects a database directly. Paths are relativ
 to the calling directory, including the default `.xean` root.
 
 `doctor SETTINGS` checks the installation receipt, settings and frozen model
-names, provider credential availability, Codex executables, and permissions for
-the campaign root and configured Codex workspace, using the nearest existing
-parent when a directory has not been created. It returns `{ok, checks}` as JSON.
-Each check has a `name`, `status` (`ok`, `error`, or `unchecked`), and `message`.
-An error makes `ok` false and exits with status 1. Unchecked items do not fail
-the command. Credential values remain private.
+names, provider credential availability, and Codex executables. It returns
+`{ok,message}` as JSON, stopping at the first problem with exit status 1.
+Credential values remain private.
 It creates no campaigns or probe files and makes no model or Codex requests.
 It does not validate live credentials, browser sessions, or Codex login. Use the
 [provider smoke procedure](kernel-smoke.md#live-provider-checks) to qualify those paths.
@@ -563,22 +560,6 @@ database connections, including while a campaign is running. `inspect --records`
 returns campaign state and journal records from the same SQLite snapshot.
 `status` supplies the [compact report](#checking-status) from the same coherent
 snapshot.
-
-`export CAMPAIGN --bundle NEW_DIRECTORY` also writes an artifact bundle and keeps
-the usual argument on stdout. The new directory contains `argument.md` with the
-exact accepted text, `result.json` with the accepted result and its checks,
-`manifest.json`, and a README. Only retained workspaces from completed workers
-whose notes contribute to the accepted dependency chain are copied under
-`artifacts/`. The manifest maps original paths to bundled paths and records file
-hashes, sizes, and executable bits.
-
-The destination must be new, have an existing parent directory, and sit outside
-the copied workspaces. Missing workspaces, mismatched frozen inputs, symbolic
-links, and special files are rejected. Notes and rerun commands retain their
-original text. Use the path mappings when running the retained programs with
-their original dependencies and external services.
-Campaign databases, settings, transcripts, and runtime environments stay outside
-the bundle. Keep those separately to continue or inspect the original campaign.
 
 `pause` stops new admission and waits for admitted work to finish. `run` leaves a
 paused campaign paused; use `resume` to continue it. `cancel` interrupts active
@@ -1140,21 +1121,21 @@ checkout:
 
 ```sh
 bun scripts/prompt-eval.ts examples/solver-settings.json runs/prompt-preview
-bun scripts/prompt-eval.ts examples/solver-settings.json runs/prompt-baseline --run
 ```
 
-The default command makes no model calls. It copies settings, cases, and role
+This command makes no model calls. It copies settings, cases, and role
 inputs into a new output directory and records source hashes and the Bun version
-in `manifest.json`. Existing output directories are rejected. `--run` executes
-the cases through the standalone Verifier, retaining process output, results,
-failures, and timings, plus campaign databases and usage when available. Source
-and saved-input hashes are checked before and after each case. A detected change
-stops the remaining cases. These runs use the current checkout, not a bundled runtime.
+in `manifest.json`. Existing output directories are rejected. The manifest's
+`commands` provide argument arrays for `xean role verifier` and `xean status`.
+Run the selected commands through the existing CLI when ready to spend model
+calls. Its campaign database retains results and usage. Expected outcomes remain
+in `cases.json`, outside model inputs. Commands reference the current checkout.
+Preserve that source and runtime for reproducible comparisons.
 
 Screen one prompt change at a time in separate baseline and candidate directories,
-with identical cases, model settings, and allowances. Inspect the reports and
-corrected summaries independently. An automated `matched` result only checks the
-expected verdict and submission shape, not mathematical or summary quality.
+with identical cases, model settings, and allowances. Compare the results against
+`cases.json` and review proofs and corrected summaries independently. A matching
+verdict alone does not establish mathematical or summary quality.
 Keep cases used for tuning separate from held-out evaluation.
 
 Historical mathematical benchmarks and provider smokes retain their original

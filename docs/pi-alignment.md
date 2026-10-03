@@ -149,7 +149,10 @@ transaction assembly, retirement, and publication own these operations.
 Reassess these local extensions when equivalent upstream controls become available.
 
 The separate owner lock protects Pi's ID allocator and Harness execution while
-allowing independent readers. Xean selects FULL synchronization. Read-only
+allowing independent readers. It rejects competing owners immediately. Campaign
+connections use Pi's 5,000 ms native SQLite busy timeout before their first query
+so concurrent reopeners can finish WAL recovery. Closing checkpoints do not wait
+for independent readers. Xean selects FULL synchronization. Read-only
 transactions give inspection coherent snapshots. The upstream opener always
 runs migrations, so the read-only patch skips writes, validates the schema, and
 rejects mutation and ID allocation. Reader cleanup avoids a writer checkpoint.

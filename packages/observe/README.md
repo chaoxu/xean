@@ -23,7 +23,8 @@ bun packages/observe/src/publish.ts /absolute/run-directory
 bun packages/observe/src/publish.ts /absolute/run-directory --watch
 ```
 
-The first command writes one `observation.json`. `--watch` refreshes it every
+The first command writes `observation.json` and a compact `status.json` from
+the same inspection. `--watch` refreshes them every
 ten seconds and publishes once more on SIGINT or SIGTERM. Each read opens and
 closes its own read-only snapshot while the solver retains ownership. Deploy
 the watcher as a separate supervised process with access to the run directory.
@@ -114,8 +115,15 @@ For routine agent checks, request a compact status for the selected run:
 curl -fsS 'http://127.0.0.1:8797/api/runs/RUN_ID?view=status'
 ```
 
-`/api/runs?view=status` returns the same view for every configured run. It reuses
-the full view's cached reads and includes campaign status, accepted note ID,
+`/api/runs?view=status` returns the same view for every configured run. Local
+databases use the public status report; artifact readers read only `status.json`
+and do not load full observations, result exports, or round histories. A missing
+status file, or one older than the full snapshot or result, requires the run's
+matching snapshot publisher. If that historical publisher lacks compact output,
+use the run's frozen CLI `status` reader. Heartbeat-only runs use task metadata
+and round filenames.
+Compact and full reads cache evidence separately and share process observations.
+The compact view includes campaign status, accepted note ID,
 note and verification counts, bounded worker activity and failures, and recorded
 usage. `usageAvailable` distinguishes missing usage records from zero calls.
 Evidence `observedAt` and `stale`, sampled process status, and external review

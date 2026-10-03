@@ -46,6 +46,10 @@ export async function openXeanStorage(
       { readOnly },
     );
     cleanup.defer(database.close.bind(database));
+    // Closing checkpoints are optional while independent readers remain open.
+    cleanup.defer(() => database.exec("PRAGMA busy_timeout = 0"));
+    // Match Pi's native opener: concurrent readers may briefly own WAL recovery.
+    await database.exec("PRAGMA busy_timeout = 5000");
     if (readOnly) {
       await database.exec("BEGIN");
       if (!(await database.get("SELECT 1 FROM sqlite_schema LIMIT 1")))
@@ -60,7 +64,7 @@ export async function openXeanStorage(
           "SQLite cannot preserve WAL files for read-only inspection",
         );
       await database.exec(
-        "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
+        "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL",
       );
     }
     // Readers close without a writer checkpoint; owners release their lock last.
