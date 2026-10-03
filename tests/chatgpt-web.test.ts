@@ -103,7 +103,7 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
   const settings = readSettings({
     profiles,
     maxExplorerReads: 1,
-    limits: { concurrency: 1, attempts: 1, providerCalls: 1 },
+    limits: { concurrency: 1, attempts: 1 },
   });
   const runtime = piRuntime(settings, "unrelated-gateway-key");
   expect(runtime.profiles.explorer.options?.apiKey).toBeUndefined();
@@ -539,7 +539,7 @@ test("reopening an interrupted browser worker never submits a second request", a
   };
   const settings = readSettings({
     profiles,
-    limits: { concurrency: 1, attempts: 3, providerCalls: 3 },
+    limits: { concurrency: 1, attempts: 3 },
   });
   const options = () =>
     campaignOptions(

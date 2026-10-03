@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import type { EntryId } from "@earendil-works/pi-durable";
+import { readView } from "../history.ts";
 import type { Role, WorkRequest, XeanOptions } from "../types.ts";
 import {
   closure,
@@ -14,8 +16,7 @@ import {
   declarationVersion,
   taskSchema,
   verificationTargets,
-  type ExplorerInput,
-  type CodexInput,
+  type Plan,
   type Task,
   type VerifierInput,
 } from "./contracts.ts";
@@ -29,6 +30,11 @@ import { type PiRuntime } from "./pi.ts";
 import { codexResearch, type Research } from "./research.ts";
 import { guidance, validateCommand } from "./commands.ts";
 import { chatGptWebProviderId } from "../providers/chatgpt-web.ts";
+
+type StoredInput = { view: EntryId } & (
+  | Exclude<Plan["work"][number], { kind: "verifier" }>
+  | { kind: "verifier"; targets: VerifierInput["targets"] }
+);
 
 export function createSolver(
   taskValue: Task,
@@ -67,8 +73,54 @@ export function createSolver(
     ["explorer", "verifier", "literature", "codex"] as const
   ).map((name) => ({
     name: `xean.${name}`,
-    run: (input, execution, context) =>
-      functions[name](input as never, execution, context),
+    async run(value, execution, context) {
+      const input = value as StoredInput;
+      if (input.kind !== name) throw new Error("Solver work kind mismatch");
+      const frozen = await execution.durable!.commit(
+        (tx) => readView(tx, input.view),
+        context,
+      );
+      const notes = project(frozen);
+      const taskInput = structuredClone(task);
+      switch (input.kind) {
+        case "explorer":
+          return functions.explorer(
+            { task: taskInput, notes, guidance: input.guidance },
+            execution,
+            context,
+          );
+        case "verifier":
+          return functions.verifier(
+            {
+              task: taskInput,
+              notes: closure(
+                input.targets.map(({ id }) => id),
+                notes,
+              ),
+              targets: input.targets,
+              evidence: sourceEvidence(notes),
+            },
+            execution,
+            context,
+          );
+        case "codex":
+          return functions.codex(
+            {
+              task: taskInput,
+              notes: closure(input.notes, notes),
+              assignment: input.assignment,
+            },
+            execution,
+            context,
+          );
+        case "literature":
+          return functions.literature(
+            { task: taskInput, notes: notes.map(noteInfo), query: input.query },
+            execution,
+            context,
+          );
+      }
+    },
   }));
   const coordinator: XeanOptions["coordinator"] = {
     name: "xean.coordinator",
@@ -78,7 +130,6 @@ export function createSolver(
       if (result !== undefined)
         return { state: view.state, completion: result };
       if (
-        view.callLimitReached ||
         view.work.some(
           (work) => work.status === "active" || work.status === "queued",
         )
@@ -89,7 +140,7 @@ export function createSolver(
           work.role === "xean.literature" && work.status === "completed",
       );
       const input: CoordinationInput = {
-        task,
+        task: structuredClone(task),
         notes,
         guidance: guidance(view),
         literatureUsed,
@@ -100,6 +151,9 @@ export function createSolver(
           .filter((work) => work.status === "failed")
           .map(({ id, role, error }) => ({ id, role, error })),
       };
+      const frozenInput = execution.inputId;
+      if (frozenInput === undefined)
+        throw new Error("Solver coordination requires a saved input");
       const plan = await functions.coordinator(input, execution, context);
       // A replaced planner need not initialize Pi. Resolve the built-in
       // Explorer's quota policy before dispatch, including after reopening.
@@ -129,20 +183,7 @@ export function createSolver(
         dispatch.push({
           id: `w${signal.id}-${dispatch.length + 1}`,
           role: `xean.${request.kind}`,
-          input:
-            request.kind === "explorer"
-              ? ({
-                  task,
-                  notes,
-                  guidance: request.guidance,
-                } satisfies ExplorerInput)
-              : request.kind === "codex"
-                ? ({
-                    task,
-                    notes: closure(request.notes, notes),
-                    assignment: request.assignment,
-                  } satisfies CodexInput)
-                : { task, notes: notes.map(noteInfo), query: request.query },
+          input: { view: frozenInput, ...request } satisfies StoredInput,
         });
       }
       if (targets.length)
@@ -150,14 +191,10 @@ export function createSolver(
           id: `w${signal.id}-${dispatch.length + 1}`,
           role: "xean.verifier",
           input: {
-            task,
-            notes: closure(
-              targets.map((target) => target.id),
-              notes,
-            ),
+            view: frozenInput,
+            kind: "verifier",
             targets,
-            evidence: sourceEvidence(notes),
-          } satisfies VerifierInput,
+          } satisfies StoredInput,
         });
       return { state: view.state, dispatch };
     },
@@ -168,7 +205,11 @@ export function createSolver(
     return expected !== undefined && isDeepStrictEqual(candidate, expected);
   };
   return {
-    task: { kind: "xean.solve.library", version: declarationVersion, task },
+    task: {
+      kind: "xean.solve.library",
+      version: declarationVersion,
+      task: structuredClone(task),
+    },
     roles,
     coordinator,
     accept,

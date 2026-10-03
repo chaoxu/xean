@@ -22,13 +22,14 @@ import { NOOP_TELEMETRY_CONTEXT } from "@earendil-works/pi-telemetry";
 import { Check } from "typebox/value";
 import { errorText, json } from "./json.ts";
 import { openXeanStorage } from "./storage.ts";
-import { reference, materialize, type ViewReference } from "./history.ts";
 import {
-  campaignVersion,
-  limitsSchema,
-  positiveIntegerSchema,
-  TransientError,
-} from "./types.ts";
+  inputs,
+  readView,
+  reference,
+  work,
+  type ViewReference,
+} from "./history.ts";
+import { campaignVersion, limitsSchema, TransientError } from "./types.ts";
 import type { CallRecorder } from "./calls.ts";
 import {
   COORDINATOR,
@@ -55,7 +56,6 @@ import type {
   Limits,
   RecordProjection,
   Signal,
-  Work,
   WorkRequest,
   XeanOptions,
   XeanStatus,
@@ -68,65 +68,14 @@ type Reserved = {
   input: JsonValue;
 };
 const stopped = (status: XeanStatus) =>
-  status === "cancelled" || status === "limited" || status === "completed";
+  status === "cancelled" || status === "completed";
 const owners = new WeakSet<Storage>();
 
 function limits(input: Partial<Limits> = {}): Limits {
-  const { concurrency = 4, attempts = 3, providerCalls = null } = input;
-  const value = { ...input, concurrency, attempts, providerCalls };
+  const { concurrency = 4, attempts = 3 } = input;
+  const value = { ...input, concurrency, attempts };
   if (!Check(limitsSchema, value)) throw new Error("Invalid campaign limits");
   return json(value);
-}
-
-function work(task: PiTask): Work {
-  const input = task.input as WorkRequest;
-  const s = task.state;
-  const { outcome, checkpoint } = s;
-  const receipt = outcome?.result as
-    | (Pick<Work, "attempts" | "attemptId" | "publicationId"> & {
-        output: JsonValue;
-      })
-    | undefined;
-  return {
-    ...input,
-    taskId: task.id,
-    status:
-      s.status === "pending"
-        ? "queued"
-        : s.status !== "terminal"
-          ? "active"
-          : outcome?.status === "completed"
-            ? "completed"
-            : outcome?.status === "aborted"
-              ? "cancelled"
-              : "failed",
-    // Attempt counts for terminal work are retained in its result receipt's metadata.
-    attempts: checkpoint?.attempts ?? receipt?.attempts ?? 0,
-    attemptId: checkpoint?.attemptId ?? receipt?.attemptId ?? null,
-    result: outcome?.status === "completed" ? (receipt?.output ?? null) : null,
-    publicationId:
-      outcome?.status === "completed" ? (receipt?.publicationId ?? null) : null,
-    error: outcome?.error?.message ?? checkpoint?.error ?? null,
-  };
-}
-
-/** Keyed-signal receipts of one kind, in ascending receipt ID order. */
-function inputs(
-  tx: Transaction,
-  kind: "input" | "allowance" = "input",
-): CampaignInput[] {
-  return tx.tasks
-    .filter(
-      (task) =>
-        task.kind === COORDINATOR &&
-        "kind" in task.input &&
-        task.input.kind === kind,
-    )
-    .map((task) => {
-      const signal = task.input as Omit<Signal, "id">;
-      return { id: task.id, key: signal.key ?? null, value: signal.value };
-    })
-    .sort((a, b) => a.id - b.id);
 }
 
 function view(tx: Transaction): CampaignView {
@@ -134,10 +83,9 @@ function view(tx: Transaction): CampaignView {
   return {
     task: tx.state.task,
     status: tx.state.status,
-    callLimitReached: tx.state.callLimitReached,
     state: tx.state.state,
     work: tx.tasks.filter((t) => t.kind === WORKER).map(work),
-    inputs: inputs(tx),
+    inputs: inputs(tx.tasks),
   };
 }
 
@@ -216,8 +164,6 @@ export class Xean {
               state: null,
               limits: campaignLimits,
               providerCalls: 0,
-              callAllowance: campaignLimits.providerCalls,
-              callLimitReached: false,
               result: null,
               error: null,
             };
@@ -356,22 +302,19 @@ export class Xean {
   /** Resolve an attempt-start entry to its exact historical callback input. */
   attemptInput(entryId: EntryId): Promise<JsonValue> {
     return this.store.mutate(async (tx) => {
-      const stored = await this.store.storage.entry(
-        entryId,
-        BACKGROUND_CONTEXT,
-      );
-      const entry = stored?.entry;
+      const entry = await tx.native.entry(entryId);
       if (!entry || entry.kind !== "xean.attempt.started")
         throw new Error("Expected an attempt-start entry");
-      const task = tx.tasks.find((task) => task.id === entry.byTaskId);
+      const task =
+        entry.byTaskId === undefined
+          ? undefined
+          : await tx.native.task(entry.byTaskId);
       if (!task) throw new Error("Attempt task is missing");
       if (task.kind === WORKER) return json((task.input as WorkRequest).input);
-      const saved = (entry.data as { snapshot?: ViewReference }).snapshot;
-      if (!saved) throw new Error("Coordinator snapshot is missing");
-      return json({
-        signal: { id: task.id, ...task.input },
-        view: materialize(saved, view(tx)),
-      });
+      return {
+        signal: json({ id: task.id, ...(task.input as Omit<Signal, "id">) }),
+        view: await readView(tx.native, entryId),
+      };
     });
   }
 
@@ -405,22 +348,10 @@ export class Xean {
         if (
           !this.closing &&
           tx.state.status === "running" &&
-          tx.tasks.some(
-            (task) =>
-              task.state.status === "pending" &&
-              (!tx.state.callLimitReached || task.kind === COORDINATOR),
-          )
+          tx.tasks.some((task) => task.state.status === "pending")
         )
           return null;
         if (tx.state.status === "pausing") tx.state.status = "paused";
-        if (
-          !this.closing &&
-          tx.state.status === "running" &&
-          tx.state.callLimitReached
-        ) {
-          tx.state.status = "limited";
-          tx.state.error = "Provider call limit reached";
-        }
         this.store.harness.pause();
         return snapshot(tx);
       });
@@ -433,12 +364,12 @@ export class Xean {
     candidates: readonly TaskRecord<JsonValue, JsonValue, JsonValue>[],
     activeIds: readonly TaskId[],
   ) {
+    if (!candidates.length || this.closing || this.fault) return [];
     const tx = await this.store.transaction(native);
-    if (this.closing || this.fault) return [];
     const active = new Set(activeIds);
     const out: { id: TaskId; checkpoint: JsonValue }[] = [];
     // Native descendants retain their checkpoints and finish inside the admitted
-    // owner's slot, including during pause, blocking, and call-cap draining.
+    // owner's slot, including during pause and blocking.
     // Pi excludes terminal/completing candidates, so each has a checkpoint.
     for (const candidate of candidates) {
       if (candidate.abortRequested) {
@@ -481,12 +412,7 @@ export class Xean {
     ).length;
     selected.push(
       ...roots
-        .filter(
-          (t) =>
-            !tx.state.callLimitReached &&
-            t.kind === WORKER &&
-            t.state.status === "pending",
-        )
+        .filter((t) => t.kind === WORKER && t.state.status === "pending")
         .slice(0, Math.max(0, tx.state.limits.concurrency - occupied)),
     );
     const exhausted = selected.find(
@@ -518,7 +444,6 @@ export class Xean {
         attempts: task.state.checkpoint.attempts + 1,
         attemptId,
         error: null,
-        callDenied: false,
       };
       const inputId = await tx.entry(
         "xean.attempt.started",
@@ -541,7 +466,6 @@ export class Xean {
 
   private exhaust(tx: Transaction, task: PiTask): void {
     // Pi cancels and joins private descendants before finalizing this outcome.
-    // Freeze a draining Coordinator's failure before a grant clears the cap.
     tx.writeTask({
       ...task,
       memos: undefined,
@@ -549,10 +473,7 @@ export class Xean {
         status: "completing",
         checkpoint: task.state.checkpoint!,
         outcome: {
-          status:
-            task.kind === COORDINATOR && tx.state.callLimitReached
-              ? "failed"
-              : "faulted",
+          status: "faulted",
           error: { message: `Attempt limit reached for task ${task.id}` },
         },
       },
@@ -606,6 +527,7 @@ export class Xean {
           const context = active.context;
           const execution: Execution = {
             attemptId: item.attemptId,
+            inputId: task.state.checkpoint?.inputId,
             attempt,
             recorder: this.recorder(item, context, calls),
             telemetry: span,
@@ -687,8 +609,6 @@ export class Xean {
         const checkpoint = { ...task.state.checkpoint, error: message };
         if (
           error instanceof TransientError &&
-          !tx.state.callLimitReached &&
-          !checkpoint.callDenied &&
           checkpoint.attempts < tx.state.limits.attempts
         ) {
           tx.writeTask({ ...task, state: { status: "pending", checkpoint } });
@@ -750,10 +670,6 @@ export class Xean {
       return terminal(task, { status: "aborted", reason: tx.state.status });
     const outcome = { status: "failed" as const, error: { message } };
     if (task.kind === WORKER) return this.finishWorker(tx, task, outcome);
-    if (tx.state.callLimitReached || task.state.checkpoint.callDenied) {
-      // End failed Coordinator signals during draining so siblings can finish.
-      return terminal(task, outcome);
-    }
     tx.writeTask({
       ...task,
       state: {
@@ -861,22 +777,6 @@ export class Xean {
               context.abortSignal?.aborted
             )
               throw new Error("Worker attempt is no longer active");
-            if (
-              tx.state.callAllowance !== null &&
-              tx.state.providerCalls >= tx.state.callAllowance
-            ) {
-              tx.state.callLimitReached = true;
-              tx.writeTask({
-                ...task,
-                state: {
-                  ...task.state,
-                  checkpoint: { ...task.state.checkpoint, callDenied: true },
-                },
-              });
-              if (tx.state.status !== "blocked")
-                tx.state.error = "Provider call limit reached";
-              return -1;
-            }
             tx.state.providerCalls++;
             return await tx.entry(
               "xean.call.started",
@@ -884,7 +784,6 @@ export class Xean {
               item.task.id,
             );
           });
-          if (admitted === -1) throw new Error("Provider call limit reached");
           id = admitted;
         } catch (error) {
           finish();
@@ -976,10 +875,6 @@ export class Xean {
   async resume(): Promise<Campaign> {
     await this.mutate(async (tx) => {
       if (tx.state.status === "blocked") {
-        if (tx.state.callLimitReached)
-          throw new Error(
-            "Campaign limit prevents resuming a blocked campaign",
-          );
         for (const task of tx.tasks) {
           if (
             task.kind !== COORDINATOR ||
@@ -1016,7 +911,6 @@ export class Xean {
 
   /** An exact keyed retry returns its original receipt without admitting again. */
   private keyedSignal(
-    kind: "input" | "allowance",
     value: JsonValue,
     key: string | undefined,
     admit: (tx: Transaction) => void | Promise<void>,
@@ -1025,17 +919,15 @@ export class Xean {
       const prior =
         key === undefined
           ? undefined
-          : inputs(tx, kind).find((receipt) => receipt.key === key);
+          : inputs(tx.tasks).find((receipt) => receipt.key === key);
       if (prior) {
         if (!isDeepStrictEqual(prior.value, value))
-          throw new Error(
-            `${kind === "input" ? "Input" : "Allowance"} key reused with a different value: ${key}`,
-          );
+          throw new Error(`Input key reused with a different value: ${key}`);
         return json(prior);
       }
       await admit(tx);
       const id = await tx.newTask(COORDINATOR, {
-        kind,
+        kind: "input",
         value,
         ...(key === undefined ? {} : { key }),
       });
@@ -1047,53 +939,14 @@ export class Xean {
     const normalized = json(value);
     if (key !== undefined && typeof key !== "string")
       throw new TypeError("Input key must be a string");
-    return this.keyedSignal("input", normalized, key, (tx) => {
+    return this.keyedSignal(normalized, key, (tx) => {
       if (
         stopped(tx.state.status) ||
         tx.state.status === "blocked" ||
-        tx.state.callLimitReached ||
         this.closing
       )
         throw new Error("Campaign does not accept input");
       this.options.validateInput?.(normalized, json(view(tx)));
-    });
-  }
-
-  /** Add a keyed logical-call grant without changing the original campaign limits. */
-  async extendCalls(additional: number, key: string): Promise<CampaignInput> {
-    if (!Check(positiveIntegerSchema, additional))
-      throw new Error("Additional calls must be a positive safe integer");
-    if (typeof key !== "string" || !key)
-      throw new Error("Call allowance requires a nonempty key");
-    return this.keyedSignal("allowance", additional, key, (tx) => {
-      if (
-        tx.state.status === "completed" ||
-        tx.state.status === "cancelled" ||
-        this.closing
-      )
-        throw new Error("Campaign does not accept call allowance");
-      if (tx.state.callAllowance === null)
-        throw new Error("Campaign already has unlimited calls");
-      const allowance = tx.state.callAllowance + additional;
-      if (!Check(positiveIntegerSchema, allowance))
-        throw new Error("Call allowance exceeds the safe integer range");
-      if (tx.state.callLimitReached) {
-        // A blocked signal and its error survive until explicit resume.
-        if (tx.state.status !== "blocked") {
-          // A grant cannot reclassify an exhausted draining signal as blocking.
-          for (const task of tx.tasks)
-            if (
-              task.kind === COORDINATOR &&
-              task.state.status === "pending" &&
-              task.state.checkpoint.attempts >= tx.state.limits.attempts
-            )
-              this.exhaust(tx, task);
-          tx.state.error = null;
-        }
-        tx.state.callLimitReached = false;
-      }
-      tx.state.callAllowance = allowance;
-      if (tx.state.status === "limited") tx.state.status = "running";
     });
   }
 

@@ -19,7 +19,7 @@ test("explicit resume retries a blocked signal and preserves completed work and 
   let workers = 0;
   const options: XeanOptions = {
     task: "resume provider failure",
-    limits: { attempts: 1, providerCalls: 1 },
+    limits: { attempts: 1 },
     roles: [
       {
         name: "worker",
@@ -61,7 +61,6 @@ test("explicit resume retries a blocked signal and preserves completed work and 
       error: null,
       pendingSignals: 0,
       providerCalls: 0,
-      callAllowance: 1,
       inputs: [],
     });
     expect(resumed.work).toEqual(blocked.work);

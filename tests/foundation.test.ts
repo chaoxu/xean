@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
   Xean,
   TransientError,
@@ -73,73 +72,6 @@ for (const transient of [false, true])
       await engine.close();
     }
   });
-
-test("call cap drains admitted work and delivers both outcomes before stopping", async () => {
-  const admitted = Promise.withResolvers<void>();
-  const failed = Promise.withResolvers<void>();
-  const outcomes: string[] = [];
-  const invoked: JsonValue[] = [];
-  const engine = await Xean.open(new MemoryStorage(), {
-    task: "drain",
-    limits: { concurrency: 2, providerCalls: 1 },
-    roles: [
-      {
-        name: "worker",
-        async run(input, execution, context) {
-          invoked.push(input);
-          if (input === "second") await admitted.promise;
-          const call = await execution.recorder.begin({
-            provider: "fixture",
-            id: "fixture",
-            api: "openai-responses",
-          });
-          await call.recordRequest({ input });
-          admitted.resolve();
-          await failed.promise;
-          expect(context.abortSignal!.aborted).toBe(false);
-          const message = fauxAssistantMessage("authorized result");
-          await call.settle(message, null);
-          return "authorized result";
-        },
-      },
-    ],
-    coordinator: {
-      name: "coordinate",
-      run(signal) {
-        if (signal.kind === "start")
-          return {
-            state: null,
-            dispatch: ["first", "second", "queued"].map((id) => ({
-              id,
-              role: "worker",
-              input: id,
-            })),
-          };
-        outcomes.push(signal.kind);
-        if (signal.kind === "failed") failed.resolve();
-        return { state: outcomes.slice() };
-      },
-    },
-  });
-  try {
-    const result = await engine.run();
-    expect(result.status).toBe("limited");
-    expect(result.providerCalls).toBe(1);
-    expect(invoked).toEqual(["first", "second"]);
-    expect(outcomes).toEqual(["failed", "completed"]);
-    expect(
-      result.work.map((work) => [work.id, work.status, work.result]),
-    ).toEqual([
-      ["first", "completed", "authorized result"],
-      ["second", "failed", null],
-      ["queued", "queued", null],
-    ]);
-    expect(result.pendingSignals).toBe(0);
-  } finally {
-    failed.resolve();
-    await engine.close();
-  }
-});
 
 test("synchronous work yields to external cancellation", async () => {
   let invoked = 0;

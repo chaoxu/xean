@@ -322,7 +322,6 @@ test("status preserves committed verification and native usage with bounded oper
       "running",
       "paused",
       "blocked",
-      "limited",
       "cancelled",
       "completed",
     ] as const) {
@@ -338,14 +337,9 @@ test("status preserves committed verification and native usage with bounded oper
       if (status === "blocked")
         expect(accepted.nextAction).toContain("Coordinator failure");
     }
-    expect(
-      observedCampaign({ status: "blocked", callLimitReached: true }).status
-        .nextAction,
-    ).toContain("extend the call allowance before resuming");
-    expect(
-      observedCampaign({ status: "running", callLimitReached: true }).status
-        .nextAction,
-    ).toContain("drains");
+    expect(observedCampaign({ status: "running" }).status.nextAction).toBe(
+      undefined,
+    );
     expect(observedCampaign({ status: "pausing" }).status.nextAction).toContain(
       "owner is still active",
     );

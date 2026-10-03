@@ -17,6 +17,7 @@ import { clampOpenAIPromptCacheKey } from "@earendil-works/pi-ai/api/openai-prom
 import { createHash } from "node:crypto";
 import {
   defineDoc,
+  defineDocFamily,
   defineTool,
   configure,
   GenerationTask,
@@ -74,13 +75,14 @@ const Invocations = defineDoc({
     conversations: {},
   }),
 });
-const Progress = defineDoc({
+const Progress = defineDocFamily({
   kind: "xean.role",
-  scope: "conversation",
-  history: "latest",
-  fork: "current",
+  scope: "task",
+  family: true,
   version: 1,
-  initial: (): {
+  initial: (
+    _seed: null,
+  ): {
     value?: JsonValue;
     reads: TaskId[];
     last?: { taskId: TaskId; receipt: JsonValue; done: boolean };
@@ -160,7 +162,12 @@ export async function ask<S extends TSchema>(
   const sessionId = `${execution.attemptId}/${name}/${crypto.randomUUID()}`;
   const capacity = `${name} input leaves insufficient context for an answer; select less context or use a larger-context model`;
   const progress = async (api: HookApi, ctx: Context) =>
-    (await api.snapshot(Progress, api.conversationId, ctx))!;
+    (await api.snapshot(
+      Progress,
+      host.taskId,
+      String(api.conversationId),
+      ctx,
+    ))!;
   const messages = async (api: HookApi, ctx: Context) =>
     (await host.context(api.conversationId, ctx)).messages;
   const responses = (history: readonly { role: string }[]) =>
@@ -177,7 +184,12 @@ export async function ask<S extends TSchema>(
     outputLimits,
     async execute(args, api, ctx) {
       const outcome = (await api.commit(async (tx) => {
-        const state = await tx.doc(Progress, api.conversationId);
+        const state = await tx.doc(
+          Progress,
+          host.taskId,
+          String(api.conversationId),
+          null,
+        );
         if (state.last?.taskId === api.taskId) return json(state.last);
         const outcome = options.submit?.(
           args,
@@ -208,7 +220,12 @@ export async function ask<S extends TSchema>(
           if (tool.name === "read_notes" && options.maxReads !== undefined) {
             const count = responses(await messages(api, ctx)) - 1;
             remaining = await api.commit(async (tx) => {
-              const state = await tx.doc(Progress, api.conversationId);
+              const state = await tx.doc(
+                Progress,
+                host.taskId,
+                String(api.conversationId),
+                null,
+              );
               if (!state.reads.includes(api.taskId)) {
                 if (!canRead(state.reads.length, count))
                   throw new Error(
@@ -480,7 +497,8 @@ export async function ask<S extends TSchema>(
         if (
           submission?.status !== "unanswered" ||
           (submission.detail === capacity &&
-            (await tx.doc(Progress, previous)).value !== undefined)
+            (await tx.doc(Progress, host.taskId, String(previous), null))
+              .value !== undefined)
         )
           return previous;
         // An authorized retry may replace a terminal failure. Interrupted and
@@ -497,7 +515,7 @@ export async function ask<S extends TSchema>(
         extensions: [extension],
         instructions: null,
       });
-      await tx.doc(Progress, conversation.id);
+      await tx.doc(Progress, host.taskId, String(conversation.id), null);
       // Declare the complete tool catalog before the stable prefix and mutable input.
       await tx.appendEntry(SystemEntry, conversation.id, {
         model: [
@@ -523,7 +541,12 @@ export async function ask<S extends TSchema>(
       context,
     );
     const settled = await submission.wait(context);
-    const state = (await host.snapshot(Progress, conversationId, context))!;
+    const state = (await host.snapshot(
+      Progress,
+      host.taskId,
+      String(conversationId),
+      context,
+    ))!;
     if (
       settled.status === "unanswered" &&
       !(settled.detail === capacity && state.value !== undefined)

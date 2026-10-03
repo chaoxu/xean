@@ -8,7 +8,7 @@ const path =
 const xean = await Xean.open(await openXeanStorage(path), {
   ...sumOfSquares,
   task: { operation: "sum of squares", values: [3, 4] },
-  limits: { concurrency: 2, attempts: 2, providerCalls: 0 },
+  limits: { concurrency: 2, attempts: 2 },
   roles: [
     {
       name: "xean.square",

@@ -73,7 +73,6 @@ const options: XeanOptions = {
       ? {
           concurrency: 2,
           attempts: 1,
-          providerCalls: 4,
         }
       : undefined,
   roles: [

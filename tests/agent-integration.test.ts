@@ -112,7 +112,7 @@ test("native private recovery retains completed tools and waits for provider set
   });
   const options: XeanOptions = {
     task: "Add 1 and 2 with a tool",
-    limits: { attempts: 2, providerCalls: 3 },
+    limits: { attempts: 2 },
     telemetry,
     roles: [
       {

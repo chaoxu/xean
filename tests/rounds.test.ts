@@ -10,7 +10,7 @@ test("an increased total resumes only additional rounds and preserves prior work
   const directory = await mkdtemp(join(tmpdir(), "xean-rounds-"));
   const database = join(directory, "campaign.sqlite");
   const task = { problem: "Fixture", completionCriteria: "Complete proof" };
-  const setup = (allowance: number) => {
+  const setup = (roundLimit: number) => {
     const solver = createSolver(task, () => {
       throw new Error("Round accounting needs no models");
     });
@@ -35,7 +35,7 @@ test("an increased total resumes only additional rounds and preserves prior work
         },
       ],
     });
-    return { solver, rounds: limitRounds(solver, directory, allowance) };
+    return { solver, rounds: limitRounds(solver, directory, roundLimit) };
   };
   let engine: Xean | undefined;
   try {
@@ -73,7 +73,7 @@ test("an increased total resumes only additional rounds and preserves prior work
     expect(retried.work).toHaveLength(4);
     expect(retried.inputs).toEqual(finished.inputs);
     expect(repeated.rounds()).toBe(4);
-    expect(() => setup(2)).toThrow("exceeded its round allowance");
+    expect(() => setup(2)).toThrow("exceeded its round limit");
   } finally {
     await engine?.close();
     await rm(directory, { recursive: true });

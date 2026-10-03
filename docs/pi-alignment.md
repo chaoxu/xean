@@ -39,7 +39,7 @@ extensions described below. These extensions are not upstream APIs.
 Xean registers its worker and Coordinator tasks in one named Pi extension.
 Pi resolves models, tools, prompt sections, hooks, and environments per
 conversation through `pi.agent`. Built-in model roles use native private
-conversations; other roles remain opaque functions. Campaign format is 11. Start fresh campaigns and
+conversations; other roles remain opaque functions. Campaign format is 12. Start fresh campaigns and
 retain old runtimes for existing runs.
 
 Xean is an application of Pi Durable: work and signals are native tasks,
@@ -54,7 +54,7 @@ constitutes an accepted solution. These policies run on Pi's execution engine.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Models and transport       | Pi catalogs, provider factories, auth helpers, conversion, and streaming. Xean profiles select models and endpoints.                                                                                  |
 | Role execution             | Pi Durable owns private conversations, generation and tool tasks, argument validation, and replay. Xean hooks enforce submission and invocation limits.                                               |
-| Turn state                 | Native transcripts determine response counts and continuation. A conversation document retains the accepted result and admitted read IDs.                                                             |
+| Turn state                 | Native transcripts determine response counts and continuation. Task-scoped documents retain accepted results and admitted read IDs until their outer task completes.                                  |
 | Context capacity           | Pi's estimator runs before each request. Xean reserves answer space and hands off prior valid submissions. Automatic compaction is disabled.                                                          |
 | Provider recovery          | Pi `retryAssistantCall` owns classification, backoff, and bounds. Xean records each admitted call and selectively retains completed reasoning.                                                        |
 | Transactions               | Native Session owns serialization, document caching, draft preparation, rollback, atomic storage, and adoption.                                                                                       |
@@ -106,7 +106,7 @@ Session writes before joining on close.
 
 - `admitTasks` selects a batch and its checkpoints on the Session transaction
   line. Xean uses it for concurrency, sequential Coordinator invocations, pause,
-  call-cap draining, and attempt-start records. A pause during an unfinished
+  and attempt-start records. A pause during an unfinished
   admission rolls back the batch and its records.
   Native candidate order is not signal order. Xean admits only its oldest
   unfinished Coordinator when that task is eligible, including after recovery.
@@ -174,11 +174,20 @@ Native paging bounds each read, but consumers must also bound retained data.
 Status projects call metadata per page. Exports reverse Pi's newest-first scans
 to retain chronological order. Native scans lack entry-kind and field projection.
 Historical worker inputs/results stay in immutable task records. Coordinator
-attempt entries freeze mutable view fields and reference those records. Session
-documents are current-only, and `task(id)` returns current state, so native
-snapshots cannot reconstruct a past Coordinator view. Task documents retire at
-completion and cannot hold permanent notes. Coalescing Chord watches cannot
-replace durable signals, receipts, or history.
+attempt entries freeze mutable view fields and reference those records. Solver
+requests reference that existing entry rather than embedding the note corpus.
+The native transaction's `entry()` and `task()` reads resolve its frozen view;
+the solver projects corrections, checks, and dependencies once per invocation.
+Recovery can put an older frozen view into a newer attempt entry, so resolution
+uses the saved contents, not the new entry's timestamp or numeric cutoff.
+
+Pi's `snapshotAsOf()` supports rewindable conversation documents. Session and
+task documents are current-only, and `task(id)` returns current state, so those
+APIs alone cannot reconstruct the saved Coordinator view. A rewindable corpus
+document would need atomic integration with result publication and a single
+authoritative representation. The existing immutable records already suffice.
+Task documents retire at completion and cannot hold permanent notes. Coalescing
+Chord watches cannot replace durable signals, receipts, or history.
 
 Xean's JSON boundary keeps Chord's strict-value check followed by serialization.
 Native `copyJson` preserves negative zero and null prototypes, whereas SQLite's
@@ -199,6 +208,16 @@ returning an aborted stream. Admission and
 accounting failures remain terminal. `onResponse` runs at HTTP headers and does
 not cover Codex WebSockets. Telemetry cannot replace durable admission or
 settlement. Context capacity belongs in the fail-closed generation request hook.
+
+Pi stores conversation messages and tool results incrementally. Xean's full
+request and settlement records add duplication, but preserve evidence absent
+from that transcript: payload-hook changes, intermediate retry responses, and
+outcomes settled before native assistant publication. The request record captures
+the logical payload before transport-specific conversion such as WebSocket
+continuation deltas. Removing those bodies safely needs native durable request artifacts,
+atomic response settlement, and read-only context reconstruction at a saved
+cutoff. Native generation checkpoints alone are temporary. Keep Codex and opaque
+role records, whose outputs have no equivalent Pi transcript.
 
 The Pi AI patch preserves failed-response usage, typed provider errors, explicit
 zero counts, retry-listener cleanup, cache-session isolation, and the existing
@@ -230,7 +249,7 @@ Explorer supplies the task and each index entry as separate user messages,
 followed by mutable note states, feedback, guidance, and allowances. Pi preserves
 those message boundaries during Responses conversion. Xean keeps tool definitions
 stable when the read allowance is exhausted. Native schema validation precedes
-tool execution; the reader then reserves its task ID in the private conversation
+tool execution. The reader then reserves its task ID in the private task
 document. Sequential execution bounds several calls in one response, and replay
 of an interrupted safe tool cannot charge twice. Unknown IDs consume an admitted
 read; schema-invalid arguments do not. Pi owns the transcript and tool results,
@@ -307,8 +326,8 @@ The separate Claude Code provider, subprocess bridge, and provider patch are rem
 Each built-in Pi stage owns a native conversation under its outer task. Native
 submission request IDs deduplicate startup; completed stages return their stored
 result without another call. Pi resumes unfinished generation and tool phases.
-Xean retains validated submissions and admitted read IDs in a conversation
-document, derives response counts from the transcript, and reuses the frozen
+Xean retains validated submissions and admitted read IDs in task-scoped
+documents, derives response counts from the transcript, and reuses the frozen
 Coordinator snapshot after interruption. Logical retries of terminal failures
 start a new conversation. Shared notes still publish only when the worker succeeds.
 
@@ -320,8 +339,11 @@ storage or publication mechanism.
 The task document maps each stage's input identity to its conversation in the
 same transaction that creates it. Pi's first-writer-wins memos cannot replace
 this mapping after a terminal failure or atomically create the conversation.
-The conversation document holds Xean's accepted submissions and read allowance.
-These are application documents managed by Pi.
+Each conversation has a separate progress document owned by the outer task.
+This keeps completed stages available during worker recovery and gives a retried
+conversation fresh submissions and read allowance. Pi retires these documents
+and evicts their cached values when the outer task becomes terminal. Published
+results and native transcripts remain durable.
 
 Pi persists validated tool arguments and replay intent before execution, then
 commits the result and terminal state together. Reads and submissions are safe

@@ -208,12 +208,16 @@ Neither role exposes the reader when its frozen index is empty. Private
 Explorer submissions remain in its conversation, not in the reader's published
 snapshot, and must not be requested by their local IDs.
 
-An Explorer work request contains only `kind: "explorer"` and `guidance`.
-The library builds its frozen `ExplorerInput` from the exact task, the full
-committed `notes` snapshot, and that guidance. Full notes stay behind the reader
-until Explorer requests them. Notes committed after dispatch remain invisible,
-including on a worker retry. Internal reads work with literature and source
-retrieval disabled.
+Coordinator requests Explorer with `kind: "explorer"` and `guidance`.
+The stored worker input adds `view`, the Pi entry ID of the Coordinator's frozen
+input record. Verifier, literature, and Codex requests use the same reference
+with their targets, query, or assignment. The library reads the referenced
+records through Pi and projects the notes once per invocation. It supplies the
+resulting full `ExplorerInput` to the role function, without storing another
+corpus copy in the work request. Standalone role calls still take explicit notes.
+Full notes stay behind the reader until Explorer requests them. Later notes,
+corrections, and checks remain invisible to that invocation, including after
+recovery. Internal reads work with literature and source retrieval disabled.
 
 `maxExplorerReads` limits reads per invocation. Each admitted `read_notes` call
 consumes one read, including a batch of IDs or a call that fails because an
@@ -618,7 +622,7 @@ it is itself the candidate. These fields describe committed state and do not
 schedule work or establish acceptance.
 
 `activity` shows active work before queued work, with each worker's ID, role,
-status, and attempt count. Use `inspect` for its frozen input. Results become
+status, and attempt count. Use `inspect` for its [frozen input reference](kernel.md#opening-and-running). Results become
 shared only when the worker publishes its complete result. `failures` lists
 failed work in reverse request order. Each work list contains at most ten items with an
 explicit `omitted` count. Diagnostics are previews of at most 500 characters,
@@ -666,8 +670,7 @@ bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts correct CAMPA
 hyphens. Each command prints its committed `{id, key, value}` receipt. Retrying
 the same command ID with identical content returns the original receipt, even
 after the campaign ends. Reusing an ID with different content is rejected.
-New commands are rejected for terminal or blocked campaigns, after the call
-cap is reached. Exact keyed retries
+New commands are rejected for terminal or blocked campaigns. Exact keyed retries
 still return their existing receipts. Only solver campaigns accept these commands.
 
 `NOTES.json` contains note drafts and a candidate flag:
@@ -750,32 +753,14 @@ All accepted commands are visible immediately in campaign views and inspection,
 even while their Coordinator signals are pending. Historical views retain input
 receipt IDs, and running workers retain their frozen requests. Later workers
 see corrected text and new notes. Completion is deferred while another
-Coordinator signal is pending, including worker results, accepted inputs, and
-call grants. Receipt acceptance records the command, not a promise that
-Coordinator will follow guidance or verify a submitted note next.
+Coordinator signal is pending, including worker results and accepted inputs.
+Receipt acceptance records the command, not a promise that Coordinator will
+follow guidance or verify a submitted note next.
 
 Library callers use `readCommand`, `submitCommand`, and the solver's
 `validateInput` callback. These share the CLI's validation and projection rules.
 `submitCommand` validates values strictly without type conversion. Direct
 `engine.input()` calls must also pass normalized JSON.
-
-To add calls to an existing finite allowance:
-
-```sh
-bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts extend CAMPAIGN.sqlite 20 --id extra-round
-```
-
-The command uses the active owner's control socket or records the grant
-offline. It returns a keyed receipt, so an exact retry grants nothing twice.
-The added count must be a positive safe integer, and an already unlimited
-campaign needs no grant.
-`Campaign.callAllowance` reports the effective cap while the original settings
-stay frozen. A call-limited campaign returns to `running` with its queued work
-preserved. The grant gives Coordinator a fresh signal but does not itself call
-`run()`. Offline campaigns continue with `run CAMPAIGN`.
-Paused campaigns stay paused. Blocked campaigns retain their Coordinator failure
-and require explicit `resume CAMPAIGN` after the grant. Cancelled and completed
-campaigns reject new grants.
 
 ## Configuration and functions
 
@@ -919,7 +904,7 @@ safe integer and defaults to `maxExplorerReads + 4`. An explicit response limit
 overrides that default.
 The [read contract](#roles-and-acceptance) defines admission and the final-response
 restriction. `literature` defaults to false. `limits`
-uses the kernel's concurrency, attempts, and logical provider calls. Campaigns,
+uses the kernel's concurrency and attempts. Campaigns,
 roles, experiments, and smoke runs have no added wall-clock deadlines. Existing
 provider timeouts remain in place and are tuned from observed provider data.
 Token and dollar budgets remain out of scope. Set `usagePrefix` to a
@@ -930,8 +915,8 @@ each process attempt separately. This overrides the prefix for that execution
 in both Pi and Codex calls while preserving the campaign's frozen settings.
 An override requires this invocation to acquire ownership. It cannot change an
 already-running owner's attribution.
-Configuration and library entry points share bounded integer schemas for limits,
-call grants, and Explorer read and response counts. JSON settings, declarations,
+Configuration and library entry points share bounded integer schemas for limits
+and Explorer read and response counts. JSON settings, declarations,
 and library command values are validated without converting strings or truncating
 numbers. Numeric CLI arguments are parsed before that validation.
 
@@ -1097,7 +1082,7 @@ The library is in `packages/core`, and the optional `xean-cli` app is in
 library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 12, with distinct solver, standalone-role, and review kinds. Only this
+version 13, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

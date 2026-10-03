@@ -9,7 +9,8 @@ intended for distribution. A passing historical run does not qualify later code.
 
 The suite exercises atomic publication, failed-decision rollback, uncertain
 commits, concurrent readers, ownership exclusion, crash recovery, pause,
-cancellation, call-cap draining, call grants, and settlement during shutdown.
+cancellation, and settlement during shutdown. Provider-call counters and usage
+remain available for observation without stopping a campaign.
 Solver checks cover dependency ordering, source-verdict finality, trusted
 imports, correction races, blinded reconstruction, and exact-task acceptance.
 Provider fixtures exercise Pi's native parsers and tools, WebSocket continuation,
@@ -33,6 +34,31 @@ dependency inputs, Bun version, operating system, and architecture, but do not
 attest arbitrary manual edits inside `node_modules`. Use a clean setup for
 distribution qualification.
 
+### Time and storage measurements
+
+Run the deterministic [profile](../scripts/profile.ts) at several corpus sizes
+under the same locked runtime. Each invocation requires a new output directory:
+
+```sh
+bun scripts/profile.ts 40 runs/profile-40
+bun scripts/profile.ts 160 runs/profile-160
+```
+
+The JSON report records creation and compact-inspection time, corpus and worker
+input bytes, database and WAL bytes, and process memory after garbage collection
+before execution, with the owner open, and after close. It makes no model calls.
+Compare growth across sizes and source revisions, using repeated measurements
+for timing. RSS includes native allocations and allocator retention, so it does
+not by itself establish a leak. The fixture measures framework overhead rather
+than provider latency or private conversation size.
+
+Storage should grow with new mathematical content and execution evidence.
+Shared inputs should use references instead of repeating the accumulated corpus
+or transcript. Retain final responses, tool results, failures, and verification
+evidence needed for reconstruction. Read large exports explicitly. Frozen
+runtime installations are a separate deployment cost and should be reused by
+immutable identity where possible.
+
 ## Live provider checks
 
 For a provider or execution change, smoke-test the affected path with its actual
@@ -55,7 +81,7 @@ The gateway smoke uses Pi Durable conversations to check two concurrent workers,
 native usage, cached WebSocket connection reuse and delta requests, and reopening
 in another process. Successful execution prints `completed` for both phases.
 The solver smoke initializes without model calls, then checks the tree edge-count
-task through acceptance and unchanged reopening with a forty-call allowance.
+task through acceptance and unchanged reopening while retaining call accounting.
 Both use Luna at max reasoning. The source-checking Codex path and subscription
 providers require separate checks when affected. Their setup is
 in the [solver guide](solver.md#configuration-and-functions).
@@ -141,8 +167,8 @@ qualified.
 ### Lifecycle
 
 A supervised Linux ARM64 smoke exercised private recovery, pause/resume,
-cancellation after HTTP 200, call-cap draining, and unchanged credentialless
-reopening. Explorer retained its full-note read, private intermediate submission,
+cancellation after HTTP 200, and unchanged credentialless reopening. Explorer
+retained its full-note read, private intermediate submission,
 and original one-read/three-response allowances across separate processes,
 publishing one shared result. All five admitted calls settled. The cancelled
 call's usage remains unknown.
@@ -159,7 +185,7 @@ retained failed preflight are bound in
 Frozen v2.0.0 at `a53d29f` and the candidate each accepted the tree edge-count
 task and the sum-of-odd-integers task. All four arguments passed an independent
 blind review supplied only the exact tasks and proofs. The task bytes, Luna/max
-model, gateway, and admission allowances were shared. Each version retained its
+model, gateway, and role settings were shared. Each version retained its
 own scheduler, dependencies, campaign format, and reader.
 
 Each version used 25 calls across the two tasks. The gateway recorded $0.029739

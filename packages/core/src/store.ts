@@ -32,8 +32,6 @@ export type AttemptState = {
   attempts: number;
   attemptId: string | null;
   error: string | null;
-  /** A grant must not turn an earlier admission denial into a blocking failure. */
-  callDenied?: boolean;
   inputId?: EntryId;
 };
 export const initialAttempt = (): AttemptState => ({
@@ -57,7 +55,7 @@ export const campaignAddress = {
   scope: { kind: "session" as const },
 };
 const context = BACKGROUND_CONTEXT;
-const campaign = defineDoc({
+export const campaign = defineDoc({
   kind: campaignAddress.kind,
   scope: "session",
   version: campaignVersion,
@@ -86,6 +84,7 @@ function resident(task: PiTask): PiTask {
 }
 
 export interface Transaction {
+  readonly native: Tx;
   state: CampaignState;
   readonly tasks: readonly PiTask[];
   /** Replaces a task using Pi's immutable record copy. */
@@ -198,6 +197,7 @@ export class Store {
 
   async transaction(tx: Tx): Promise<Transaction> {
     return {
+      native: tx,
       state: await tx.doc(campaign),
       tasks: [...this.tasks.values()],
       writeTask: (task) => tx.setTask(task),

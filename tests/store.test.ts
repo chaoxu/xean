@@ -32,10 +32,8 @@ const initial: CampaignState = {
   coordinator: "fixture",
   status: "running",
   state: { count: 1 },
-  limits: { concurrency: 1, attempts: 1, providerCalls: null },
+  limits: { concurrency: 1, attempts: 1 },
   providerCalls: 0,
-  callAllowance: null,
-  callLimitReached: false,
   result: null,
   error: null,
 };

@@ -56,15 +56,9 @@ const program = new Command("xean")
       await verifyInstall(resolve(import.meta.dir, "../../.."));
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
-      ![
-        "resume",
-        "pause",
-        "cancel",
-        "submit",
-        "guide",
-        "correct",
-        "extend",
-      ].includes(action.name())
+      !["resume", "pause", "cancel", "submit", "guide", "correct"].includes(
+        action.name(),
+      )
     )
       throw new Error("--expected-owner-id requires a live control command");
   });
@@ -296,15 +290,4 @@ for (const kind of ["submit", "guide", "correct"] as const) {
       );
     });
 }
-program
-  .command("extend <campaign> <calls>")
-  .requiredOption("--id <id>", "Stable command ID for exact retries")
-  .action(async (campaign: string, calls: string, flags: { id: string }) => {
-    await sendCommand(campaign, {
-      kind: "extend",
-      calls: Number(calls),
-      id: flags.id,
-    });
-  });
-
 await program.parseAsync();

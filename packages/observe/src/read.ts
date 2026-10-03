@@ -89,7 +89,7 @@ export async function readRun(
   compact = false,
 ): Promise<Run> {
   processObservation ??= source.job
-    ? readProcess(source, fleet, signal)
+    ? readProcess(source, fleet, signal, compact)
     : undefined;
   const run: Run = {
     id: source.id,
@@ -193,6 +193,7 @@ export async function readProcess(
   source: Pick<Source, "job" | "task">,
   fleet: string,
   signal?: AbortSignal,
+  compact = false,
 ): Promise<Pick<Run, "process" | "error">> {
   const observation: Pick<Run, "process" | "error"> = {};
   try {
@@ -221,6 +222,7 @@ export async function readProcess(
           log: "",
           errorLog: "",
         };
+        if (compact) return observation;
         const readLog = async (stderr: boolean) => {
           try {
             return await nomad([

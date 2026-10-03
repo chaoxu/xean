@@ -69,7 +69,7 @@ export const statusSchema = Type.Script(
   notes?: Counts, verification?: Record<string, Counts>,
   nextAction?: string, verificationIssues?: Issues,
   calls: {
-    admitted: Count, allowance: Count | null, limitReached: boolean,
+    admitted: Count,
     settled: Count, unknownUsage: Count, unsettled: Count,
     byModel: Models, byModelOmitted: Count
   },
@@ -186,11 +186,8 @@ export function statusReport({
   const result = campaign.result as { noteId?: unknown } | null;
   const imported = notes?.filter((note) => note.imported).length ?? 0;
   const nextAction = {
-    blocked: campaign.callLimitReached
-      ? "Resolve the reported Coordinator failure and extend the call allowance before resuming."
-      : "Resolve the reported Coordinator failure, then resume the campaign.",
-    limited:
-      "Admitted work has drained. Extend the call allowance to admit more work.",
+    blocked:
+      "Resolve the reported Coordinator failure, then resume the campaign.",
     pausing:
       "Check whether the owner is still active. An active owner will finish draining; an interrupted owner requires recovery.",
     paused: "Resume the campaign when ready.",
@@ -198,9 +195,7 @@ export function statusReport({
     completed: solver
       ? "Export the accepted argument. Independent review remains a separate step."
       : "This campaign completed.",
-    running: campaign.callLimitReached
-      ? "The call allowance is exhausted. Check owner/process health while admitted work drains, or extend the allowance."
-      : undefined,
+    running: undefined,
   }[campaign.status];
   const issues: {
     noteId: string;
@@ -293,8 +288,6 @@ export function statusReport({
       : {}),
     calls: {
       admitted: campaign.providerCalls,
-      allowance: campaign.callAllowance,
-      limitReached: campaign.callLimitReached,
       settled,
       unknownUsage: byModel.reduce(
         (total, group) => total + group.unknownUsage,

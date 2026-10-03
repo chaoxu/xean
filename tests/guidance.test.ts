@@ -2,8 +2,13 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Xean, openXeanStorage } from "xean";
-import { createSolver, submitCommand, type ExplorerInput } from "xean/solve";
+import { Xean, openXeanStorage, type CampaignView, type EntryId } from "xean";
+import {
+  createSolver,
+  project,
+  submitCommand,
+  type ExplorerInput,
+} from "xean/solve";
 
 test("guidance changes the next assignment while interrupted Explorer inputs stay frozen", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-guidance-"));
@@ -78,7 +83,22 @@ test("guidance changes the next assignment while interrupted Explorer inputs sta
         result.work.some((work) => work.taskId === entry.byTaskId),
     );
     expect(
-      await Promise.all(workers.map((entry) => engine.attemptInput(entry.id))),
+      await Promise.all(
+        workers.map(async (entry) => {
+          const request = (await engine.attemptInput(entry.id)) as {
+            view: EntryId;
+            guidance: string;
+          };
+          const frozen = (await engine.attemptInput(request.view)) as {
+            view: CampaignView;
+          };
+          return {
+            task,
+            notes: project(frozen.view),
+            guidance: request.guidance,
+          };
+        }),
+      ),
     ).toEqual(received);
   } finally {
     await engine.close();

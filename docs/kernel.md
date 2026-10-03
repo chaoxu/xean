@@ -7,13 +7,13 @@ The [glossary](glossary.md) defines the shared terminology and code spellings.
 
 ## Responsibilities
 
-| Component      | Responsibility                                                                                                         |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `pi-ai`        | Models, providers, request conversion, streaming, authentication options, and transport retries                        |
-| Chord          | Native invocation context, cooperative cancellation, and prepared immutable campaign-state changes                     |
-| `pi-durable`   | Conversations, model and tool tasks, dispatch, cancellation, joining, recovery, records, atomic batches, and SQLite    |
-| `pi-telemetry` | Optional native spans supplied through `XeanOptions.telemetry`                                                         |
-| Xean           | Concurrent admission, sequential Coordinator decisions, whole-worker publication, campaign limits, and recovery policy |
+| Component      | Responsibility                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `pi-ai`        | Models, providers, request conversion, streaming, authentication options, and transport retries                     |
+| Chord          | Native invocation context, cooperative cancellation, and prepared immutable campaign-state changes                  |
+| `pi-durable`   | Conversations, model and tool tasks, dispatch, cancellation, joining, recovery, records, atomic batches, and SQLite |
+| `pi-telemetry` | Optional native spans supplied through `XeanOptions.telemetry`                                                      |
+| Xean           | Concurrent admission, sequential Coordinator decisions, whole-worker publication, and recovery policy               |
 
 Pi Harness executes tasks through the [local controls](pi-alignment.md#durable-integration)
 that let Xean supply admission and publication policy. The kernel introduces no workflow language or plugin sandbox.
@@ -45,6 +45,8 @@ try {
 The application can also supply limits, acceptance, and native Pi telemetry.
 A role supplies a `name` and `run(input, execution, context)`, which returns JSON.
 `execution` supplies the attempt ID, one-based `attempt` ordinal, and call recorder.
+For Coordinator, `inputId` identifies its frozen input entry in Pi. Requests can
+reference this entry without copying the corresponding view.
 Roles can use the ordinal to reject unsafe whole-worker replay. `context` is Chord's
 native `Context`, with cancellation on `context.abortSignal`. Xean always
 supplies that signal. `execution.telemetry` supplies the native Pi attempt span.
@@ -71,7 +73,7 @@ Coordinator implements `run(signal, view, execution, context)`, receiving a
 committed campaign view and the same execution and Chord context types.
 It returns its next JSON state, optional work requests, and an optional
 completion candidate. Receiving a signal can be handled entirely in ordinary
-code. Signals are `start`, `completed`, `failed`, user `input`, and `allowance`.
+code. Signals are `start`, `completed`, `failed`, and user `input`.
 Worker signals identify the work and its Pi task record. The committed view
 contains the result or failure details.
 Work, signals, input receipts, and publication references use Pi's native
@@ -97,6 +99,9 @@ history visible at that attempt's start.
 `{ signal, view }` for a Coordinator attempt. Its argument is the ID of a
 `xean.attempt.started` entry from `records()`. Workers may finish while
 Coordinator is considering an older snapshot. Their signals remain pending.
+Solver worker inputs contain a `view` reference and role arguments. Their
+referenced Coordinator input can also be read with `attemptInput(view)` and
+projected through the solver's `project()` to inspect the original note corpus.
 
 `run()` returns when there is no runnable work, the campaign is paused or
 blocked, or a terminal status is reached. Waiting leaves the status `running`.
@@ -117,7 +122,7 @@ A supplied key makes retries idempotent. The same key and value return the
 original receipt. A different value with that key is rejected. Exact retries
 are resolved before lifecycle checks, so a terminal campaign can still return
 an existing receipt. New inputs are rejected after termination, while blocked,
-after the call cap is reached, or while the owner is closing.
+or while the owner is closing.
 
 The solver uses these inputs for external notes, guidance, and harmless
 corrections. Running workers retain their immutable requests. New Coordinator
@@ -175,12 +180,6 @@ signal's attempt allowance and records its previous checkpoint, preserving the
 signal ID, accepted input receipts, completed work, and immutable attempt history.
 The retry receives a fresh Coordinator view. Roles distinguish resuming private
 work from starting another request after a terminal failure.
-Call caps remain in force. If a concurrent worker reaches the call cap while
-the campaign is blocked, add calls with `extendCalls()` before `resume()`.
-During provider-call draining,
-automatic retries stop. A worker failure becomes terminal, and a
-Coordinator failure or exhausted allowance ends that signal so remaining work
-and signals can drain.
 
 Pi reports provider failures through native response messages. `auditedStream`
 preserves that behavior. The role is responsible for identifying a known
@@ -196,7 +195,7 @@ A missing or rejecting guard is a Coordinator error. Validation that needs
 model calls or tools belongs in ordinary work before the completion proposal.
 The completion decision cannot admit new work. If another Coordinator signal is
 pending, the kernel consumes the current decision and defers completion until
-pending worker results, external inputs, and grants reach fresh Coordinator
+pending worker results and external inputs reach fresh Coordinator
 invocations. Accepted completion
 preserves committed results and stops unfinished siblings. The mathematical
 solver must implement the exact problem's verification requirements in this
@@ -207,14 +206,13 @@ acceptance policy.
 | `pause()`                  | Stops starting new attempts, lets active workers and Coordinator finish, then records `paused`                  |
 | `resume()`                 | Resumes a paused campaign and runs queued work                                                                  |
 | `cancel()`                 | Records `cancelled`, aborts active execution, and prevents late publication                                     |
-| Request beyond call cap    | Sets `callLimitReached`, stops new workers, and lets active work and Coordinator signals finish                 |
 | Terminal worker failure    | Records failed work and sends its `failed` signal to Coordinator                                                |
-| Terminal Coordinator error | Records `blocked`, except while draining                                                                        |
+| Terminal Coordinator error | Records `blocked`                                                                                               |
 | `close()`                  | Interrupts active execution, waits for it to settle, and closes storage without cancelling the logical campaign |
 
 Pause preserves queued work and completion signals for resumption. An active
 Coordinator can finish registering work that remains queued. Native descendants
-of admitted work continue during pause and call-cap draining. They occupy their
+of admitted work continue during pause. They occupy their
 owner's concurrency slot. Cancellation marks the ownership tree and Pi aborts
 it from the leaves upward. Roles and their tools must honor
 those signals for prompt shutdown. Xean rejects a late result after cancellation
@@ -245,11 +243,10 @@ interrupt several concurrent workers.
 
 ## Limits and call records
 
-| Limit           | Meaning                                                                                                  | Default           |
-| --------------- | -------------------------------------------------------------------------------------------------------- | ----------------- |
-| `concurrency`   | Concurrent worker attempts, with Coordinator allowed alongside them                                      | `4`               |
-| `attempts`      | Maximum invocations per logical worker or Coordinator signal, including initial and interrupted attempts | `3`               |
-| `providerCalls` | Initial logical-call allowance, retained unchanged when reopening                                        | `null`, unlimited |
+| Limit         | Meaning                                                                                                  | Default |
+| ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
+| `concurrency` | Concurrent worker attempts, with Coordinator allowed alongside them                                      | `4`     |
+| `attempts`    | Maximum invocations per logical worker or Coordinator signal, including initial and interrupted attempts | `3`     |
 
 Omitted limits and explicitly undefined known fields use these defaults.
 Unknown fields and invalid values are rejected.
@@ -260,44 +257,10 @@ does not stop kernel admission or publication. Settings reject the retired
 dependency timeouts remain provider behavior and are tuned from measured data.
 
 Token and dollar budgets are outside the planned scope. Usage records support
-observation and comparisons. Pi's internal HTTP or WebSocket retry
-attempts count within their logical call. A fresh call through the recorder
-consumes another admission. A rejected call cannot dispatch through the audited
-stream. Roles must use that integration for the kernel to account for calls.
-
-The first request beyond the call cap sets `callLimitReached`. Calls already admitted
-can settle, and active workers can publish their complete results. Coordinator
-continues processing signals and can accept a completed result without another
-provider call. New worker attempts stay queued, including work registered by
-Coordinator during draining. Once active work and runnable Coordinator signals
-are exhausted, the campaign becomes `limited` and remaining queued work is
-preserved for a possible allowance extension. An accepted completion can finish
-the campaign before that point.
-
-Call-cap draining is tracked separately from pause and Coordinator blocking.
-A pause still stops new Coordinator attempts while admitted workers settle.
-Resuming a paused campaign
-with `callLimitReached` continues draining without admitting new workers. A
-call denial also preserves an existing blocked Coordinator failure.
-
-`extendCalls(additional, key)` grants additional calls to a finite allowance.
-`additional` must be a positive safe integer and `key` must be nonempty. It
-returns a durable `{ id, key, value: additional }` receipt and creates a
-separate Coordinator signal. An exact keyed retry returns the receipt without
-granting the calls again, including after termination. Reusing a grant key with
-a different count is rejected. `Campaign.callAllowance` exposes the effective cap.
-The original `limits.providerCalls` stays frozen, so the same startup options
-remain valid on reopen.
-
-A grant can return a campaign stopped by its call cap to `running`, clear the
-admission block, and make preserved work runnable. It does not invoke `run()`.
-An exhausted Coordinator already draining keeps its failure outcome while Pi
-cancels and joins its private descendants, including across a concurrent grant.
-A paused campaign stays paused. A blocked campaign can receive a grant while
-preserving its Coordinator failure and pending signal. Explicit `resume()` is
-still required. Cancelled and completed campaigns reject new grants.
-The CLI's `extend` command
-uses the active owner's control socket or acquires storage offline.
+observation and comparisons but never stop admission or publication. Pi's
+internal HTTP or WebSocket retry attempts count within their logical call. Each
+fresh call through the recorder records another admission, and roles must use
+that integration for the kernel to account for calls.
 
 `auditedStream` from `xean/pi` wraps Pi's native `streamSimple` function. At Pi's
 `onPayload` hook, it calls `recordRequest()` with a JSON snapshot after applying
@@ -363,11 +326,11 @@ tasks retain their own checkpoints and stay outside the campaign's work and
 signal projection. Private transcripts and documents remain available through
 Pi's conversation APIs.
 
-Xean's campaign state and campaign document use format version 11. Earlier formats
+Xean's campaign state and campaign document use format version 12. Earlier formats
 are rejected without migration. This Pi revision changes its initial SQLite
 schema while retaining upstream schema version 1; old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 12. The durable patch
+version 1. Solver declarations independently use version 13. The durable patch
 adds Harness policy hooks, pause, and quiescence, exposes native task-record
 mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
@@ -441,5 +404,5 @@ runs Pi Durable conversations through file-backed storage and interrupts a
 provider call after a completed tool. It checks settlement before close and
 private recovery without repeating that tool.
 Native-child fixtures cover checkpoint recovery, frozen Coordinator inputs,
-exhausted attempt allowances, cancellation, pause, and call-cap draining.
+exhausted attempt allowances, cancellation, pause, and provider accounting.
 No paid campaign is required to validate the foundation.

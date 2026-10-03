@@ -55,18 +55,18 @@ export const offlineResearch: Research = {
 export function limitRounds(
   solver: ReturnType<typeof createSolver>,
   directory: string,
-  allowance = 20,
+  roundLimit = 20,
 ) {
   assert.ok(
-    Number.isSafeInteger(allowance) && allowance >= 0,
-    "Invalid round allowance",
+    Number.isSafeInteger(roundLimit) && roundLimit >= 0,
+    "Invalid round limit",
   );
   const plan = solver.functions.coordinator;
   let rounds = 0;
   while (existsSync(resolve(directory, `round-${rounds + 1}.json`))) rounds++;
-  assert.ok(rounds <= allowance, "Experiment exceeded its round allowance");
+  assert.ok(rounds <= roundLimit, "Experiment exceeded its round limit");
   solver.functions.coordinator = async (...args) => {
-    if (rounds === allowance) return { work: [] };
+    if (rounds === roundLimit) return { work: [] };
     const marker = {
       round: rounds + 1,
       attemptId: args[1].attemptId,
@@ -84,12 +84,12 @@ export function limitRounds(
   return () => rounds;
 }
 
-/** A drained campaign needs a new signal as well as a higher outer allowance. */
-export async function resumeExperiment(engine: Xean, allowance: number) {
+/** Resume a campaign while the outer runner retains its round limit. */
+export async function resumeExperiment(engine: Xean, roundLimit: number) {
   if ((await engine.inspect()).status === "blocked") return engine.resume();
   await submitCommand(engine, {
     kind: "guide",
-    id: `bounded-continue-${allowance}`,
+    id: `bounded-continue-${roundLimit}`,
     text: "Continue the exact task using the recorded mathematical notes and verification feedback.",
   });
   return engine.resume();
@@ -107,7 +107,7 @@ if (import.meta.main) {
     },
   });
   const offline = values.offline;
-  const allowance = Number(values["round-limit"]);
+  const roundLimit = Number(values["round-limit"]);
   assert.ok(
     positionals.length === 1,
     "Usage: scripts/bounded-solve.ts RUN_DIRECTORY [--offline] [--round-limit TOTAL] [--resume]",
@@ -141,7 +141,7 @@ if (import.meta.main) {
       ? offlineResearch
       : codexResearch(settings.research, settings.usagePrefix),
   );
-  const rounds = limitRounds(solver, directory, allowance);
+  const rounds = limitRounds(solver, directory, roundLimit);
   const options: XeanOptions = {
     ...solver,
     // A separate kind prevents the online CLI from resuming this experiment.
@@ -219,15 +219,15 @@ if (import.meta.main) {
   };
   try {
     control = await serveControl(await realpath(database), engine);
-    if (values.resume) await resumeExperiment(engine, allowance);
+    if (values.resume) await resumeExperiment(engine, roundLimit);
     else await engine.run();
     await control.close();
     if (shutdown) process.exitCode = 130;
     else {
       let campaign = await engine.inspect();
-      const roundLimit =
-        rounds() === allowance && campaign.status === "running";
-      if (roundLimit) {
+      const hitRoundLimit =
+        rounds() === roundLimit && campaign.status === "running";
+      if (hitRoundLimit) {
         await engine.pause();
         campaign = await engine.inspect();
       }
@@ -236,7 +236,7 @@ if (import.meta.main) {
         outcome:
           campaign.status === "completed"
             ? "accepted"
-            : roundLimit
+            : hitRoundLimit
               ? "round_limit"
               : campaign.status,
         rounds: rounds(),

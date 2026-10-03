@@ -98,29 +98,24 @@ if (args[0] === "job") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as string[]);
-    const [first, concurrent, compact] = await Promise.all([
-      read(),
-      read(),
-      handle(new Request("http://127.0.0.1/api/runs/first?view=status")).then(
-        (response) => response.json(),
-      ),
-    ]);
+    const compact = await (
+      await handle(new Request("http://127.0.0.1/api/runs/first?view=status"))
+    ).json();
+    expect(await commands()).toEqual([["job", "allocs", "-json", "pool"]]);
+    const [first, concurrent] = await Promise.all([read(), read()]);
     expect(concurrent).toEqual(first);
     expect(compact.heartbeat).toEqual({ rounds: 0 });
-    expect(compact.process).toEqual({
+    expect(compact.process).toMatchObject({
       job: "pool",
       task: "solver",
       allocation: "allocation",
       status: "running",
-      observedAt: first[0]?.process?.observedAt,
     });
-    expect(compact.error).toStartWith("ExecaError: Command failed");
-    expect(compact.error).toEndWith("…");
-    expect(compact.error).toHaveLength(500);
+    expect(compact.error).toBeUndefined();
     expect((await commands()).filter((args) => args[0] === "job")).toHaveLength(
-      2,
+      3,
     );
-    expect(await commands()).toHaveLength(6);
+    expect(await commands()).toHaveLength(7);
     expect(first[0]?.error).toContain("solver stderr unavailable");
     expect(first[1]?.error).toBe(first[0]?.error);
     expect(first[0]?.process).toMatchObject({
@@ -145,14 +140,14 @@ if (args[0] === "job") {
     await writeFile(mode, "allocs");
     clock.mockReturnValue(Date.now() + 10_001);
     const failed = await read();
-    expect(await commands()).toHaveLength(8);
+    expect(await commands()).toHaveLength(9);
     expect(failed[0]?.error).toContain("allocations unavailable");
     expect(failed[1]?.error).toBe(failed[0]?.error);
     expect(failed[0]?.process).toBeUndefined();
     await writeFile(mode, "ok");
     clock.mockReturnValue(Date.now() + 10_001);
     const recovered = await read();
-    expect(await commands()).toHaveLength(14);
+    expect(await commands()).toHaveLength(15);
     expect(recovered.slice(0, 3).every((run) => run.error === undefined)).toBe(
       true,
     );
@@ -265,6 +260,19 @@ test("the external observer reads coherent live snapshots without changing a loc
       ...readSummary(published),
       observedAt: summary.observedAt,
     });
+    const extra = {
+      ...published,
+      status: { ...published.status, ignored: "preserved input" },
+      ignored: () => "unrelated fields must not be cloned",
+    };
+    expect(readSummary(extra)).toEqual({
+      ...summary,
+      observedAt: published.observedAt,
+    });
+    expect(extra.status.ignored).toBe("preserved input");
+    expect(() => readSummary({ ...published, status: {} })).toThrow(
+      "Malformed compact observation",
+    );
     expect(after.snapshot?.notes[0]?.id).toBe("work/n1");
     expect(after.snapshot?.notes[0]?.detailedSummary).toContain("twice $2n$");
     const history = await engine.inspect();

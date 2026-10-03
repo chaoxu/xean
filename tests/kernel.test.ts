@@ -424,13 +424,11 @@ test("invalid open options release ownership and committed work survives role re
       limits: {
         concurrency: undefined,
         attempts: undefined,
-        providerCalls: undefined,
       },
     });
     expect((await first.inspect()).limits).toEqual({
       concurrency: 4,
       attempts: 3,
-      providerCalls: null,
     });
     await expect(
       Xean.open(storage, { roles: [role], coordinator }),

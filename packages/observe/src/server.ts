@@ -123,9 +123,11 @@ export function api(
         const processKey = JSON.stringify([
           source.job,
           source.task ?? defaultProcessTask,
+          compact,
         ]);
         processObservation =
-          batch.processes.get(processKey) ?? readProcess(source, fleet, signal);
+          batch.processes.get(processKey) ??
+          readProcess(source, fleet, signal, compact);
         batch.processes.set(processKey, processObservation);
       }
       observation = readRun(

@@ -12,10 +12,12 @@ import {
   defineTask,
   ROOT_CONVERSATION_ID,
   MemoryStorage,
+  type EntryId,
   type Extension,
   type Task,
 } from "@earendil-works/pi-durable";
 import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import { readView } from "../packages/core/src/history.ts";
 import type { Execution, XeanOptions } from "../packages/core/src/types.ts";
 import type { Context } from "@earendil-works/chord";
 
@@ -111,7 +113,18 @@ for (const [attempts, failed] of [
     const options: XeanOptions = {
       task: "frozen",
       limits: { attempts },
-      roles: [],
+      roles: [
+        {
+          name: "resolve input",
+          async run(input, execution, context) {
+            const view = await execution.durable!.commit(
+              (tx) => readView(tx, input as EntryId),
+              context,
+            );
+            return view.inputs;
+          },
+        },
+      ],
       coordinator: {
         name: "private coordinator",
         async run(signal, view, execution, context) {
@@ -131,7 +144,16 @@ for (const [attempts, failed] of [
           } finally {
             execution.durable!.registry.uninstall(extension);
           }
-          return { state: [...state, "start"] };
+          return {
+            state: [...state, "start"],
+            dispatch: [
+              {
+                id: "original input",
+                role: "resolve input",
+                input: execution.inputId!,
+              },
+            ],
+          };
         },
       },
     };
@@ -139,7 +161,7 @@ for (const [attempts, failed] of [
     try {
       const first = engine.run();
       await (failed ? cancelled : entered).promise;
-      await engine.input("arrived after the frozen prompt");
+      const late = await engine.input("arrived after the frozen prompt");
       expect((await engine.inspect()).state).toBeNull();
       expect(
         (await engine.records()).filter(
@@ -182,8 +204,10 @@ for (const [attempts, failed] of [
       expect(signals).toEqual(["start", "start"]);
       register.resolve();
       const result = await second;
-      expect(result.state).toEqual(["start", "input"]);
-      expect(signals).toEqual(["start", "start", "input"]);
+      expect(result.state).toEqual(["start", "input", "completed"]);
+      expect(signals).toEqual(["start", "start", "input", "completed"]);
+      expect(result.work).toMatchObject([{ status: "completed", result: [] }]);
+      expect(result.work[0]!.input as number).toBeGreaterThan(late.id);
       expect(result.pendingSignals).toBe(0);
       expect(views).toEqual([[], []]);
       expect(preparations).toBe(1);
@@ -201,7 +225,7 @@ for (const [attempts, failed] of [
     }
   });
 
-for (const stop of ["pause", "cancel", "limit"] as const) {
+for (const stop of ["pause", "cancel"] as const) {
   test(`${stop} joins native descendants before returning`, async () => {
     const entered = latch();
     const release = latch();
@@ -240,19 +264,11 @@ for (const stop of ["pause", "cancel", "limit"] as const) {
     } satisfies Extension;
     const engine = await Xean.open(storage, {
       task: "join",
-      limits: { providerCalls: stop === "limit" ? 0 : null },
+      limits: { attempts: 1 },
       roles: [
         {
           name: "worker",
           async run(_input, execution, context) {
-            if (stop === "limit")
-              await expect(
-                execution.recorder.begin({
-                  provider: "fixture",
-                  id: "denied",
-                  api: "fixture",
-                }),
-              ).rejects.toThrow("Provider call limit reached");
             if (stop === "pause") {
               const api = execution.durable!;
               api.registry.install(extension);
@@ -287,7 +303,7 @@ for (const stop of ["pause", "cancel", "limit"] as const) {
       const running = engine.run();
       await entered.promise;
       expect((await engine.inspect()).work[0]!.result).toBeNull();
-      const stopping = stop === "limit" ? running : engine[stop]();
+      const stopping = engine[stop]();
       if (stop !== "cancel") release.resolve();
       const result = await stopping;
       await running;
@@ -295,8 +311,7 @@ for (const stop of ["pause", "cancel", "limit"] as const) {
         stop === "cancel" ? "cancelled" : "completed",
       );
       expect(aborted).toBe(stop === "cancel" ? 1 : 0);
-      expect(published).toBe(stop === "limit");
-      if (stop === "limit") expect(result.status).toBe("limited");
+      expect(published).toBe(false);
       const tasks = (
         await storage.scanTasks({}, 100, undefined, BACKGROUND_CONTEXT)
       ).items;

@@ -107,7 +107,7 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, o
         research: { model: "fixture", command },
         literature: true,
         usagePrefix: "frozen",
-        limits: { attempts: 1, providerCalls: 1 },
+        limits: { attempts: 1 },
       }),
     );
     const run = (...args: string[]) => {
@@ -193,7 +193,7 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
       join(directory, "settings.json"),
       JSON.stringify({
         profiles: { default: { provider: "openai", model: "unavailable" } },
-        limits: { providerCalls: 0 },
+        limits: { attempts: 1 },
       }),
     );
     const init = ["init", "task.json", "example", "settings.json"];
@@ -231,13 +231,11 @@ test("CLI metadata stays model-free, shares flags, and releases ownership after 
     for (const args of [
       ["submit", "example", "notes.json", "--id", "import"],
       ["guide", "example", "guidance.txt", "--id", "initial"],
-      ["extend", "example", "1", "--id", "grant"],
     ])
       expect(run(...args).code).toBe(0);
     const report = JSON.parse(run("inspect", "example").stdout);
     expect(report.campaign).toMatchObject({
       providerCalls: 0,
-      callAllowance: 1,
     });
     expect(report.notes[0].text).toBe("Note");
     expect(report.campaign.inputs.at(-1).value).toEqual({

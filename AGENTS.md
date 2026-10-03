@@ -82,9 +82,9 @@ and the campaign's frozen reader. Read full inspection or proofs only when neede
 - Do not impose arbitrary wall-clock deadlines on campaigns, roles, experiments,
   or smoke runs. Keep existing dependency timeouts and tune them from measured
   run and provider data, distinguishing total duration from inactivity.
-  Call caps stop admission and drain admitted work. Cancellation prevents late
-  publication. Keyed call grants preserve frozen startup limits
-  and cannot bypass other stopping conditions. Token and dollar budgets are out of scope.
+  Model-call counters and usage are observational only; they never stop
+  admission. Cancellation prevents late publication. Token and dollar budgets
+  are out of scope.
 - Permit independent read-only inspection while retaining one campaign owner.
   Inspection must not acquire ownership or perform recovery. Keep SQL as the backend direction.
 - Core is a library. CLI and observer are optional sibling applications using

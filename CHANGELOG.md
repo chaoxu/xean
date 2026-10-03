@@ -7,7 +7,7 @@ private work across interruptions through Pi Durable conversations. Explorer
 selects its own note reads, and the CLI and observer share public reports from
 the core library.
 
-Start fresh campaigns with campaign format 11, solver declaration version 12,
+Start fresh campaigns with campaign format 12, solver declaration version 13,
 and observer snapshot format `xean-observe/v4`. Notes and harmless corrections
 now require `summary`, `detailedSummary`, and authoritative full `text`, changing
 the public APIs, CLI inputs, and stored solver records. Historical campaigns and
@@ -22,9 +22,12 @@ is provided. Existing releases and tags remain historical archives.
 - Use Pi's native initialization, dispatch, cancellation, task recovery, commit
   subscriptions, and SQL transactions. Preserve Coordinator signal order during
   recovery and wait for private-child cleanup before settling exhausted Coordinator
-  signals. Drain call accounting before closing storage. Call grants during
-  recovery preserve the original draining outcome. Cancellation prevents late
-  publication while retaining provider outcomes and measured usage.
+  signals. Drain call accounting before closing storage. Cancellation prevents
+  late publication while retaining provider outcomes and measured usage.
+- Store solver work as references to the existing frozen Coordinator record,
+  with guidance and selected targets. Resolve notes through Pi's native record
+  reads once per invocation, preserving revisions and verification feedback on
+  recovery without storing another complete corpus in every worker input.
 - Give Explorer the exact task, complete note index, and feedback. It chooses
   detailed summaries or full notes through `read_notes`. `maxExplorerReads`
   defaults to four batched calls per invocation, and `maxExplorerResponses`
@@ -109,8 +112,8 @@ is provided. Existing releases and tags remain historical archives.
   the campaign for qualification.
 - Integrate the separate Xean Lab runner through public CLI, inspection, and
   reporting APIs. Lab retains frozen task, settings, and guidance inputs,
-  immutable attempts, keyed call grants, and exact source, image, and Bun
-  identities. It supervises the observer publisher separately. The bounded
+  immutable attempts, and exact source, image, and Bun identities. It supervises
+  the observer publisher separately. The bounded
   Nomad runner provides writable storage for its control socket.
 - Pin matching Pi/Chord packages to `a276dabe5791` with the frozen model catalog
   and recorded artifact and patch hashes. Remove the unused `pi-agent-core`
@@ -150,8 +153,6 @@ original release. No migration is provided.
   disconnect. A request already running in the browser must not be duplicated.
 - The closed-book runner accepts the default disabled literature setting.
   The observer and bounded runner verify the dependency installation before use.
-- Call grants preserve blocked Coordinator failures for explicit recovery when
-  a concurrent worker exhausts the call allowance.
 - Local observer reads include configured process status and logs. Missing
   observations no longer imply that a campaign is still running. Process status
   remains visible when snapshots or logs cannot be read, and remote snapshots

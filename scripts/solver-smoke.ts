@@ -18,7 +18,6 @@ settings.usagePrefix = `xean-solver/${runId}`;
 settings.limits = {
   concurrency: 2,
   attempts: 1,
-  providerCalls: 40,
 };
 const settingsPath = resolve(directory, "settings.json");
 await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");

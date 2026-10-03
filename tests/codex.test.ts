@@ -421,9 +421,12 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
     }),
     { codex },
   );
+  const coordinate = solver.functions.coordinator;
+  solver.functions.coordinator = (...args) =>
+    plans === 0 ? coordinate(...args) : Promise.resolve({ work: [] });
   let engine = await Xean.open(
     await openXeanStorage(join(directory, "campaign.sqlite")),
-    { ...solver, limits: { providerCalls: 4 } },
+    { ...solver, limits: { attempts: 3 } },
   );
   try {
     const blankAssignment = { kind: "codex", assignment: " \n", notes: [] };

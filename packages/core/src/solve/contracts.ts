@@ -7,7 +7,7 @@ import {
 import { Value } from "typebox/value";
 
 export const defaultReasoning = "max";
-export const declarationVersion = 12;
+export const declarationVersion = 13;
 const text = Type.String({
   minLength: 1,
   // Reject non-whitespace ASCII controls without rewriting mathematical text.

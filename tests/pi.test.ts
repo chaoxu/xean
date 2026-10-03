@@ -116,22 +116,17 @@ test("configuration and library limits share safe integer boundaries", async () 
     ).toThrow();
     await expect(open({ concurrency: value })).rejects.toThrow();
   }
-  for (const value of [0, maximum, null]) {
-    const limits = {
-      concurrency: maximum,
-      attempts: 1,
-      providerCalls: value,
-    };
-    expect(
-      readSettings({ profiles, limits, maxExplorerResponses: maximum }),
-    ).toMatchObject({ limits, maxExplorerResponses: maximum });
-    const engine = await open(limits);
-    try {
-      expect((await engine.inspect()).limits).toEqual(limits);
-    } finally {
-      await engine.close();
-    }
-  }
+  const retiredCalls = { concurrency: maximum, attempts: 1, providerCalls: 1 };
+  expect(() =>
+    readSettings({
+      profiles,
+      limits: retiredCalls,
+      maxExplorerResponses: maximum,
+    }),
+  ).toThrow();
+  await expect(open(retiredCalls as Partial<Limits>)).rejects.toThrow(
+    "Invalid campaign limits",
+  );
   expect(() => solver(maximum)).not.toThrow();
   expect(() => roles(maximum, maximum)).not.toThrow();
   const retired = { deadline: Date.now() + 60_000 };
@@ -1204,104 +1199,100 @@ test("turn recovery stops at its allowance, refused admission, cancellation, and
   }
 });
 
-test("native response recovery consumes new campaign admission before publication", async () => {
-  for (const providerCalls of [1, 2]) {
-    let sent = 0;
-    const item = {
-      type: "reasoning",
-      id: "rs_recovered",
-      status: "completed",
-      summary: [],
-      encrypted_content: "opaque-native-signature",
-    };
-    const models = fixtureModels(async (init) => {
-      if (++sent > 1) {
-        expect(
-          (await requestBody(init)).input.filter(
-            (part: { type: string }) => part.type === "reasoning",
-          ),
-        ).toEqual([item]);
-        return completedResponse();
-      }
-      return eventResponse(
-        { type: "response.output_item.added", output_index: 0, item },
-        { type: "response.output_item.done", output_index: 0, item },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { ...item, id: "rs_unfinished" },
-        },
-        {
-          type: "response.failed",
-          response: {
-            id: "interrupted",
-            status: "failed",
-            output: [],
-            error: {
-              code: "stream_incomplete",
-              message:
-                "Upstream websocket closed before response.completed (close_code=1012)",
-            },
-            usage: { input_tokens: 3, output_tokens: 7, total_tokens: 10 },
+test("native response recovery records each logical call before publication", async () => {
+  let sent = 0;
+  const item = {
+    type: "reasoning",
+    id: "rs_recovered",
+    status: "completed",
+    summary: [],
+    encrypted_content: "opaque-native-signature",
+  };
+  const models = fixtureModels(async (init) => {
+    if (++sent > 1) {
+      expect(
+        (await requestBody(init)).input.filter(
+          (part: { type: string }) => part.type === "reasoning",
+        ),
+      ).toEqual([item]);
+      return completedResponse();
+    }
+    return eventResponse(
+      { type: "response.output_item.added", output_index: 0, item },
+      { type: "response.output_item.done", output_index: 0, item },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { ...item, id: "rs_unfinished" },
+      },
+      {
+        type: "response.failed",
+        response: {
+          id: "interrupted",
+          status: "failed",
+          output: [],
+          error: {
+            code: "stream_incomplete",
+            message:
+              "Upstream websocket closed before response.completed (close_code=1012)",
           },
-        },
-      );
-    });
-    const engine = await Xean.open(new MemoryStorage(), {
-      task: "recover a native provider response",
-      limits: { providerCalls },
-      roles: [
-        {
-          name: "worker",
-          async run(_input, execution, scope) {
-            const message = await auditedStream(models, execution.recorder, {
-              enabled: true,
-              maxRetries: 1,
-              baseDelayMs: 0,
-            })(model, context, { signal: scope.abortSignal }).result();
-            if (message.stopReason !== "stop")
-              throw new Error(message.errorMessage);
-            return "recovered";
-          },
-        },
-      ],
-      coordinator: {
-        name: "coordinate",
-        async run(signal, view) {
-          if (signal.kind === "start")
-            return {
-              state: null,
-              dispatch: [{ id: "work", role: "worker", input: null }],
-            };
-          return {
-            state: null,
-            ...(signal.kind === "completed"
-              ? { completion: view.work[0]!.result }
-              : {}),
-          };
+          usage: { input_tokens: 3, output_tokens: 7, total_tokens: 10 },
         },
       },
-      accept: (result) => result === "recovered",
+    );
+  });
+  const engine = await Xean.open(new MemoryStorage(), {
+    task: "recover a native provider response",
+    limits: { attempts: 2 },
+    roles: [
+      {
+        name: "worker",
+        async run(_input, execution, scope) {
+          const message = await auditedStream(models, execution.recorder, {
+            enabled: true,
+            maxRetries: 1,
+            baseDelayMs: 0,
+          })(model, context, { signal: scope.abortSignal }).result();
+          if (message.stopReason !== "stop")
+            throw new Error(message.errorMessage);
+          return "recovered";
+        },
+      },
+    ],
+    coordinator: {
+      name: "coordinate",
+      async run(signal, view) {
+        if (signal.kind === "start")
+          return {
+            state: null,
+            dispatch: [{ id: "work", role: "worker", input: null }],
+          };
+        return {
+          state: null,
+          ...(signal.kind === "completed"
+            ? { completion: view.work[0]!.result }
+            : {}),
+        };
+      },
+    },
+    accept: (result) => result === "recovered",
+  });
+  try {
+    const result = await engine.run();
+    expect(result.status).toBe("completed");
+    expect(result.work[0]!.result).toBe("recovered");
+    expect(result.providerCalls).toBe(2);
+    expect(sent).toBe(2);
+    const settled = (await engine.records()).filter(
+      (entry) => entry.kind === "xean.call.settled",
+    );
+    expect(settled).toHaveLength(2);
+    expect(settled[0]!.data).toMatchObject({
+      message: { stopReason: "error" },
+      usage: { output: 7 },
     });
-    try {
-      const result = await engine.run();
-      expect(result.status).toBe(providerCalls === 1 ? "limited" : "completed");
-      expect(result.work[0]!.result).toBe(
-        providerCalls === 1 ? null : "recovered",
-      );
-      expect(result.providerCalls).toBe(providerCalls);
-      expect(sent).toBe(providerCalls);
-      const settled = (await engine.records()).filter(
-        (entry) => entry.kind === "xean.call.settled",
-      );
-      expect(settled).toHaveLength(providerCalls);
-      expect(settled[0]!.data).toMatchObject({
-        message: { stopReason: "error" },
-        usage: { output: 7 },
-      });
-    } finally {
-      await engine.close();
-    }
+  } finally {
+    await engine.close();
   }
 });
 

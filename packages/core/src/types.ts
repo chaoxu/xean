@@ -1,5 +1,6 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
 import type {
+  EntryId,
   EntryRecord,
   Registry,
   TaskId,
@@ -16,7 +17,7 @@ export type { JsonValue };
 /** Select or reduce detached records in Pi's newest-first scan order. */
 export type RecordProjection = (entry: EntryRecord) => EntryRecord | undefined;
 
-export const campaignVersion = 11;
+export const campaignVersion = 12;
 
 /** Opt in to whole-attempt recovery only for a known transient execution failure. */
 export class TransientError extends Error {
@@ -32,17 +33,13 @@ export class UninitializedCampaignError extends Error {
 }
 
 export type XeanStatus =
-  | "running"
-  | "pausing"
-  | "paused"
-  | "cancelled"
-  | "limited"
-  | "blocked"
-  | "completed";
+  "running" | "pausing" | "paused" | "cancelled" | "blocked" | "completed";
 
 /** Attempt-owned operations, separate from Chord's invocation context. */
 export interface Execution {
   readonly attemptId: string;
+  /** Frozen callback input entry, present for Coordinator invocations. */
+  readonly inputId?: EntryId;
   /** One-based invocation ordinal, including attempts interrupted by close/crash. */
   readonly attempt: number;
   /** Shared call accounting for the chosen execution backend. */
@@ -89,9 +86,9 @@ export type Work = WorkRequest & {
 
 export type Signal = {
   id: TaskId<JsonValue>;
-  kind: "start" | "completed" | "failed" | "input" | "allowance";
+  kind: "start" | "completed" | "failed" | "input";
   value: JsonValue;
-  /** Present on keyed external input and allowance signals. */
+  /** Present on keyed external input signals. */
   key?: string;
 };
 
@@ -101,10 +98,7 @@ export type CampaignInput = {
   value: JsonValue;
 };
 
-export type CampaignView = Pick<
-  CampaignState,
-  "task" | "status" | "callLimitReached" | "state"
-> & {
+export type CampaignView = Pick<CampaignState, "task" | "status" | "state"> & {
   work: Work[];
   /** Accepted external input receipts in ascending receipt ID order. */
   inputs: CampaignInput[];
@@ -135,15 +129,12 @@ export const positiveIntegerSchema = Type.Integer({
   ...nonnegativeIntegerSchema,
   minimum: 1,
 });
-const nullableLimitSchema = Type.Union([nonnegativeIntegerSchema, Type.Null()]);
 export const limitsSchema = Type.Object(
   {
     /** Concurrent admitted workers; Coordinator may run alongside them. */
     concurrency: positiveIntegerSchema,
     /** Transient recovery allowance, including attempts interrupted by close/crash. */
     attempts: positiveIntegerSchema,
-    /** Logical calls admitted by the recorder; backend-internal requests are opaque. */
-    providerCalls: nullableLimitSchema,
   },
   { additionalProperties: false },
 );
@@ -156,11 +147,8 @@ export type CampaignState = {
   status: XeanStatus;
   state: JsonValue;
   limits: Limits;
+  /** Number of logical provider calls admitted, retained for observation only. */
   providerCalls: number;
-  /** Effective logical-call cap; original limits remain immutable. */
-  callAllowance: number | null;
-  /** A denied call stops new workers while admitted work and signals drain. */
-  callLimitReached: boolean;
   result: JsonValue;
   error: string | null;
 };

@@ -7,14 +7,10 @@ import { submitCommand, type SolverCommand } from "xean/solve";
 import { campaignReport } from "xean/report";
 
 export type OwnerCommand =
-  | SolverCommand
-  | { kind: "pause" | "resume" | "cancel"; records: boolean }
-  | { kind: "extend"; calls: number; id: string };
+  SolverCommand | { kind: "pause" | "resume" | "cancel"; records: boolean };
 
 export async function controlCommand(engine: Xean, command: OwnerCommand) {
   switch (command.kind) {
-    case "extend":
-      return engine.extendCalls(command.calls, command.id);
     case "pause":
     case "resume":
     case "cancel":

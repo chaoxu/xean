@@ -8,7 +8,12 @@ import {
   getDeclaredTools,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai/utils/transcript";
-import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import {
+  Xean,
+  openXeanStorage,
+  type CampaignView,
+  type EntryId,
+} from "../packages/core/src/index.ts";
 import { createSolver, project } from "../packages/core/src/solve/index.ts";
 import type {
   Check,
@@ -363,12 +368,15 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       { ...content("ESTABLISHED-SUPPORT twice"), revision: 1 },
       { ...content("CANDIDATE-SECRET final"), revision: 3 },
     ]);
-    expect(verifications[0]!.input).toMatchObject({
-      notes: [
-        { text: "ESTABLISHED-SUPPORT", revision: 0 },
-        { text: "CANDIDATE-SECRET", revision: 0 },
-      ],
-    });
+    const saved = verifications[0]!.input as { view: EntryId };
+    expect(saved).not.toHaveProperty("notes");
+    const original = (await engine.attemptInput(saved.view)) as {
+      view: CampaignView;
+    };
+    expect(project(original.view)).toMatchObject([
+      { text: "ESTABLISHED-SUPPORT", revision: 0 },
+      { text: "CANDIDATE-SECRET", revision: 0 },
+    ]);
     const noCalls = {
       attemptId: "reuse",
       attempt: 1,

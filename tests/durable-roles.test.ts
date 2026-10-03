@@ -14,6 +14,8 @@ import { ask } from "../packages/core/src/solve/pi.ts";
 import {
   Xean,
   openXeanStorage,
+  type CampaignView,
+  type EntryId,
   type JsonValue,
 } from "../packages/core/src/index.ts";
 import {
@@ -63,14 +65,15 @@ test("concurrent Pi runtimes retain each other's custom models", async () => {
 test("explicit Coordinator retry replaces a terminal conversation failure", async () => {
   let calls = 0;
   const runtime = fixtureRuntime(() =>
-    ++calls === 1
+    ++calls === 2
       ? fauxAssistantMessage("", {
           stopReason: "error",
           errorMessage: "Invalid request",
         })
-      : fauxAssistantMessage([fauxToolCall("submit_result", { answer: 7 })], {
-          stopReason: "toolUse",
-        }),
+      : fauxAssistantMessage(
+          [fauxToolCall("submit_result", { answer: calls === 1 ? 1 : 7 })],
+          { stopReason: "toolUse" },
+        ),
   );
   const storage = new MemoryStorage();
   const engine = await Xean.open(storage, {
@@ -88,6 +91,16 @@ test("explicit Coordinator retry replaces a terminal conversation failure", asyn
             Type.Object({ answer: Type.Number() }),
             execution,
             context,
+            {
+              maxResponses: 2,
+              submit(value, previous) {
+                expect(previous).toBeUndefined();
+                return {
+                  done: value.answer === 7,
+                  receipt: { recorded: true },
+                };
+              },
+            },
           ),
         };
       },
@@ -96,12 +109,12 @@ test("explicit Coordinator retry replaces a terminal conversation failure", asyn
   try {
     expect(await engine.run()).toMatchObject({
       status: "blocked",
-      providerCalls: 1,
+      providerCalls: 2,
     });
     await engine.resume();
     expect(await engine.run()).toMatchObject({
       state: { answer: 7 },
-      providerCalls: 2,
+      providerCalls: 3,
     });
     const conversations = await storage.scanConversations(
       {},
@@ -112,7 +125,7 @@ test("explicit Coordinator retry replaces a terminal conversation failure", asyn
     expect(
       conversations.items.filter((conversation) => conversation.owner),
     ).toHaveLength(2);
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
   } finally {
     await engine.close();
   }
@@ -225,7 +238,8 @@ test("Explorer resumes private native work before one complete shared publicatio
       await storage.close(BACKGROUND_CONTEXT);
     }
   };
-  let engine = await Xean.open(await openXeanStorage(path), setup());
+  let storage = await openXeanStorage(path);
+  let engine = await Xean.open(storage, setup());
   let running: ReturnType<Xean["run"]> | undefined;
   try {
     await submitCommand(engine, {
@@ -250,6 +264,28 @@ test("Explorer resumes private native work before one complete shared publicatio
       result: null,
       publicationId: null,
     });
+    const progressQuery = {
+      kind: "xean.role",
+      scope: { kind: "task" as const, taskId: privateView.work[0]!.taskId },
+      at: "current" as const,
+    };
+    const progress = await storage.scanDocuments(
+      progressQuery,
+      10,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    expect(progress.items).toHaveLength(1);
+    const progressId = progress.items[0]!.id;
+    const savedProgress = await storage.document(
+      progressId,
+      "current",
+      BACKGROUND_CONTEXT,
+    );
+    expect(savedProgress?.value).toMatchObject({
+      value: { notes: [{ id: "n1" }] },
+    });
+    expect(savedProgress?.value.reads).toHaveLength(1);
     await engine.close();
     await running;
     expect(transcripts).toHaveLength(2);
@@ -266,7 +302,11 @@ test("Explorer resumes private native work before one complete shared publicatio
     ]);
 
     resuming = true;
-    engine = await Xean.open(await openXeanStorage(path), setup());
+    storage = await openXeanStorage(path);
+    engine = await Xean.open(storage, setup());
+    expect(
+      await storage.document(progressId, "current", BACKGROUND_CONTEXT),
+    ).toEqual(savedProgress);
     await submitCommand(engine, {
       kind: "correct",
       id: "copyedit",
@@ -283,9 +323,26 @@ test("Explorer resumes private native work before one complete shared publicatio
     expect(result.work).toHaveLength(1);
     const work = result.work[0]!;
     expect(work.status).toBe("completed");
-    expect(work.input).toMatchObject({
-      notes: [{ id: "input/seed/n1", text: "ORIGINAL-FROZEN-PROOF" }],
-    });
+    expect(
+      (
+        await storage.scanDocuments(
+          progressQuery,
+          10,
+          undefined,
+          BACKGROUND_CONTEXT,
+        )
+      ).items,
+    ).toEqual([]);
+    expect(
+      await storage.document(progressId, "current", BACKGROUND_CONTEXT),
+    ).toBeUndefined();
+    const { view: inputId } = work.input as { view: EntryId };
+    const frozen = (await engine.attemptInput(inputId)) as {
+      view: CampaignView;
+    };
+    expect(project(frozen.view)).toMatchObject([
+      { id: "input/seed/n1", text: "ORIGINAL-FROZEN-PROOF" },
+    ]);
     expect(project(result).find((note) => note.imported)?.text).toBe(
       "COPYEDITED-AFTER-CLOSE",
     );
