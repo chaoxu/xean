@@ -10,14 +10,19 @@ import {
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Xean, openXeanStorage } from "../packages/core/src/index.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  Xean,
+  inspectCampaign,
+  openXeanStorage,
+} from "../packages/core/src/index.ts";
 import { declarationVersion } from "xean/solve";
 import {
   readSnapshot,
   readSummary,
   snapshot,
 } from "../packages/observe/src/snapshot.ts";
-import { observe, publish } from "../packages/observe/src/publish.ts";
+import { observe } from "../packages/observe/src/publish.ts";
 import {
   observationInterval,
   readRun,
@@ -238,12 +243,22 @@ test("the external observer reads coherent live snapshots without changing a loc
     release.resolve();
     await running;
     const committed = await engine.inspectWithRecords();
+    const omitted = readSnapshot(
+      snapshot(await inspectCampaign(database, false)),
+    );
+    expect(omitted.usageAvailable).toBe(false);
+    expect(omitted.status.calls).toEqual({
+      admitted: 1,
+      settled: null,
+      unknownUsage: null,
+      unsettled: null,
+      byModel: [],
+      byModelOmitted: null,
+    });
     const stop = observe(directory, (error) => {
       failures.push(error);
     });
     await stop();
-    await stop();
-    await Promise.all(Array.from({ length: 8 }, () => publish(directory)));
     expect(
       (await readdir(directory)).filter((name) => name.endsWith(".tmp")),
     ).toEqual([]);
@@ -256,7 +271,7 @@ test("the external observer reads coherent live snapshots without changing a loc
       ...after.snapshot,
       observedAt: published.observedAt,
     });
-    expect(published.schema).toBe("xean-observe/v4");
+    expect(published.schema).toBe("xean-observe/v5");
     const summary = await Bun.file(join(directory, "status.json")).json();
     expect(summary).toEqual({
       ...readSummary(published),
@@ -317,6 +332,31 @@ test("the external observer reads coherent live snapshots without changing a loc
     expect(readback.error).toBeUndefined();
     expect(readback.kind).toBe("snapshot");
     expect(readback.snapshot).toEqual(published);
+    const support = {
+      ...published.notes[0],
+      id: "support",
+      support: [],
+      accepted: false,
+    };
+    const target = {
+      ...published.notes[0],
+      support: [support.id],
+      accepted: true,
+    };
+    const accepted = {
+      ...published,
+      status: {
+        ...published.status,
+        status: "completed",
+        phase: "terminal",
+        allowedActions: [],
+        acceptedNoteId: target.id,
+      },
+      notes: [support, target],
+      result: { noteId: target.id },
+    };
+    await writeFile(observationFile, JSON.stringify(accepted));
+    expect((await exportedRun()).snapshot).toEqual(accepted);
     const invalidUsage = structuredClone(published);
     invalidUsage.status.calls.byModel[0].reportedUsage = {
       proof: "Extra saved proof",
@@ -335,6 +375,14 @@ test("the external observer reads coherent live snapshots without changing a loc
       },
       { ...published, status: { ...published.status, error: "x".repeat(501) } },
       invalidUsage,
+      { ...accepted, notes: [support] },
+      { ...accepted, notes: [support, { ...target, accepted: false }] },
+      { ...accepted, notes: [target] },
+      {
+        ...accepted,
+        notes: [{ ...support, support: [target.id] }, target],
+      },
+      { ...accepted, notes: [support, target, support] },
     ]) {
       await writeFile(observationFile, JSON.stringify(invalid));
       const unavailable = await exportedRun();
@@ -575,6 +623,36 @@ test("observer sources preserve unavailable evidence and reject unsupported snap
     expect(run.kind).toBe("heartbeat");
     expect(run.snapshot).toBeUndefined();
     expect(run.heartbeat?.rounds).toBe(1);
+    const storage = await openXeanStorage(join(directory, "campaign.sqlite"));
+    try {
+      for (const compact of [false, true]) {
+        const initializing = await readRun(
+          { id: "initializing", directory },
+          directory,
+          undefined,
+          undefined,
+          compact,
+        );
+        expect(initializing.error).toBeUndefined();
+        expect(initializing.kind).toBe("heartbeat");
+        expect(initializing.heartbeat?.rounds).toBe(1);
+      }
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+    const corrupt = join(directory, "corrupt");
+    await mkdir(corrupt);
+    await writeFile(
+      join(corrupt, "task.json"),
+      JSON.stringify(run.heartbeat!.task),
+    );
+    await writeFile(join(corrupt, "campaign.sqlite"), "Not a SQLite database");
+    const unavailableDatabase = await readRun(
+      { id: "corrupt", directory: corrupt },
+      directory,
+    );
+    expect(unavailableDatabase.error).toBeString();
+    expect(unavailableDatabase.heartbeat).toBeUndefined();
     await writeFile(
       join(directory, "observation.json"),
       JSON.stringify({

@@ -81,7 +81,7 @@ test("standalone research runs without Pi credentials and preserves usage attrib
       `#!${process.execPath}
 import { appendFile } from "node:fs/promises";
 const input = await Bun.stdin.json();
-await appendFile(${JSON.stringify(invocations)}, JSON.stringify(process.env.XEAN_CODEX_USAGE_TAG) + "\\n");
+await appendFile(${JSON.stringify(invocations)}, JSON.stringify({ input, usageTag: process.env.XEAN_CODEX_USAGE_TAG }) + "\\n");
 const value = "query" in input ? { notes: [], candidate: false } : { verdict: "PASS", report: "Reflexivity proves the exact claim.", premises: [], passages: [] };
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(value) } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, output_tokens: 0 } }));
@@ -133,9 +133,16 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, o
       expect(campaign.status).toBe("completed");
       expect(campaign.providerCalls).toBe(1);
       expect(campaign.campaign).toBeUndefined();
-      expect(
-        run("inspect", args.at(-2)!).campaign.task.settings.usagePrefix,
-      ).toBe("frozen");
+      const stored = run("inspect", args.at(-2)!).campaign;
+      expect(stored.task.settings.usagePrefix).toBe("frozen");
+      expect(stored.task.task).toEqual(task);
+      expect(stored.work[0].input).toBeNull();
+      if (args[0] === "role")
+        expect(stored.task.input).toEqual({
+          notes: [],
+          query: "Find references",
+        });
+      else expect(stored.task.argument).toBe("Equality is reflexive.");
       expect(run(...args)).toEqual(campaign);
     }
     const tags = (await Bun.file(invocations).text())
@@ -143,7 +150,13 @@ console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 0, o
       .split("\n")
       .map((line) => JSON.parse(line));
     expect(tags).toHaveLength(2);
-    expect(tags.every((tag) => tag.startsWith("override/"))).toBe(true);
+    expect(tags.every(({ usageTag }) => usageTag.startsWith("override/"))).toBe(
+      true,
+    );
+    expect(tags.map(({ input }) => input)).toEqual([
+      { task, argument: "Equality is reflexive." },
+      { task, notes: [], query: "Find references" },
+    ]);
     const ordinary = run(
       "role",
       "explorer",
@@ -291,20 +304,29 @@ test("CLI inspects solver campaign kinds, drains large output, and restricts exe
         ...runtimeArgs,
         "--eval",
         `import { Xean, openXeanStorage } from "xean";
+import { createSolver } from "xean/solve";
 import { join } from "node:path";
 const { directory, kinds, argument, version } = await Bun.stdin.json();
 for (const kind of kinds) {
+const task = { problem: "Even integers", completionCriteria: "Prove 2n is even" };
+const solver = createSolver(task, () => { throw new Error("Fixture must not construct a model runtime"); });
+solver.functions.coordinator = async () => ({ work: [
+  { kind: "verifier", notes: ["input/fixture/n1"], through: "reconstruction" },
+] });
+const pass = { verdict: "PASS", report: "Checked." };
+solver.functions.verifier = async () => ({ kind: "verification", checks: [{
+  noteId: "input/fixture/n1", requirements: pass,
+  reconstruction: { ...pass, statement: task.problem, proof: "2n is twice an integer." },
+}] });
 const engine = await Xean.open(await openXeanStorage(join(directory, kind + ".sqlite")), {
-  task: { kind, version,
-    task: { problem: "Even integers", completionCriteria: "Prove 2n is even" },
+  ...solver,
+  task: { kind, version, task,
     settings: { profiles: { default: { provider: "openai", model: "unavailable" } } },
-  }, roles: [],
-  coordinator: { name: "output-fixture", run: () => ({ state: null, completion: { argument } }) },
-  accept: () => true,
+  },
 });
 try {
-  await engine.input({ kind: "submit", id: "fixture", candidate: false,
-    notes: [{ id: "n1", text: "2n is even.", summary: "Even", detailedSummary: "Even integer", support: [] }],
+  await engine.input({ kind: "submit", id: "fixture", candidate: true,
+    notes: [{ id: "n1", text: argument, summary: "Even", detailedSummary: "Even integer", support: [] }],
   });
   await engine.run();
 } finally { await engine.close(); }
@@ -355,7 +377,7 @@ try {
           const report = JSON.parse(stdout);
           expect(report).toMatchObject({
             status: "completed",
-            acceptedNoteId: null,
+            acceptedNoteId: "input/fixture/n1",
             notes: { imported: 1, generated: 0 },
           });
           expect(Date.parse(report.observedAt)).toBeGreaterThan(0);
@@ -364,9 +386,11 @@ try {
         } else if (command === "inspect") {
           const report = JSON.parse(stdout);
           expect(report.campaign.providerCalls).toBe(0);
-          expect(report.notes[0].text).toBe("2n is even.");
-          expect(report.campaign.result.argument).toBe(argument);
-        } else expect(stdout).toBe(argument + "\n");
+          expect(report.notes[0].text).toBe(argument);
+          expect(report.campaign.result).toEqual({
+            noteId: "input/fixture/n1",
+          });
+        } else expect(stdout).toBe(`## input/fixture/n1\n\n${argument}\n`);
       }
     }
   } finally {

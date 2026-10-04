@@ -21,19 +21,16 @@ import {
   initialAttempt,
 } from "../packages/core/src/store.ts";
 import {
-  campaignVersion,
   UninitializedCampaignError,
   type CampaignState,
 } from "../packages/core/src/types.ts";
 
 const initial: CampaignState = {
-  version: campaignVersion,
   task: "prepared changes",
   coordinator: "fixture",
   status: "running",
   state: { count: 1 },
   limits: { concurrency: 1, attempts: 1 },
-  providerCalls: 0,
   result: null,
   error: null,
 };
@@ -303,4 +300,60 @@ test("Store snapshots entries and keeps rejected commits separate from uncertain
   } finally {
     await store.close();
   }
+});
+
+test("Store counts a pinned journal once and preserves later committed admissions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-store-accounting-"));
+  const path = join(directory, "campaign.sqlite");
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => rm(directory, { recursive: true, force: true }));
+  const owner = await Store.open(await openXeanStorage(path), initial, {
+    models: createModels(),
+    registry: createRegistry(),
+  });
+  cleanup.defer(() => owner.close());
+  await owner.mutate(async (tx) => {
+    for (let index = 0; index < 65; index++)
+      await tx.entry("xean.call.started", null);
+  });
+
+  const storage = await openXeanStorage(path, { readOnly: true });
+  cleanup.defer(() => storage.close(context));
+  const scan = storage.scanEntries.bind(storage);
+  const seen: number[] = [];
+  const scanning = spyOn(storage, "scanEntries").mockImplementation(
+    async (...args) => {
+      const page = await scan(...args);
+      seen.push(...page.items.map(({ id }) => id));
+      return page;
+    },
+  );
+  cleanup.defer(() => scanning.mockRestore());
+  const reader = await Store.open(storage);
+  cleanup.defer(() => reader.close());
+  expect(scanning).not.toHaveBeenCalled();
+  await owner.mutate((tx) => tx.entry("xean.call.started", null));
+  const observed = await reader.mutate(async (tx) => {
+    const entries = await tx.entries((entry) => entry);
+    return { entries, count: await tx.providerCalls() };
+  });
+  expect(observed.entries).toHaveLength(65);
+  expect(observed.count).toBe(65);
+  expect(seen).toHaveLength(65);
+  expect(new Set(seen).size).toBe(65);
+  expect(await reader.mutate((tx) => tx.providerCalls())).toBe(65);
+  expect(seen).toHaveLength(65);
+
+  expect(await owner.mutate((tx) => tx.providerCalls())).toBe(66);
+  await owner.mutate((tx) => tx.entry("xean.call.started", null));
+  await expect(
+    owner.mutate((tx) =>
+      tx.entries(() => {
+        throw new Error("projection failed");
+      }),
+    ),
+  ).rejects.toThrow("projection failed");
+  expect(await owner.mutate((tx) => tx.providerCalls())).toBe(67);
+  expect(await owner.mutate((tx) => tx.entries())).toHaveLength(67);
+  expect(await owner.mutate((tx) => tx.providerCalls())).toBe(67);
 });

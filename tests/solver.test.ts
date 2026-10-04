@@ -14,7 +14,11 @@ import {
   type CampaignView,
   type EntryId,
 } from "../packages/core/src/index.ts";
-import { createSolver, project } from "../packages/core/src/solve/index.ts";
+import {
+  acceptedArgument,
+  createSolver,
+  project,
+} from "../packages/core/src/solve/index.ts";
 import type {
   Check,
   Note,
@@ -353,6 +357,11 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
       [true, false],
       [true, true],
     ]);
+    expect(result.result).toEqual({ noteId: notes[1]!.id });
+    const argument = `## ${notes[0]!.id}\n\nESTABLISHED-SUPPORT twice\n\n## ${notes[1]!.id}\n\nCANDIDATE-SECRET final`;
+    expect(acceptedArgument(notes, notes[1]!.id)).toBe(argument);
+    for (const noteId of [notes[0]!.id, "missing"])
+      expect(solver.accept({ noteId }, result)).toBe(false);
     expect(sourceTexts).toEqual([
       "ESTABLISHED-SUPPORT",
       "CANDIDATE-SECRET corrected",
@@ -427,7 +436,10 @@ test("solver stops at requested stages, applies only PASS corrections, reuses ch
     const records = await engine.records();
     await engine.close();
     engine = await Xean.open(await openXeanStorage(path), offline);
-    expect(await engine.run()).toEqual(result);
+    const reopened = await engine.run();
+    expect(reopened).toEqual(result);
+    expect(reopened.result).toEqual({ noteId: notes[1]!.id });
+    expect(acceptedArgument(project(reopened), notes[1]!.id)).toBe(argument);
     expect(await engine.records()).toEqual(records);
   } finally {
     await engine?.close();

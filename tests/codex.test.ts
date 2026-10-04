@@ -1,13 +1,17 @@
 import { expect, test } from "bun:test";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   Type,
   fauxAssistantMessage,
   fauxToolCall,
+  type Static,
 } from "@earendil-works/pi-ai";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT,
+} from "@earendil-works/chord/context";
 import {
   Xean,
   openXeanStorage,
@@ -33,8 +37,10 @@ import {
   createSolver,
   declarationVersion,
   project,
+  readDeclaration,
   submitCommand,
   type CodexInput,
+  type Declaration,
 } from "../packages/core/src/solve/index.ts";
 import { fixtureRuntime } from "./fixtures/pi.ts";
 
@@ -88,17 +94,19 @@ test("Codex source bindings require exact premises and independent evidence", ()
       ],
     },
     operationId: "fixture",
-    searches: 0,
+    searches: 1,
   };
-  expect(bindCodex(source, ["P"]).verdict).toBe("INCONCLUSIVE");
+  const withPassages = (
+    passages: Static<typeof sourceSchema>["passages"],
+    searches = 0,
+  ) => ({ ...source, searches, value: { ...source.value, passages } });
+  expect(bindCodex({ ...source, searches: 0 }, ["P"]).verdict).toBe(
+    "INCONCLUSIVE",
+  );
   const task = { problem: "Assume P holds.", completionCriteria: "Prove Q" };
-  const taskSource = {
-    ...source,
-    value: {
-      ...source.value,
-      passages: [{ premise: 0, url: "urn:xean:task", quote: task.problem }],
-    },
-  };
+  const taskSource = withPassages([
+    { premise: 0, url: "urn:xean:task", quote: task.problem },
+  ]);
   const taskReport = bindCodex(taskSource, ["P"], [], "fixture", task);
   expect(taskReport.verdict).toBe("PASS");
   expect(bindCodex(taskSource, ["P"]).verdict).toBe("INCONCLUSIVE");
@@ -108,20 +116,15 @@ test("Codex source bindings require exact premises and independent evidence", ()
       problem: "Prove P.",
     }).verdict,
   ).toBe("INCONCLUSIVE");
-  const taskReuse = {
-    ...source,
-    value: {
-      ...source.value,
-      passages: [{ premise: 0, passageId: taskReport.passages[0]!.id }],
-    },
-  };
+  const taskReuse = withPassages([
+    { premise: 0, passageId: taskReport.passages[0]!.id },
+  ]);
   expect(
     bindCodex(taskReuse, ["P"], taskReport.passages, "reuse", task).verdict,
   ).toBe("PASS");
   expect(bindCodex(taskReuse, ["P"], taskReport.passages).verdict).toBe(
     "INCONCLUSIVE",
   );
-  source.searches = 1;
   expect(bindCodex(source, ["P", "Q"]).verdict).toBe("INCONCLUSIVE");
   const verified = bindCodex(source, ["P"]);
   expect(verified.verdict).toBe("PASS");
@@ -154,16 +157,10 @@ test("Codex source bindings require exact premises and independent evidence", ()
     { ...source.value.passages[0]!, id: "fixture/0", statement: "P" },
   ]);
   const partial = bindCodex(
-    {
-      ...source,
-      value: {
-        ...source.value,
-        passages: [
-          { premise: 0, passageId: "missing" },
-          ...source.value.passages,
-        ],
-      },
-    },
+    withPassages(
+      [{ premise: 0, passageId: "missing" }, ...source.value.passages],
+      1,
+    ),
     ["P"],
   );
   expect(partial.verdict).toBe("INCONCLUSIVE");
@@ -171,13 +168,8 @@ test("Codex source bindings require exact premises and independent evidence", ()
     { ...verified.passages[0]!, id: "fixture/1" },
   ]);
   const reused = {
-    ...source,
+    ...withPassages([{ premise: 0, passageId: "fixture/0" }]),
     operationId: "reuse",
-    searches: 0,
-    value: {
-      ...source.value,
-      passages: [{ premise: 0, passageId: "fixture/0" }],
-    },
   };
   const reuse = bindCodex(
     reused,
@@ -203,17 +195,10 @@ test("Codex source bindings require exact premises and independent evidence", ()
   ).toBe("FAIL");
   expect(
     bindCodex(
-      {
-        ...source,
-        searches: 0,
-        value: {
-          ...source.value,
-          passages: [
-            ...reused.value.passages,
-            { premise: 1, url: "https://example.com/q", quote: "Q" },
-          ],
-        },
-      },
+      withPassages([
+        ...reused.value.passages,
+        { premise: 1, url: "https://example.com/q", quote: "Q" },
+      ]),
       ["P", "Q"],
       verified.passages,
     ).verdict,
@@ -235,6 +220,7 @@ test("Codex source bindings require exact premises and independent evidence", ()
 async function codexLifecycle(mode: string) {
   const directory = await mkdtemp(join(process.cwd(), ".xean-codex-test-"));
   const path = join(directory, "campaign.sqlite");
+  const log = () => Bun.file(join(directory, "invocations.jsonl")).text();
   const codex = await fixture(directory);
   codex.command = relative(process.cwd(), codex.command!);
   const options: XeanOptions = {
@@ -332,7 +318,7 @@ async function codexLifecycle(mode: string) {
         prompt: JSON.stringify({ mode: "success" }),
       },
     });
-    const calls = await readFile(join(directory, "invocations.jsonl"), "utf8");
+    const calls = await log();
     const invocations = calls
       .trim()
       .split("\n")
@@ -356,10 +342,10 @@ async function codexLifecycle(mode: string) {
       await expect(access(invocation.schema)).rejects.toThrow();
       if (mode === "workspace") {
         expect(
-          await readFile(join(invocation.workspace, "program.ts"), "utf8"),
+          await Bun.file(join(invocation.workspace, "program.ts")).text(),
         ).toBe("console.log(25);\n");
         expect(
-          await readFile(join(invocation.workspace, "output.txt"), "utf8"),
+          await Bun.file(join(invocation.workspace, "output.txt")).text(),
         ).toBe(invocation.mode);
       } else await expect(access(invocation.workspace)).rejects.toThrow();
     }
@@ -367,9 +353,7 @@ async function codexLifecycle(mode: string) {
     engine = await Xean.open(await openXeanStorage(path), options);
     expect(await engine.run()).toEqual(result);
     expect(await engine.records()).toEqual(records);
-    expect(await readFile(join(directory, "invocations.jsonl"), "utf8")).toBe(
-      calls,
-    );
+    expect(await log()).toBe(calls);
   } finally {
     await engine.close();
     await rm(directory, { recursive: true, force: true });
@@ -378,6 +362,7 @@ async function codexLifecycle(mode: string) {
 
 test("Coordinator Codex work freezes support and publishes only valid unverified drafts", async () => {
   const directory = await mkdtemp(join(process.cwd(), ".xean-codex-worker-"));
+  const log = () => Bun.file(join(directory, "invocations.jsonl")).text();
   const codex = {
     ...(await fixture(directory)),
     workspace: join(directory, "artifacts"),
@@ -482,9 +467,7 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
       checks: [],
     });
     expect(generated[0]!.text).toContain(draft.text);
-    const invocations = (
-      await readFile(join(directory, "invocations.jsonl"), "utf8")
-    )
+    const invocations = (await log())
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as CodexInput & { workspace: string });
@@ -493,15 +476,13 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
       const input = { task, notes: frozen, assignment: invocation.assignment };
       expect(invocation.notes).toEqual(frozen);
       expect(
-        JSON.parse(
-          await readFile(join(invocation.workspace, "input.json"), "utf8"),
-        ),
+        await Bun.file(join(invocation.workspace, "input.json")).json(),
       ).toEqual(input);
       expect(
-        await readFile(join(invocation.workspace, "program.ts"), "utf8"),
+        await Bun.file(join(invocation.workspace, "program.ts")).text(),
       ).toBe("console.log(25);\n");
       expect(
-        await readFile(join(invocation.workspace, "output.txt"), "utf8"),
+        await Bun.file(join(invocation.workspace, "output.txt")).text(),
       ).toBe(invocation.assignment);
       if (invocation.assignment === JSON.stringify(replies[0])) {
         expect(result.work[0]!.result).toMatchObject({
@@ -513,27 +494,71 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
       }
     }
     await engine.close();
-    const standalone = campaignOptions(
-      {
-        kind: "xean.role",
-        version: declarationVersion,
-        role: "codex",
-        task,
-        input: { task, notes: frozen, assignment: JSON.stringify(replies[0]) },
-        settings: {
-          profiles: { default: { provider: "openai", model: "unused" } },
-          codex: {
-            model: codex.model,
-            command: codex.command,
-            workspace: codex.workspace,
-          },
+    const declaration = {
+      kind: "xean.role",
+      version: declarationVersion,
+      role: "codex",
+      task,
+      input: { notes: frozen, assignment: JSON.stringify(replies[0]) },
+      settings: {
+        profiles: { default: { provider: "openai", model: "unused" } },
+        codex: {
+          model: codex.model,
+          command: codex.command,
+          workspace: codex.workspace,
         },
       },
-      () => {
-        throw new Error("Standalone Codex must not initialize Pi");
-      },
-    );
+    } satisfies Declaration;
+    expect(() =>
+      readDeclaration({
+        ...declaration,
+        input: { ...declaration.input, task },
+      }),
+    ).toThrow("Standalone declaration input must omit task");
+    expect(() =>
+      readDeclaration({ ...declaration, version: declarationVersion - 1 }),
+    ).toThrow("Invalid value");
+    const standalone = campaignOptions(declaration, () => {
+      throw new Error("Standalone Codex must not initialize Pi");
+    });
+    const entered = Promise.withResolvers<void>();
+    let interrupt = true;
+    const role = standalone.roles[0]!;
+    const invoke = role.run;
+    role.run = (input, execution, context) =>
+      invoke(
+        input,
+        {
+          ...execution,
+          recorder: {
+            ...execution.recorder,
+            async begin(model, generation) {
+              if (interrupt) {
+                entered.resolve();
+                await awaitWithContext(new Promise(() => {}), context);
+              }
+              return execution.recorder.begin(model, generation);
+            },
+          },
+        },
+        context,
+      );
     const path = join(directory, "standalone.sqlite");
+    engine = await Xean.open(await openXeanStorage(path), standalone);
+    (standalone.task as unknown as typeof declaration).input.notes[0]!.text =
+      "Caller mutation after open";
+    const interrupted = engine.run();
+    await Promise.race([
+      entered.promise,
+      interrupted.then(() => {
+        throw new Error("Standalone role stopped before interruption");
+      }),
+    ]);
+    expect((await engine.inspect()).work[0]!.input).toBeNull();
+    await engine.close();
+    await interrupted;
+    standalone.task = declaration as unknown as typeof standalone.task;
+    interrupt = false;
     engine = await Xean.open(await openXeanStorage(path), standalone);
     const completed = await engine.run();
     expect(completed).toMatchObject({
@@ -541,13 +566,19 @@ test("Coordinator Codex work freezes support and publishes only valid unverified
       providerCalls: 1,
       result: { kind: "notes", candidate: true },
     });
-    const calls = await readFile(join(directory, "invocations.jsonl"), "utf8");
+    expect<unknown>(completed.task).toEqual(declaration);
+    expect(completed.work[0]).toMatchObject({ input: null, attempts: 2 });
+    const workspace = (completed.work[0]!.result as { workspace: string })
+      .workspace;
+    expect(await Bun.file(join(workspace, "input.json")).json()).toEqual({
+      ...declaration.input,
+      task,
+    });
+    const calls = await log();
     await engine.close();
     engine = await Xean.open(await openXeanStorage(path), standalone);
     expect(await engine.run()).toEqual(completed);
-    expect(await readFile(join(directory, "invocations.jsonl"), "utf8")).toBe(
-      calls,
-    );
+    expect(await log()).toBe(calls);
   } finally {
     await engine.close();
     await rm(directory, { recursive: true, force: true });
@@ -686,7 +717,7 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
         throw new Error("Codex fixture did not become ready");
       await Bun.sleep(10);
     }
-    const recorded: unknown = JSON.parse(await readFile(ready, "utf8"));
+    const recorded: unknown = await Bun.file(ready).json();
     if (
       !Array.isArray(recorded) ||
       recorded.length !== 2 ||
@@ -694,9 +725,9 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
     )
       throw new Error("Invalid fixture process IDs");
     processes = recorded as number[];
-    const invocation = JSON.parse(
-      await readFile(join(directory, "invocations.jsonl"), "utf8"),
-    );
+    const invocation = await Bun.file(
+      join(directory, "invocations.jsonl"),
+    ).json();
     expect(invocation.usageTag).toBe("caller-tag");
     expect(invocation.shell).toBe("features.shell_tool=true");
     expect(invocation.sandbox).toBe("workspace-write");
@@ -722,7 +753,7 @@ test("close kills a Codex launcher and its resistant descendant and preserves ca
         webSearch: "disabled",
       },
     });
-    expect(await readFile(join(codex.workspace, "output.txt"), "utf8")).toBe(
+    expect(await Bun.file(join(codex.workspace, "output.txt")).text()).toBe(
       "wait",
     );
     await expect(access(invocation.schema)).rejects.toThrow();

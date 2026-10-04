@@ -5,7 +5,13 @@ export {
   type CoordinationInput,
 } from "./roles.ts";
 export { piRuntime, readSettings, type Settings } from "./config.ts";
-export { project, closure, completion, isSolverCampaign } from "./notes.ts";
+export {
+  project,
+  closure,
+  completion,
+  acceptedArgument,
+  isSolverCampaign,
+} from "./notes.ts";
 export {
   readCommand,
   submitCommand,

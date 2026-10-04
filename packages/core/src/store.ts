@@ -5,10 +5,12 @@ import {
   Harness,
   ROOT_CONVERSATION_ID,
   type Cursor,
+  type ConversationId,
   type EntryId,
   type EntryRecord,
   type HarnessOptions,
   type RegistryReader,
+  type RunningTask,
   type Session,
   type Storage,
   type Task,
@@ -65,30 +67,11 @@ export const campaign = defineDoc({
   checkpointWhen: () => true,
 });
 
-/** Consumed decisions remain in Pi; scheduling only needs their terminal state. */
-function resident(task: PiTask): PiTask {
-  if (
-    task.kind === COORDINATOR &&
-    task.state.status === "terminal" &&
-    task.state.outcome.status === "completed"
-  )
-    return {
-      ...task,
-      memos: undefined,
-      state: {
-        ...task.state,
-        outcome: { ...task.state.outcome, result: null },
-      },
-    };
-  return task;
-}
-
 export interface Transaction {
   readonly native: Tx;
   state: CampaignState;
+  providerCalls(): Promise<number>;
   readonly tasks: readonly PiTask[];
-  /** Replaces a task using Pi's immutable record copy. */
-  writeTask(task: PiTask): void;
   newTask(kind: string, input: Input): Promise<TaskId<JsonValue>>;
   entry(kind: string, data: unknown, taskId?: TaskId): Promise<EntryId>;
   entries(project?: RecordProjection): Promise<EntryRecord[]>;
@@ -97,6 +80,7 @@ export interface Transaction {
 /** Pi publishes adopted commits; Xean retains the scheduling projection. */
 export class Store {
   failure: Error | undefined;
+  private providerCalls: number | undefined;
 
   private constructor(
     readonly storage: Storage,
@@ -107,7 +91,14 @@ export class Store {
     this.session.subscribeCommits(({ changes }) => {
       for (const change of changes)
         if (change.type === "task" && isXeanTask(change.value))
-          this.tasks.set(change.value.id, resident(change.value as PiTask));
+          this.tasks.set(change.value.id, change.value as PiTask);
+        else if (
+          change.type === "entry" &&
+          change.value.kind === "xean.call.started" &&
+          change.value.conversationId === ROOT_CONVERSATION_ID &&
+          this.providerCalls !== undefined
+        )
+          this.providerCalls++;
     });
   }
 
@@ -140,10 +131,7 @@ export class Store {
         throw new Error("Storage already contains a non-Xean session");
       }
       if (!initial || !runtime) throw new UninitializedCampaignError();
-    } else if (
-      saved?.version !== campaignVersion ||
-      saved.value.version !== campaignVersion
-    )
+    } else if (saved?.version !== campaignVersion)
       throw new Error("Unsupported Xean campaign version");
     const records: PiTask[] = [];
     for (const kind of [WORKER, COORDINATOR]) {
@@ -156,7 +144,7 @@ export class Store {
               `Unsupported Xean task ${task.kind}@${task.version}`,
             );
           }
-          records.push(resident(task as PiTask));
+          records.push(task as PiTask);
         }
         cursor = page.next;
       } while (cursor);
@@ -188,7 +176,7 @@ export class Store {
           ) {
             const refreshed = await storage.task(task.id, context);
             if (tasks.get(task.id) === task)
-              tasks.set(task.id, resident(refreshed as PiTask));
+              tasks.set(task.id, refreshed as PiTask);
           }
       return store;
     } catch (error) {
@@ -205,8 +193,12 @@ export class Store {
     return {
       native: tx,
       state: await tx.doc(campaign),
+      providerCalls: async () => {
+        if (this.providerCalls === undefined)
+          await this.scanEntries(tx, () => undefined);
+        return this.providerCalls!;
+      },
       tasks: [...this.tasks.values()],
-      writeTask: (task) => tx.setTask(task),
       newTask: (kind, input) => {
         const task = this.registry!.snapshot().task(kind);
         return tx.createTask(task as Definition, json(input), {
@@ -241,13 +233,20 @@ export class Store {
     runtime: Runtime,
     action: (
       tx: Transaction,
-      current: PiTask,
+      current: RunningTask<Input, AttemptState, JsonValue>,
     ) => TerminalState | void | Promise<TerminalState | void>,
+    options?: Parameters<Runtime["commit"]>[2],
   ): Promise<void> {
     await this.checked(
-      runtime.commit(async (tx, current) => {
-        return (await action(await this.transaction(tx), current)) ?? undefined;
-      }, context),
+      runtime.commit(
+        async (tx, current) => {
+          return (
+            (await action(await this.transaction(tx), current)) ?? undefined
+          );
+        },
+        context,
+        options,
+      ),
     );
   }
 
@@ -269,23 +268,40 @@ export class Store {
 
   private async scanEntries(
     tx: Tx,
-    project: RecordProjection = (entry) => entry,
+    project?: RecordProjection,
   ): Promise<EntryRecord[]> {
-    const entries: EntryRecord[] = [];
-    let cursor: Cursor | undefined;
-    do {
-      const page = await tx.scanEntries(
-        { conversationId: ROOT_CONVERSATION_ID },
-        64,
-        cursor,
-      );
-      for (const entry of page.items) {
-        const selected = project(entry);
-        if (selected !== undefined) entries.push(selected);
-      }
-      cursor = page.next;
-    } while (cursor);
-    return entries.reverse();
+    const entries = new Map<EntryId, EntryRecord>();
+    let providerCalls = 0;
+    const read = async (conversationId: ConversationId) => {
+      let cursor: Cursor | undefined;
+      do {
+        const page = await tx.scanEntries({ conversationId }, 64, cursor);
+        for (const entry of page.items) {
+          if (
+            conversationId === ROOT_CONVERSATION_ID &&
+            entry.kind === "xean.call.started"
+          )
+            providerCalls++;
+          const selected = project ? project(entry) : entry;
+          if (selected !== undefined) entries.set(selected.id, selected);
+        }
+        cursor = page.next;
+      } while (cursor);
+    };
+    // Compact projections read only the root journal. Full inspection also
+    // exposes the native transcripts referenced by Pi call receipts.
+    if (project) await read(ROOT_CONVERSATION_ID);
+    else {
+      let cursor: Cursor | undefined;
+      do {
+        const page = await tx.scanConversations({}, 64, cursor);
+        for (const conversation of page.items) await read(conversation.id);
+        cursor = page.next;
+      } while (cursor);
+    }
+    // Session serialization keeps later commit increments after this snapshot.
+    this.providerCalls = providerCalls;
+    return [...entries.values()].sort((a, b) => a.id - b.id);
   }
 
   async close(): Promise<void> {

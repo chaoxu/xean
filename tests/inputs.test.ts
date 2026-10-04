@@ -17,7 +17,6 @@ test("keyed input, JSON normalization, and exact historical visibility survive S
   const path = join(directory, "campaign.sqlite");
   const text = "immutable input ".repeat(512);
   const seen: JsonValue[] = [];
-  const decisions: JsonValue[] = [];
   const validated: number[][] = [];
   const options: XeanOptions = {
     task: { zero: -0, statement: text },
@@ -53,7 +52,6 @@ test("keyed input, JSON normalization, and exact historical visibility survive S
               }
             : {}),
         };
-        decisions.push(decision);
         return decision;
       },
     },
@@ -112,7 +110,7 @@ test("keyed input, JSON normalization, and exact historical visibility survive S
 
     storage = await openXeanStorage(path);
     engine = await Xean.open(storage, options);
-    expect(await storedDecisions()).toEqual(decisions);
+    expect(await storedDecisions()).toEqual(coordinatorStarts.map(() => null));
     expect(await engine.inspect()).toEqual(cancelled);
     const validationsBeforeReplay = validated.length;
     expect(await engine.input({ zero: -0, text }, "initial")).toEqual(first);

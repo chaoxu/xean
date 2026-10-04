@@ -34,9 +34,14 @@ export function work(task: PiTask): Work {
     // Attempt counts for terminal work are retained in its result receipt's metadata.
     attempts: checkpoint?.attempts ?? receipt?.attempts ?? 0,
     attemptId: checkpoint?.attemptId ?? receipt?.attemptId ?? null,
-    result: outcome?.status === "completed" ? (receipt?.output ?? null) : null,
+    result:
+      status === "terminal" && outcome?.status === "completed"
+        ? (receipt?.output ?? null)
+        : null,
     publicationId:
-      outcome?.status === "completed" ? (receipt?.publicationId ?? null) : null,
+      status === "terminal" && outcome?.status === "completed"
+        ? (receipt?.publicationId ?? null)
+        : null,
     error: outcome?.error?.message ?? checkpoint?.error ?? null,
   };
 }
@@ -79,28 +84,6 @@ export function reference(view: CampaignView): ViewReference {
   };
 }
 
-export function materialize(
-  snapshot: ViewReference,
-  current: Pick<CampaignView, "task" | "work" | "inputs">,
-): CampaignView {
-  const workers = new Map(current.work.map((work) => [work.taskId, work]));
-  return {
-    ...snapshot,
-    task: current.task,
-    inputs: current.inputs.filter(({ id }) => id <= snapshot.inputs),
-    work: snapshot.work.map((saved) => {
-      const work = workers.get(saved.taskId);
-      if (!work) throw new Error(`Snapshot task is missing: ${saved.taskId}`);
-      return {
-        ...work,
-        ...saved,
-        result: saved.status === "completed" ? work.result : null,
-        publicationId: saved.status === "completed" ? work.publicationId : null,
-      };
-    }),
-  };
-}
-
 /** Reconstruct a detached Coordinator view from its immutable input entry. */
 export async function readView(
   tx: Tx,
@@ -126,7 +109,12 @@ export async function readView(
       (current.status !== "completed" || current.publicationId === null)
     )
       throw new Error(`Snapshot publication is missing: ${item.taskId}`);
-    workers.push(current);
+    workers.push({
+      ...current,
+      ...item,
+      result: item.status === "completed" ? current.result : null,
+      publicationId: item.status === "completed" ? current.publicationId : null,
+    });
   }
   const receipts: CampaignInput[] = [];
   let cursor: Cursor | undefined;
@@ -143,11 +131,10 @@ export async function readView(
     } while (cursor);
   if (saved.inputs !== 0 && receipts.at(-1)?.id !== saved.inputs)
     throw new Error(`Snapshot input is missing: ${saved.inputs}`);
-  return json(
-    materialize(saved, {
-      task: (await tx.doc(campaign)).task,
-      work: workers,
-      inputs: receipts,
-    }),
-  );
+  return json({
+    ...saved,
+    task: (await tx.doc(campaign)).task,
+    work: workers,
+    inputs: receipts,
+  });
 }

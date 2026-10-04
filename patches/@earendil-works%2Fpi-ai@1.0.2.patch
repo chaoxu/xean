@@ -330,7 +330,7 @@ index f413fe5..bbf6512 100644
              const details = event.response?.incomplete_details;
              const msg = error
 diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
-index 4d58c97..411839b 100644
+index 2a6b4e4..2426c25 100644
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
 @@ -163,7 +163,8 @@ export const stream = (model, context, options) => {
@@ -344,10 +344,10 @@ index 4d58c97..411839b 100644
              output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
                  ? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b141efd..0691d10 100644
+index 8e333b4..3545294 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -370,6 +370,8 @@ export interface UserMessage {
+@@ -372,6 +372,8 @@ export interface UserMessage {
      timestamp: number;
  }
  export interface AssistantMessage {
@@ -356,7 +356,7 @@ index b141efd..0691d10 100644
      role: "assistant";
      content: (TextContent | ThinkingContent | ToolCall)[];
      api: Api;
-@@ -386,6 +388,8 @@ export interface AssistantMessage {
+@@ -388,6 +390,8 @@ export interface AssistantMessage {
      stopReason: StopReason;
      deferred?: DeferredHandle;
      errorMessage?: string;
@@ -365,7 +365,7 @@ index b141efd..0691d10 100644
      rawStopReason?: string;
      /**
       * Provider indication of whether the model explicitly ended its turn.
-@@ -688,6 +692,8 @@ export interface OpenAICompletionsCompat {
+@@ -690,6 +694,8 @@ export interface OpenAICompletionsCompat {
  }
  /** Compatibility settings for OpenAI Responses APIs. */
  export interface OpenAIResponsesCompat {

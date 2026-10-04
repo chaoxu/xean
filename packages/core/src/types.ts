@@ -14,10 +14,10 @@ import type { CallRecorder } from "./calls.ts";
 
 export type { JsonValue };
 
-/** Select or reduce detached records in Pi's newest-first scan order. */
+/** Select or reduce detached root-journal records in Pi's newest-first scan order. */
 export type RecordProjection = (entry: EntryRecord) => EntryRecord | undefined;
 
-export const campaignVersion = 12;
+export const campaignVersion = 13;
 
 /** Opt in to whole-attempt recovery only for a known transient execution failure. */
 export class TransientError extends Error {
@@ -141,20 +141,20 @@ export const limitsSchema = Type.Object(
 export type Limits = Static<typeof limitsSchema>;
 
 export type CampaignState = {
-  version: typeof campaignVersion;
   task: JsonValue;
   coordinator: string;
   status: XeanStatus;
   state: JsonValue;
   limits: Limits;
-  /** Number of logical provider calls admitted, retained for observation only. */
-  providerCalls: number;
   result: JsonValue;
   error: string | null;
 };
 
 export type Campaign = CampaignState &
   CampaignView & {
+    version: typeof campaignVersion;
+    /** Derived from call admission entries in Pi, never persisted as campaign state. */
+    providerCalls: number;
     pendingSignals: number;
   };
 

@@ -25,7 +25,12 @@ const taskPath = resolve(root, "examples/tree-task.json");
 const campaignPath = resolve(directory, "campaign.sqlite");
 const key = credential.toString().trim();
 const cli = resolve(root, "packages/cli/src/index.ts");
-const run = async (name: string, args: string[], authenticated = false) => {
+const run = async (
+  name: string,
+  args: string[],
+  authenticated = false,
+  format: "json" | "md" = "json",
+) => {
   const child = Bun.spawn([...bun, cli, ...args], {
     env,
     stdin: authenticated ? credential : "ignore",
@@ -41,10 +46,10 @@ const run = async (name: string, args: string[], authenticated = false) => {
     !stdout.includes(key) && !stderr.includes(key),
     "Credential must not reach artifacts",
   );
-  await Bun.write(resolve(directory, `${name}.json`), stdout);
+  await Bun.write(resolve(directory, `${name}.${format}`), stdout);
   await Bun.write(resolve(directory, `${name}.stderr`), stderr);
   assert.equal(code, 0, `${name} failed: ${stderr}`);
-  return JSON.parse(stdout);
+  return format === "json" ? JSON.parse(stdout) : stdout;
 };
 const initialized = await run("init", [
   "init",
@@ -71,10 +76,7 @@ assert.deepEqual(
   live,
   "Completed reopen must make no calls or change records",
 );
-await Bun.write(
-  resolve(directory, "argument.md"),
-  live.campaign.result.argument + "\n",
-);
+await run("argument", ["export", campaignPath], false, "md");
 console.log(
   JSON.stringify({
     directory,

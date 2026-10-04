@@ -126,7 +126,7 @@ export function createSolver(
     name: "xean.coordinator",
     async run(signal, view, execution, context) {
       const notes = project(view);
-      const result = completion(task, notes);
+      const result = completion(notes);
       if (result !== undefined)
         return { state: view.state, completion: result };
       if (
@@ -201,7 +201,7 @@ export function createSolver(
   };
   const accept: NonNullable<XeanOptions["accept"]> = (candidate, view) => {
     // Acceptance is reconstructed from committed worker evidence, never a Coordinator claim.
-    const expected = completion(task, project(view));
+    const expected = completion(project(view));
     return expected !== undefined && isDeepStrictEqual(candidate, expected);
   };
   return {

@@ -65,6 +65,7 @@ const modelSchema = Type.Script(
 export const statusSchema = Type.Script(
   {
     Count: count,
+    CountOrNull: Type.Union([count, Type.Null()]),
     Counts: counts,
     Diagnostic: diagnostic,
     Phase: phase,
@@ -92,8 +93,8 @@ export const statusSchema = Type.Script(
   nextAction?: string, verificationIssues?: Issues,
   calls: {
     admitted: Count,
-    settled: Count, unknownUsage: Count, unsettled: Count,
-    byModel: Models, byModelOmitted: Count
+    settled: CountOrNull, unknownUsage: CountOrNull, unsettled: CountOrNull,
+    byModel: Models, byModelOmitted: CountOrNull
   },
   usageNote: string
 }`,
@@ -160,15 +161,18 @@ function usageGroup({ provider, id, api }: CallIdentity) {
 }
 type UsageGroup = ReturnType<typeof usageGroup>;
 
-/** Summarize one coherent kernel snapshot without reconciling provider bills. */
+/**
+ * Summarize one coherent kernel snapshot without reconciling provider bills.
+ * Supplied records must include every call admission and settlement, as usageRecord does.
+ */
 export function statusReport({
   campaign,
-  records = [],
+  records,
   notes = isSolverCampaign(campaign) ? project(campaign) : undefined,
 }: ReturnType<typeof campaignReport>): Static<typeof statusSchema> {
   const groups = new Map<string, UsageGroup>();
   const calls = new Map<EntryId, UsageGroup>();
-  for (const entry of records) {
+  for (const entry of records ?? []) {
     if (entry.kind === "xean.call.started") {
       const { model } = entry.data as unknown as { model: CallIdentity };
       const key = JSON.stringify([model.provider, model.id, model.api]);
@@ -201,7 +205,10 @@ export function statusReport({
     ...group,
     unsettled: group.admitted - group.settled,
   }));
-  const settled = byModel.reduce((total, group) => total + group.settled, 0);
+  const settled =
+    records === undefined
+      ? null
+      : byModel.reduce((total, group) => total + group.settled, 0);
   const work = { queued: 0, active: 0, completed: 0, failed: 0, cancelled: 0 };
   for (const item of campaign.work) work[item.status]++;
   const solver = isSolverCampaign(campaign);
@@ -339,13 +346,14 @@ export function statusReport({
     calls: {
       admitted: campaign.providerCalls,
       settled,
-      unknownUsage: byModel.reduce(
-        (total, group) => total + group.unknownUsage,
-        0,
-      ),
-      unsettled: campaign.providerCalls - settled,
+      unknownUsage:
+        records === undefined
+          ? null
+          : byModel.reduce((total, group) => total + group.unknownUsage, 0),
+      unsettled: settled === null ? null : campaign.providerCalls - settled,
       byModel: byModel.slice(0, itemLimit),
-      byModelOmitted: Math.max(0, byModel.length - itemLimit),
+      byModelOmitted:
+        records === undefined ? null : Math.max(0, byModel.length - itemLimit),
     },
     usageNote:
       "Reported native counts may be partial and fields overlap. Codex internal requests and provider bills are not reconciled. Price estimates are omitted.",

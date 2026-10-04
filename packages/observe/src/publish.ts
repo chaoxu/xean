@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { rename, rm, stat, writeFile } from "node:fs/promises";
+import { realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Database } from "bun:sqlite";
@@ -8,8 +8,14 @@ import { usageRecord } from "xean/report";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
 import { readSummary, snapshot } from "./snapshot.ts";
 
-/** Read independently of the campaign owner and atomically replace its export. */
+/** Publish matching observation and compact files under a separate publisher lock. */
 export async function publish(directory: string): Promise<void> {
+  directory = await realpath(directory);
+  // Keep this inode: the native lock excludes competing publishers across processes.
+  using owner = new Database(join(directory, ".publish.lock"), {
+    create: true,
+  });
+  owner.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
   const value = snapshot(
     await inspectCampaign(join(directory, "campaign.sqlite"), usageRecord),
   );

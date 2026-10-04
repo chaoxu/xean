@@ -17,6 +17,8 @@ import {
   readDeclaration,
   readSettings,
   isSolverCampaign,
+  acceptedArgument,
+  project,
   type Declaration,
 } from "xean/solve";
 import { verifyInstall } from "../../../scripts/dependencies.ts";
@@ -214,11 +216,7 @@ program
           campaignPath(campaign),
           flags.records === true,
         );
-        await print(
-          campaignReport(
-            flags.records ? snapshot : { campaign: snapshot.campaign },
-          ),
-        );
+        await print(campaignReport(snapshot));
       } catch (error) {
         if (
           !flags.allowUninitialized ||
@@ -239,13 +237,13 @@ program
   .command("role <name> <input> <campaign> <settings>")
   .action(
     async (name: string, file: string, campaign: string, settings: string) => {
-      const input = await read(file);
+      const { task, ...input } = await read(file);
       const declaration = readDeclaration({
         version: declarationVersion,
         kind: "xean.role",
         role: name,
         input,
-        task: input.task,
+        task,
         settings: await read(settings),
       });
       await runCampaign(campaign, declaration);
@@ -272,15 +270,17 @@ program
   );
 program.command("export <campaign>").action(async (target: string) => {
   const { campaign } = await inspectCampaign(campaignPath(target), false);
-  const result = campaign.result as { argument?: string } | null;
+  const result = campaign.result as { noteId?: unknown } | null;
   if (
     !isSolverCampaign(campaign) ||
     campaign.status !== "completed" ||
-    typeof result?.argument !== "string" ||
-    !result.argument
+    typeof result?.noteId !== "string"
   )
     throw new Error("No accepted argument");
-  await Bun.write(Bun.stdout, result.argument + "\n");
+  await Bun.write(
+    Bun.stdout,
+    acceptedArgument(project(campaign), result.noteId) + "\n",
+  );
 });
 for (const kind of ["submit", "guide", "correct"] as const) {
   program

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT as context,
+} from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   createRegistry,
@@ -9,6 +12,17 @@ import {
   MemoryStorage,
   ROOT_CONVERSATION_ID,
 } from "@earendil-works/pi-durable";
+
+async function rootEntries(storage: MemoryStorage) {
+  return (
+    await storage.scanEntries(
+      { conversationId: ROOT_CONVERSATION_ID },
+      10,
+      undefined,
+      context,
+    )
+  ).items;
+}
 
 test("Harness pause rolls back an unfinished admission and resumes it once", async () => {
   const storage = new MemoryStorage();
@@ -84,29 +98,11 @@ test("Harness pause rolls back an unfinished admission and resumes it once", asy
       status: "pending",
       checkpoint: { phase: "run", attempt: 0 },
     });
-    expect(
-      (
-        await storage.scanEntries(
-          { conversationId: ROOT_CONVERSATION_ID },
-          10,
-          undefined,
-          context,
-        )
-      ).items,
-    ).toHaveLength(0);
+    expect(await rootEntries(storage)).toHaveLength(0);
     harness.resume();
     await harness.waitForQuiescence(context);
     expect(executions).toBe(1);
-    expect(
-      (
-        await storage.scanEntries(
-          { conversationId: ROOT_CONVERSATION_ID },
-          10,
-          undefined,
-          context,
-        )
-      ).items,
-    ).toMatchObject([{ kind: "admitted" }]);
+    expect(await rootEntries(storage)).toMatchObject([{ kind: "admitted" }]);
     expect((await storage.task(id, context))!.state).toEqual({
       status: "terminal",
       outcome: { status: "completed", result: null },
@@ -194,110 +190,136 @@ test("Harness interruption rejects late publication while keeping accounting wri
     await harness.waitForQuiescence(context);
     expect(rejected).toBe(true);
     expect((await storage.task(id, context))!.state.status).toBe("running");
-    expect(
-      (
-        await storage.scanEntries(
-          { conversationId: ROOT_CONVERSATION_ID },
-          10,
-          undefined,
-          context,
-        )
-      ).items.map((entry) => entry.kind),
-    ).toEqual(["settled"]);
+    expect((await rootEntries(storage)).map((entry) => entry.kind)).toEqual([
+      "settled",
+    ]);
   } finally {
     release.resolve();
     await harness.close(context);
   }
 });
 
-test("Harness quiescence waits for atomic runtime failure publication", async () => {
-  const storage = new MemoryStorage();
-  const registry = createRegistry();
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const task = defineTask({
-    name: "fault",
-    version: 1,
-    initial: () => ({ phase: "run" as const }),
-    phases: {
-      run: async () => {
-        throw new Error("runtime failure");
+test.each(["runtime failure", "invalid publication"])(
+  "Harness quiescence waits for atomic failure publication after %s",
+  async (failure) => {
+    const storage = new MemoryStorage();
+    const registry = createRegistry();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const childEntered = Promise.withResolvers<void>();
+    let aborted = false;
+    let failures = 0;
+    const child = defineTask({
+      name: "background-child",
+      version: 1,
+      initial: () => ({ phase: "run" as const }),
+      phases: {
+        async run(_task, _runtime, ctx) {
+          childEntered.resolve();
+          await awaitWithContext(new Promise(() => {}), ctx);
+        },
       },
-    },
-    abort: async () => {},
-  });
-  registry.install({ name: "fixture", tasks: [task] });
-  const publications: string[][] = [];
-  const harness = await Harness.open(
-    storage,
-    {
-      registry,
-      models: createModels(),
-      onTaskFailure: async (tx, record, outcome) => {
-        entered.resolve();
-        await release.promise;
-        const { memos: _memos, ...rest } = record;
-        tx.setTask({ ...rest, state: { status: "terminal", outcome } });
-        await tx.appendEntry(ROOT_CONVERSATION_ID, {
-          kind: "failed",
-          data: null,
-          byTaskId: record.id,
-        });
-        return true;
+      async abort(_task, runtime, ctx) {
+        aborted = true;
+        await runtime.commit(
+          () => ({ status: "terminal", outcome: { status: "aborted" } }),
+          ctx,
+        );
       },
-    },
-    context,
-  );
-  try {
-    const root = await harness.root(context);
-    const id = await root.commit(
-      (tx) =>
-        tx.createTask(task, null, { ownership: { kind: "conversation" } }),
+    });
+    const task = defineTask({
+      name: "fault",
+      version: 1,
+      initial: () => ({ phase: "run" as const }),
+      phases: {
+        async run(_task, runtime, ctx) {
+          if (failure === "runtime failure") throw new Error(failure);
+          await runtime.commit(async (tx) => {
+            const conversation = await tx.createConversation({
+              ownership: { kind: "task", taskId: runtime.taskId },
+            });
+            await tx.createTask(child, null, {
+              conversationId: conversation.id,
+              ownership: { kind: "conversation" },
+              background: true,
+            });
+          }, ctx);
+          await childEntered.promise;
+          await runtime.commit(
+            async (tx) => {
+              expect(aborted).toBe(true);
+              await tx.appendEntry(ROOT_CONVERSATION_ID, {
+                kind: "must-roll-back",
+                data: null,
+              });
+              throw new Error(failure);
+            },
+            ctx,
+            { owned: "abort" },
+          );
+        },
+      },
+      abort: async () => {},
+    });
+    registry.install({ name: "fixture", tasks: [task, child] });
+    const publications: string[][] = [];
+    const harness = await Harness.open(
+      storage,
+      {
+        registry,
+        models: createModels(),
+        onTaskFailure: async (tx, record, outcome) => {
+          failures++;
+          entered.resolve();
+          await release.promise;
+          const { memos: _memos, ...rest } = record;
+          tx.setTask({ ...rest, state: { status: "terminal", outcome } });
+          await tx.appendEntry(ROOT_CONVERSATION_ID, {
+            kind: "failed",
+            data: null,
+            byTaskId: record.id,
+          });
+          return true;
+        },
+      },
       context,
     );
-    harness.subscribeCommits(({ changes }) => {
-      publications.push(changes.map((change) => change.type));
-    });
-    harness.resume();
-    await entered.promise;
-    harness.pause({ interrupt: true });
-    let quiescent = false;
-    const waiting = harness.waitForQuiescence(context).then(() => {
-      quiescent = true;
-    });
-    // Cross an event-loop turn while the failure hook holds the transaction.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(quiescent).toBe(false);
-    expect((await storage.task(id, context))!.state.status).toBe("running");
-    expect(
-      (
-        await storage.scanEntries(
-          { conversationId: ROOT_CONVERSATION_ID },
-          10,
-          undefined,
-          context,
-        )
-      ).items,
-    ).toHaveLength(0);
-    release.resolve();
-    await waiting;
-    expect((await storage.task(id, context))!.state).toEqual({
-      status: "terminal",
-      outcome: { status: "faulted", error: { message: "runtime failure" } },
-    });
-    expect(
-      (
-        await storage.scanEntries(
-          { conversationId: ROOT_CONVERSATION_ID },
-          10,
-          undefined,
-          context,
-        )
-      ).items,
-    ).toMatchObject([{ kind: "failed", byTaskId: id }]);
-    expect(publications.at(-1)?.sort()).toEqual(["entry", "task"]);
-  } finally {
-    release.resolve();
-    await harness.close(context);
-  }
-});
+    try {
+      const root = await harness.root(context);
+      const id = await root.commit(
+        (tx) =>
+          tx.createTask(task, null, { ownership: { kind: "conversation" } }),
+        context,
+      );
+      harness.subscribeCommits(({ changes }) => {
+        publications.push(changes.map((change) => change.type));
+      });
+      harness.resume();
+      await entered.promise;
+      harness.pause({ interrupt: true });
+      let quiescent = false;
+      const waiting = harness.waitForQuiescence(context).then(() => {
+        quiescent = true;
+      });
+      // Cross an event-loop turn while the failure hook holds the transaction.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(quiescent).toBe(false);
+      expect((await storage.task(id, context))!.state.status).toBe("running");
+      expect(await rootEntries(storage)).toHaveLength(0);
+      release.resolve();
+      await waiting;
+      expect(failures).toBe(1);
+      expect((await storage.task(id, context))!.state).toEqual({
+        status: "terminal",
+        outcome: { status: "faulted", error: { message: failure } },
+      });
+      expect(await rootEntries(storage)).toMatchObject([
+        { kind: "failed", byTaskId: id },
+      ]);
+      expect(publications.at(-1)?.sort()).toEqual(["entry", "task"]);
+    } finally {
+      release.resolve();
+      await harness.close(context);
+    }
+  },
+);

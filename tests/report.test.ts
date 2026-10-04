@@ -7,12 +7,9 @@ import {
 } from "@earendil-works/pi-durable";
 import { Xean, type JsonValue, type Work } from "xean";
 import { declarationVersion, type Note } from "xean/solve";
-import { campaignReport, statusReport, usageRecord } from "xean/report";
-import {
-  readSnapshot,
-  snapshot as observeSnapshot,
-  snapshotFromReport,
-} from "xean-observe";
+import { acceptedArgument } from "xean/solve/argument";
+import { statusReport, usageRecord } from "xean/report";
+import { readSnapshot, snapshot as observeSnapshot } from "xean-observe";
 
 test("status preserves committed verification and native usage with bounded operational metadata", async () => {
   const storage = new MemoryStorage();
@@ -36,6 +33,12 @@ test("status preserves committed verification and native usage with bounded oper
       candidate: true,
     });
     const snapshot = await engine.inspectWithRecords();
+    expect(observeSnapshot(snapshot)).toMatchObject({
+      usageAvailable: true,
+      status: {
+        calls: { admitted: 0, settled: 0, unknownUsage: 0, unsettled: 0 },
+      },
+    });
     let id = 100;
     const entry = (kind: string, data: JsonValue) => {
       const record = {
@@ -82,11 +85,22 @@ test("status preserves committed verification and native usage with bounded oper
       if (usage !== undefined)
         entry("xean.call.settled", { callId, message: body, usage });
     snapshot.campaign.providerCalls = calls.length;
+    expect(
+      readSnapshot(observeSnapshot({ campaign: snapshot.campaign })),
+    ).toMatchObject({
+      usageAvailable: false,
+      status: {
+        calls: {
+          admitted: calls.length,
+          settled: null,
+          unknownUsage: null,
+          unsettled: null,
+          byModel: [],
+          byModelOmitted: null,
+        },
+      },
+    });
     const report = statusReport(snapshot);
-    const prepared = campaignReport(snapshot);
-    const observed = snapshotFromReport({ ...prepared, status: report });
-    expect(observed.notes).toBe(prepared.notes!);
-    expect(observed.status).toBe(report);
     const completed = {
       status: "completed" as const,
       attempts: 1,
@@ -349,11 +363,12 @@ test("status preserves committed verification and native usage with bounded oper
       "cancelled",
       "completed",
     ] as const) {
-      const accepted = observedCampaign({
+      const observed = observedCampaign({
         work,
         status,
         result: { noteId: checked.id },
-      }).status;
+      });
+      const accepted = observed.status;
       expect(accepted.notes?.accepted).toBe(1);
       expect(accepted.acceptedNoteId).toBe(
         status === "completed" ? checked.id : null,
@@ -383,7 +398,17 @@ test("status preserves committed verification and native usage with bounded oper
       );
       if (status === "blocked")
         expect(accepted.nextAction).toContain("Coordinator failure");
+      if (status === "completed") {
+        expect(observed.result).toEqual({ noteId: checked.id });
+        expect(acceptedArgument(observed.notes, checked.id)).toBe(
+          `## input/example/n1\n\n${draft.text}\n\n## ${checked.id}\n\n${draft.text}`,
+        );
+      }
     }
+    for (const noteId of ["unknown", "input/example/n1"])
+      expect(() =>
+        observedCampaign({ work, status: "completed", result: { noteId } }),
+      ).toThrow("No accepted argument");
     expect(observedCampaign({ status: "running" }).status.nextAction).toBe(
       undefined,
     );

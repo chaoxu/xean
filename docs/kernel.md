@@ -1,7 +1,7 @@
 # Xean kernel
 
 Xean coordinates durable work over Pi's storage and execution APIs. The current
-foundation pins matching Pi 1.0.1 packages to one source commit and uses the
+foundation pins matching Pi 1.0.2 packages to one source commit and uses the
 public `pi-durable` storage contract.
 The [glossary](glossary.md) defines the shared terminology and code spellings.
 
@@ -135,15 +135,21 @@ A successful worker commits its entire JSON result, completed task receipt,
 and Coordinator completion signal in one Pi storage batch. Until that commit,
 its result is unavailable to Coordinator. A terminal worker failure commits
 the failure receipt and `failed` signal together. Failed and interrupted
-attempts publish no result. Operational records, including provider requests,
-responses, attempts, and usage, remain inspectable.
+attempts publish no result. Operational records, including native transcripts,
+call receipts, attempts, and usage, remain inspectable.
 Completed work exposes its `publicationId`, which orders that commit against
 external input receipts. The solver uses this order when projecting corrections.
 
 Private conversations commit their transcripts, tool results, and documents as
-they run. The kernel joins owned work before publishing the role's result.
-These private commits leave the shared campaign result unchanged. On failure,
-Pi aborts and joins descendants before Xean publishes the failure receipt.
+they run. Pi joins ordinary owned tasks and rechecks ownership on the publication
+transaction line before invoking Xean's result callback. These private commits
+leave the shared campaign result unchanged. On failure, Pi starts descendant
+cancellation, including background descendants, before Xean drains call accounting,
+then rechecks owned work before
+publishing the failure receipt. The [local commit option](pi-alignment.md#durable-integration)
+keeps the outer invocation alive through publication.
+Campaign cancellation and accepted completion use Pi's root-conversation abort,
+including background descendants, before waiting for quiescence.
 
 A Coordinator decision commits its next state, consumes its pending signal,
 and admits all new work together. A failed decision admits no partial work
@@ -269,11 +275,14 @@ fresh call through the recorder records another admission, and roles must use
 that integration for the kernel to account for calls.
 
 `auditedStream` from `xean/pi` wraps Pi's native `streamSimple` function. At Pi's
-`onPayload` hook, it calls `recordRequest()` with a JSON snapshot after applying
-the caller's hook and before returning control to Pi. This captures the hook
-payload, whose serialization or later transformation by a provider can differ from the final
-wire request. It awaits durable response settlement before emitting terminal
-success. Pi retains its provider behavior, tool loop, cancellation options, and
+`onPayload` hook, it calls `recordRequest()` after applying the caller's hook
+and before returning control to Pi. Built-in roles supply a `GenerationReference`
+as the fourth argument: the native generation task and request cutoff entry.
+The task record identifies its conversation. Call receipts record dispatch intent, stop reason, error, and
+nullable usage. Pi's transcript holds the base request context and published
+response bodies. Without a generation reference, the wrapper records the effective
+JSON payload and native result for an opaque call. It awaits durable settlement
+before emitting terminal success. Pi retains its provider behavior, tool loop, cancellation options, and
 retries. The role owns Pi session cleanup.
 An optional third argument supplies Pi's `RetryPolicy` to `retryAssistantCall`.
 Each recovered response attempt requires fresh admission and durable request
@@ -288,7 +297,7 @@ model identity, deduplicates item IDs, and replays only those completed items.
 Pi still serializes them and executes the next request. The retry must leave
 room for the model's maximum answer according to Pi's capacity estimator.
 The model-facing successful message retains recovered reasoning for later
-turns. Recorded responses and usage remain the originals from each attempt.
+turns. Each attempt retains its own outcome and usage receipt.
 The narrow package patch retains reported failure usage and supports opaque
 credentials on explicitly configured custom Codex endpoints.
 
@@ -296,8 +305,12 @@ The recorder also accepts non-Pi calls. Codex research records one admission
 per subprocess invocation and preserves its native result
 and usage. That admission does not limit the subprocess's internal model calls.
 
-`records()` returns native Pi entries containing attempt starts, completions,
-failures, interruptions, and provider call admission, request, and settlement.
+`records()` returns entries from all Pi conversations in ascending entry ID order,
+including native model/tool transcripts and Xean's attempt and call receipts.
+Exact transformed Pi request bodies, intermediate retry response bodies, and
+invocation-local retry additions are not separately retained. A response
+interrupted before native publication may have only its outcome and usage receipt.
+Opaque calls retain their full recorded bodies.
 Usage `null` means no measurement was identified. The patched Responses and
 Anthropic adapters distinguish explicitly reported zero usage from absent,
 empty, or invalid counts. Other adapters without a usage marker conservatively
@@ -332,11 +345,15 @@ tasks retain their own checkpoints and stay outside the campaign's work and
 signal projection. Private transcripts and documents remain available through
 Pi's conversation APIs.
 
-Xean's campaign state and campaign document use format version 12. Earlier formats
-are rejected without migration. This Pi revision changes its initial SQLite
-schema while retaining upstream schema version 1; old campaign files remain
+Pi's campaign document version is the authority for campaign format 13. The
+inspected `version` is derived from it. Call admission entries are the authority
+for `providerCalls`. Store counts them during the first journal scan or count
+request, then updates the derived count through native commit subscriptions.
+Neither field is duplicated in the campaign document's value.
+Earlier formats are rejected without migration. This Pi revision changes its
+initial SQLite schema while retaining upstream schema version 1. Old campaign files remain
 provenance and must not be opened with this build. Task records still use native
-version 1. Solver declarations independently use version 14. The durable patch
+version 1. Solver declarations independently use version 16. The durable patch
 adds Harness policy hooks, pause, and quiescence, exposes native task-record
 mutation for atomic domain transitions, and retains entry attribution. The
 [alignment notes](pi-alignment.md#durable-integration) describe these local extensions.
@@ -357,8 +374,9 @@ existing target. Hard-linked databases are rejected.
 `await inspectCampaign(path, records = true)` opens a read-only connection and returns
 `{campaign, records}` from one SQLite read transaction. It uses the same campaign
 projection as owner inspection, without opening the kernel, running recovery, or
-making model calls. Pass `false` to skip the journal, or a `RecordProjection` to
-select records. It reuses Pi's document loading and paginated scans through the
+making model calls. Pass `false` to omit returned records, or a `RecordProjection`
+to select records. With `false`, `records` is `undefined`, and call admissions
+are still scanned to derive `providerCalls`. It reuses Pi's document loading and paginated scans through the
 existing Store. `openXeanStorage(path, {readOnly: true})` opens a read-only SQLite
 connection and pins one read transaction. A small Pi patch adds a read-only
 storage opener that checks its schema, skips migrations, and rejects writes and
@@ -369,9 +387,10 @@ snapshots without delaying shutdown for a WAL checkpoint.
 
 Inside the owner, `inspectWithRecords()` returns `{campaign, records}` from one
 serialized point, so a worker publication cannot fall between its two reads.
-An optional `RecordProjection` callback selects or reduces each detached record
-as Pi pages are read. Returning `undefined` omits that record. Status retains only
-call identity and usage through this callback. Full inspection remains the default.
+An optional `RecordProjection` callback selects or reduces detached root-journal
+records as Pi pages are read. Returning `undefined` omits that record. Status
+retains only call identity and usage through this callback. Full inspection
+includes native transcripts from every conversation and remains the default.
 Separate calls to `inspect()` and `records()` do not provide that guarantee.
 The CLI's `inspect`, `status`, and `export` use independent read-only connections.
 `inspect --allow-uninitialized` returns `{ "campaign": null }` when SQLite is
@@ -392,10 +411,11 @@ Keep the database and retained `-wal` and `-shm` files together for read-only
 inspection. Live backups must include SQLite's committed WAL data. Copying the
 main database file alone is insufficient.
 
-Pi retains complete Coordinator decisions. Xean drops their result payloads from
-its resident task map after commit and on reopen, keeping signal inputs, worker
-inputs/results, and historical reconstruction intact. Terminal tasks cannot be
-rewritten through the mutation interface.
+Consumed Coordinator tasks retain their signal and a terminal receipt with a null
+result. Dispatched work lives in its native task inputs, and current Coordinator
+state lives in the campaign document. Attempt-start entries retain frozen views
+for historical reconstruction. Terminal tasks cannot be rewritten through the
+mutation interface.
 
 Tests cover concurrent snapshot readers, writes during reads, independent CLI
 inspection, second-owner rejection, SIGKILL recovery, retained committed records,

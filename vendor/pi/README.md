@@ -1,10 +1,10 @@
 # Pi artifacts
 
 Xean consumes the packages listed in [provenance.json](provenance.json)
-from Pi commit `83692682f095528f8b71652ddacff7075e36e893`.
+from Pi commit `cd32f7725fdbddbaecdff5b1e68491563394e0ca`.
 The tarballs contain upstream build output. The root
 catalog selects them, and dependency overrides apply the same selections to
-Pi's internal dependencies. Their upstream package version is `1.0.1`.
+Pi's internal dependencies. Their upstream package version is `1.0.2`.
 The commit and artifact hashes identify this build.
 
 Normal installation uses Xean's existing locked Bun command, documented in the
@@ -93,10 +93,3 @@ These are local extensions, not upstream guarantees. The
 [alignment notes](../../docs/pi-alignment.md#durable-integration) record their
 contracts and removal criteria. Unpatched artifacts remain reproducible;
 the patch separately identifies the code executed by Xean.
-
-The 2026-10-03 refresh to `83692682f095` uses Pi `1.0.1` packages. The consumed
-packages' runtime source is unchanged from `a276dabe5791`. The AI patch retains
-identical bytes. The durable patch removes the obsolete wakeup on every document
-commit, so streaming partials no longer rerun campaign admission. The two commits
-after the `v1.0.1` tag update changelogs and the Nix release workflow. The frozen
-model catalog and remaining patch guarantees are unchanged.

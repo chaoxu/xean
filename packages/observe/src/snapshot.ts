@@ -1,40 +1,36 @@
-import { taskSchema, type SolverResult, type Task } from "xean/solve";
+import {
+  closure,
+  completion,
+  taskSchema,
+  type SolverResult,
+  type Task,
+} from "xean/solve";
 import { campaignReport, statusReport, statusSchema } from "xean/report";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-const snapshotFormat = "xean-observe/v4" as const;
+const snapshotFormat = "xean-observe/v5" as const;
 
-export function snapshot(
+export function summary(
   value: Parameters<typeof campaignReport>[0],
   observedAt = new Date().toISOString(),
 ) {
-  const report = campaignReport(value);
-  return snapshotFromReport(
-    { ...report, status: statusReport(report) },
-    observedAt,
-  );
+  return readSummary(summaryFromReport(campaignReport(value), observedAt));
 }
 
-/** Reuse notes and usage already projected from the same inspection. */
-export function snapshotFromReport(
-  {
-    campaign,
-    records,
-    notes,
-    status,
-  }: ReturnType<typeof campaignReport> & {
-    status: ReturnType<typeof statusReport>;
-  },
+function summaryFromReport(
+  { campaign, records, notes }: ReturnType<typeof campaignReport>,
   observedAt = new Date().toISOString(),
 ) {
+  const status = statusReport({ campaign, records, notes });
   const declaration = campaign.task as { kind?: string; task?: Task } | null;
+  if (
+    notes !== undefined &&
+    campaign.status === "completed" &&
+    completion(notes)?.noteId !== status.acceptedNoteId
+  )
+    throw new Error("No accepted argument");
   return {
-    schema: snapshotFormat,
-    kind:
-      typeof declaration?.kind === "string" && declaration.kind.trim()
-        ? declaration.kind
-        : null,
     observedAt,
     // A generic kernel task may contain an unrelated field named task.
     task:
@@ -45,6 +41,20 @@ export function snapshotFromReport(
         : null,
     status,
     usageAvailable: records !== undefined,
+  };
+}
+
+export function snapshot(
+  value: Parameters<typeof campaignReport>[0],
+  observedAt = new Date().toISOString(),
+) {
+  const report = campaignReport(value);
+  const { campaign, notes } = report;
+  const kind = (campaign.task as { kind?: unknown } | null)?.kind;
+  return {
+    schema: snapshotFormat,
+    kind: typeof kind === "string" && kind.trim() ? kind : null,
+    ...summaryFromReport(report, observedAt),
     notes: notes ?? [],
     work: campaign.work.map(
       ({ id, role, status, attempts, error, publicationId, input, result }) => {
@@ -162,6 +172,12 @@ const snapshotSchema = Type.Unsafe<Snapshot>(
 export function readSnapshot(value: unknown): Snapshot {
   if (!Value.Check(snapshotSchema, value))
     throw new Error("Unsupported observation schema or malformed snapshot");
+  const noteId = value.status.acceptedNoteId;
+  if (noteId !== null) {
+    if (!value.notes.find((note) => note.id === noteId)?.accepted)
+      throw new Error("Snapshot accepted note is missing or unaccepted");
+    closure([noteId], value.notes);
+  }
   const status = structuredClone(value.status);
   Value.Clean(statusSchema, status);
   return { ...value, status };

@@ -1,5 +1,7 @@
-import type { CampaignView, JsonValue } from "../types.ts";
+import type { CampaignView } from "../types.ts";
 import { json } from "../json.ts";
+import { closure } from "./argument.ts";
+export { closure, acceptedArgument } from "./argument.ts";
 import type { SolverCommand } from "./commands.ts";
 import { declarationVersion, verificationStages } from "./contracts.ts";
 import type {
@@ -9,7 +11,6 @@ import type {
   NoteInfo,
   SolverResult,
   SourceEvidence,
-  Task,
   VerificationStage,
 } from "./contracts.ts";
 
@@ -20,29 +21,6 @@ export const correctionInstructions =
 const fatalStages: readonly VerificationStage[] = verificationStages.filter(
   (stage) => stage !== "requirements",
 );
-
-/** Support is a mathematical dependency, not a record of everything read. */
-export function closure<T extends Pick<Note, "id" | "support">>(
-  ids: readonly string[],
-  notes: readonly T[],
-): T[] {
-  const byId = new Map(notes.map((note) => [note.id, note]));
-  if (byId.size !== notes.length) throw new Error("Duplicate note IDs");
-  const visiting = new Set<string>();
-  const found = new Map<string, T>();
-  const visit = (id: string): void => {
-    if (found.has(id)) return;
-    const note = byId.get(id);
-    if (!note) throw new Error(`Unknown note: ${id}`);
-    if (visiting.has(id)) throw new Error(`Cyclic support: ${id}`);
-    visiting.add(id);
-    for (const support of note.support) visit(support);
-    visiting.delete(id);
-    found.set(id, note);
-  };
-  ids.forEach(visit);
-  return [...found.values()];
-}
 
 const stageRank = (stage: VerificationStage) =>
   verificationStages.indexOf(stage);
@@ -307,22 +285,8 @@ export function noteInfo(note: Note): NoteInfo {
 }
 
 export function completion(
-  task: Task,
   notes: readonly Note[],
-): JsonValue | undefined {
+): { noteId: string } | undefined {
   const acceptedNote = notes.find((note) => note.accepted);
-  if (!acceptedNote) return undefined;
-  const argument = closure([acceptedNote.id], notes);
-  return {
-    task,
-    noteId: acceptedNote.id,
-    argument: argument
-      .map((note) => `## ${note.id}\n\n${note.text}`)
-      .join("\n\n"),
-    checks: argument.map((note) => ({
-      noteId: note.id,
-      imported: note.imported,
-      checks: note.checks,
-    })) as unknown as JsonValue,
-  };
+  return acceptedNote ? { noteId: acceptedNote.id } : undefined;
 }

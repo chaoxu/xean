@@ -540,7 +540,6 @@ test("roles hand off valid private submissions and never continue a rejected one
   );
   expect(result).toEqual({ answer: 7 });
   expect(state.calls).toHaveLength(3);
-  expect(state.calls[0]?.payload).toMatchObject({ parallel_tool_calls: false });
 });
 
 test("Codex keeps required submission tools on a rejected-submission retry", async () => {
@@ -908,11 +907,6 @@ test("interrupted turns retain completed reasoning and prior submissions without
   expect(answer).toEqual({ answer: 3 });
   expect(submitted).toEqual([1, 2, 3]);
   expect(new Set(sessions).size).toBe(1);
-  expect(state.calls[1]?.message?.content).toContainEqual({
-    type: "text",
-    text: "Failed text",
-  });
-  expect(state.calls[2]?.message?.content).not.toContainEqual(recovered);
   expect(state.calls.map((call) => call.message?.stopReason)).toEqual([
     "toolUse",
     "error",

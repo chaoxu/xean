@@ -8,15 +8,11 @@ acceptance. This document records which Pi APIs Xean uses and why local code rem
 ## Sources and availability
 
 The Pi/Chord packages are pinned to
-[`83692682f095`](https://github.com/earendil-works/pi/tree/83692682f095528f8b71652ddacff7075e36e893),
-the main revision checked on 2026-10-03 after the Pi `1.0.1` release.
-The four consumed packages have unchanged runtime source since the preceding
-`a276dabe5791` pin. The intervening main commits change documentation and the
-Nix workflow. This refresh preserves the frozen model catalog, reasoning settings,
-and the retained provider and Harness controls. The obsolete scheduler wakeup
-on every document update has been removed. Each patched file was compared with an independently patched
-upstream artifact. The [artifact record](../vendor/pi/provenance.json) identifies
-the source, model catalog, reproducible builds, and patch hashes.
+[`cd32f7725fdb`](https://github.com/earendil-works/pi/tree/cd32f7725fdbddbaecdff5b1e68491563394e0ca),
+the Pi `1.0.2` release. This upgrade preserves the frozen model catalog and
+retained patches. Pi now persists provider session identity per conversation.
+The [artifact record](../vendor/pi/provenance.json) identifies the source,
+model catalog, reproducible builds, and patch hashes.
 Pi Durable remains experimental.
 
 The [public durable types][types] and [Session implementation][session] supply
@@ -30,8 +26,8 @@ extensions described below. These extensions are not upstream APIs.
 Xean registers its worker and Coordinator tasks in one named Pi extension.
 Pi resolves models, tools, prompt sections, hooks, and environments per
 conversation through `pi.agent`. Built-in model roles use native private
-conversations; other roles remain opaque functions. Campaign format is 12. Start fresh campaigns and
-retain old runtimes for existing runs.
+conversations. Other roles remain opaque functions. Campaign format is 13.
+Start fresh campaigns and retain old runtimes for existing runs.
 
 Xean is an application of Pi Durable: work and signals are native tasks,
 private model interactions are conversations, and state changes use native
@@ -90,8 +86,10 @@ attempts before call admission or request recording. Call settlement uses Sessio
 commits so accounting survives cancellation. Scheduler wakeups follow native task
 changes, extension installation, and explicit resume. Document-only streaming
 updates do not need to rerun campaign admission.
-The task projection avoids repeated full scans. Completed Coordinator payloads
-stay durable but leave the resident cache.
+The task projection avoids repeated full scans. Completed Coordinator tasks
+retain a null result because their dispatched inputs and resulting campaign
+state already have authoritative Pi records. Call counts derive from admission
+entries, and campaign format comes from Pi's document version.
 `StorageRejected` guarantees a failed batch made no durable change and leaves
 the instance usable. Unknown commit outcomes and post-storage adoption failures
 stop the instance.
@@ -109,6 +107,13 @@ Session writes before joining on close.
 - `onTaskFailure` can replace a runtime-generated `faulted` or `orphaned` outcome
   and stage domain records in the same transaction. Xean publishes a worker's
   failure signal or blocks a failed Coordinator without losing its signal.
+- `runtime.commit(change, context, {owned: "join" | "abort"})` waits for ordinary
+  live owned tasks in join mode. Abort mode cancels and waits for live descendants,
+  including background tasks, and withdraws their conversations' queued inputs
+  while preserving queued writes. Both modes recheck their ownership scope on the
+  Session transaction line before invoking `change`. Xean uses this boundary for
+  result and failure publication, keeping the invocation alive while descendants
+  finish. New tasks in the selected scope cause another wait before the callback runs.
 - `pause({interrupt: true})` cancels invocations and rejects their late runtime
   commits while keeping Session writes open. `waitForQuiescence()` joins admitted
   invocations and their final transactions, including when admission holds queued
@@ -134,8 +139,10 @@ Xean registers executable task definitions and uses native task creation.
 Native descendants run within their admitted owner's slot, including during
 draining. They wait until the resumed owner has reinstalled its conversation's
 extensions. Xean projects only its outer tasks into campaign work and signals.
-Pi owns child checkpoints and waits for owned work before terminal settlement;
-Xean joins it before publishing a shared result. The patch retains an outer
+Pi owns child checkpoints and joins ordinary owned tasks before Xean's publication callback.
+Role-private background tasks are outside Xean's recovery contract: after their
+outer role completes, reopening cannot reinstall that role's private extensions.
+The patch retains an outer
 checkpoint while it is completing so domain failure settlement can identify
 the attempt after owned work has been cancelled.
 The patch exposes existing `Tx.setTask()` for external campaign transitions,
@@ -200,7 +207,7 @@ registers only its selected provider and model with the host, preserving models
 already supplied by other roles, including custom IDs absent from the provider's catalog. Generation resolves that native
 catalog before Xean's stream hook supplies the selected profile's request.
 
-`auditedStream` uses Pi's awaited `onPayload` hook to record the effective request
+`auditedStream` uses Pi's awaited `onPayload` hook to record dispatch intent
 before dispatch, then settles accounting before terminal delivery. Cancellation
 during settlement preserves the recorded provider outcome and usage while
 returning an aborted stream. Admission and
@@ -208,22 +215,20 @@ accounting failures remain terminal. `onResponse` runs at HTTP headers and does
 not cover Codex WebSockets. Telemetry cannot replace durable admission or
 settlement. Context capacity belongs in the fail-closed generation request hook.
 
-Pi stores conversation messages and tool results incrementally. Mathematical
-recovery uses those native records, tasks, and documents. The full bodies in
-`xean.call.request` and `xean.call.settled` serve a separate audit contract:
-they retain payload-hook changes, intermediate retry responses, and outcomes
-settled before native assistant publication. They record the logical payload
-before transport-specific conversion such as WebSocket continuation deltas.
-The compact report needs only call identity, settlement, and nullable usage.
+Pi stores conversation messages and tool results incrementally. These native
+records are authoritative for built-in model base request context and published
+responses. `xean.call.started` links each call to its conversation, generation
+task, and request cutoff. `xean.call.request` records dispatch intent, and
+`xean.call.settled` retains stop reason, error, and nullable usage. These receipts
+survive cancellation even when Pi cannot publish the assistant entry.
 
-Replacing Pi-backed call bodies with native conversation/generation references
-would reduce duplication without changing mathematical recovery. It would give
-up exact transformed-request evidence and response bodies lost before native
-publication. This is a retention-policy choice, rather than a prerequisite for
-using Pi. Codex and opaque roles still need their own records because they have
-no equivalent native transcript. Full inspection currently scans Xean's root
-entries, so a switch to native references must also expose the corresponding
-conversation entries through explicit inspection.
+Full inspection reads every conversation through Pi's paginated scans. Compact
+status reads the root journal. Exact transformed request bodies, intermediate
+retry response bodies, and invocation-local retry additions are not separately
+retained. A final body lost before native publication may have only its outcome
+and usage receipt. Mathematical recovery continues to use Pi's records,
+tasks, and documents. Codex and opaque roles retain their payloads and results
+because they have no native conversation transcript.
 
 The Pi AI patch preserves failed-response usage, typed provider errors, explicit
 zero counts, retry-listener cleanup, cache-session isolation, and the existing
@@ -246,8 +251,9 @@ Remove it when the native parser handles CRLF, including split line endings.
 Pi drops failed messages from normal input. Xean retains only completed
 encrypted reasoning items, checks identity and capacity, and preserves original
 call records. Failed text, unfinished reasoning, and tool calls remain excluded.
-Pi also derives OpenAI's prompt cache key from its transport session ID. Xean
-replaces only that generated default with a model/system/tools hash, preserving
+Pi's `ProviderDoc` owns each conversation's provider session ID across recovery.
+Xean releases its transport resources when the role ends. Pi also derives OpenAI's
+prompt cache key from this ID. Xean replaces only that generated default with a model/system/tools hash, preserving
 caller keys and disabled caching. Native selective replay and an independent
 cache-key option would remove these integrations.
 
@@ -255,10 +261,10 @@ Explorer and Coordinator supply the task and each index entry as separate user m
 followed by mutable note states, feedback, guidance, and allowances. Pi preserves
 those message boundaries during Responses conversion. Xean keeps tool definitions
 stable when the read allowance is exhausted. Native schema validation precedes
-tool execution. The reader then reserves its task ID in the private task
-document. Sequential execution bounds several calls in one response, and replay
+tool execution. The `beforeTool` hook reserves read task IDs in the private task document.
+Sequential execution bounds several calls in one response, and replay
 of an interrupted safe tool cannot charge twice. Unknown IDs consume an admitted
-read; schema-invalid arguments do not. Pi owns the transcript and tool results,
+read. Schema-invalid arguments do not. Pi owns the transcript and tool results,
 while Xean owns the allowance and final-response restriction.
 
 For public OpenAI Responses models that advertise explicit cache support, the
@@ -362,7 +368,7 @@ replay policy. Native ownership joins or aborts child tasks before settlement.
 
 Automatic compaction is disabled and mathematical tools have explicit output
 limits that preserve full text. The stream wrapper retains call admission,
-effective-request recording, and settlement even when cancellation bypasses
+dispatch-intent recording, and settlement even when cancellation bypasses
 generation hooks. Native generation retries are disabled because the audited
 stream already uses Pi's response retry policy. ChatGPT Web cannot replay an
 interrupted browser send. An unfinished Codex subprocess restarts as a whole call.
@@ -376,10 +382,6 @@ optional retention policies, and missing upstream controls. The linked closed
 issues record why publication waiting, catalog merging, and capacity handoff
 remain as implemented.
 
-- **Provider records:** a compact ledger could refer to native conversation
-  entries and retain usage/error receipts, replacing duplicate Pi request and
-  response bodies. This requires the audit-contract choice described above,
-  not a new storage engine.
 - **Response retries:** Pi Durable already persists retry backoff and failed
   assistant entries. Xean instead uses Pi AI's retry helper to retain selected
   completed reasoning while excluding failed text and tool calls. Adoption of
@@ -391,8 +393,9 @@ remain as implemented.
   admission, domain settlement, and pause controls when available. Preserve
   atomic whole-worker publication and durable failure delivery. Native ownership
   delays a task's terminal state, but writes made in its callback commit
-  immediately. A [success-settlement callback](https://github.com/chaoxu/xean/issues/15) could replace the success-path
-  wait. Failure handling would still need to join owned work.
+  immediately. The local owned-work commit option supplies the atomic boundary
+  discussed in [publication waiting](https://github.com/chaoxu/xean/issues/15).
+  Replace it when upstream offers the same serialized ownership check.
 - **Role configuration:** [conversation-scoped model resolution](https://github.com/chaoxu/xean/issues/16) would remove
   shared catalog merging. A [stop decision in `beforeRequest`](https://github.com/chaoxu/xean/issues/17) would let a role
   hand off an accepted submission at capacity without recognizing a persisted
@@ -419,7 +422,7 @@ framework remain deferred. Invocation-specific extensions are registered today
 to bind frozen inputs, tools, and call accounting. Current validation is recorded in
 [kernel verification](kernel-smoke.md).
 
-[types]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/types.ts
-[session]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/session/session.ts
-[scheduler]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/src/harness/scheduler.ts
-[spec]: https://github.com/earendil-works/pi/blob/83692682f095528f8b71652ddacff7075e36e893/packages/durable/docs/spec.md
+[types]: https://github.com/earendil-works/pi/blob/cd32f7725fdbddbaecdff5b1e68491563394e0ca/packages/durable/src/types.ts
+[session]: https://github.com/earendil-works/pi/blob/cd32f7725fdbddbaecdff5b1e68491563394e0ca/packages/durable/src/session/session.ts
+[scheduler]: https://github.com/earendil-works/pi/blob/cd32f7725fdbddbaecdff5b1e68491563394e0ca/packages/durable/src/harness/scheduler.ts
+[spec]: https://github.com/earendil-works/pi/blob/cd32f7725fdbddbaecdff5b1e68491563394e0ca/packages/durable/docs/spec.md

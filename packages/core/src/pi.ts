@@ -12,7 +12,11 @@ import {
 } from "@earendil-works/pi-ai";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import type { JsonValue } from "@earendil-works/chord";
-import type { CallRecorder, RecordedCall } from "./calls.ts";
+import type {
+  CallRecorder,
+  GenerationReference,
+  RecordedCall,
+} from "./calls.ts";
 export {
   chatGptWebProvider,
   chatGptWebProviderId,
@@ -102,6 +106,7 @@ export function auditedStream(
   models: Pick<Models, "streamSimple">,
   recorder: CallRecorder,
   retry?: RetryPolicy,
+  generation?: GenerationReference,
 ): Models["streamSimple"] {
   return (model, context, options) => {
     const output = createAssistantMessageEventStream();
@@ -140,11 +145,14 @@ export function auditedStream(
           throw new Error(
             "Recovered reasoning leaves insufficient context for an answer",
           );
-        call = await recorder.begin({
-          provider: model.provider,
-          id: model.id,
-          api: model.api,
-        });
+        call = await recorder.begin(
+          {
+            provider: model.provider,
+            id: model.id,
+            api: model.api,
+          },
+          generation,
+        );
         signal.throwIfAborted();
         const stream = models.streamSimple(model, input, {
           ...options,
@@ -155,14 +163,21 @@ export function auditedStream(
               requestModel,
             );
             const effective = replacement === undefined ? payload : replacement;
-            const encoded = JSON.stringify(effective);
-            if (encoded === undefined)
+            const encoded = generation ? undefined : JSON.stringify(effective);
+            if (!generation && encoded === undefined)
               throw new TypeError("Pi request body must be JSON");
             signal.throwIfAborted();
-            await call!.recordRequest(JSON.parse(encoded) as JsonValue);
+            await call!.recordRequest(
+              encoded === undefined
+                ? undefined
+                : (JSON.parse(encoded) as JsonValue),
+            );
             requestRecorded = true;
             signal.throwIfAborted();
-            if (JSON.stringify(effective) !== encoded) {
+            if (
+              encoded !== undefined &&
+              JSON.stringify(effective) !== encoded
+            ) {
               throw new Error(
                 "Pi request changed while its snapshot was being recorded",
               );
@@ -211,7 +226,15 @@ export function auditedStream(
       // Settlement is awaited even after cancellation; usage cannot disappear.
       if (call) {
         try {
-          await call.settle(final!, reportedPiUsage(final!));
+          await call.settle(
+            generation
+              ? {
+                  stopReason: final!.stopReason,
+                  errorMessage: final!.errorMessage,
+                }
+              : final!,
+            reportedPiUsage(final!),
+          );
         } catch (error) {
           failed = true;
           controller.abort();

@@ -43,15 +43,19 @@ The solver remains independent of the publisher. Remote campaign details require
 in `result.json` are separate from observations. Before publication, task and
 round files provide a heartbeat. Process logs remain available independently.
 
+Publication holds a native SQLite lock on `.publish.lock` in the resolved run
+directory from inspection through both file replacements. A competing publisher
+fails immediately, and a watcher retries on its next check. The lock is separate
+from campaign ownership and contains no campaign data. Keep its file in place:
+closing the publisher or terminating its process releases ownership.
+
 The workspace binaries are `xean-observe` for the dashboard and
 `xean-observe-publish` for snapshots. The commands above retain the selected Bun
 runtime. On Fleet, launch either file through the locked `fleet-run` command
 shown below.
 
-Library callers use `snapshot(inspection)` from `xean-observe`. Callers that
-already have a `campaignReport` and its `statusReport` can pass
-`{ ...report, status }` to `snapshotFromReport` to reuse the prepared notes and
-usage totals. Both reports must come from the same inspection.
+Library callers use `snapshot(inspection)` from `xean-observe`, or
+`summary(inspection)` for compact data without constructing the full work view. Both derive notes and status from the same inspection.
 
 ## Run locally
 
@@ -134,7 +138,9 @@ Compact and full reads cache evidence separately and share process observations.
 The compact view includes the problem text, campaign status, accepted note ID,
 note and verification counts, bounded worker activity and failures, and recorded
 usage. Published compact artifacts include the task for this projection.
-`usageAvailable` distinguishes missing usage records from zero calls.
+`usageAvailable` distinguishes missing usage records from zero calls. Missing
+records leave settlement counters null and usage groups empty while retaining
+the admitted call count.
 Evidence `observedAt` and `stale`, sampled process status, and external review
 verdict remain separate. Heartbeat-only sources provide a round count. Proofs,
 completion criteria, logs, and review reports are omitted, and diagnostics
@@ -154,10 +160,11 @@ Runs launched before snapshot publishing retain their original runner. Observe
 shows their task, round markers, and Nomad logs until a result export appears.
 Detailed notes during execution require a compatible local campaign database
 or an observation snapshot.
-Snapshots use `xean-observe/v4` and include committed index and detailed summaries,
+Snapshots use `xean-observe/v5` and include committed index and detailed summaries,
 full note text and checks, worker outcomes and note links, and native
-usage counts. Private model reasoning and complete request bodies stay in the
-campaign journal. Snapshots created without usage records show usage as
+usage counts. Completed solver snapshots retain `{noteId}`. The browser derives
+the displayed argument from the snapshot's notes. Native conversations retain published model messages, while
+the root journal retains call receipts. Snapshots created without usage records show usage as
 unavailable. Gateway billing reconciliation remains separate.
 
 Run search filters the configured source list. Notes can be searched and filtered

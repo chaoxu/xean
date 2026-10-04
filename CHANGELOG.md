@@ -7,16 +7,37 @@ private work across interruptions through Pi Durable conversations. Explorer
 selects its own note reads, and the CLI and observer share public reports from
 the core library.
 
-Start fresh campaigns with campaign format 12, solver declaration version 14,
-and observer snapshot format `xean-observe/v4`. Notes require
+Start fresh campaigns with campaign format 13, solver declaration version 16,
+and observer snapshot format `xean-observe/v5`. Notes require
 `summary`, `detailedSummary`, and authoritative full `text`. Verifier corrections
 use null for unchanged fields, retaining their exact bytes without model output. These changes affect
 the public APIs, CLI inputs, and stored solver records. Historical campaigns and
 exports require their original source revision, runtime, and reader. No migration
 is provided. Existing releases and tags remain historical archives.
 
-- Pin matching Pi `1.0.1` packages at `83692682f095`, preserving frozen model data
-  and verified patches. Let Pi replace superseded private-progress revisions,
+- Make Pi transcripts authoritative for built-in model base request context and
+  native-published response bodies. Call receipts retain generation references, dispatch intent, outcome,
+  and usage. Full inspection includes native conversation entries. Opaque calls
+  retain their own payloads. Derive call counts from admission entries and campaign
+  format from Pi's document version. Remove duplicated Coordinator decision
+  payloads and the cache code that stripped them after publication.
+- Store accepted solver results as a note ID. Derive exported arguments and
+  the observer's displayed argument from committed notes and checks. Observer
+  snapshots retain the accepted note ID. Reuse journal scans for call
+  counts, and report omitted usage records as unavailable.
+  Compact observer reads skip the full work projection. Serialize snapshot
+  publishers with a native SQLite lock separate from campaign ownership.
+- Store standalone role and review inputs in the campaign declaration. Each
+  invocation reads a detached input from that declaration, and its worker stores
+  `input: null`. Role declarations store the task once and reject a second task
+  inside their input. CLI input files and public role functions still include `task`.
+- Move publication waiting into Pi's runtime commit. Its serialized ownership
+  recheck includes newly created ordinary descendants. Start native cancellation before
+  draining provider accounting on role failure.
+  Campaign cancellation and acceptance also abort native background descendants.
+- Pin matching Pi `1.0.2` packages at `cd32f7725fdb`, preserving frozen model data
+  and verified patches. Use Pi's persistent conversation session IDs and let it
+  replace superseded private-progress revisions,
   gate invocation writes, and wake scheduling on task changes.
   The bounded runner now writes only a compact result receipt, leaving notes and
   records in Pi's database for explicit inspection. Remote observation uses the

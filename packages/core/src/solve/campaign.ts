@@ -3,7 +3,7 @@ import type { Storage } from "@earendil-works/pi-durable";
 import { StringEnum, Type, type Static } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 import { json } from "../json.ts";
-import { campaignAddress } from "../store.ts";
+import { campaign, campaignAddress } from "../store.ts";
 import type { JsonValue, XeanOptions } from "../types.ts";
 import { readSettings, settingsSchema } from "./config.ts";
 import { decode, declarationVersion, object, taskSchema } from "./contracts.ts";
@@ -47,9 +47,9 @@ export function readDeclaration(value: unknown): Declaration {
   readSettings(declaration.settings);
   if (
     declaration.kind === "xean.role" &&
-    !isDeepStrictEqual(declaration.task, declaration.input.task)
+    Object.hasOwn(declaration.input, "task")
   )
-    throw new Error("Standalone input must contain the declared task");
+    throw new Error("Standalone declaration input must omit task");
   return declaration;
 }
 
@@ -94,10 +94,6 @@ export function campaignOptions(
   if (declaration.kind === "xean.solve") return options;
 
   const name = declaration.kind === "xean.review" ? "review" : declaration.role;
-  const input =
-    declaration.kind === "xean.review"
-      ? { task: declaration.task, argument: declaration.argument }
-      : declaration.input;
   const run = solver.functions[name];
   return {
     ...options,
@@ -107,8 +103,15 @@ export function campaignOptions(
     roles: [
       {
         name,
-        run: (input, execution, context) =>
-          run(input as never, execution, context),
+        async run(_input, execution, context) {
+          const frozen = (await execution.durable!.snapshot(campaign, context))!
+            .task as unknown as Exclude<Declaration, { kind: "xean.solve" }>;
+          const input =
+            frozen.kind === "xean.review"
+              ? { task: frozen.task, argument: frozen.argument }
+              : { ...frozen.input, task: frozen.task };
+          return run(json(input) as never, execution, context);
+        },
       },
     ],
     coordinator: {
@@ -117,7 +120,7 @@ export function campaignOptions(
         if (signal.kind === "start")
           return {
             state: null,
-            dispatch: [{ id: "role", role: name, input: input as JsonValue }],
+            dispatch: [{ id: "role", role: name, input: null }],
           };
         const work = view.work.find((work) => work.id === "role");
         if (work?.status === "failed")

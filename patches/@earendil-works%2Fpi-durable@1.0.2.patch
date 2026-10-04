@@ -1,8 +1,8 @@
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 46fcb25..e015f2f 100644
+index 548358e..dba2d28 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -105,17 +105,22 @@ export const GenerationTask = defineTask({
+@@ -106,18 +106,23 @@ export const GenerationTask = defineTask({
                  return failNoModel(runtime, ref, context);
              const view = await runtime.context(conversationId, context, cutoff);
              let messages = view.messages;
@@ -15,6 +15,7 @@ index 46fcb25..e015f2f 100644
 +            let options = {
                  ...streamOptions,
                  signal: runtime.signal,
+                 sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
 -            const message = await streamResponse(runtime, model, messages, options, attempt, context);
@@ -32,7 +33,7 @@ index 46fcb25..e015f2f 100644
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -255,7 +260,7 @@ export async function convertPartial(tx, live, conversationId) {
+@@ -257,7 +262,7 @@ export async function convertPartial(tx, live, conversationId) {
   * Stream one request and return the terminal message. Partials commit as trailing writes at most every 100 ms with one
   * commit in flight; `finally` stops the throttle and awaits that commit, so no stale partial lands after the outcome.
   */
@@ -41,7 +42,7 @@ index 46fcb25..e015f2f 100644
      let pending;
      let timer;
      let inFlight;
-@@ -288,7 +293,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+@@ -290,7 +295,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
          });
      };
      try {
@@ -50,7 +51,7 @@ index 46fcb25..e015f2f 100644
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -330,7 +335,7 @@ async function classify(runtime, request, message, context) {
+@@ -332,7 +337,7 @@ async function classify(runtime, request, message, context) {
          }, context);
          return;
      }
@@ -59,7 +60,7 @@ index 46fcb25..e015f2f 100644
      const calls = message.content.filter((content) => content.type === "toolCall");
      if (message.stopReason === "toolUse" && calls.length > 0) {
          return startToolRound(runtime, request, message, calls, context);
-@@ -397,7 +402,7 @@ async function answer(runtime, message, context) {
+@@ -399,7 +404,7 @@ async function answer(runtime, message, context) {
          if (continuation !== undefined)
              return;
          continuation = (await hook(message, runtime, context))?.continue;
@@ -68,7 +69,7 @@ index 46fcb25..e015f2f 100644
      const conversationId = runtime.conversationId;
      await runtime.commit(async (tx) => {
          // Queue modes are read on the Session line, when the boundary is decided.
-@@ -474,10 +479,15 @@ async function finishToolRound(runtime, assistant, tools, context) {
+@@ -476,10 +481,15 @@ async function finishToolRound(runtime, assistant, tools, context) {
      });
      const slots = (await runtime.snapshot(LiveDoc, conversationId, context))?.tools ?? [];
      const results = slots.flatMap((slot) => (slot.entry === undefined ? [] : [slot.entry]));
@@ -88,7 +89,7 @@ index 46fcb25..e015f2f 100644
      const added = [...controls.values()].flatMap((control) => control?.addTools ?? []);
      // The last handoff in call order wins.
      const handoff = [...controls.values()].findLast((control) => control?.handoff !== undefined)?.handoff;
-@@ -507,6 +517,10 @@ async function finishToolRound(runtime, assistant, tools, context) {
+@@ -509,6 +519,10 @@ async function finishToolRound(runtime, assistant, tools, context) {
                      await startRun(tx, conversationId, live, users);
              }
              else {
@@ -100,10 +101,10 @@ index 46fcb25..e015f2f 100644
                  if (live.run?.taskId === runtime.taskId)
                      live.run.inputs.push(...users);
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index c22c100..1c448df 100644
+index 22b0bbe..507b786 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
-@@ -103,6 +103,7 @@ class HarnessImpl extends SessionImpl {
+@@ -104,6 +104,7 @@ class HarnessImpl extends SessionImpl {
              now,
              report: this.#report,
              settleOutcome: settleSchedulerOutcome,
@@ -111,7 +112,7 @@ index c22c100..1c448df 100644
              withdrawInputs: withdrawQueuedInputs,
              conversation: async (id, binding, callContext) => {
                  const record = await this.readOnLine(() => storage.conversation(id, callContext));
-@@ -144,6 +145,13 @@ class HarnessImpl extends SessionImpl {
+@@ -145,6 +146,13 @@ class HarnessImpl extends SessionImpl {
          this.#assertOpen();
          this.#tasks.resume();
      }
@@ -156,7 +157,7 @@ index c485fb9..838b6c2 100644
      join(): Promise<void>;
      /**
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index 4e2d00f..44721ec 100644
+index 4e2d00f..a9b6b22 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
 @@ -4,6 +4,7 @@ import { agentHooks } from "./agent.js";
@@ -273,7 +274,55 @@ index 4e2d00f..44721ec 100644
              }
          }
      }
-@@ -552,6 +584,7 @@ export class TaskScheduler {
+@@ -485,12 +517,13 @@ export class TaskScheduler {
+     }
+     /**
+      * Every task with live ordinary owned work (spec §5.5), mapped to that work: each live non-background task counts for
+-     * every owner task above it up to and including the first background one. Owner chains must be loaded.
++     * every owner task above it up to and including the first background one. With background, include those tasks
++     * and cross their boundaries too. Owner chains must be loaded.
+      */
+-    #ownedLive(overlay) {
++    #ownedLive(overlay, background = false) {
+         const owned = new Map();
+         for (const record of this.#liveRecords(overlay)) {
+-            if (record.background)
++            if (record.background && !background)
+                 continue;
+             for (const step of this.#above(parentOf(record), overlay)) {
+                 if ("unknown" in step)
+@@ -502,14 +535,14 @@ export class TaskScheduler {
+                     owned.set(step.task, [record.id]);
+                 else
+                     below.push(record.id);
+-                if (step.node.background)
++                if (step.node.background && !background)
+                     break;
+             }
+         }
+         return owned;
+     }
+     /**
+-     * Whether ordinary traversal from `scope` reaches `start`: walking up reaches the scope's conversation, or an
++     * Whether ordinary traversal from `scope` reaches `start`: walking up reaches the scope's task or conversation, or an
+      * ownerless one for `roots`, without crossing a background owner, unless `crossBackground`. `undefined` while an
+      * edge is not loaded.
+      */
+@@ -521,8 +554,11 @@ export class TaskScheduler {
+                 if ("conversation" in scope && step.conversation === scope.conversation)
+                     return true;
+             }
+-            else if (step.node.background && !crossBackground) {
+-                return false;
++            else {
++                if ("task" in scope && step.task === scope.task)
++                    return true;
++                if (step.node.background && !crossBackground)
++                    return false;
+             }
+         }
+         return "roots" in scope;
+@@ -552,6 +588,7 @@ export class TaskScheduler {
          const error = closedError();
          this.#taskWaiters.rejectAll(error);
          this.#idleWaiters.rejectAll(error);
@@ -281,7 +330,7 @@ index 4e2d00f..44721ec 100644
          for (const invocation of this.#invocations.values())
              invocation.controller.abort();
      }
-@@ -569,6 +602,8 @@ export class TaskScheduler {
+@@ -569,6 +606,8 @@ export class TaskScheduler {
                  this.#dirty = false;
                  for (const reservation of await this.#reserve())
                      this.#start(reservation);
@@ -290,7 +339,7 @@ index 4e2d00f..44721ec 100644
              }
          }
          catch (error) {
-@@ -580,6 +615,7 @@ export class TaskScheduler {
+@@ -580,6 +619,7 @@ export class TaskScheduler {
              // A wakeup that arrived during a failed pass still needs its pass.
              if (this.#dirty)
                  this.#kick();
@@ -298,7 +347,7 @@ index 4e2d00f..44721ec 100644
          }
      }
      /** Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take. */
-@@ -589,26 +625,36 @@ export class TaskScheduler {
+@@ -589,26 +629,36 @@ export class TaskScheduler {
              await this.#session.commitWith(async (tx) => {
                  if (!this.#enabled || this.#closing)
                      return;
@@ -343,7 +392,7 @@ index 4e2d00f..44721ec 100644
                          tx.setTask(withState(resolution.record, {
                              status: "running",
                              checkpoint: resolution.record.state.checkpoint,
-@@ -618,13 +664,19 @@ export class TaskScheduler {
+@@ -618,13 +668,19 @@ export class TaskScheduler {
                      const invocation = this.#createInvocation(record, mode);
                      reservations.push({ invocation, task: resolution.task, snapshot });
                  }
@@ -363,7 +412,7 @@ index 4e2d00f..44721ec 100644
              throw error;
          }
          return reservations;
-@@ -717,6 +769,7 @@ export class TaskScheduler {
+@@ -717,6 +773,7 @@ export class TaskScheduler {
              context: withAbortSignal(controller.signal, this.#context),
              watches: new Set(),
              ended: false,
@@ -371,7 +420,7 @@ index 4e2d00f..44721ec 100644
              done,
              finish: () => finish(),
          };
-@@ -737,8 +790,10 @@ export class TaskScheduler {
+@@ -737,8 +794,10 @@ export class TaskScheduler {
              }
              finally {
                  this.#end(invocation);
@@ -382,7 +431,7 @@ index 4e2d00f..44721ec 100644
              }
          })();
      }
-@@ -752,7 +807,7 @@ export class TaskScheduler {
+@@ -752,7 +811,7 @@ export class TaskScheduler {
          for (;;) {
              const current = await this.#step(invocation, (tx, current) => this.#decide(tx, current, previous, state));
              // Close may seal between the decision and dispatch.
@@ -391,7 +440,7 @@ index 4e2d00f..44721ec 100644
                  return;
              const checkpoint = current.state.checkpoint;
              // Each phase handler resolves its agent afresh, at first use.
-@@ -804,7 +859,7 @@ export class TaskScheduler {
+@@ -804,7 +863,7 @@ export class TaskScheduler {
      async #runAbort(reservation) {
          const invocation = reservation.invocation;
          const current = this.#live.get(invocation.taskId);
@@ -400,7 +449,7 @@ index 4e2d00f..44721ec 100644
              return;
          let failure;
          try {
-@@ -829,7 +884,7 @@ export class TaskScheduler {
+@@ -829,7 +888,7 @@ export class TaskScheduler {
              return await this.#session.commitWith(async (tx) => {
                  const found = this.#live.get(invocation.taskId);
                  const current = found?.state.status === "running" ? found : undefined;
@@ -409,7 +458,7 @@ index 4e2d00f..44721ec 100644
                  if (decision === true)
                      return current;
                  this.#end(invocation);
-@@ -854,9 +909,15 @@ export class TaskScheduler {
+@@ -854,9 +913,15 @@ export class TaskScheduler {
      async #terminate(tx, record, outcome) {
          await this.#loadScopes(false);
          if (this.#ownedLive(overlayOf(tx)).has(record.id)) {
@@ -426,7 +475,7 @@ index 4e2d00f..44721ec 100644
          tx.setTask(withState(record, { status: "terminal", outcome }));
          await this.#settleOutcome(tx, record, outcome);
      }
-@@ -874,7 +935,7 @@ export class TaskScheduler {
+@@ -874,7 +939,7 @@ export class TaskScheduler {
              for (const record of overlay.tasks.values())
                  await this.#loadChain(parentOf(record), overlay);
              if (this.#ownedLive(overlay).has(current.id)) {
@@ -435,7 +484,7 @@ index 4e2d00f..44721ec 100644
                  return;
              }
          }
-@@ -905,13 +966,11 @@ export class TaskScheduler {
+@@ -905,13 +970,11 @@ export class TaskScheduler {
              }
          }
      }
@@ -450,7 +499,7 @@ index 4e2d00f..44721ec 100644
          for (const watch of invocation.watches)
              void watch.stop();
          // Pending waits bound to the invocation, such as a tool's waitForTask(), reject with it.
-@@ -940,7 +999,7 @@ export class TaskScheduler {
+@@ -940,7 +1003,7 @@ export class TaskScheduler {
              return phase.agent;
          };
          const hooks = {
@@ -459,7 +508,7 @@ index 4e2d00f..44721ec 100644
                  for (const handlers of agentHooks(await agent(), phase.task().definition.name)) {
                      const handler = handlers[name];
                      if (typeof handler !== "function")
-@@ -949,7 +1008,7 @@ export class TaskScheduler {
+@@ -949,7 +1012,7 @@ export class TaskScheduler {
                          await invoke(handler.bind(handlers));
                      }
                      catch (error) {
@@ -468,7 +517,49 @@ index 4e2d00f..44721ec 100644
                              throw error;
                          this.#report(error);
                      }
-@@ -1043,10 +1102,10 @@ export class TaskScheduler {
+@@ -971,11 +1034,36 @@ export class TaskScheduler {
+             get registry() {
+                 return phase.snapshot();
+             },
+-            commit: (change, context) => this.#gated(invocation, async (tx, current) => {
+-                const next = await change(tx, current);
+-                if (next !== undefined)
+-                    await this.#commitState(tx, invocation, current, next);
+-            }, context),
++            commit: async (change, context, options) => {
++                for (;;) {
++                    let owned = [];
++                    await this.#gated(invocation, async (tx, current) => {
++                        if (options?.owned !== undefined) {
++                            const queued = await this.#loadScopes(options.owned === "abort");
++                            owned = this.#ownedLive(undefined, options.owned === "abort").get(current.id) ?? [];
++                            if (options.owned === "abort") {
++                                for (const id of owned) {
++                                    const child = this.#live.get(id);
++                                    if (!child.abortRequested)
++                                        tx.setTask({ ...child, abortRequested: true });
++                                }
++                                for (const id of queued)
++                                    if (this.#inScope({ conversation: id }, { task: current.id }, true) === true)
++                                        await this.#withdrawInputs(tx, id);
++                            }
++                        }
++                        if (owned.length > 0)
++                            return;
++                        const next = await change(tx, current);
++                        if (next !== undefined)
++                            await this.#commitState(tx, invocation, current, next);
++                    }, context);
++                    if (owned.length === 0)
++                        return;
++                    const waiting = withAbortSignal(invocation.controller.signal, context);
++                    await Promise.all(owned.map((id) => this.waitForTask(id, waiting)));
++                }
++            },
+             memo: ((name, ...rest) => {
+                 if (rest.length === 1) {
+                     return this.#read(invocation, async () => memoOf(this.#live.get(invocation.taskId), name));
+@@ -1043,10 +1131,10 @@ export class TaskScheduler {
      }
      /** Commit after rereading the task on the line and gating the invocation. */
      #gated(invocation, change, context) {
@@ -481,7 +572,7 @@ index 4e2d00f..44721ec 100644
                  throw endedError(invocation);
              if (this.#closing)
                  throw closedError();
-@@ -1059,7 +1118,10 @@ export class TaskScheduler {
+@@ -1059,7 +1147,10 @@ export class TaskScheduler {
              if (invocation.mode === "run" && current.abortRequested) {
                  throw new Error(`Task ${invocation.taskId} has a durable abort mark`);
              }
@@ -769,7 +860,7 @@ index e425feb..23fbd3b 100644
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 19096c0..6fea85e 100644
+index 19096c0..2a71650 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -121,9 +121,10 @@ export type PhaseHandler<I, P, S, R, H extends object> = (task: RunningTask<I, P
@@ -785,7 +876,22 @@ index 19096c0..6fea85e 100644
  }
  /**
   * Operations of one task invocation. Every operation rejects after the invocation ends; watches acquired through it
-@@ -286,7 +287,7 @@ export type EntryRecord = {
+@@ -152,9 +153,12 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
+      * Commit on the Session line after rereading the task. Rejects when the task is terminal, the invocation ended, the
+      * Harness is closing, or, in a run invocation, the task carries an abort mark. A returned state replaces the task's
+      * state in the same commit; returning nothing leaves it unchanged. `tx.createTask()` defaults to the task's
+-     * conversation.
++     * conversation. With owned, join ordinary descendants or abort all descendants and queued inputs before invoking change,
++     * rechecking ownership on its publication transaction. Waits occur outside the Session line.
+      */
+-    commit(change: (tx: Tx, current: RunningTask<I, S, R>) => NextTaskState<S, R> | undefined | Promise<NextTaskState<S, R> | undefined>, context: Context): Promise<void>;
++    commit(change: (tx: Tx, current: RunningTask<I, S, R>) => NextTaskState<S, R> | undefined | Promise<NextTaskState<S, R> | undefined>, context: Context, options?: {
++        readonly owned: "join" | "abort";
++    }): Promise<void>;
+     /** Read a durable memo of this task. */
+     memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
+     /** Store `candidate` unless a memo already exists; return the durable winner. */
+@@ -286,7 +290,7 @@ export type EntryRecord = {
      readonly byTaskId?: TaskId;
  };
  /** Entry content supplied before the Session assigns identity and task attribution. */
@@ -794,7 +900,7 @@ index 19096c0..6fea85e 100644
      /** `"self"` starts active context at the newly assigned entry ID. */
      readonly head?: EntryId | "self";
  };
-@@ -444,7 +445,8 @@ export type TaskState<S, R> = {
+@@ -444,7 +448,8 @@ export type TaskState<S, R> = {
  } | {
      /** Outcome decided; becomes terminal once no ordinary owned work below is live. Runs no more code. */
      readonly status: "completing";
@@ -804,7 +910,7 @@ index 19096c0..6fea85e 100644
      readonly outcome: TaskOutcome<R>;
  } | {
      /** Permanently settled durable result receipt. */
-@@ -690,6 +692,8 @@ export interface Tx {
+@@ -690,6 +695,8 @@ export interface Tx {
      createTask<I, S extends {
          phase: string;
      }, R, H extends object>(task: Task<I, S, R, H>, input: I, options: TaskOptions): Promise<TaskId<R>>;

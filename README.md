@@ -44,8 +44,8 @@ all three packages, with one dependency lock and aligned package versions.
 Matching Pi packages are pinned to one exact source commit in `package.json`.
 The [artifact record](vendor/pi/provenance.json) records that source revision,
 build, frozen model data, and hashes. The `main` branch contains the unreleased
-3.0 candidate. New campaigns use campaign format 12 and solver declaration
-version 14. Observer snapshots use `xean-observe/v4`. Historical campaigns require
+3.0 candidate. New campaigns use campaign format 13 and solver declaration
+version 16. Observer snapshots use `xean-observe/v5`. Historical campaigns require
 their original source revision and runtime, and historical snapshots require
 their matching observer. No migration is provided. Existing releases and tags
 remain historical archives.

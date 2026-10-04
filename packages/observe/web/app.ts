@@ -3,6 +3,7 @@ import { keyed } from "lit-html/directives/keyed.js";
 import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
+import { acceptedArgument } from "xean/solve/argument";
 import type { Run } from "../src/read.ts";
 import type { RunStatus } from "../src/server.ts";
 
@@ -36,7 +37,7 @@ const json = (value: unknown) =>
   html`<pre>${JSON.stringify(value, null, 2)}</pre>`;
 const badge = (label: string) => html`<span class="badge">${label}</span>`;
 const metrics = (
-  values: Record<string, string | number | undefined | TemplateResult>,
+  values: Record<string, string | number | null | undefined | TemplateResult>,
   className = "metrics",
 ) =>
   html`<dl class=${className}>
@@ -45,7 +46,7 @@ const metrics = (
         html`<div>
           <dt>${label}</dt>
           <dd>
-            ${typeof value === "number" || value === undefined ? count(value) : value}
+            ${typeof value === "number" || value == null ? count(value) : value}
           </dd>
         </div>`,
     )}
@@ -572,6 +573,13 @@ function detailView(run: Run) {
                     <h2>Campaign result</h2>
                     ${disclosure("result", "Read campaign result", () => {
                       const result = snapshot.result;
+                      if (snapshot.status.acceptedNoteId !== null)
+                        return math(
+                          acceptedArgument(
+                            snapshot.notes,
+                            snapshot.status.acceptedNoteId,
+                          ),
+                        );
                       return result &&
                         typeof result === "object" &&
                         "argument" in result &&

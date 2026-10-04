@@ -31,6 +31,7 @@ import {
   type ToolTaskInput,
   type HookApi,
   type Extension,
+  type GenerationCheckpoint,
 } from "@earendil-works/pi-durable";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import type { Execution } from "../types.ts";
@@ -159,7 +160,7 @@ export async function ask<S extends TSchema>(
     });
   }
   let conversationId: ConversationId | undefined;
-  const sessionId = `${execution.attemptId}/${name}/${crypto.randomUUID()}`;
+  let sessionId: string | undefined;
   const capacity = `${name} input leaves insufficient context for an answer; select less context or use a larger-context model`;
   const progress = async (api: HookApi, ctx: Context) =>
     (await api.snapshot(
@@ -211,44 +212,7 @@ export async function ask<S extends TSchema>(
   });
   const tools = [
     submit,
-    ...(options.tools ?? []).map((tool) =>
-      defineTool({
-        ...tool,
-        outputLimits,
-        async execute(args, api, ctx) {
-          let remaining: number | undefined;
-          if (tool.name === "read_notes" && options.maxReads !== undefined) {
-            const count = responses(await messages(api, ctx)) - 1;
-            remaining = await api.commit(async (tx) => {
-              const state = await tx.doc(
-                Progress,
-                host.taskId,
-                String(api.conversationId),
-                null,
-              );
-              if (!state.reads.includes(api.taskId)) {
-                if (!canRead(state.reads.length, count))
-                  throw new Error(
-                    "Reading is disabled. Submit results from the available context.",
-                  );
-                state.reads.push(api.taskId);
-              }
-              return options.maxReads! - state.reads.length;
-            }, ctx);
-          }
-          const result = await tool.execute(args, api, ctx);
-          return remaining === undefined
-            ? result
-            : {
-                ...result,
-                content: [
-                  ...(result.content ?? []),
-                  { type: "text", text: `${remaining} reads remain.` },
-                ],
-              };
-        },
-      }),
-    ),
+    ...(options.tools ?? []).map((tool) => ({ ...tool, outputLimits })),
   ];
   const followUp = (count: number, reads: number, text?: string) =>
     [
@@ -270,6 +234,7 @@ export async function ask<S extends TSchema>(
     value: JsonValue | undefined,
     reads: number,
     count: number,
+    sessionId: string,
   ): SimpleStreamOptions => ({
     ...profile.options,
     reasoning: profile.options?.reasoning ?? defaultReasoning,
@@ -379,7 +344,7 @@ export async function ask<S extends TSchema>(
     tools,
     hooks: [
       hook(ToolTask, {
-        async beforeTool(_call, api, ctx) {
+        async beforeTool(call, api, ctx) {
           const assistant = await host.commit(async (tx) => {
             const task = (await tx.task(api.taskId))!;
             const { assistant } = task.input as ToolTaskInput;
@@ -392,11 +357,29 @@ export async function ask<S extends TSchema>(
             ).length > 1
           )
             return { block: "Submit exactly once in each response" };
+          if (call.name === "read_notes" && options.maxReads !== undefined) {
+            const count = responses(await messages(api, ctx)) - 1;
+            await host.commit(async (tx) => {
+              const state = await tx.doc(
+                Progress,
+                host.taskId,
+                String(api.conversationId),
+                null,
+              );
+              if (state.reads.includes(api.taskId)) return;
+              if (!canRead(state.reads.length, count))
+                throw new Error(
+                  "Reading is disabled. Submit results from the available context.",
+                );
+              state.reads.push(api.taskId);
+            }, ctx);
+          }
           return undefined;
         },
       }),
       hook(GenerationTask, {
-        async beforeRequest({ messages: pending }, api, ctx) {
+        async beforeRequest({ messages: pending, options: native }, api, ctx) {
+          sessionId = native.sessionId!;
           ctx.abortSignal?.throwIfAborted();
           const state = await progress(api, ctx);
           const count = responses(pending);
@@ -411,15 +394,31 @@ export async function ask<S extends TSchema>(
           );
           if (room < profile.model.maxTokens || room <= 1)
             throw new Error(capacity);
-          // The native request hook runs again on recovery; transport sessions stay invocation-local.
+          const checkpoint = await host.commit(
+            async (tx) =>
+              (await tx.task(api.taskId))!.state
+                .checkpoint as GenerationCheckpoint,
+            ctx,
+          );
+          if (checkpoint.phase !== "request")
+            throw new Error("Pi generation has no request checkpoint");
           return {
             stream: (_model, input, options) =>
               auditedStream(
                 runtime.models,
                 execution.recorder,
                 browser ? undefined : recovery,
+                {
+                  taskId: api.taskId,
+                  cutoff: checkpoint.cutoff,
+                },
               )(profile.model, input, options),
-            options: requestOptions(state.value, state.reads.length, count),
+            options: requestOptions(
+              state.value,
+              state.reads.length,
+              count,
+              sessionId,
+            ),
           };
         },
         afterResponse(message) {
@@ -561,6 +560,6 @@ export async function ask<S extends TSchema>(
     return structuredClone(state.value) as Static<S>;
   } finally {
     registry.uninstall(extension);
-    cleanupSessionResources(sessionId);
+    if (sessionId) cleanupSessionResources(sessionId);
   }
 }

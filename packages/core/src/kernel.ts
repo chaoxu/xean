@@ -62,11 +62,6 @@ import type {
 } from "./types.ts";
 
 type Calls = { pending: Set<Promise<void>>; failure?: Error };
-type Reserved = {
-  task: PiTask;
-  attemptId: string;
-  input: JsonValue;
-};
 const stopped = (status: XeanStatus) =>
   status === "cancelled" || status === "completed";
 const owners = new WeakSet<Storage>();
@@ -89,9 +84,11 @@ function view(tx: Transaction): CampaignView {
   };
 }
 
-function snapshot(tx: Transaction): Campaign {
+async function snapshot(tx: Transaction): Promise<Campaign> {
   return json({
     ...tx.state,
+    version: campaignVersion,
+    providerCalls: await tx.providerCalls(),
     ...view(tx),
     pendingSignals: tx.tasks.filter(
       (t) => t.kind === COORDINATOR && t.state.status !== "terminal",
@@ -157,13 +154,11 @@ export class Xean {
         options.task === undefined
           ? undefined
           : {
-              version: campaignVersion,
               task: json(options.task),
               coordinator: options.coordinator.name,
               status: "running",
               state: null,
               limits: campaignLimits,
-              providerCalls: 0,
               result: null,
               error: null,
             };
@@ -211,13 +206,14 @@ export class Xean {
         onTaskFailure: async (tx, task, outcome) => {
           if (!isXeanTask(task)) return false;
           await initialized.promise;
-          await xean.failTask(
+          const state = await xean.failureState(
             await xean.store.transaction(tx),
             task as PiTask,
             outcome.status === "faulted"
               ? outcome.error.message
               : outcome.reason,
           );
+          if (state) tx.setTask({ ...task, memos: undefined, state });
           return true;
         },
         onReport: (error) => xean?.fail(error),
@@ -290,10 +286,10 @@ export class Xean {
     campaign: Campaign;
     records: EntryRecord[];
   }> {
-    return this.store.mutate(async (tx) => ({
-      campaign: snapshot(tx),
-      records: await tx.entries(project),
-    }));
+    return this.store.mutate(async (tx) => {
+      const records = await tx.entries(project);
+      return { campaign: await snapshot(tx), records };
+    });
   }
   records(): Promise<EntryRecord[]> {
     return this.store.mutate((tx) => tx.entries());
@@ -466,7 +462,7 @@ export class Xean {
 
   private exhaust(tx: Transaction, task: PiTask): void {
     // Pi cancels and joins private descendants before finalizing this outcome.
-    tx.writeTask({
+    tx.native.setTask({
       ...task,
       memos: undefined,
       state: {
@@ -488,14 +484,11 @@ export class Xean {
     if (task.state.status !== "running")
       throw new Error("Pi invoked a non-running task");
     const attempt = task.state.checkpoint.attempts;
-    const item: Reserved = {
-      task,
-      attemptId: task.state.checkpoint.attemptId!,
-      input:
-        task.kind === WORKER
-          ? json((task.input as WorkRequest).input)
-          : await this.attemptInput(task.state.checkpoint.inputId!),
-    };
+    const attemptId = task.state.checkpoint.attemptId!;
+    const input =
+      task.kind === WORKER
+        ? json((task.input as WorkRequest).input)
+        : await this.attemptInput(task.state.checkpoint.inputId!);
     const active = withCancel(nativeContext);
     const calls: Calls = { pending: new Set() };
     const telemetry = this.options.telemetry ?? NOOP_TELEMETRY_CONTEXT;
@@ -503,19 +496,19 @@ export class Xean {
       await runtime.commit(() => undefined, nativeContext);
       await telemetry.startSpan(
         {
-          name: item.task.kind,
+          name: task.kind,
           attributes: {
-            "xean.task": item.task.id,
-            "xean.attempt": item.attemptId,
+            "xean.task": task.id,
+            "xean.attempt": attemptId,
           },
         },
         async (span) => {
           const context = active.context;
           const execution: Execution = {
-            attemptId: item.attemptId,
+            attemptId,
             inputId: task.state.checkpoint?.inputId,
             attempt,
-            recorder: this.recorder(item, runtime, context, calls),
+            recorder: this.recorder(attemptId, runtime, context, calls),
             telemetry: span,
             durable: {
               taskId: runtime.taskId,
@@ -536,13 +529,13 @@ export class Xean {
             },
           };
           let result: JsonValue;
-          if (item.task.kind === WORKER) {
+          if (task.kind === WORKER) {
             const role = this.options.roles.find(
-              (r) => r.name === (item.task.input as WorkRequest).role,
+              (r) => r.name === (task.input as WorkRequest).role,
             )!;
-            result = json(await role.run(item.input, execution, context));
+            result = json(await role.run(input, execution, context));
           } else {
-            const { signal, view } = item.input as {
+            const { signal, view } = input as {
               signal: Signal;
               view: CampaignView;
             };
@@ -555,93 +548,78 @@ export class Xean {
               ),
             );
           }
-          await this.joinOwned(runtime.taskId, context);
-          if (calls.failure) throw calls.failure;
-          if (calls.pending.size > 0)
-            throw new Error("Role returned with unsettled provider calls");
-          await this.store.mutateTask(runtime, async (tx, current) => {
-            const next =
-              item.task.kind === WORKER
-                ? await this.finishWorker(tx, current, {
-                    status: "completed",
-                    result,
-                  })
-                : await this.commitDecision(tx, current, result as Decision);
-            await tx.entry(
-              "xean.attempt.completed",
-              { attemptId: item.attemptId },
-              current.id,
-            );
-            return next;
-          });
+          let completed = false;
+          await this.store.mutateTask(
+            runtime,
+            async (tx, current) => {
+              if (calls.failure) throw calls.failure;
+              if (calls.pending.size > 0)
+                throw new Error("Role returned with unsettled provider calls");
+              const next =
+                task.kind === WORKER
+                  ? await this.finishWorker(tx, current, {
+                      status: "completed",
+                      result,
+                    })
+                  : await this.commitDecision(tx, current, result as Decision);
+              await tx.entry(
+                "xean.attempt.completed",
+                { attemptId },
+                current.id,
+              );
+              completed = tx.state.status === "completed";
+              return next;
+            },
+            { owned: "join" },
+          );
+          if (completed) await this.abortCampaign(nativeContext);
         },
       );
     } catch (error) {
       active.cancel(error);
-      // A rejected Promise.all can leave sibling calls cleaning up after abort.
-      // Keep the attempt alive until their accounting writes have settled.
-      await Promise.all(calls.pending);
+      // Native calls have their own signals. Initiate their abort before joining
+      // accounting, which may itself be waiting for that cancellation.
+      const cleanup =
+        this.store.failure || this.closing || nativeContext.abortSignal?.aborted
+          ? undefined
+          : runtime
+              .commit(() => undefined, nativeContext, { owned: "abort" })
+              .catch((cleanupError) => {
+                if (!this.closing && !nativeContext.abortSignal?.aborted)
+                  this.fail(cleanupError);
+                throw cleanupError;
+              });
+      const [cleaned] = await Promise.allSettled([cleanup, ...calls.pending]);
       if (this.store.failure) throw error;
       if (this.closing || nativeContext.abortSignal?.aborted) return;
-      await this.joinOwned(runtime.taskId, nativeContext, true);
-      await this.store.mutateTask(runtime, async (tx, task) => {
-        if (task.state.status !== "running") return;
-        const message = errorText(error);
-        await tx.entry(
-          "xean.attempt.failed",
-          { attemptId: item.attemptId, error: message },
-          task.id,
-        );
-        const checkpoint = { ...task.state.checkpoint, error: message };
-        if (
-          error instanceof TransientError &&
-          checkpoint.attempts < tx.state.limits.attempts
-        ) {
-          tx.writeTask({ ...task, state: { status: "pending", checkpoint } });
-          return;
-        }
-        return this.failureState(tx, task, message);
-      });
+      if (cleaned!.status === "rejected") throw cleaned!.reason;
+      await this.store.mutateTask(
+        runtime,
+        async (tx, task) => {
+          const message = errorText(error);
+          await tx.entry(
+            "xean.attempt.failed",
+            { attemptId, error: message },
+            task.id,
+          );
+          const checkpoint = { ...task.state.checkpoint, error: message };
+          if (
+            error instanceof TransientError &&
+            checkpoint.attempts < tx.state.limits.attempts
+          ) {
+            tx.native.setTask({
+              ...task,
+              state: { status: "pending", checkpoint },
+            });
+            return;
+          }
+          return this.failureState(tx, task, message);
+        },
+        { owned: "abort" },
+      );
     } finally {
       active.cancel();
     }
-  }
-
-  /** Pi owns descendant joins and aborts; shared publication waits for them. */
-  private async joinOwned(
-    taskId: TaskId,
-    context: Context,
-    abort = false,
-  ): Promise<void> {
-    const graph = await this.store.harness.taskGraph(context);
-    const conversations = graph.value.tasks[taskId]?.conversations ?? [];
-    const children = Object.values(graph.value.tasks).filter(
-      (task) => task.owner === taskId,
-    );
-    graph.dispose();
-    await Promise.all([
-      ...conversations.map(async (id) => {
-        const conversation = (await this.store.harness.conversation(
-          id,
-          context,
-        ))!;
-        if (abort) await conversation.abort(context, { background: true });
-        else await conversation.waitForIdle(context);
-      }),
-      ...children.map(async (child) => {
-        if (abort) await this.store.harness.abortTask(child.id, context);
-        await this.store.harness.waitForTask(child.id, context);
-      }),
-    ]);
-  }
-
-  private async failTask(
-    tx: Transaction,
-    task: PiTask,
-    message: string,
-  ): Promise<void> {
-    const state = await this.failureState(tx, task, message);
-    if (state) tx.writeTask({ ...task, memos: undefined, state });
   }
 
   private async failureState(
@@ -656,7 +634,7 @@ export class Xean {
       return terminal(task, { status: "aborted", reason: tx.state.status });
     const outcome = { status: "failed" as const, error: { message } };
     if (task.kind === WORKER) return this.finishWorker(tx, task, outcome);
-    tx.writeTask({
+    tx.native.setTask({
       ...task,
       state: {
         status: "pending",
@@ -734,18 +712,19 @@ export class Xean {
     }
     tx.state.state = decision.state;
     for (const request of admitted) await tx.newTask(WORKER, request);
-    return terminal(task, { status: "completed", result: decision });
+    return terminal(task, { status: "completed", result: null });
   }
 
   private recorder(
-    item: Reserved,
+    attemptId: string,
     runtime: Runtime,
     context: Context,
     calls: Calls,
   ): CallRecorder {
     return {
-      begin: async (model) => {
+      begin: async (model, generation) => {
         model = json(model);
+        generation = generation && json(generation);
         // Register before admission can yield, so returning during begin()
         // cannot bypass the unsettled-call guard.
         const completion = Promise.withResolvers<void>();
@@ -758,11 +737,14 @@ export class Xean {
         try {
           await this.store.mutateTask(runtime, async (tx) => {
             context.abortSignal?.throwIfAborted();
-            tx.state.providerCalls++;
             id = await tx.entry(
               "xean.call.started",
-              { attemptId: item.attemptId, model },
-              item.task.id,
+              {
+                attemptId,
+                model,
+                ...(generation ? { generation } : {}),
+              },
+              runtime.taskId,
             );
           });
         } catch (error) {
@@ -778,13 +760,13 @@ export class Xean {
                 "Provider call request already recorded or settled",
               );
             requestRecorded = true;
-            payload = json(payload);
+            if (payload !== undefined) payload = json(payload);
             await this.store.mutateTask(runtime, async (tx) => {
               context.abortSignal?.throwIfAborted();
               await tx.entry(
                 "xean.call.request",
-                { callId: id, payload },
-                item.task.id,
+                { callId: id, ...(payload === undefined ? {} : { payload }) },
+                runtime.taskId,
               );
             });
           },
@@ -797,7 +779,7 @@ export class Xean {
                 JSON.stringify({ callId: id, message, usage }),
               ) as JsonValue;
               await this.mutate((tx) =>
-                tx.entry("xean.call.settled", data, item.task.id),
+                tx.entry("xean.call.settled", data, runtime.taskId),
               );
             } catch (error) {
               calls.failure = new Error(errorText(error));
@@ -821,7 +803,7 @@ export class Xean {
     tx.state.error = error;
     for (const task of tx.tasks)
       if (task.state.status !== "terminal" && task.id !== except) {
-        tx.writeTask({
+        tx.native.setTask({
           ...task,
           abortRequested: true,
         });
@@ -834,9 +816,21 @@ export class Xean {
         this.halt(tx, "cancelled", "Cancelled by user");
     });
     this.store.harness.resume();
+    await this.abortCampaign();
     await this.store.harness.waitForQuiescence(BACKGROUND_CONTEXT);
     this.store.harness.pause();
     return this.inspect();
+  }
+
+  private async abortCampaign(context = BACKGROUND_CONTEXT): Promise<void> {
+    try {
+      const root = await this.store.harness.root(context);
+      await root.abort(context, { background: true });
+    } catch (error) {
+      if (this.closing || context.abortSignal?.aborted) return;
+      this.fail(error);
+      throw error;
+    }
   }
 
   async pause(): Promise<Campaign> {
@@ -866,17 +860,11 @@ export class Xean {
             task.state.checkpoint,
             task.id,
           );
-          tx.writeTask({
+          tx.native.setTask({
             ...task,
             state: {
               status: "pending",
-              checkpoint: {
-                ...task.state.checkpoint,
-                attempts: 0,
-                attemptId: null,
-                inputId: undefined,
-                error: null,
-              },
+              checkpoint: initialAttempt(),
             },
           });
         }
@@ -889,11 +877,10 @@ export class Xean {
   }
 
   /** An exact keyed retry returns its original receipt without admitting again. */
-  private keyedSignal(
-    value: JsonValue,
-    key: string | undefined,
-    admit: (tx: Transaction) => void | Promise<void>,
-  ): Promise<CampaignInput> {
+  async input(value: JsonValue, key?: string): Promise<CampaignInput> {
+    value = json(value);
+    if (key !== undefined && typeof key !== "string")
+      throw new TypeError("Input key must be a string");
     return this.mutate(async (tx) => {
       const prior =
         key === undefined
@@ -904,28 +891,19 @@ export class Xean {
           throw new Error(`Input key reused with a different value: ${key}`);
         return json(prior);
       }
-      await admit(tx);
-      const id = await tx.newTask(COORDINATOR, {
-        kind: "input",
-        value,
-        ...(key === undefined ? {} : { key }),
-      });
-      return json({ id, key: key ?? null, value });
-    });
-  }
-
-  async input(value: JsonValue, key?: string): Promise<CampaignInput> {
-    const normalized = json(value);
-    if (key !== undefined && typeof key !== "string")
-      throw new TypeError("Input key must be a string");
-    return this.keyedSignal(normalized, key, (tx) => {
       if (
         stopped(tx.state.status) ||
         tx.state.status === "blocked" ||
         this.closing
       )
         throw new Error("Campaign does not accept input");
-      this.options.validateInput?.(normalized, json(view(tx)));
+      this.options.validateInput?.(value, json(view(tx)));
+      const id = await tx.newTask(COORDINATOR, {
+        kind: "input",
+        value,
+        ...(key === undefined ? {} : { key }),
+      });
+      return json({ id, key: key ?? null, value });
     });
   }
 
@@ -945,6 +923,18 @@ export class Xean {
 }
 
 /** Read a pinned Pi storage snapshot without opening the kernel or recovering work. */
+export function inspectCampaign(
+  path: string,
+  records?: true | RecordProjection,
+): Promise<{ campaign: Campaign; records: EntryRecord[] }>;
+export function inspectCampaign(
+  path: string,
+  records: false,
+): Promise<{ campaign: Campaign; records: undefined }>;
+export function inspectCampaign(
+  path: string,
+  records?: boolean | RecordProjection,
+): Promise<{ campaign: Campaign; records: EntryRecord[] | undefined }>;
 export async function inspectCampaign(
   path: string,
   records: boolean | RecordProjection = true,
@@ -954,10 +944,10 @@ export async function inspectCampaign(
   cleanup.defer(() => storage.close(BACKGROUND_CONTEXT));
   const store = await Store.open(storage);
   cleanup.defer(() => store.close());
-  return await store.mutate(async (tx) => ({
-    campaign: snapshot(tx),
-    records: records
+  return await store.mutate(async (tx) => {
+    const entries = records
       ? await tx.entries(typeof records === "function" ? records : undefined)
-      : [],
-  }));
+      : undefined;
+    return { campaign: await snapshot(tx), records: entries };
+  });
 }

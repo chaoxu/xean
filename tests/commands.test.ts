@@ -8,6 +8,7 @@ import {
   validateCommand,
 } from "../packages/core/src/solve/commands.ts";
 import {
+  acceptedArgument,
   closure,
   completion,
   noteInfo,
@@ -16,7 +17,7 @@ import {
 } from "../packages/core/src/solve/notes.ts";
 
 test("solver imports are trusted over verified support, preserve corrections, and replay safely", async () => {
-  const pass = { verdict: "PASS", report: "Checked." };
+  const pass = { verdict: "PASS" as const, report: "Checked." };
   const fixtures = {
     base: {
       kind: "notes",
@@ -114,9 +115,13 @@ test("solver imports are trusted over verified support, preserve corrections, an
       imported: true,
       passed: ["correctness", "source"],
     });
-    expect(
-      completion({ problem: "Task", completionCriteria: "Proof" }, notes),
-    ).toBeUndefined();
+    expect(completion(notes)).toBeUndefined();
+    expect(() => acceptedArgument(notes, notes[2]!.id)).toThrow(
+      "No accepted argument",
+    );
+    expect(() => acceptedArgument(notes, "missing")).toThrow(
+      "No accepted argument",
+    );
     const unsupported = structuredClone(notes);
     unsupported[0]!.checks = [];
     expect(refresh(unsupported).map((note) => note.verified)).toEqual([
@@ -180,6 +185,22 @@ test("solver imports are trusted over verified support, preserve corrections, an
       text: "Imported proof, with corrected formatting.",
       revision: 1,
     });
+    const accepted = structuredClone(corrected);
+    for (const note of [accepted[0]!, accepted[2]!])
+      note.checks.push({
+        noteId: note.id,
+        ...(note.candidate ? { requirements: pass } : {}),
+        reconstruction: {
+          ...pass,
+          statement: note.summary,
+          proof: "Independent proof.",
+        },
+      });
+    refresh(accepted);
+    expect(completion(accepted)).toEqual({ noteId: candidate.id });
+    expect(acceptedArgument(accepted, candidate.id)).toBe(
+      "## base/n1\n\nChecked lemma, with corrected typography.\n\n## input/external/n1\n\nImported lemma.\n\n## input/external/n2\n\nImported proof, with corrected formatting.",
+    );
     expect(await submitCommand(engine, correction)).toEqual(receipt);
     await expect(
       submitCommand(engine, { ...correction, id: "stale" }),

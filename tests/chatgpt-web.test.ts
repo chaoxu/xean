@@ -162,7 +162,6 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
         task,
         settings,
         input: {
-          task,
           notes: [
             {
               id: "given",
@@ -209,14 +208,16 @@ test("browser provider runs a quota-safe one-shot Explorer", async () => {
     const settled = snapshot.records
       .filter((r) => r.kind === "xean.call.settled")
       .map((r) => r.data as any);
-    expect(
-      settled.every(
-        (r) => r.usage === null && r.message.usageReported === false,
-      ),
-    ).toBeTrue();
-    expect(settled[0].message.chatGptWeb).toEqual({
-      text: selection("submit_result", draft),
-      servedModel: null,
+    expect(settled.every((r) => r.usage === null)).toBeTrue();
+    const assistant = snapshot.records
+      .flatMap((entry) => entry.model ?? [])
+      .find((message) => message.role === "assistant")!;
+    expect(assistant.usageReported).toBe(false);
+    expect(assistant).toMatchObject({
+      chatGptWeb: {
+        text: selection("submit_result", draft),
+        servedModel: null,
+      },
     });
   } finally {
     await engine.close();
@@ -549,7 +550,7 @@ test("reopening an interrupted browser worker never submits a second request", a
         role: "explorer",
         task,
         settings,
-        input: { task, notes: [], guidance: "Explore" },
+        input: { notes: [], guidance: "Explore" },
       },
       () => {
         const runtime = piRuntime(settings);

@@ -27,16 +27,16 @@ test("publisher skips unchanged ticks and recovers changes, replacement, and fai
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let hold = false;
-  const inspect = spyOn(core, "inspectCampaign").mockImplementation(
-    async (...args) => {
-      const result = await original(...args);
-      if (hold) {
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
-    },
-  );
+  const inspect = spyOn(core, "inspectCampaign").mockImplementation((async (
+    ...args: Parameters<typeof original>
+  ) => {
+    const result = await original(...args);
+    if (hold) {
+      entered.resolve();
+      await release.promise;
+    }
+    return result;
+  }) as typeof original);
   const intervals = spyOn(globalThis, "setInterval");
   const stop = observe(directory, (error) => {
     errors.push(error);
@@ -78,6 +78,23 @@ test("publisher skips unchanged ticks and recovers changes, replacement, and fai
     await entered.promise;
     await engine.input("during publication");
     expect(tick()).toBe(publishing);
+    // A second process using the canonical directory cannot overwrite this snapshot.
+    const competing = Bun.spawn(
+      [
+        process.execPath,
+        "--no-install",
+        "--no-env-file",
+        new URL("../packages/observe/src/publish.ts", import.meta.url).pathname,
+        first,
+      ],
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    const [code, error] = await Promise.all([
+      competing.exited,
+      new Response(competing.stderr).text(),
+    ]);
+    expect(code).not.toBe(0);
+    expect(error).toContain("database is locked");
     release.resolve();
     await publishing;
     const preceding = await read();

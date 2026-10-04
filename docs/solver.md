@@ -66,6 +66,12 @@ additional PASS results and reconstruction of every generated claim in its
 transitive support. Trusted imported support is assumed, with its dependencies
 still checked. Acceptance is reconstructed from committed notes and
 checks, independently of Coordinator's claims.
+The stored solver result is `{noteId}`. `acceptedArgument(notes, noteId)` derives
+the accepted argument from projected notes in dependency order, including
+committed harmless corrections. The CLI export and observer use this projection.
+Browser callers can import it from `xean/solve/argument` without loading the
+solver runtime. Observer snapshots retain the accepted note ID and derive the
+argument when displaying it.
 Worker completion, a rejected proof, or an inconclusive check does not complete
 the mathematical search. It continues until exact-task acceptance or an
 authorized stop, with operational failures reported separately.
@@ -307,7 +313,7 @@ A stale automatic proposal leaves newer content intact and retains the completed
 checks. This differs from a stale manual `correct` command, which is rejected.
 Projected note checks omit `Check.correction` and verdict `correction`
 payloads, so later role inputs contain the current note text without old edit
-proposals. Immutable worker results and call records retain the original payloads.
+proposals. Immutable worker results retain the original payloads.
 
 ## Research
 
@@ -689,6 +695,10 @@ operational attempt/concurrency limits, and any explicit outer-runner round limi
 with `byModelOmitted` for the remainder. Overlapping usage fields are not added
 into a new token total. Price estimates and provider-bill reconciliation remain
 outside this report.
+When inspection omits records, the admitted call count remains known.
+`calls.settled`, `calls.unknownUsage`, `calls.unsettled`, and
+`calls.byModelOmitted` are null, and `calls.byModel` is empty. Observe marks
+these snapshots with `usageAvailable: false`.
 
 Library callers use the same projection:
 
@@ -698,6 +708,10 @@ import { statusReport, usageRecord } from "xean/report";
 
 const report = statusReport(await inspectCampaign(path, usageRecord));
 ```
+
+Records supplied to `statusReport` must retain every call admission and
+settlement. Use full inspection or `usageRecord`. Other record projections are
+for consumers that understand their selection.
 
 Use `inspect CAMPAIGN` for an explicit detailed read, `inspect --records` for
 execution evidence, and `export CAMPAIGN` for the accepted argument. Capture
@@ -1102,6 +1116,12 @@ role campaign records successful execution, not acceptance of a mathematical
 solution. Solver acceptance, a separate review of the full proof, and catalog
 closure remain distinct.
 
+The campaign declaration stores the standalone input. A role declaration keeps
+`task` at the top level and omits it from `input`. A review declaration keeps its
+`task` and `argument` at the top level. The worker stores `input: null` and reads
+the declaration from Pi for each invocation, supplying a detached input with
+`task` to the role function. Stored role inputs containing another `task` are rejected.
+
 Standalone execution returns a compact receipt. Use `inspect ROLE.sqlite` to
 read its result, or `inspect REVIEW.sqlite` for an independent review's verdict.
 
@@ -1140,7 +1160,7 @@ The library is in `packages/core`, and the optional `xean-cli` app is in
 library APIs, including shared status reports from `xean/report`. Distribution uses the complete
 source checkout, including the dependency-installation check, lockfile, and
 vendored packages. Individual workspace packages remain private. Campaign declarations are
-version 14, with distinct solver, standalone-role, and review kinds. Only this
+version 16, with distinct solver, standalone-role, and review kinds. Only this
 declaration is supported. Historical declarations retain their original runtime
 and are not read, rewritten, or migrated by this CLI. The
 [kernel storage contract](kernel.md#sqlite-ownership-and-durability) defines the

@@ -3,8 +3,11 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { once } from "node:events";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT,
+} from "@earendil-works/chord/context";
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -14,11 +17,17 @@ import { defineTool, MemoryStorage } from "@earendil-works/pi-durable";
 import { ask } from "../packages/core/src/solve/pi.ts";
 import {
   Xean,
+  inspectCampaign,
   openXeanStorage,
   type CampaignView,
+  type CallIdentity,
   type EntryId,
+  type Execution,
   type JsonValue,
+  type GenerationReference,
 } from "../packages/core/src/index.ts";
+import { statusReport, usageRecord } from "../packages/core/src/report.ts";
+import { campaignAddress } from "../packages/core/src/store.ts";
 import {
   createSolver,
   project,
@@ -27,7 +36,140 @@ import {
 } from "../packages/core/src/solve/index.ts";
 import { fixtureRuntime, invoke } from "./fixtures/pi.ts";
 
-test("mixed tool batches reject duplicate submissions and finish without rereading history", async () => {
+function holdCalls<Input, Output>(
+  run: (input: Input, execution: Execution, context: Context) => Output,
+  when: (identity: CallIdentity) => boolean,
+  entered: () => void,
+) {
+  return (input: Input, execution: Execution, context: Context) =>
+    run(
+      input,
+      {
+        ...execution,
+        recorder: {
+          async begin(identity, generation) {
+            if (when(identity)) {
+              entered();
+              await awaitWithContext(new Promise(() => {}), context);
+            }
+            return execution.recorder.begin(identity, generation);
+          },
+        },
+      },
+      context,
+    );
+}
+
+test("Pi transcripts own model bodies and campaign accounting derives from their call receipts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xean-native-records-"));
+  const path = join(directory, "campaign.sqlite");
+  const text = "Full mathematical argument. ".repeat(100);
+  const runtime = fixtureRuntime(() =>
+    fauxAssistantMessage([fauxToolCall("submit_result", { text })], {
+      stopReason: "toolUse",
+    }),
+  );
+  const options = {
+    task: "Native evidence",
+    roles: [],
+    coordinator: {
+      name: "fixture",
+      async run(
+        _signal: unknown,
+        _view: unknown,
+        execution: Parameters<typeof ask>[5],
+        context: Parameters<typeof ask>[6],
+      ) {
+        return {
+          state: await ask(
+            runtime,
+            "coordinator",
+            "Return an argument",
+            {},
+            Type.Object({ text: Type.String() }),
+            execution,
+            context,
+          ),
+        };
+      },
+    },
+  };
+  let storage = await openXeanStorage(path);
+  let engine = await Xean.open(storage, options);
+  try {
+    expect((await engine.run()).state).toEqual({ text });
+    const full = await engine.inspectWithRecords();
+    const start = full.records.find(
+      (entry) => entry.kind === "xean.call.started",
+    )!;
+    const generation = (start.data as { generation: GenerationReference })
+      .generation;
+    expect(Object.keys(generation).sort()).toEqual(["cutoff", "taskId"]);
+    const conversationId = (
+      await storage.task(generation.taskId, BACKGROUND_CONTEXT)
+    )?.conversationId;
+    expect(conversationId).toBeDefined();
+    expect(
+      full.records.find((entry) => entry.id === generation.cutoff)
+        ?.conversationId,
+    ).toBe(conversationId);
+    const assistants = full.records
+      .filter((entry) => entry.byTaskId === generation.taskId)
+      .flatMap((entry) => entry.model ?? [])
+      .filter((message) => message.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(JSON.stringify(assistants[0])).toContain(text);
+    expect(
+      full.records.find((entry) => entry.kind === "xean.call.request")?.data,
+    ).toEqual({ callId: start.id });
+    expect(
+      full.records.find((entry) => entry.kind === "xean.call.settled")?.data,
+    ).toEqual({
+      callId: start.id,
+      message: { stopReason: "toolUse" },
+      usage: null,
+    });
+    const address = (await storage.findDocument(
+      campaignAddress,
+      "current",
+      BACKGROUND_CONTEXT,
+    ))!;
+    const saved = (await storage.document(
+      address.id,
+      "current",
+      BACKGROUND_CONTEXT,
+    ))!;
+    expect(saved.version).toBe(full.campaign.version);
+    expect(saved.value).not.toHaveProperty("providerCalls");
+    expect(saved.value).not.toHaveProperty("version");
+    const decisions = (
+      await storage.scanTasks(
+        { kind: "xean.coordinator" },
+        10,
+        undefined,
+        BACKGROUND_CONTEXT,
+      )
+    ).items;
+    expect(decisions.map((task) => task.state.outcome?.result)).toEqual([null]);
+    const compact = await inspectCampaign(path, usageRecord);
+    expect(statusReport(compact)).toEqual(statusReport(full));
+    expect(compact.records.map((entry) => entry.kind)).toEqual([
+      "xean.call.started",
+      "xean.call.settled",
+    ]);
+    await engine.close();
+    expect(await inspectCampaign(path)).toEqual(full);
+    storage = await openXeanStorage(path);
+    engine = await Xean.open(storage, options);
+    expect(await engine.run()).toEqual(full.campaign);
+    expect(await engine.inspectWithRecords()).toEqual(full);
+  } finally {
+    await engine.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("mixed tool batches validate reads, reject duplicate submissions, and avoid redundant history reads", async () => {
   let calls = 0;
   let reads = 0;
   let submissions = 0;
@@ -43,9 +185,10 @@ test("mixed tool batches reject duplicate submissions and finish without rereadi
     }
     return fauxAssistantMessage(
       [
+        ...(calls === 2 ? [fauxToolCall("read_notes", {})] : []),
         fauxToolCall("submit_result", { answer: 7 }),
         ...(calls === 1 ? [fauxToolCall("submit_result", { answer: 8 })] : []),
-        fauxToolCall("read_fixture", {}),
+        fauxToolCall("read_notes", { ids: ["n1"] }),
       ],
       { stopReason: "toolUse" },
     );
@@ -70,12 +213,13 @@ test("mixed tool batches reject duplicate submissions and finish without rereadi
       },
       context,
       {
-        maxResponses: 2,
+        maxResponses: 3,
+        maxReads: 1,
         tools: [
           defineTool({
-            name: "read_fixture",
+            name: "read_notes",
             description: "Read a fixture",
-            parameters: Type.Object({}),
+            parameters: Type.Object({ ids: Type.Array(Type.String()) }),
             replay: "safe",
             async execute() {
               reads++;
@@ -94,14 +238,17 @@ test("mixed tool batches reject duplicate submissions and finish without rereadi
   expect(calls).toBe(2);
   expect(reads).toBe(1);
   expect(submissions).toBe(1);
-  expect(contextReads).toBe(1);
+  expect(contextReads).toBe(2);
 });
 
 test("concurrent Pi runtimes retain each other's custom models", async () => {
   const calls: string[] = [];
+  const sessions = new Set<string>();
   const runtimes = ["first", "second"].map((id) => {
-    const runtime = fixtureRuntime((_input, _options, selected) => {
+    const runtime = fixtureRuntime((_input, options, selected) => {
       calls.push(selected.id);
+      expect(options?.sessionId).toEqual(expect.any(String));
+      sessions.add(options!.sessionId!);
       return fauxAssistantMessage(
         [fauxToolCall("submit_result", { answer: id })],
         {
@@ -131,6 +278,7 @@ test("concurrent Pi runtimes retain each other's custom models", async () => {
   );
   expect(results).toEqual([{ answer: "first" }, { answer: "second" }]);
   expect(calls.sort()).toEqual(["first", "second"]);
+  expect(sessions.size).toBe(2);
 });
 
 test("explicit Coordinator retry replaces a terminal conversation failure", async () => {
@@ -207,6 +355,7 @@ test("Explorer resumes private native work before one complete shared publicatio
   const path = join(directory, "campaign.sqlite");
   const pending = Promise.withResolvers<void>();
   const transcripts: string[] = [];
+  const sessions = new Set<string>();
   let resuming = false;
   const content = (text: string) => ({
     summary: text,
@@ -219,8 +368,10 @@ test("Explorer resumes private native work before one complete shared publicatio
     support,
   });
   const setup = () => {
-    const runtime = fixtureRuntime((input, _options, selected) => {
+    const runtime = fixtureRuntime((input, options, selected) => {
       expect(selected.id).toBe("explorer");
+      expect(options?.sessionId).toEqual(expect.any(String));
+      sessions.add(options!.sessionId!);
       transcripts.push(JSON.stringify(input.messages));
       const response = transcripts.length;
       const tools = input.messages.filter(
@@ -265,33 +416,11 @@ test("Explorer resumes private native work before one complete shared publicatio
           : [{ kind: "explorer", guidance: "Explore" }],
       };
     };
-    const explorer = solver.functions.explorer;
-    solver.functions.explorer = (input, execution, context) =>
-      explorer(
-        input,
-        {
-          ...execution,
-          recorder: {
-            ...execution.recorder,
-            async begin(identity) {
-              if (!resuming && transcripts.length === 2) {
-                const signal = context.abortSignal!;
-                signal.throwIfAborted();
-                pending.resolve();
-                await new Promise<void>((_resolve, reject) => {
-                  signal.addEventListener(
-                    "abort",
-                    () => reject(signal.reason),
-                    { once: true },
-                  );
-                });
-              }
-              return execution.recorder.begin(identity);
-            },
-          },
-        },
-        context,
-      );
+    solver.functions.explorer = holdCalls(
+      solver.functions.explorer,
+      () => !resuming && transcripts.length === 2,
+      pending.resolve,
+    );
     return solver;
   };
   const nativeTasks = async () => {
@@ -398,7 +527,20 @@ test("Explorer resumes private native work before one complete shared publicatio
     ).toEqual([]);
     const result = await engine.run();
     expect(transcripts).toHaveLength(4);
+    expect(sessions.size).toBe(1);
     expect(result.providerCalls).toBe(4);
+    const records = await engine.records();
+    for (const start of records.filter(
+      (entry) => entry.kind === "xean.call.started",
+    )) {
+      const { generation } = start.data as { generation: GenerationReference };
+      expect(
+        (await storage.task(generation.taskId, BACKGROUND_CONTEXT))?.kind,
+      ).toBe("pi.generation");
+      expect(records.some((entry) => entry.id === generation.cutoff)).toBe(
+        true,
+      );
+    }
     expect(result.work).toHaveLength(1);
     const work = result.work[0]!;
     expect(work.status).toBe("completed");
@@ -431,7 +573,7 @@ test("Explorer resumes private native work before one complete shared publicatio
       { id: `${work.id}/n2`, support: [`${work.id}/n1`] },
     ]);
     expect(
-      (await engine.records()).filter(
+      records.filter(
         (entry) =>
           entry.kind === "xean.attempt.completed" &&
           entry.byTaskId === work.taskId,
@@ -541,28 +683,11 @@ test("Verifier reuses completed source evidence and Pi stages after interruption
           : [{ kind: "explorer", guidance: "Explore" }],
       };
     };
-    const verifier = solver.functions.verifier;
-    solver.functions.verifier = (input, execution, context) =>
-      verifier(
-        input,
-        {
-          ...execution,
-          recorder: {
-            ...execution.recorder,
-            async begin(identity) {
-              if (!resuming && identity.id === "proof") {
-                const signal = context.abortSignal!;
-                signal.throwIfAborted();
-                pending.resolve();
-                await once(signal, "abort");
-                signal.throwIfAborted();
-              }
-              return execution.recorder.begin(identity);
-            },
-          },
-        },
-        context,
-      );
+    solver.functions.verifier = holdCalls(
+      solver.functions.verifier,
+      (identity) => !resuming && identity.id === "proof",
+      pending.resolve,
+    );
     return solver;
   };
   let engine = await Xean.open(await openXeanStorage(path), setup());

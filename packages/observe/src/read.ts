@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { execa } from "execa";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { inspectCampaign } from "xean";
+import { inspectCampaign, UninitializedCampaignError } from "xean";
 import { decode, taskSchema, type Task } from "xean/solve";
 import { usageRecord } from "xean/report";
 import { readEvidence, readReview } from "./artifacts.ts";
@@ -11,6 +11,7 @@ import {
   readSnapshot,
   readSummary,
   snapshot,
+  summary,
   type Snapshot,
   type Summary,
 } from "./snapshot.ts";
@@ -106,12 +107,16 @@ export async function readRun(
             return undefined;
           },
         );
-    if (db) {
-      run.kind = "database";
-      const inspection = await inspectCampaign(db, usageRecord);
-      const value = snapshot(inspection, run.observedAt);
-      if (compact) run.summary = readSummary(value);
-      else run.snapshot = value;
+    if (db) run.kind = "database";
+    const inspection = db
+      ? await inspectCampaign(db, usageRecord).catch((error: unknown) => {
+          if (!(error instanceof UninitializedCampaignError)) throw error;
+          return undefined;
+        })
+      : undefined;
+    if (inspection) {
+      if (compact) run.summary = summary(inspection, run.observedAt);
+      else run.snapshot = snapshot(inspection, run.observedAt);
     } else {
       const evidence = source.host
         ? (JSON.parse(
