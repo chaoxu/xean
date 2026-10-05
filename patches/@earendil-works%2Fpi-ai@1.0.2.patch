@@ -1,0 +1,288 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -3,4 +3,5 @@
+ import { calculateCost } from "../models.js";
+ import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
++import { normalizeProviderError } from "../utils/error-body.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { headersToRecord } from "../utils/headers.js";
+@@ -459,4 +460,11 @@
+                     usageModel = fallbackCost ? { ...model, id: responseModel, cost: fallbackCost } : model;
+                     // Capture initial token usage from message_start event
++                    output.usageReported ||= [
++                        event.message.usage?.input_tokens,
++                        event.message.usage?.output_tokens,
++                        event.message.usage?.cache_read_input_tokens,
++                        event.message.usage?.cache_creation_input_tokens,
++                        event.message.usage?.cache_creation?.ephemeral_1h_input_tokens,
++                    ].some(Number.isFinite);
+                     // This ensures we have input token counts even if the stream is aborted early
+                     output.usage.input = event.message.usage.input_tokens || 0;
+@@ -622,4 +630,11 @@
+                     // Preserves input_tokens from message_start when proxies omit it in message_delta.
+                     if (event.usage) {
++                        output.usageReported ||= [
++                            event.usage.input_tokens,
++                            event.usage.output_tokens,
++                            event.usage.cache_read_input_tokens,
++                            event.usage.cache_creation_input_tokens,
++                            event.usage.output_tokens_details?.thinking_tokens,
++                        ].some(Number.isFinite);
+                         if (event.usage.input_tokens != null) {
+                             output.usage.input = event.usage.input_tokens;
+@@ -683,4 +698,5 @@
+             }
+             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
++            output.providerError = { status: normalizeProviderError(error).status };
+             output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+             stream.push({ type: "error", reason: output.stopReason, error: output });
+diff --git a/dist/api/google-generative-ai.js b/dist/api/google-generative-ai.js
+--- a/dist/api/google-generative-ai.js
++++ b/dist/api/google-generative-ai.js
+@@ -227,5 +227,7 @@
+             }
+             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+-            output.errorMessage = formatProviderError(normalizeProviderError(error));
++            const providerError = normalizeProviderError(error);
++            output.providerError = { status: providerError.status };
++            output.errorMessage = formatProviderError(providerError);
+             stream.push({ type: "error", reason: output.stopReason, error: output });
+             stream.end();
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+--- a/dist/api/openai-codex-responses.js
++++ b/dist/api/openai-codex-responses.js
+@@ -11,4 +11,5 @@
+ import { getDeclaredTools, getInitialSystemMessage, normalizeContext, resolveTranscript, resolveTranscriptTools, } from "../utils/transcript.js";
+ import { uuidv7 } from "../utils/uuid.js";
++import { isRetryableAssistantError } from "../utils/retry.js";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+@@ -50,15 +51,11 @@
+ // Retry Helpers
+ // ============================================================================
+-function isTerminalRateLimitError(errorText) {
+-    return /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(errorText);
+-}
+ function isRetryableError(status, errorText) {
+-    if (status === 429 && isTerminalRateLimitError(errorText)) {
+-        return false;
+-    }
+-    if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
+-        return true;
+-    }
+-    return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
++    let detail;
++    try { detail = JSON.parse(errorText)?.error; } catch { }
++    return isRetryableAssistantError({
++        stopReason: "error", errorMessage: errorText,
++        providerError: { status, type: detail?.type, code: detail?.code },
++    });
+ }
+ function getRetryAfterDelayMs(headers) {
+@@ -300,5 +297,7 @@
+                     });
+                     const info = await parseErrorResponse(fakeResponse);
+-                    throw new Error(info.friendlyMessage || info.message);
++                    throw new CodexApiError(info.friendlyMessage || info.message, {
++                        code: info.code, payload: { status: response.status, error: info },
++                    });
+                 }
+                 catch (error) {
+@@ -309,8 +308,10 @@
+                     }
+                     lastError = error instanceof Error ? error : new Error(String(error));
+-                    // Network errors are retryable
+                     if (attempt < maxRetries &&
+                         !(lastError instanceof RetryDelayExceededError) &&
+-                        !lastError.message.includes("usage limit")) {
++                        isRetryableAssistantError({
++                            stopReason: "error", errorMessage: lastError.message,
++                            providerError: lastError instanceof CodexApiError ? lastError.providerError : undefined,
++                        })) {
+                         const delayMs = BASE_DELAY_MS * 2 ** attempt;
+                         await sleep(delayMs, options?.signal);
+@@ -346,4 +347,5 @@
+             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+             output.errorMessage = formatProviderError(normalizeProviderError(error));
++            if (error instanceof CodexApiError) output.providerError = error.providerError;
+             stream.push({ type: "error", reason: output.stopReason, error: output });
+             stream.end();
+@@ -487,4 +489,5 @@
+     code;
+     payload;
++    providerError;
+     constructor(message, options) {
+         super(message);
+@@ -492,4 +495,6 @@
+         this.code = options?.code;
+         this.payload = options?.payload;
++        const detail = this.payload?.error ?? this.payload?.response?.error;
++        this.providerError = { status: this.payload?.status, type: detail?.type, code: this.code };
+         this.cause = options?.cause;
+     }
+@@ -512,5 +517,7 @@
+ }
+ function isCodexNonTransportError(error) {
+-    return (error instanceof CodexApiError ||
++    return ((error instanceof CodexApiError && !isRetryableAssistantError({
++        stopReason: "error", errorMessage: error.message, providerError: error.providerError,
++    })) ||
+         error instanceof CodexProtocolError ||
+         error instanceof ProviderStreamEventCallbackError);
+@@ -556,4 +563,8 @@
+             const code = response?.error?.code;
+             const message = response?.error?.message;
++            if (response) {
++                // Preserve terminal usage before native transport recovery.
++                yield { ...event, type: "response.completed", response: { ...response, status: "failed" } };
++            }
+             throw new CodexApiError(message || "Codex response failed", { code, payload: event });
+         }
+@@ -600,4 +611,5 @@
+             }
+             buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
++            buffer = buffer.replaceAll("\r\n", "\n");
+             // Treat EOF as terminating the residual SSE frame.
+             if (done && buffer.trim())
+@@ -1241,11 +1253,12 @@
+     const raw = await response.text();
+     let message = raw || response.statusText || "Request failed";
+-    let friendlyMessage;
++    let friendlyMessage, code, type;
+     try {
+         const parsed = JSON.parse(raw);
+         const err = parsed?.error;
+         if (err) {
+-            const code = err.code || err.type || "";
+-            if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
++            code = err.code;
++            type = err.type;
++            if (/^(usage_limit_reached|usage_not_included)$/i.test(code || type || "")) {
+                 const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
+                 const mins = err.resets_at
+@@ -1259,5 +1272,5 @@
+     }
+     catch { }
+-    return { message, friendlyMessage };
++    return { message, friendlyMessage, code, type };
+ }
+ // ============================================================================
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -434,9 +434,18 @@
+     const finalizeResponse = (response) => {
+         sawTerminalResponseEvent = true;
+-        backfillReasoningSignatures(response.output ?? []);
++        if (response.status !== "failed")
++            backfillReasoningSignatures(response.output ?? []);
+         if (response?.id) {
+             output.responseId = response.id;
+         }
+         if (response?.usage) {
++            output.usageReported ||= [
++                response.usage.input_tokens,
++                response.usage.output_tokens,
++                response.usage.total_tokens,
++                response.usage.input_tokens_details?.cached_tokens,
++                response.usage.input_tokens_details?.cache_write_tokens,
++                response.usage.output_tokens_details?.reasoning_tokens,
++            ].some(Number.isFinite);
+             const inputDetails = response.usage.input_tokens_details;
+             const cachedTokens = inputDetails?.cached_tokens || 0;
+@@ -644,6 +653,5 @@
+         }
+         else if (event.type === "response.failed") {
+-            sawTerminalResponseEvent = true;
+-            output.rawStopReason = event.response?.status;
++            finalizeResponse(event.response);
+             const error = event.response?.error;
+             const details = event.response?.incomplete_details;
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -164,5 +164,7 @@
+             }
+             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+-            const errorMessage = formatProviderError(normalizeProviderError(error), `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
++            const providerError = normalizeProviderError(error);
++            output.providerError = { status: providerError.status };
++            const errorMessage = formatProviderError(providerError, `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
+             // Sign in with ChatGPT shares the subscription's usage limit with other apps.
+             output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -373,4 +373,6 @@
+ }
+ export interface AssistantMessage {
++    /** Finite token count supplied; false means none, undefined means the adapter does not mark usage. */
++    usageReported?: boolean;
+     role: "assistant";
+     content: (TextContent | ThinkingContent | ToolCall)[];
+@@ -389,4 +391,6 @@
+     deferred?: DeferredHandle;
+     errorMessage?: string;
++    /** Structured provider failure metadata, when the adapter can preserve it. */
++    providerError?: { status?: number; type?: string; code?: string };
+     rawStopReason?: string;
+     /**
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -20,4 +20,18 @@
+     // after hours rather than seconds.
+     "subscription_sharing_usage_limit_exceeded",
++    "usage_limit_reached",
++    "usage_not_included",
++    "credit_balance_exhausted",
++    "(?:organization|project)_(?:spend|usage)_limit_exceeded",
++    // Configuration errors remain terminal even when their detail matches a
++    // transient phrase (for example an invalid timeout or a provider error).
++    "invalid_api_key",
++    "authentication_error",
++    "permission_error",
++    "permission_denied",
++    "permission denied",
++    "invalid_request(?:_error)?",
++    "context_length_exceeded",
++    "context window exceeded",
+ ]);
+ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+@@ -60,5 +74,5 @@
+     "timed? out",
+     "timeout",
+-    "terminated",
++    "\\bterminated\\b",
+     // WebSocket transports can report close/error text instead of HTTP/fetch text.
+     "websocket.?closed",
+@@ -68,4 +82,8 @@
+     // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
+     "ended without",
++    "closed stream without completion",
++    "stream_incomplete",
++    "previous_response_owner_unavailable",
++    "previous response owner account is unavailable",
+     "stream ended before message_stop",
+     "stream ended before a terminal response event",
+@@ -182,9 +200,17 @@
+  */
+ export function isRetryableAssistantError(message) {
+-    if (message.stopReason !== "error" || !message.errorMessage)
++    if (message.stopReason !== "error")
+         return false;
+-    const errorMessage = message.errorMessage;
++    const { status, type, code } = message.providerError ?? {};
++    const identity = [type, code].filter(Boolean).join(" ");
++    const errorMessage = [identity, message.errorMessage].filter(Boolean).join(" ");
++    // Structured categories survive new codes and wording. Account exhaustion
++    // remains terminal even when the provider uses HTTP 429 or a server type.
+     if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage))
+         return false;
++    if (typeof status === "number" && status >= 400 && status < 600)
++        return status === 408 || status === 409 || status === 429 || status >= 500;
++    if (["server_error", "service_unavailable_error", "rate_limit_error"].includes(type))
++        return true;
+     return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+ }

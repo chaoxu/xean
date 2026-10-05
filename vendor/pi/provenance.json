@@ -1,0 +1,80 @@
+{
+  "repository": "https://github.com/earendil-works/pi",
+  "commit": "b2b5c42f6138b73ec4b2f49ec0ca468800f88586",
+  "build": {
+    "node": "26.5.0",
+    "npm": "11.17.0",
+    "dependencyInstall": "npm ci --ignore-scripts --no-audit --no-fund",
+    "order": [
+      "chord",
+      "telemetry",
+      "ai",
+      "durable"
+    ],
+    "aiScript": "build:offline",
+    "otherScript": "build",
+    "pack": "npm pack --ignore-scripts"
+  },
+  "modelData": {
+    "generatedAt": "2026-09-30T21:02:52.413Z",
+    "manifestSha256": "2e80e00cd2851db0eda7cc8bffe14396f9b32d033e37b4fe2211568e5d6f128d",
+    "frozenIn": "@earendil-works/pi-ai:package/dist/providers/data"
+  },
+  "artifacts": [
+    {
+      "name": "@earendil-works/chord",
+      "version": "1.0.2",
+      "bytes": 208923,
+      "sha256": "323dd79bb7eb27febea94aed4da5f7f7351923ee025fee002567d2d78661c92f",
+      "path": "vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-chord-1.0.2.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-telemetry",
+      "version": "1.0.2",
+      "bytes": 27276,
+      "sha256": "420e43d633f1d3e097ef95bc79f3571fd248ff3225968c6c66aca704ad63f9d7",
+      "path": "vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-telemetry-1.0.2.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-ai",
+      "version": "1.0.2",
+      "bytes": 770864,
+      "sha256": "c68f8c56e3ad156f41f36e90ba29c0a2dfe1fde8028ad86c742ddea4e43648db",
+      "path": "vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-ai-1.0.2.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-durable",
+      "version": "1.0.2",
+      "bytes": 531312,
+      "sha256": "7c3ca14b65e40b9b44237187864adefd1f3d5dc2fba7979bc4d08c4626ac9cdc",
+      "path": "vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-durable-1.0.2.tgz"
+    }
+  ],
+  "patches": [
+    {
+      "package": "@earendil-works/pi-ai",
+      "path": "patches/@earendil-works%2Fpi-ai@1.0.2.patch",
+      "sha256": "0e7022c2f935b66d8b5a9d2fe621e7de6841c6f6cc63b6ee8e8e49033214aa8f",
+      "reason": "Preserve provider error classification and usage, and correct direct Codex failure and SSE handling.",
+      "files": {
+        "dist/api/anthropic-messages.js": "4682481a75fe91796031dce050e2bfd11734c0a62400e895cfd583fbf9f73e22",
+        "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
+        "dist/api/openai-codex-responses.js": "af7caa047471ab382cbcbdf5a06afd6ef8f1a2bfdfe4c6efbab896ac87c95c9e",
+        "dist/api/openai-responses-shared.js": "64f2882dee09b86379f033c265d088ef5d5ac77b8730713d3189ec73b9052f6b",
+        "dist/api/openai-responses.js": "cef4401f72b89878ec3b91be1135960c8976336a1ad23473722a9f6b97152791",
+        "dist/types.d.ts": "3be4af6f7c63b5df151f0d36a0732d0a82290449058051115d90f3da33198a74",
+        "dist/utils/retry.js": "7e31edfc617ba5456d171942b66f7ec33c95d9130ce670a01db2fb906dcdd812"
+      }
+    },
+    {
+      "package": "@earendil-works/pi-durable",
+      "path": "patches/@earendil-works%2Fpi-durable@1.0.2.patch",
+      "sha256": "3175bf26920971121ff52bb0a96e54962d91e46037e21e52cda2c4b6eed56d44",
+      "reason": "Allow the native request hook to select a stream without synthetic provider registrations.",
+      "files": {
+        "dist/harness/generation.js": "7b163d55858c9ea11cafc4df9a3cb19e1216c44151f82ef17a628f366fbbf17e",
+        "dist/harness/types.d.ts": "ae5f501c039241373feb3333f5b6300e9760620ffc741041f6c3f7e5c00bb277"
+      }
+    }
+  ]
+}

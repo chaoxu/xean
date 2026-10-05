@@ -1,0 +1,65 @@
+{
+  "name": "xean-pi-prototype",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "bin": {
+    "xean": "./apps/cli/index.ts",
+    "xean-observe": "./apps/observe/server.ts"
+  },
+  "files": [
+    "src/",
+    "apps/",
+    "scripts/",
+    "examples/",
+    "vendor/",
+    "tests/",
+    "nix/",
+    "docs/",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE",
+    "bun.lock",
+    "tsconfig.json",
+    "patches/"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./report": "./src/report.ts"
+  },
+  "scripts": {
+    "check": "bun scripts/dev.ts check",
+    "check:distribution": "bun scripts/dev.ts distribution",
+    "xean": "bun apps/cli/index.ts",
+    "observe": "bun apps/observe/server.ts"
+  },
+  "dependencies": {
+    "commander": "15.0.0",
+    "execa": "10.0.1",
+    "lit-html": "3.3.3",
+    "katex": "0.18.9",
+    "@earendil-works/chord": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-chord-1.0.2.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-ai-1.0.2.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-durable-1.0.2.tgz",
+    "typebox": "1.3.27"
+  },
+  "overrides": {
+    "@earendil-works/chord": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-chord-1.0.2.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-ai-1.0.2.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-durable-1.0.2.tgz",
+    "@earendil-works/pi-telemetry": "file:vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-telemetry-1.0.2.tgz"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-ai-1.0.2.tgz": "patches/@earendil-works%2Fpi-ai@1.0.2.patch",
+    "@earendil-works/pi-durable@vendor/pi/b2b5c42f6138b73ec4b2f49ec0ca468800f88586/earendil-works-pi-durable-1.0.2.tgz": "patches/@earendil-works%2Fpi-durable@1.0.2.patch"
+  }
+}
