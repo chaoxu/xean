@@ -104,7 +104,7 @@ console.log((await inspect(path, readReport)).status);
 
 The host uses Pi's native SQLite adapter with FULL synchronization and excludes
 a second owner. Notes resolve from Pi's committed submissions and task outcomes.
-Imports and corrections are Pi entries. `inspect` reads a consistent backup
+Imports and corrections are Pi entries. By default, `inspect` reads a consistent backup
 through a Pi Session without recovering live work.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat, except
@@ -128,6 +128,9 @@ for compact reports. Run it on the campaign host and arrange remote access
 yourself, for example with an SSH tunnel. Independent-review databases can be
 listed as separate sources. The viewer shows note indexes, detailed summaries,
 full notes, checks, dependencies, and usage.
+Each refresh uses a fresh Pi Session on the live database, with no database copy.
+Concurrent campaign updates can produce a temporarily inconsistent display.
+CLI inspection and export retain consistent snapshots.
 
 Usage reports count committed assistant responses and recorded Codex invocations.
 They cannot establish every outbound request or provider retry. Direct ChatGPT

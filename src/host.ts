@@ -17,7 +17,10 @@ import {
   type Storage,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import {
+  CURRENT_SQLITE_SCHEMA_VERSION,
+  SqliteStorage,
+} from "@earendil-works/pi-durable/storage/sqlite";
 import {
   openNodeSqliteDatabase,
   openNodeSqliteStorage,
@@ -100,7 +103,7 @@ export function openReadDatabase(path: string) {
   }
 }
 
-function recognize(path: string) {
+function recognize(path: string, live = false) {
   const database = openReadDatabase(path);
   try {
     const tables = database
@@ -111,6 +114,14 @@ function recognize(path: string) {
     const native = tables.some(({ name }) => name === "durable_schema");
     if (!native && tables.length)
       throw new Error("Not a Pi Durable research database");
+    if (
+      native &&
+      live &&
+      database
+        .prepare("SELECT version FROM durable_schema WHERE singleton = 1")
+        .get()?.version !== CURRENT_SQLITE_SCHEMA_VERSION
+    )
+      throw new Error("Live inspection requires the current Pi SQLite schema");
     return native;
   } finally {
     database.close();
@@ -248,6 +259,7 @@ export async function open(path: string, options: OpenOptions = {}) {
     const root = await harness.root(context, {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
+        await tx.doc(Control, root);
         if (options.initialize) await options.initialize(tx, root);
         else if (definition.mode)
           await workflow.worker(tx, root, { standalone: true });
@@ -269,24 +281,33 @@ export async function open(path: string, options: OpenOptions = {}) {
   }
 }
 
-/** Read a committed backup through a Session; never open a live Harness. */
+/** Inspect through a fresh Session. Live reads may span commits. Default to a backup. */
 export async function inspect<T>(
   path: string,
   read: (tx: Tx, root: ConversationId) => T | Promise<T>,
+  { live = false }: { live?: boolean } = {},
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  const directory = await mkdtemp(join(tmpdir(), "research-snapshot-"));
+  const directory = live
+    ? undefined
+    : await mkdtemp(join(tmpdir(), "research-snapshot-"));
   let session: ReturnType<typeof createSession> | undefined;
   try {
-    const source = openReadDatabase(path);
-    const snapshot = join(directory, "snapshot.sqlite");
-    try {
-      await backup(source, snapshot);
-    } finally {
-      source.close();
+    const database = directory ? join(directory, "snapshot.sqlite") : path;
+    if (directory) {
+      const source = openReadDatabase(path);
+      try {
+        await backup(source, database);
+      } finally {
+        source.close();
+      }
     }
-    if (!recognize(snapshot)) throw new UninitializedResearchError();
-    const storage = await openNodeSqliteStorage(snapshot);
+    if (!recognize(database, live)) throw new UninitializedResearchError();
+    const storage = await openNodeSqliteStorage(database);
+    if (live)
+      storage.commit = async () => {
+        throw new Error("Live inspection cannot change campaign state");
+      };
     session = createSession(storage);
     return await session.commit(async (tx) => {
       if (!(await tx.conversation(ROOT_CONVERSATION_ID)))
@@ -298,7 +319,7 @@ export async function inspect<T>(
     try {
       await session?.close(context);
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      if (directory) await rm(directory, { recursive: true, force: true });
     }
   }
 }

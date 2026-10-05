@@ -24,6 +24,7 @@ import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
 import { api, readSources } from "../apps/observe/server.ts";
+import { readRun } from "../apps/observe/read.ts";
 import { noteStatus } from "../apps/observe/web/notes.ts";
 import { limitRounds, readRounds } from "../scripts/bounded-solve.ts";
 
@@ -430,6 +431,11 @@ test(
 
 test("observer reads arbitrary native databases without ownership and retains only matching stale evidence", () =>
   temporary(async (directory) => {
+    const idle = join(directory, "idle.sqlite");
+    await (await open(idle, { create: definition })).close();
+    const dormant = await readRun({ id: "idle", database: idle }, true);
+    expect(dormant.error).toBeUndefined();
+    expect(dormant.summary?.status.status).toBe("running");
     const database = join(directory, "review.sqlite");
     const owner = await open(database, {
       create: {

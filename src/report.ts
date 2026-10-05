@@ -141,7 +141,7 @@ export async function readUsage(tx: Tx, includeRecords = false) {
   };
 }
 
-/** One pinned native read supplies the mathematical view, operations, and usage. */
+/** Project the mathematical view, operations, and usage from the supplied transaction. */
 export async function readReport(
   tx: Tx,
   root: ConversationId,

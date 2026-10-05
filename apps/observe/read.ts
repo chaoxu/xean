@@ -19,11 +19,11 @@ export type Run = Source & {
   error?: string;
 };
 
-/** Inspect committed state without acquiring campaign ownership or recovering work. */
+/** Read live state through a fresh Session without ownership or recovery. */
 export async function readRun(source: Source, compact = false): Promise<Run> {
   const run: Run = { ...source, observedAt: new Date().toISOString() };
   try {
-    const report = await inspect(source.database, readReport);
+    const report = await inspect(source.database, readReport, { live: true });
     if (compact) run.summary = summary(report);
     else run.snapshot = snapshot(report);
   } catch (error) {
