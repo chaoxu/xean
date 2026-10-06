@@ -1,12 +1,34 @@
 #!/usr/bin/env bun
 import { resolve, dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { decode } from "../../src/math/contracts.ts";
-import { statusText } from "../../src/report.ts";
-import { readRun, sourceSchema, type Source, type Run } from "./read.ts";
-import type { Summary } from "./snapshot.ts";
+import { readReport, statusText, type Report } from "../../src/report.ts";
+import { inspect } from "../../src/host.ts";
 import index from "./web/index.html";
+
+const sourceSchema = Type.Object(
+  {
+    id: Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" }),
+    database: Type.String({ minLength: 1, pattern: "\\S" }),
+  },
+  { additionalProperties: false },
+);
+type Source = Static<typeof sourceSchema>;
+export type Run = Source & {
+  observedAt: string;
+  stale?: boolean;
+  snapshot?: Pick<
+    Report,
+    "task" | "status" | "kind" | "notes" | "work" | "result"
+  >;
+  error?: string;
+};
+export type RunStatus = Omit<Run, "snapshot"> & {
+  problem: string | null;
+  stale: boolean;
+  snapshot?: Pick<Report, "status">;
+};
 
 export function readSources(value: unknown, directory: string): Source[] {
   const ids = new Set<string>();
@@ -17,23 +39,12 @@ export function readSources(value: unknown, directory: string): Source[] {
   });
 }
 
-function runStatus(run: Run) {
-  return {
-    id: run.id,
-    database: run.database,
-    problem: run.summary?.task.problem ?? null,
-    observedAt: run.observedAt,
-    stale: run.stale ?? false,
-    snapshot: run.summary && { status: run.summary.status },
-    error: statusText(run.error) ?? undefined,
-  };
-}
-
-export type RunStatus = ReturnType<typeof runStatus>;
-
 export function api(sources: Source[] | (() => Promise<Source[]>)) {
   // Retain only compact evidence; the browser owns its last full detail view.
-  const previous = new Map<string, { observedAt: string; summary: Summary }>();
+  const previous = new Map<
+    string,
+    Pick<RunStatus, "observedAt" | "problem" | "snapshot">
+  >();
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (
@@ -78,23 +89,39 @@ export function api(sources: Source[] | (() => Promise<Source[]>)) {
     const compact = view === "status";
     const runs = await Promise.all(
       selected.map(async (source) => {
-        const run = await readRun(source, compact);
-        if (compact) {
-          if (run.summary)
-            previous.set(source.database, {
-              observedAt: run.observedAt,
-              summary: run.summary,
-            });
-          else {
-            const retained = previous.get(source.database);
-            if (retained) return { ...run, ...retained, stale: true };
-          }
+        const run = { ...source, observedAt: new Date().toISOString() };
+        try {
+          const { task, status, kind, notes, work, result } = await inspect(
+            source.database,
+            readReport,
+            { live: true },
+          );
+          if (!compact)
+            return {
+              ...run,
+              snapshot: { task, status, kind, notes, work, result },
+            };
+          const evidence = {
+            observedAt: run.observedAt,
+            problem: task.problem,
+            snapshot: { status },
+          };
+          previous.set(source.database, evidence);
+          return { ...run, ...evidence, stale: false };
+        } catch (error) {
+          if (!compact) return { ...run, error: String(error) };
+          const retained = previous.get(source.database);
+          return {
+            ...run,
+            problem: null,
+            ...retained,
+            stale: !!retained,
+            error: statusText(String(error)),
+          };
         }
-        return run;
       }),
     );
-    const values = compact ? runs.map(runStatus) : runs;
-    return Response.json(id === undefined ? values : values[0], {
+    return Response.json(id === undefined ? runs : runs[0], {
       headers: { "cache-control": "no-store" },
     });
   };

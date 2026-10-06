@@ -68,7 +68,8 @@ for (const example of cases) {
         "Give a self-contained proof using elementary real arithmetic.",
     },
     notes: [note],
-    targets: [{ id: note.id, through: "correctness" }],
+    targets: [note.id],
+    through: "correctness",
   });
   const inputPath = resolve(directory, "input.json");
   const database = resolve(directory, "campaign.sqlite");

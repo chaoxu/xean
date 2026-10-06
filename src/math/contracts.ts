@@ -258,11 +258,6 @@ export const submissionSchemas = {
   proof: batchSchema(proofSchema),
   reconstruction: batchSchema(verdictSchema),
 };
-/** One Verifier checks its requested notes and shared support together. */
-export const verificationTargets = ({ work }: Plan) =>
-  work?.kind === "verifier"
-    ? work.notes.map((id) => ({ id, through: work.through }))
-    : [];
 export type SolverInput = { task: Task; notes: Note[] };
 export type NoteInfo = Pick<
   Note,
@@ -273,7 +268,8 @@ export type ExplorerInput = SolverInput & {
 };
 export type CodexInput = SolverInput & { assignment: string };
 export type VerifierInput = SolverInput & {
-  targets: { id: string; through: VerificationStage }[];
+  targets: string[];
+  through: VerificationStage;
   evidence?: SourceEvidence[];
 };
 export type ReconstructionInput = SolverInput & { targets: string[] };

@@ -1,6 +1,5 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -287,7 +286,7 @@ test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without 
 });
 
 test("native worker recovery refuses to resend an interrupted ChatGPT request", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "chatgpt-recovery-"));
+  const directory = await temporaryDirectory("chatgpt-recovery-");
   const path = join(directory, "campaign.sqlite");
   const started = Promise.withResolvers<void>();
   let calls = 0;
@@ -350,7 +349,6 @@ test("native worker recovery refuses to resend an interrupted ChatGPT request", 
   } finally {
     await owner?.close();
     request.mockRestore();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 

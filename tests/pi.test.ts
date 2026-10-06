@@ -1,6 +1,6 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { cp, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   cleanupSessionResources,
@@ -367,43 +367,40 @@ test("Codex SSE accepts CRLF frames even when every byte arrives separately", as
 });
 
 test("installation verification binds patches to the exact changed and untouched bytes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-integrity-"));
+  const root = await temporaryDirectory("pi-integrity-");
   const source = resolve(import.meta.dir, "..");
   const manifest = await Bun.file(
     join(source, "vendor/pi/provenance.json"),
   ).json();
   const patch = manifest.patches[0];
-  try {
-    for (const path of [
-      "package.json",
-      "vendor/pi/provenance.json",
-      ...manifest.patches.map((entry: { path: string }) => entry.path),
-    ])
-      await Bun.write(join(root, path), Bun.file(join(source, path)));
-    for (const artifact of manifest.artifacts) {
-      await Bun.write(
-        join(root, artifact.path),
-        Bun.file(join(source, artifact.path)),
-      );
-      const path = join("node_modules", artifact.name);
-      await cp(join(source, path), join(root, path), {
-        recursive: true,
-        dereference: true,
-      });
-    }
-    await verifyInstall(root);
-    for (const path of [
-      patch.path,
-      join("node_modules", patch.package, Object.keys(patch.files)[0]!),
-      join("node_modules", patch.package, "package.json"),
-    ]) {
-      const file = Bun.file(join(root, path));
-      const original = await file.text();
-      await Bun.write(file, original + "\n");
-      await expect(verifyInstall(root)).rejects.toThrow();
-      await Bun.write(file, original);
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
+
+  for (const path of [
+    "package.json",
+    "vendor/pi/provenance.json",
+    ...manifest.patches.map((entry: { path: string }) => entry.path),
+  ])
+    await Bun.write(join(root, path), Bun.file(join(source, path)));
+  for (const artifact of manifest.artifacts) {
+    await Bun.write(
+      join(root, artifact.path),
+      Bun.file(join(source, artifact.path)),
+    );
+    const path = join("node_modules", artifact.name);
+    await cp(join(source, path), join(root, path), {
+      recursive: true,
+      dereference: true,
+    });
+  }
+  await verifyInstall(root);
+  for (const path of [
+    patch.path,
+    join("node_modules", patch.package, Object.keys(patch.files)[0]!),
+    join("node_modules", patch.package, "package.json"),
+  ]) {
+    const file = Bun.file(join(root, path));
+    const original = await file.text();
+    await Bun.write(file, original + "\n");
+    await expect(verifyInstall(root)).rejects.toThrow();
+    await Bun.write(file, original);
   }
 });

@@ -128,24 +128,6 @@ function recognize(path: string, live = false) {
   }
 }
 
-async function frozenDefinition(
-  storage: Storage,
-): Promise<Definition | undefined> {
-  const record = await storage.findDocument(
-    {
-      kind: DefinitionDoc.definition.kind,
-      scope: { kind: "conversation", conversationId: ROOT_CONVERSATION_ID },
-    },
-    "current",
-    context,
-  );
-  if (!record) return undefined;
-  const stored = await storage.document(record.id, "current", context);
-  if (!stored || stored.version !== DefinitionDoc.definition.version)
-    throw new Error("Unsupported research definition version");
-  return validateDefinition(stored.value);
-}
-
 async function openOwnedStorage(path: string) {
   const database = await openNodeSqliteDatabase(path);
   const nativeClose = database.close.bind(database);
@@ -212,7 +194,12 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (existing) assertSingleLink(existing.nlink);
     if (existing?.size) recognize(canonical);
     storage = await openOwnedStorage(canonical);
-    const stored = await frozenDefinition(storage);
+    const value = await createSession(storage).snapshot(
+      DefinitionDoc,
+      ROOT_CONVERSATION_ID,
+      context,
+    );
+    const stored = value === undefined ? undefined : validateDefinition(value);
     if (stored && requested && !isDeepStrictEqual(stored, requested))
       throw new Error("Research task and settings are frozen");
     const definition = stored ?? requested;

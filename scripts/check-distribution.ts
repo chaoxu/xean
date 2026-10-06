@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import manifest from "../package.json";
 import { verifyInstall } from "./dependencies.ts";
-import { readRun } from "../apps/observe/read.ts";
+import { api } from "../apps/observe/server.ts";
 
 const root = resolve(import.meta.dir, "..");
 await verifyInstall(root);
@@ -54,7 +54,11 @@ try {
     await run(manifest.bin.xean, "export", path),
     `## ${result.acceptedNoteId}\n\n1 = 1.\n\nBy reflexivity, 1 = 1.\n`,
   );
-  const observation = await readRun({ id: "smoke", database: path });
+  const observation = await (
+    await api([{ id: "smoke", database: path }])(
+      new Request("http://localhost/api/runs/smoke"),
+    )
+  ).json();
   assert.equal(
     observation.snapshot?.status.acceptedNoteId,
     result.acceptedNoteId,

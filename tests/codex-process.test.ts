@@ -1,7 +1,7 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { inspect, open, readReport } from "../src/index.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import { context, settings, task } from "./fixture.ts";
@@ -16,7 +16,7 @@ test.each([
 ] as const)(
   "Codex %s/%s preserves accounting, failure identity, and workspace policy",
   async (failure, mode) => {
-    const directory = await mkdtemp(join(tmpdir(), "codex-failure-"));
+    const directory = await temporaryDirectory("codex-failure-");
     const path = join(directory, "campaign.sqlite");
     const command = join(directory, "codex-fixture");
     const output =
@@ -108,7 +108,6 @@ test.each([
       else await access(workspace);
     } finally {
       await owner.close();
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -116,7 +115,7 @@ test.each([
 test.each(["cancel", "close"] as const)(
   "Codex %s kills resistant descendants and abandons private research output",
   async (action) => {
-    const directory = await mkdtemp(join(tmpdir(), "codex-cancel-"));
+    const directory = await temporaryDirectory("codex-cancel-");
     const path = join(directory, "campaign.sqlite");
     const command = join(directory, "codex-fixture");
     const ready = join(directory, "processes.json");
@@ -202,7 +201,6 @@ setInterval(() => {}, 1000);
       for (const pid of processes) if (alive(pid)) process.kill(pid, "SIGKILL");
       await owner.close();
       if (workspace) await rm(workspace, { recursive: true, force: true });
-      await rm(directory, { recursive: true, force: true });
     }
   },
   15_000,

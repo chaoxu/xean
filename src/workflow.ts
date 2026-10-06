@@ -12,7 +12,7 @@ import {
   type TaskOutcome,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { verificationTargets, type Plan } from "./math/contracts.ts";
+import { type Plan } from "./math/contracts.ts";
 import {
   noteInfo,
   sourceEvidence,
@@ -183,7 +183,8 @@ export function createResearch(roles: Roles) {
               value = {
                 task: definition.task,
                 notes: closure(request.notes, view.notes),
-                targets: verificationTargets({ work: request }),
+                targets: request.notes,
+                through: request.through,
                 evidence: sourceEvidence(view.notes),
               };
               break;

@@ -4,8 +4,7 @@ import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import { acceptedArgument } from "../../../src/math/argument.ts";
-import type { Run } from "../read.ts";
-import type { RunStatus } from "../server.ts";
+import type { Run, RunStatus } from "../server.ts";
 import { noteStatus } from "./notes.ts";
 
 const app = document.querySelector<HTMLElement>("#app")!;

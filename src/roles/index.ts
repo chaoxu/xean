@@ -25,12 +25,9 @@ import {
   correctionInstructions,
   noteInfo,
   refresh,
-  reconstructionTargets,
-  requiredStages,
+  pendingChecks,
   sourceEvidence,
   stagePassed,
-  stagePending,
-  stageWithin,
   validateNotes,
   validateResult,
 } from "../math/notes.ts";
@@ -468,15 +465,8 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
     ): Promise<SolverResult> {
       const notes = structuredClone(input.notes);
       refresh(notes);
-      for (const target of input.targets)
-        Assert(verificationStageSchema, target.through);
-      const ordered = requiredStages(input.targets, notes);
-      const pending = (stage: VerificationStage) =>
-        [...ordered].flatMap(([note, through]) =>
-          stageWithin(stage, through) && stagePending(note, stage)
-            ? [note]
-            : [],
-        );
+      Assert(verificationStageSchema, input.through);
+      const pending = pendingChecks(input.targets, input.through, notes);
       return collectChecks(context, async (record) => {
         const assess = async (
           stage: "correctness" | "requirements",
@@ -554,7 +544,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           {
             task: input.task,
             notes,
-            targets: reconstructionTargets(ordered),
+            targets: pending("reconstruction").map((note) => note.id),
           },
           runtime,
           context,

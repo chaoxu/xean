@@ -5,7 +5,6 @@ import {
   planSchema,
   solverResultSchema,
   verificationStages,
-  verificationTargets,
   type Exploration,
   type Note,
   type NoteInfo,
@@ -20,31 +19,6 @@ export const correctionInstructions =
   "On PASS, you may supply correction for harmless typos, formatting, or unambiguous notation. Supply the complete replacement for each changed field, and null for each unchanged field; code retains unchanged bytes. Keep text, summary, and detailedSummary consistent. When a mismatch is confined to the summaries, correct them to match the authoritative full text instead of failing only for that mismatch. Leave text null for summary-only corrections. Restore only hypotheses, conclusions, bounds, conditionality, and limitations already explicit in the text, and explain the correction in report. Preserve dependencies, the checked claim, and external premises. Never add assumptions, repair a proof gap, or use a summary correction to satisfy an unmet task criterion; substantive changes require a new note.";
 
 const fatalStages = ["correctness", "reconstruction"] as const;
-const stageRank = (stage: VerificationStage) =>
-  verificationStages.indexOf(stage);
-
-/** Verification runs an ordered prefix of stages through the requested one. */
-export const stageWithin = (
-  stage: VerificationStage,
-  through: VerificationStage,
-) => stageRank(stage) <= stageRank(through);
-
-/** Targets reach their requested stage; dependencies need correctness and source. */
-export function requiredStages<T extends Pick<Note, "id" | "support">>(
-  targets: readonly { id: string; through: VerificationStage }[],
-  notes: readonly T[],
-): Map<T, VerificationStage> {
-  const required = new Map<T, VerificationStage>();
-  for (const target of targets)
-    for (const note of closure([target.id], notes)) {
-      const through = note.id === target.id ? target.through : "source";
-      const prior = required.get(note);
-      if (prior === undefined || stageRank(through) > stageRank(prior))
-        required.set(note, through);
-    }
-  return required;
-}
-
 export function validateNotes(
   drafts: Exploration["notes"],
   known: readonly Pick<Note, "id" | "dead">[],
@@ -172,38 +146,38 @@ export function noteInfo(note: Note): NoteInfo {
   };
 }
 
-/** Final-task reconstruction requires verified targets meeting requirements. */
-export const reconstructionTargets = (
-  stages: ReadonlyMap<Note, VerificationStage>,
-) =>
-  [...stages].flatMap(([note, through]) =>
-    through === "reconstruction" &&
-    note.verified &&
-    stagePassed(note, "requirements")
-      ? [note.id]
-      : [],
-  );
-
-/** Shared by planning and admission so completed checks are never repeated. */
-export function verificationPending(
-  targets: Parameters<typeof requiredStages>[0],
+/** Shared selection retains the note objects updated by each completed stage. */
+export function pendingChecks(
+  targets: readonly string[],
+  through: VerificationStage,
   notes: readonly Note[],
-): boolean {
-  const ordered = requiredStages(targets, notes);
-  const reconstruction = reconstructionTargets(ordered);
-  return (
-    [...ordered].some(([note, through]) =>
-      verificationStages.some(
-        (stage) =>
-          stageWithin(stage, through) &&
-          stagePending(note, stage) &&
-          (stage !== "reconstruction" || reconstruction.includes(note.id)),
-      ),
-    ) ||
-    closure(reconstruction, notes).some(
-      (note) => !note.imported && stagePending(note, "reconstruction"),
-    )
-  );
+) {
+  const ordered = closure(targets, notes);
+  const requested = ordered.filter((note) => targets.includes(note.id));
+  const support = new Set(ordered.flatMap((note) => note.support));
+  return (stage: VerificationStage): Note[] => {
+    let selected = ordered;
+    if (stage === "source" && through === "correctness")
+      selected = ordered.filter((note) => support.has(note.id));
+    if (stage === "requirements")
+      selected =
+        through === "requirements" || through === "reconstruction"
+          ? requested
+          : [];
+    if (stage === "reconstruction") {
+      const roots =
+        through === "reconstruction"
+          ? requested.filter(
+              (note) => note.verified && stagePassed(note, "requirements"),
+            )
+          : [];
+      selected = closure(
+        roots.map((note) => note.id),
+        ordered,
+      ).filter((note) => !note.imported || roots.includes(note));
+    }
+    return selected.filter((note) => stagePending(note, stage));
+  };
 }
 
 export function validatePlan(
@@ -216,13 +190,15 @@ export function validatePlan(
   if (!allowEmptyPlan && plan.work === null)
     throw new Error("Return useful work while Explorer is available");
   if (plan.work?.kind === "codex") closure(plan.work.notes, notes);
-  const targets = verificationTargets(plan);
-  for (const { id } of targets) {
-    const note = notes.find((note) => note.id === id);
-    if (!note || note.dead) throw new Error(`Unknown or dead note: ${id}`);
+  if (plan.work?.kind === "verifier") {
+    for (const id of plan.work.notes) {
+      const note = notes.find((note) => note.id === id);
+      if (!note || note.dead) throw new Error(`Unknown or dead note: ${id}`);
+    }
+    const pending = pendingChecks(plan.work.notes, plan.work.through, notes);
+    if (!verificationStages.some((stage) => pending(stage).length))
+      throw new Error("Requested verification has no pending checks");
   }
-  if (targets.length && !verificationPending(targets, notes))
-    throw new Error("Requested verification has no pending checks");
   return plan;
 }
 

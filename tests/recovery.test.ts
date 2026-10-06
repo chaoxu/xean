@@ -1,6 +1,5 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createRegistry,
@@ -22,7 +21,7 @@ import {
 } from "./fixture.ts";
 
 test("Coordinator children settle before its worker starts, including after reopening", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "coordinator-settlement-"));
+  const directory = await temporaryDirectory("coordinator-settlement-");
   const path = join(directory, "campaign.sqlite");
   const release = Promise.withResolvers<void>();
   let entered = Promise.withResolvers<void>();
@@ -109,12 +108,11 @@ test("Coordinator children settle before its worker starts, including after reop
     release.resolve();
     detach();
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("closing at private submission and worker publication reuses each committed native result", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "research-recovery-"));
+  const directory = await temporaryDirectory("research-recovery-");
   const path = join(directory, "campaign.sqlite");
   const provider = fixture((role, input) =>
     role === "explorer"
@@ -199,12 +197,11 @@ test("closing at private submission and worker publication reuses each committed
   } finally {
     unsubscribe();
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("SIGKILL recovers the product's native SQLite work without repeating its original Coordinator", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "research-kill-"));
+  const directory = await temporaryDirectory("research-kill-");
   const path = join(directory, "campaign.sqlite");
   const child = Bun.spawn(
     [process.execPath, join(import.meta.dir, "crash.ts"), path],
@@ -249,6 +246,5 @@ test("SIGKILL recovers the product's native SQLite work without repeating its or
   } finally {
     if (child.exitCode === null) child.kill("SIGKILL");
     await child.exited;
-    await rm(directory, { recursive: true, force: true });
   }
 });

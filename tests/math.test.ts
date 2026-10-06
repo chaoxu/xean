@@ -1,7 +1,5 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -26,6 +24,7 @@ import { bindCodex } from "../src/math/evidence.ts";
 import { Events, readView } from "../src/math/state.ts";
 import {
   refresh,
+  pendingChecks,
   stagePassed,
   sourceEvidence,
   stagePending,
@@ -73,6 +72,34 @@ test("Coordinator plans contain one worker or an intentional wait", () => {
   });
   expect(() => validatePlan({ work: null }, [], capabilities, false)).toThrow(
     "Return useful work",
+  );
+});
+
+test("correctness targets still establish sources when they support another target", () => {
+  const base = note("base");
+  delete base.checks[0]!.source;
+  const target = note("target", [base.id]);
+  const notes = refresh([base, target]);
+  const request = {
+    targets: [base.id, target.id],
+    through: "correctness" as const,
+  };
+  const pending = pendingChecks(request.targets, request.through, notes);
+  expect(pending("source").map((note) => note.id)).toEqual([base.id]);
+  expect(pending("requirements")).toEqual([]);
+  expect(pending("reconstruction")).toEqual([]);
+  const plan = {
+    work: {
+      kind: "verifier",
+      notes: request.targets,
+      through: request.through,
+    },
+  };
+  expect(validatePlan(plan, notes, capabilities).work).not.toBeNull();
+  base.checks.push({ source: pass });
+  refresh(notes);
+  expect(() => validatePlan(plan, notes, capabilities)).toThrow(
+    "no pending checks",
   );
 });
 
@@ -463,7 +490,7 @@ test("batch responses and note support reject missing, duplicate, extra, dead an
 
 test("native result references preserve frozen views and late corrections across reopen", async () => {
   const context = BACKGROUND_CONTEXT;
-  const directory = await mkdtemp(join(tmpdir(), "pi-math-"));
+  const directory = await temporaryDirectory("pi-math-");
   const Worker = defineTask<
     { standalone?: true },
     { phase: "result" },
@@ -644,6 +671,5 @@ test("native result references preserve frozen views and late corrections across
     expect(await read()).toEqual(latest);
   } finally {
     await harness.close(context);
-    await rm(directory, { recursive: true });
   }
 });

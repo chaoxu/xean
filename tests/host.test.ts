@@ -1,14 +1,6 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, spyOn, test } from "bun:test";
-import {
-  copyFile,
-  link,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  unlink,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, link, readFile, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -53,79 +45,73 @@ const definition = {
 const Event = defineEntry<string>("fixture.event");
 
 test("definition and initialization commit atomically once and freeze on reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-atomic-"));
+  const directory = await temporaryDirectory("host-atomic-");
   const path = join(directory, "campaign.sqlite");
-  try {
-    await expect(
-      open(path, {
-        create: definition,
-        initialize: async (tx, root) => {
-          await tx.appendEntry(Event, root, { data: "rollback" });
-          throw new Error("fixture failure");
-        },
-      }),
-    ).rejects.toThrow("fixture failure");
-    await expect(inspect(path, readDefinition)).rejects.toBeInstanceOf(
-      UninitializedResearchError,
-    );
-    const owner = await open(path, {
+
+  await expect(
+    open(path, {
       create: definition,
-      initialize: (tx, root) => tx.appendEntry(Event, root, { data: "once" }),
-    });
-    await owner.close();
-    const reopened = await open(path, {
-      create: definition,
-      initialize: () => {
-        throw new Error("must not initialize twice");
+      initialize: async (tx, root) => {
+        await tx.appendEntry(Event, root, { data: "rollback" });
+        throw new Error("fixture failure");
       },
-    });
-    try {
-      expect(await inspect(path, readDefinition)).toEqual(definition);
-      const events = await reopened.root.commit(
-        (tx) => tx.scanEntries({ conversationId: reopened.root.id }, 10),
-        context,
-      );
-      expect(
-        events.items
-          .filter((entry) => entry.kind === Event.kind)
-          .map((entry) => entry.data),
-      ).toEqual(["once"]);
-    } finally {
-      await reopened.close();
-    }
-    await expect(
-      open(path, {
-        create: {
-          ...definition,
-          task: { ...definition.task, problem: "another problem" },
-        },
-      }),
-    ).rejects.toThrow("frozen");
+    }),
+  ).rejects.toThrow("fixture failure");
+  await expect(inspect(path, readDefinition)).rejects.toBeInstanceOf(
+    UninitializedResearchError,
+  );
+  const owner = await open(path, {
+    create: definition,
+    initialize: (tx, root) => tx.appendEntry(Event, root, { data: "once" }),
+  });
+  await owner.close();
+  const reopened = await open(path, {
+    create: definition,
+    initialize: () => {
+      throw new Error("must not initialize twice");
+    },
+  });
+  try {
+    expect(await inspect(path, readDefinition)).toEqual(definition);
+    const events = await reopened.root.commit(
+      (tx) => tx.scanEntries({ conversationId: reopened.root.id }, 10),
+      context,
+    );
+    expect(
+      events.items
+        .filter((entry) => entry.kind === Event.kind)
+        .map((entry) => entry.data),
+    ).toEqual(["once"]);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await reopened.close();
   }
+  await expect(
+    open(path, {
+      create: {
+        ...definition,
+        task: { ...definition.task, problem: "another problem" },
+      },
+    }),
+  ).rejects.toThrow("frozen");
 });
 
 test("dangling database symlinks cannot create storage under a different owner path", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-dangling-"));
+  const directory = await temporaryDirectory("host-dangling-");
   const path = join(directory, "campaign.sqlite");
   const alias = join(directory, "alias.sqlite");
-  try {
-    await symlink(path, alias);
-    await expect(
-      open(alias, { create: definition }).then((owner) => owner.close()),
-    ).rejects.toThrow("database symlink must have an existing target");
-    expect(await Bun.file(path).exists()).toBe(false);
-    expect(await Bun.file(`${alias}.owner.sqlite`).exists()).toBe(false);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+
+  await symlink(path, alias);
+  await expect(
+    open(alias, { create: definition }).then((owner) => owner.close()),
+  ).rejects.toThrow("database symlink must have an existing target");
+  expect(await Bun.file(path).exists()).toBe(false);
+  expect(await Bun.file(`${alias}.owner.sqlite`).exists()).toBe(false);
 });
 
 test.each([false, true])(
   "one owner excludes aliases while inspection uses live=%s",
   async (live) => {
-    const directory = await mkdtemp(join(tmpdir(), "host-reader-"));
+    const directory = await temporaryDirectory("host-reader-");
     const path = join(directory, "campaign.sqlite");
     const owner = await open(path, {
       create: definition,
@@ -212,12 +198,11 @@ test.each([false, true])(
     }
     const reopened = await open(path);
     await reopened.close();
-    await rm(directory, { recursive: true, force: true });
   },
 );
 
 test("reopening recorded cancellation aborts an interrupted decision and nested work before recovery", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-cancelled-"));
+  const directory = await temporaryDirectory("host-cancelled-");
   const path = join(directory, "campaign.sqlite");
   const started = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
@@ -296,12 +281,11 @@ test("reopening recorded cancellation aborts an interrupted decision and nested 
   } finally {
     held.resolve();
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("usage overrides preserve frozen settings and completed custom-provider work reopens lazily", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-attribution-"));
+  const directory = await temporaryDirectory("host-attribution-");
   const path = join(directory, "campaign.sqlite");
   const faux = fauxProvider({
     provider: "custom",
@@ -377,12 +361,11 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
     }
   } finally {
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("owner commits use FULL durability and close without waiting for a held reader", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-durability-"));
+  const directory = await temporaryDirectory("host-durability-");
   const path = join(directory, "campaign.sqlite");
   const nativeOpen = SqliteStorage.open;
   let synchronous: number | undefined;
@@ -429,12 +412,11 @@ test("owner commits use FULL durability and close without waiting for a held rea
     opening.mockRestore();
     reader?.close();
     await owner?.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("custom role extensions compose with built-in mathematical conversations", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-extensions-"));
+  const directory = await temporaryDirectory("host-extensions-");
   const path = join(directory, "campaign.sqlite");
   const faux = fauxProvider({
     provider: "custom",
@@ -516,12 +498,11 @@ test("custom role extensions compose with built-in mathematical conversations", 
     ).toBe(true);
   } finally {
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("nonfatal Pi reports remain diagnostic while a poisoned Session releases waiters", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-failure-"));
+  const directory = await temporaryDirectory("host-failure-");
   const path = join(directory, "campaign.sqlite");
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -559,12 +540,11 @@ test("nonfatal Pi reports remain diagnostic while a poisoned Session releases wa
     commits.mockRestore();
     await owner?.close().catch(() => {});
     reports.mockRestore();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("replacement roles preserve the browser quota and expose custom Codex", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "host-replacements-"));
+  const directory = await temporaryDirectory("host-replacements-");
   const path = join(directory, "campaign.sqlite");
   let explorers = 0,
     codex = 0,
@@ -633,91 +613,83 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
     ).toBe(true);
   } finally {
     await owner.close();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test.each([false, true])(
   "inspection with live=%s does not recover work or alter unsupported databases",
   async (live) => {
-    const directory = await mkdtemp(join(tmpdir(), "host-inspection-"));
+    const directory = await temporaryDirectory("host-inspection-");
     const path = join(directory, "campaign.sqlite");
-    try {
-      const started = Promise.withResolvers<void>();
-      const owner = await open(path, {
-        create: definition,
-        roles: () => ({
-          coordinator: async (_input, _runtime, invocation) => {
-            started.resolve();
-            await awaitWithContext(new Promise(() => {}), invocation);
-            return { work: null };
-          },
-        }),
+
+    const started = Promise.withResolvers<void>();
+    const owner = await open(path, {
+      create: definition,
+      roles: () => ({
+        coordinator: async (_input, _runtime, invocation) => {
+          started.resolve();
+          await awaitWithContext(new Promise(() => {}), invocation);
+          return { work: null };
+        },
+      }),
+    });
+    owner.harness.resume();
+    await started.promise;
+    const tasks = () =>
+      inspect(path, async (tx) => (await tx.scanTasks({}, 20)).items, {
+        live,
       });
-      owner.harness.resume();
-      await started.promise;
-      const tasks = () =>
-        inspect(path, async (tx) => (await tx.scanTasks({}, 20)).items, {
-          live,
-        });
-      const pending = await tasks();
-      expect(pending.some((task) => task.state.status === "running")).toBe(
-        true,
-      );
-      expect(await tasks()).toEqual(pending);
-      await owner.close();
-      expect(await tasks()).toEqual(pending);
-      // A checkpointed copy has no WAL sidecars, regardless of statement GC timing.
-      const stopped = join(directory, "stopped.sqlite");
-      await copyFile(path, stopped);
-      expect(
-        await inspect(
-          stopped,
-          async (tx) => (await tx.scanTasks({}, 20)).items,
-          { live },
-        ),
-      ).toEqual(pending);
-      const reader = openReadDatabase(stopped);
-      try {
-        expect(() => reader.exec("DELETE FROM tasks")).toThrow("readonly");
-      } finally {
-        reader.close();
-      }
-      const missing = join(directory, "missing.sqlite");
-      expect(() => openReadDatabase(missing)).toThrow();
-      expect(await Bun.file(missing).exists()).toBe(false);
-      const uninitialized = join(directory, "empty.sqlite");
-      await (await openNodeSqliteStorage(uninitialized)).close(context);
-      await expect(
-        inspect(uninitialized, readDefinition, { live }),
-      ).rejects.toBeInstanceOf(UninitializedResearchError);
-      const future = new DatabaseSync(uninitialized);
-      future.exec("UPDATE durable_schema SET version = 999");
-      future.close();
-      await expect(
-        inspect(uninitialized, readDefinition, { live }),
-      ).rejects.toThrow(
-        live ? "current Pi SQLite schema" : "newer than supported",
-      );
-      const corrupt = join(directory, "corrupt.sqlite");
-      await Bun.write(corrupt, "not a database");
-      await expect(
-        inspect(corrupt, readDefinition, { live }),
-      ).rejects.not.toBeInstanceOf(UninitializedResearchError);
-      const unrelated = join(directory, "unrelated.sqlite");
-      const other = new DatabaseSync(unrelated);
-      other.exec("CREATE TABLE unrelated (value TEXT)");
-      other.close();
-      const original = await readFile(unrelated);
-      await expect(
-        inspect(unrelated, readDefinition, { live }),
-      ).rejects.toThrow("Not a Pi Durable");
-      await expect(open(unrelated, { create: definition })).rejects.toThrow(
-        "Not a Pi Durable",
-      );
-      expect(await readFile(unrelated)).toEqual(original);
+    const pending = await tasks();
+    expect(pending.some((task) => task.state.status === "running")).toBe(true);
+    expect(await tasks()).toEqual(pending);
+    await owner.close();
+    expect(await tasks()).toEqual(pending);
+    // A checkpointed copy has no WAL sidecars, regardless of statement GC timing.
+    const stopped = join(directory, "stopped.sqlite");
+    await copyFile(path, stopped);
+    expect(
+      await inspect(stopped, async (tx) => (await tx.scanTasks({}, 20)).items, {
+        live,
+      }),
+    ).toEqual(pending);
+    const reader = openReadDatabase(stopped);
+    try {
+      expect(() => reader.exec("DELETE FROM tasks")).toThrow("readonly");
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      reader.close();
     }
+    const missing = join(directory, "missing.sqlite");
+    expect(() => openReadDatabase(missing)).toThrow();
+    expect(await Bun.file(missing).exists()).toBe(false);
+    const uninitialized = join(directory, "empty.sqlite");
+    await (await openNodeSqliteStorage(uninitialized)).close(context);
+    await expect(
+      inspect(uninitialized, readDefinition, { live }),
+    ).rejects.toBeInstanceOf(UninitializedResearchError);
+    const future = new DatabaseSync(uninitialized);
+    future.exec("UPDATE durable_schema SET version = 999");
+    future.close();
+    await expect(
+      inspect(uninitialized, readDefinition, { live }),
+    ).rejects.toThrow(
+      live ? "current Pi SQLite schema" : "newer than supported",
+    );
+    const corrupt = join(directory, "corrupt.sqlite");
+    await Bun.write(corrupt, "not a database");
+    await expect(
+      inspect(corrupt, readDefinition, { live }),
+    ).rejects.not.toBeInstanceOf(UninitializedResearchError);
+    const unrelated = join(directory, "unrelated.sqlite");
+    const other = new DatabaseSync(unrelated);
+    other.exec("CREATE TABLE unrelated (value TEXT)");
+    other.close();
+    const original = await readFile(unrelated);
+    await expect(inspect(unrelated, readDefinition, { live })).rejects.toThrow(
+      "Not a Pi Durable",
+    );
+    await expect(open(unrelated, { create: definition })).rejects.toThrow(
+      "Not a Pi Durable",
+    );
+    expect(await readFile(unrelated)).toEqual(original);
   },
 );

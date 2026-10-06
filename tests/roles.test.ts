@@ -1,8 +1,8 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
 import { Check } from "typebox/value";
 import { watchFile, unwatchFile } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -273,7 +273,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
   const unregister = registerSessionResourceCleanup((sessionId) =>
     cleaned.push(sessionId),
   );
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-explorer-"));
+  const directory = await temporaryDirectory("pi-role-explorer-");
   const inputNote = {
     ...preparedNote("prior"),
     imported: true,
@@ -463,12 +463,11 @@ test("Explorer retains frozen reads and private submissions across native reopen
   } finally {
     await current.harness.close(context);
     unregister();
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("model-selected proof and comparison batches preserve blindness, IDs, and progress after reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-verifier-"));
+  const directory = await temporaryDirectory("pi-role-verifier-");
   let rejectedIds = false;
   const schemaChecks: boolean[] = [];
   const invalidPrefixes = [[], ["n2"], ["n1", "n1"]];
@@ -598,7 +597,8 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
                 note("n2", ["n1"]),
                 { ...note("n3", ["n2"]), candidate: true },
               ],
-              targets: [{ id: "n3", through: "reconstruction" }],
+              targets: ["n3"],
+              through: "reconstruction",
             },
           },
           { ownership: { kind: "conversation" } },
@@ -662,14 +662,13 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
     expect(schemaChecks.every(Boolean)).toBe(true);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
   "reconstruction finishes produced proofs before handling %s pending support",
   async (boundary) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-role-support-"));
+    const directory = await temporaryDirectory("pi-role-support-");
     const refuted = boundary === "refuted";
     const dependent = boundary === "dependent";
     const notes = [
@@ -707,10 +706,8 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
               input: {
                 task,
                 notes,
-                targets: ["n1", "n3", "n4", "n5"].map((id) => ({
-                  id,
-                  through: "reconstruction",
-                })),
+                targets: ["n1", "n3", "n4", "n5"],
+                through: "reconstruction",
               },
             },
             { ownership: { kind: "conversation" } },
@@ -783,13 +780,12 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
       }
     } finally {
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
 
 test("standalone reconstruction retains completed checks and corrections after a later failure", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-reconstruct-failure-"));
+  const directory = await temporaryDirectory("pi-reconstruct-failure-");
   const notes = [preparedNote("n1"), preparedNote("n2", ["n1"])];
   const provider = fixture((name, input) => {
     if (name === "proof")
@@ -860,16 +856,13 @@ test("standalone reconstruction retains completed checks and corrections after a
     ]);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test.each(["imported", "reconstructed"] as const)(
   "reconstruction checks ancestors of %s support without repeating its proof",
   async (middle) => {
-    const directory = await mkdtemp(
-      join(tmpdir(), "pi-role-transitive-support-"),
-    );
+    const directory = await temporaryDirectory("pi-role-transitive-support-");
     const support = preparedNote("n2", ["n1"]);
     if (middle === "imported") support.imported = true;
     else
@@ -921,7 +914,8 @@ test.each(["imported", "reconstructed"] as const)(
                   support,
                   preparedNote("n1"),
                 ],
-                targets: [{ id: "n3", through: "reconstruction" }],
+                targets: ["n3"],
+                through: "reconstruction",
               },
             },
             { ownership: { kind: "conversation" } },
@@ -947,7 +941,6 @@ test.each(["imported", "reconstructed"] as const)(
       ]);
     } finally {
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -961,7 +954,7 @@ test.each([
 ] as const)(
   "late %s failure preserves completed verification and a fresh worker reuses it",
   async (failure) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-verifier-failure-"));
+    const directory = await temporaryDirectory("pi-verifier-failure-");
     const invalidSource =
       failure === "source IDs" || failure === "source premises";
     let proofs = 0,
@@ -1209,7 +1202,6 @@ test.each([
     } finally {
       unregister();
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -1217,7 +1209,7 @@ test.each([
 test.each([true, false])(
   "an imported candidate needs independent reconstruction, complete=%s, despite cleanup failure",
   async (complete) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-imported-candidate-"));
+    const directory = await temporaryDirectory("pi-imported-candidate-");
     const imported = {
       ...note("n1"),
       imported: true,
@@ -1290,7 +1282,8 @@ test.each([true, false])(
               input: {
                 task,
                 notes: [imported],
-                targets: [{ id: "n1", through: "reconstruction" }],
+                targets: ["n1"],
+                through: "reconstruction",
               },
             },
             { ownership: { kind: "conversation" } },
@@ -1335,13 +1328,12 @@ test.each([true, false])(
     } finally {
       unregister();
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
 
 test("notes without a mathematical claim skip source and reconstruction", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-context-note-"));
+  const directory = await temporaryDirectory("pi-role-context-note-");
   const provider = fixture((name, input) => {
     expect(name).toBe("correctness");
     expect(input.notes[0].text).toBe("Would a different construction help?");
@@ -1370,7 +1362,8 @@ test("notes without a mathematical claim skip source and reconstruction", async 
               notes: [
                 { ...note("n1"), text: "Would a different construction help?" },
               ],
-              targets: [{ id: "n1", through: "reconstruction" }],
+              targets: ["n1"],
+              through: "reconstruction",
             },
           },
           { ownership: { kind: "conversation" } },
@@ -1397,14 +1390,13 @@ test("notes without a mathematical claim skip source and reconstruction", async 
     expect(provider.calls.map(({ name }) => name)).toEqual(["correctness"]);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test.each(["request", "incomplete.max_messages", "length"] as const)(
   "source recovery preserves checks and rejects incomplete proofs after %s",
   async (reason) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-role-custom-source-"));
+    const directory = await temporaryDirectory("pi-role-custom-source-");
     let sourceCalls = 0;
     let proofs = 0;
     const premise = "Every finite example satisfies the external theorem.";
@@ -1614,7 +1606,8 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
               input: {
                 task,
                 notes: [{ ...note("n1"), candidate: true }],
-                targets: [{ id: "n1", through: "reconstruction" }],
+                targets: ["n1"],
+                through: "reconstruction",
               },
             },
             { ownership: { kind: "conversation" } },
@@ -1689,7 +1682,8 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
               input: {
                 task,
                 notes: [mismatched],
-                targets: [{ id: "n1", through: "reconstruction" }],
+                targets: ["n1"],
+                through: "reconstruction",
               },
             },
             { ownership: { kind: "conversation" } },
@@ -1705,7 +1699,6 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
       expect(provider.calls).toHaveLength(reason === "request" ? 4 : 5);
     } finally {
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
@@ -1721,7 +1714,7 @@ async function fakeCodex(directory: string) {
 }
 
 test("Coordinator capabilities survive retry and reopen; fresh decisions get fresh conversations", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-coordinator-"));
+  const directory = await temporaryDirectory("pi-role-coordinator-");
   let count = 0;
   let retried = false;
   const provider = fixture(
@@ -1857,12 +1850,11 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
     });
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("Coordinator rejects used literature and multiple workers", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-policy-"));
+  const directory = await temporaryDirectory("pi-role-policy-");
   let response = 0;
   const provider = fixture(
     (_name, input, transcript) => {
@@ -1926,7 +1918,6 @@ test("Coordinator rejects used literature and multiple workers", async () => {
     expect(provider.calls).toHaveLength(4);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -1937,7 +1928,7 @@ test.each([
 ] as const)(
   "truncated Explorer responses retain only prior complete submissions (saved=%s, allowance=%s, calls=%s)",
   async (submitted, allowance, expectedCalls) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-role-truncated-"));
+    const directory = await temporaryDirectory("pi-role-truncated-");
     const cleaned: (string | undefined)[] = [];
     const unregister = registerSessionResourceCleanup((sessionId) =>
       cleaned.push(sessionId),
@@ -2016,13 +2007,12 @@ test.each([
     } finally {
       await current.harness.close(context);
       unregister();
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
 
 test("capacity after a frozen read hands off valid private notes without another provider call", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-capacity-"));
+  const directory = await temporaryDirectory("pi-role-capacity-");
   let count = 0;
   const provider = fixture(
     () =>
@@ -2060,12 +2050,11 @@ test("capacity after a frozen read hands off valid private notes without another
     expect(provider.calls).toHaveLength(2);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("invalid submissions consume the response allowance and cannot publish partial results", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-allowance-"));
+  const directory = await temporaryDirectory("pi-role-allowance-");
   const provider = fixture(
     () => ({ notes: [draft("n1", ["unknown"])], candidate: false }),
     { research: false, maxExplorerReads: 1, maxExplorerResponses: 2 },
@@ -2092,12 +2081,11 @@ test("invalid submissions consume the response allowance and cannot publish part
     expect(provider.calls).toHaveLength(2);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("an admitted failed read consumes its allowance, while schema-invalid reads do not", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-read-allowance-"));
+  const directory = await temporaryDirectory("pi-role-read-allowance-");
   let count = 0;
   const provider = fixture(
     (_name, _input, transcript) => {
@@ -2155,12 +2143,11 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
     ).toHaveLength(1);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("interrupted Codex workers retain old artifacts and replay in a fresh workspace", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-codex-replay-"));
+  const directory = await temporaryDirectory("pi-role-codex-replay-");
   const command = await fakeCodex(directory);
   const provider = fixture(
     () => {
@@ -2233,12 +2220,11 @@ test("interrupted Codex workers retain old artifacts and replay in a fresh works
   } finally {
     if (watched) unwatchFile(watched);
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("Codex preparation failures retain a task failure without admitting or recording an invocation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-codex-prepare-"));
+  const directory = await temporaryDirectory("pi-role-codex-prepare-");
   const workspace = join(directory, "not-a-directory");
   await writeFile(workspace, "Fixture");
   const provider = fixture(
@@ -2278,12 +2264,11 @@ test("Codex preparation failures retain a task failure without admitting or reco
     expect(provider.calls).toHaveLength(0);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("Codex source memos survive later Verifier recovery and other calls retain evidence", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-codex-"));
+  const directory = await temporaryDirectory("pi-role-codex-");
   const command = await fakeCodex(directory);
   const provider = fixture(
     (name, input) => ({
@@ -2340,7 +2325,8 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
             input: {
               task,
               notes: [{ ...note("n1"), candidate: true }],
-              targets: [{ id: "n1", through: "requirements" }],
+              targets: ["n1"],
+              through: "requirements",
             },
           },
           { ownership: { kind: "conversation" } },
@@ -2446,7 +2432,6 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
     ).toBe(true);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -2458,7 +2443,7 @@ test.each([
 ])(
   "mixed read/submission completes without another response (read first: %s, valid read: %s)",
   async (readFirst, validRead) => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-role-mixed-"));
+    const directory = await temporaryDirectory("pi-role-mixed-");
     let calls = 0;
     const provider = fixture(() => {
       if (++calls > 1)
@@ -2514,13 +2499,12 @@ test.each([
       ).toHaveLength(validRead ? 2 : 1);
     } finally {
       await current.harness.close(context);
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );
 
 test("native mixed-round controls preserve read-only, partial, and invalid-submission continuation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-mixed-continue-"));
+  const directory = await temporaryDirectory("pi-role-mixed-continue-");
   let calls = 0;
   const provider = fixture(
     () => {
@@ -2592,6 +2576,5 @@ test("native mixed-round controls preserve read-only, partial, and invalid-submi
     ).toBe(true);
   } finally {
     await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });

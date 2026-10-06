@@ -1,7 +1,5 @@
+import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   BACKGROUND_CONTEXT as context,
   awaitWithContext,
@@ -117,58 +115,6 @@ test("standalone initialization serializes and reuses completed work", async () 
   }
 });
 
-test("input replay is idempotent after projection and frozen workers retain old note revisions", async () => {
-  const { research, harness, root, view } = await setup();
-  try {
-    const command = {
-      kind: "submit",
-      id: "import",
-      notes: [draft()],
-      candidate: true,
-    };
-    const at = await root.commit(
-      (tx) => research.input(tx, root.id, command),
-      context,
-    );
-    expect(
-      await root.commit((tx) => research.input(tx, root.id, command), context),
-    ).toBe(at);
-    const correction = {
-      kind: "correct",
-      id: "fix",
-      note: "input/import/n1",
-      revision: 0,
-      summary: "Equality",
-      detailedSummary: "Reflexivity proves equality.",
-      text: "1=1\n\nBy reflexivity, 1=1.",
-    };
-    const revised = await root.commit(
-      (tx) => research.input(tx, root.id, correction),
-      context,
-    );
-    expect(
-      await root.commit(
-        (tx) => research.input(tx, root.id, correction),
-        context,
-      ),
-    ).toBe(revised);
-    expect((await view()).notes[0]!.revision).toBe(1);
-    const original = await root.commit(
-      (tx) => readView(tx, root.id, at),
-      context,
-    );
-    expect(original.notes[0]!.revision).toBe(0);
-    await expect(
-      root.commit(
-        (tx) => research.input(tx, root.id, { ...command, candidate: false }),
-        context,
-      ),
-    ).rejects.toThrow("another value");
-  } finally {
-    await harness.close(context);
-  }
-});
-
 test("Coordinator waits for the worker outcome before handling inputs and choosing again", async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -225,7 +171,7 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
 });
 
 test("a worker fault wakes Coordinator after reopening without repeating the failed worker", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "worker-fault-recovery-"));
+  const directory = await temporaryDirectory("worker-fault-recovery-");
   let attempt = 0;
   const roles: Partial<Roles> = {
     coordinator: async (input) => {
@@ -281,7 +227,6 @@ test("a worker fault wakes Coordinator after reopening without repeating the fai
     expect((await owner.view()).notes).toHaveLength(1);
   } finally {
     await owner.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -372,8 +317,8 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
   },
 );
 
-test("Verifier recovery retains its admission cutoff after a harmless correction", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "research-verifier-"));
+test("Verifier recovery retains its admission cutoff and input retries preserve revisions", async () => {
+  const directory = await temporaryDirectory("research-verifier-");
   const started = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
   let carriedOnClose = false;
@@ -431,18 +376,27 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
   );
   try {
     const { research, root, harness } = owner;
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "submit",
-          id: "import",
-          notes: [draft()],
-          candidate: false,
-        }),
+    const command = {
+      kind: "submit",
+      id: "import",
+      notes: [draft()],
+      candidate: false,
+    };
+    const admitted = await root.commit(
+      (tx) => research.input(tx, root.id, command),
       context,
     );
     harness.resume();
     await started.promise;
+    expect(
+      await root.commit((tx) => research.input(tx, root.id, command), context),
+    ).toBe(admitted);
+    await expect(
+      root.commit(
+        (tx) => research.input(tx, root.id, { ...command, candidate: true }),
+        context,
+      ),
+    ).rejects.toThrow("another value");
     const [worker] = await root.commit(
       (tx) => scanTasks(tx, root.id, "research.worker"),
       context,
@@ -456,19 +410,25 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
     expect(worker!.input).toMatchObject({
       at,
     });
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "correct",
-          id: "fix",
-          note: "input/import/n1",
-          revision: 0,
-          summary: "Equality",
-          detailedSummary: "Reflexivity proves equality.",
-          text: "1=1\n\nBy reflexivity, 1=1.",
-        }),
+    const correction = {
+      kind: "correct",
+      id: "fix",
+      note: "input/import/n1",
+      revision: 0,
+      summary: "Equality",
+      detailedSummary: "Reflexivity proves equality.",
+      text: "1=1\n\nBy reflexivity, 1=1.",
+    };
+    const revised = await root.commit(
+      (tx) => research.input(tx, root.id, correction),
       context,
     );
+    expect(
+      await root.commit(
+        (tx) => research.input(tx, root.id, correction),
+        context,
+      ),
+    ).toBe(revised);
     expect((await owner.view()).notes[0]!.revision).toBe(1);
     await harness.close(context);
     expect(carriedOnClose).toBe(true);
@@ -498,7 +458,6 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
   } finally {
     held.resolve();
     await owner.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
   }
 });
 

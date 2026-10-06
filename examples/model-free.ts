@@ -44,7 +44,7 @@ const owner = await open(path, {
       kind: "verification",
       checks: [
         {
-          noteId: input.targets[0].id,
+          noteId: input.targets[0],
           correctness: { ...pass, statement: "1 = 1.", premises: [] },
           source: pass,
           requirements: pass,
