@@ -10,7 +10,6 @@ import {
   type TaskId,
   type TaskRecord,
   type TaskOutcome,
-  type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { verificationTargets, type Plan } from "./math/contracts.ts";
@@ -26,7 +25,11 @@ import { readCommand, validateCommand } from "./math/commands.ts";
 import { readDefinition } from "./definition.ts";
 import { isDeepStrictEqual } from "node:util";
 import { resolveResult } from "./math/results.ts";
-import { RoleFailure } from "./roles/types.ts";
+import {
+  RoleFailure,
+  type NoteReference,
+  type RoleRuntime,
+} from "./roles/types.ts";
 
 // These are application admission choices. Pi retains all execution state.
 export const Control = defineDoc({
@@ -43,13 +46,11 @@ export const Control = defineDoc({
 });
 const DecisionView = defineEntry("research.decision-view");
 
-type Runtime = TaskRuntime<any, any, any, object>;
-type Source = { root: ConversationId; cutoff: EntryId };
 type Role = (
   input: any,
-  runtime: Runtime,
+  runtime: RoleRuntime,
   context: Context,
-  source?: Source,
+  source?: NoteReference,
 ) => Promise<any>;
 export const roleNames = [
   "coordinator",
@@ -131,7 +132,7 @@ export async function scanTasks(tx: Tx, root: ConversationId, kind?: string) {
   return tasks;
 }
 
-async function abort(_task: unknown, runtime: Runtime, context: Context) {
+async function abort(_task: unknown, runtime: RoleRuntime, context: Context) {
   await runtime.commit(
     () => ({ status: "terminal", outcome: { status: "aborted" } }),
     context,
@@ -147,7 +148,7 @@ export function createResearch(roles: Roles) {
       async run(task, runtime, context) {
         let value: unknown;
         let name: RoleName;
-        let source: Source | undefined;
+        let source: NoteReference | undefined;
         let predecessor: TaskId | undefined;
         let stopped = false;
         await runtime.commit(async (tx) => {

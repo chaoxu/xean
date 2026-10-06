@@ -175,15 +175,10 @@ export type CoordinationInput = {
   /** Any prior work for the current built-in Explorer, including failures. */
   explorerUsed: boolean;
 };
-export type RoleOptions = {
+export type RoleOptions = Omit<Settings, "profiles" | "research" | "codex"> & {
   profiles: Profiles;
-  maxExplorerResponses?: number;
-  maxExplorerReads?: number;
-  chatgpt?: Settings["chatgpt"];
-  literature?: boolean;
   research?: CodexOptions | false;
   codex?: CodexOptions & { workspace: string };
-  usagePrefix?: string;
 };
 
 export function createRoles(options: RoleOptions, researchOverride?: Research) {
