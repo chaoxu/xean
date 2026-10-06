@@ -377,12 +377,14 @@ export function conversations(profiles: Profiles) {
                           const parameters = call.capabilities
                             ? planSchema(call.capabilities)
                             : structuredClone(submissionSchemas[call.profile!]);
-                          if (call.ids && "results" in parameters.properties)
-                            Object.assign(
-                              parameters.properties.results.items.properties
-                                .noteId,
-                              { enum: call.ids },
-                            );
+                          if (call.ids && "results" in parameters.properties) {
+                            const fields =
+                              parameters.properties.results.items.properties;
+                            fields.noteId = Type.String({
+                              ...fields.noteId,
+                              enum: call.ids,
+                            });
+                          }
                           return { ...tool, parameters };
                         }),
                       }

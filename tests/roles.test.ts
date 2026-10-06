@@ -470,6 +470,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
 test("model-selected proof and comparison batches preserve blindness, IDs, and progress after reopen", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-role-verifier-"));
   let rejectedIds = false;
+  const schemaChecks: boolean[] = [];
   const invalidPrefixes = [[], ["n2"], ["n1", "n1"]];
   const provider = fixture((name, input, transcript) => {
     const tool = getCurrentTools(transcript.messages).find(
@@ -538,7 +539,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
         : name === "reconstruction"
           ? input.notes.slice(0, 1)
           : input.notes;
-    return {
+    const result = {
       results: [...selected].reverse().map((note: { id: string }) => ({
         noteId: note.id,
         ...value,
@@ -547,6 +548,8 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
           : {}),
       })),
     };
+    schemaChecks.push(Check(tool.parameters, result));
+    return result;
   });
   let current = await provider.open(directory);
   try {
@@ -643,6 +646,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
     expect(JSON.stringify(proofs.at(-1)!.transcript)).toContain(
       "Batch results must contain exactly one result per requested note",
     );
+    expect(schemaChecks.every(Boolean)).toBe(true);
   } finally {
     await current.harness.close(context);
     await rm(directory, { recursive: true, force: true });
