@@ -518,7 +518,19 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
           }
         : name === "proof"
           ? { proof: "Independent complete proof.", complete: true }
-          : { verdict: "PASS", report: "Private comparison report" };
+          : {
+              verdict: "PASS",
+              report: "Private comparison report",
+              ...(name === "reconstruction"
+                ? {
+                    correction: {
+                      summary: null,
+                      detailedSummary: "Clarified detailed summary",
+                      text: null,
+                    },
+                  }
+                : {}),
+            };
     if (
       name === "proof" &&
       input.notes[0].id === "n1" &&
@@ -618,6 +630,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
     expect(result.checks[0]!.correction).toEqual({
       revision: 0,
       summary: "Harmless clarification",
+      detailedSummary: "Clarified detailed summary",
     });
     expect(
       provider.calls.map(({ name, input }) => [
@@ -774,6 +787,82 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
     }
   },
 );
+
+test("standalone reconstruction retains completed checks and corrections after a later failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-reconstruct-failure-"));
+  const notes = [preparedNote("n1"), preparedNote("n2", ["n1"])];
+  const provider = fixture((name, input) => {
+    if (name === "proof")
+      return {
+        results: input.notes.map(({ id }: { id: string }) => ({
+          noteId: id,
+          proof: "Independent complete proof",
+          complete: true,
+        })),
+      };
+    expect(name).toBe("reconstruction");
+    if (input.notes[0].id === "n2")
+      return fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "Comparison unavailable",
+      });
+    return {
+      results: [
+        {
+          noteId: "n1",
+          verdict: "PASS",
+          report: "Checked",
+          correction: {
+            summary: "Clarified summary",
+            detailedSummary: null,
+            text: null,
+          },
+        },
+      ],
+    };
+  });
+  const current = await provider.open(directory, {
+    task,
+    settings: { profiles: { default: { provider: "openai", model: "roles" } } },
+    mode: { role: "reconstruct", input: { task, notes, targets: ["n2"] } },
+  });
+  try {
+    await current.root.commit(
+      (tx) => provider.workflow.initialize(tx, current.root.id),
+      context,
+    );
+    await current.root.waitForIdle(context);
+    const view = await current.root.commit(
+      (tx) => readView(tx, current.root.id),
+      context,
+    );
+    expect(view.results[0]!.outcome).toMatchObject({
+      status: "failed",
+      error: { message: "Comparison unavailable" },
+      result: {
+        kind: "verification",
+        checks: [
+          {
+            noteId: "n1",
+            correction: { revision: 0, summary: "Clarified summary" },
+            reconstruction: {
+              verdict: "PASS",
+              proof: "Independent complete proof",
+            },
+          },
+        ],
+      },
+    });
+    expect(provider.calls.map(({ name }) => name)).toEqual([
+      "proof",
+      "reconstruction",
+      "reconstruction",
+    ]);
+  } finally {
+    await current.harness.close(context);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test.each(["imported", "reconstructed"] as const)(
   "reconstruction checks ancestors of %s support without repeating its proof",

@@ -110,60 +110,78 @@ const sourceRecord = (note: Note) => {
 };
 type StageResult<Stage extends VerificationStage> = NonNullable<Check[Stage]> &
   Pick<Verdict, "correction">;
-const verificationFailure = (error: unknown, context: Context) => {
-  if (context.abortSignal?.aborted) throw error;
-  return error instanceof RoleFailure
-    ? error
-    : new RoleFailure(error instanceof Error ? error.message : String(error), {
-        cause: error,
-      });
-};
-
-/** Corrections share one policy for standalone reconstruction and verifier batches. */
-function recordCheck<Stage extends VerificationStage>(
+type RecordCheck = <Stage extends VerificationStage>(
   note: Note,
-  check: Check,
   stage: Stage,
   result: StageResult<Stage>,
-): void {
-  const recorded = { ...result };
-  delete recorded.correction;
-  if (stage === "correctness" && note.imported && "premises" in recorded) {
+) => void;
+
+async function collectChecks(
+  context: Context,
+  run: (record: RecordCheck) => Promise<void>,
+): Promise<Extract<SolverResult, { kind: "verification" }>> {
+  const checks = new Map<string, Check>();
+  const record: RecordCheck = (note, stage, result) => {
+    const check = checks.get(note.id) ?? { noteId: note.id };
+    const recorded = { ...result };
+    delete recorded.correction;
+    if (stage === "correctness" && note.imported && "premises" in recorded) {
+      if (
+        recorded.premises.length ||
+        (result.correction &&
+          Object.values(result.correction).some((value) => value !== null))
+      )
+        throw new Error(
+          "Imported statement preparation cannot add premises or corrections",
+        );
+      if (recorded.verdict === "FAIL") recorded.verdict = "INCONCLUSIVE";
+    }
     if (
-      recorded.premises.length ||
-      (result.correction &&
-        Object.values(result.correction).some((value) => value !== null))
-    )
-      throw new Error(
-        "Imported statement preparation cannot add premises or corrections",
-      );
-    if (recorded.verdict === "FAIL") recorded.verdict = "INCONCLUSIVE";
+      stage === "correctness" &&
+      "statement" in recorded &&
+      recorded.statement === null &&
+      recorded.verdict === "PASS"
+    ) {
+      recorded.verdict = "INCONCLUSIVE";
+      recorded.report = `No mathematical claim was identified for verification. ${recorded.report}`;
+    }
+    validateResult(
+      {
+        kind: "verification",
+        checks: [{ noteId: note.id, [stage]: recorded }],
+      },
+      [note],
+    );
+    if (result.correction !== undefined)
+      Assert(verdictSchema.properties.correction, result.correction);
+    check[stage] = recorded;
+    if (!checks.has(note.id)) {
+      checks.set(note.id, check);
+      note.checks.push(check);
+    }
+    if (recorded.verdict !== "PASS" || result.correction === undefined) return;
+    for (const field of Object.keys(
+      noteContentSchema.properties,
+    ) as (keyof NoteContent)[]) {
+      const value = result.correction[field];
+      if (value == null || value === note[field]) continue;
+      note[field] = value;
+      (check.correction ??= { revision: note.revision })[field] = value;
+    }
+  };
+  try {
+    await run(record);
+  } catch (error) {
+    if (context.abortSignal?.aborted) throw error;
+    const failure = new RoleFailure(
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+    if (checks.size)
+      failure.result = { kind: "verification", checks: [...checks.values()] };
+    throw failure;
   }
-  if (
-    stage === "correctness" &&
-    "statement" in recorded &&
-    recorded.statement === null &&
-    recorded.verdict === "PASS"
-  ) {
-    recorded.verdict = "INCONCLUSIVE";
-    recorded.report = `No mathematical claim was identified for verification. ${recorded.report}`;
-  }
-  validateResult(
-    { kind: "verification", checks: [{ noteId: note.id, [stage]: recorded }] },
-    [note],
-  );
-  if (result.correction !== undefined)
-    Assert(verdictSchema.properties.correction, result.correction);
-  check[stage] = recorded;
-  if (recorded.verdict !== "PASS" || result.correction === undefined) return;
-  for (const field of Object.keys(
-    noteContentSchema.properties,
-  ) as (keyof NoteContent)[]) {
-    const value = result.correction[field];
-    if (value == null || value === note[field]) continue;
-    note[field] = value;
-    (check.correction ??= { revision: note.revision })[field] = value;
-  }
+  return { kind: "verification", checks: [...checks.values()] };
 }
 
 export type CoordinationInput = {
@@ -230,12 +248,12 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       results,
     );
   };
-  const reconstruct = async (
+  const reconstruction = (
     input: ReconstructionInput,
     runtime: RoleRuntime,
     context: Context,
-  ): Promise<Extract<SolverResult, { kind: "verification" }>> => {
-    const notes = closure(input.targets, refresh(structuredClone(input.notes)));
+  ) => {
+    const notes = closure(input.targets, refresh(input.notes));
     if (notes.some((note) => !note.verified))
       throw new Error(
         "Reconstruction requires verified notes and support with checked statements",
@@ -245,42 +263,37 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         (!note.imported || input.targets.includes(note.id)) &&
         !stagePassed(note, "reconstruction"),
     );
-    if (!pending.length) return { kind: "verification", checks: [] };
-    const checks: Check[] = [];
-    const unblocked = (pending: Note[]) => {
-      refresh(notes);
-      return pending.filter((note) => {
-        if (!note.dead) return true;
-        checks.push({
-          noteId: note.id,
-          reconstruction: {
+    return async (record: RecordCheck) => {
+      const unblocked = (pending: Note[]) => {
+        refresh(notes);
+        return pending.filter((note) => {
+          if (!note.dead) return true;
+          record(note, "reconstruction", {
             verdict: "INCONCLUSIVE",
             report:
               "A declared dependency was refuted. This dependent claim remains unresolved.",
             proof:
               "Further reconstruction was skipped after its support was refuted.",
-          },
+          });
+          return false;
         });
-        return false;
+      };
+      const statement = (note: Note) => ({
+        id: note.id,
+        statement: verdict(note, "correctness")?.statement,
+        premises: sourceRecord(note).premises,
+        support: note.support,
       });
-    };
-    const statement = (note: Note) => ({
-      id: note.id,
-      statement: verdict(note, "correctness")?.statement,
-      premises: sourceRecord(note).premises,
-      support: note.support,
-    });
-    const supportFor = (group: Note[]) =>
-      closure(
-        group.flatMap((note) => note.support),
-        notes,
-      ).filter((note) => !group.includes(note));
-    const batching =
-      "Choose a manageable nonempty prefix of the requested notes in their supplied dependency order. Submit one complete result for every note in that prefix and no others. You may handle several notes together; later calls handle the remaining suffix. Estimate input, reasoning, complete written proofs or reports, and structured-output space before choosing the group. Leave room for the full result; an abbreviated answer does not establish that a proof fits. Around 5000–10000 written proof tokens is only initial sizing guidance, not a limit. Original text lengths are scheduling hints, not proof-size guarantees. ";
-    const instructions =
-      "Independently prove each statement in your selected prefix, returning one complete proof per selected note. Declared support outside that prefix may be assumed at its exact stated scope without reproving it. Check applicability and submit results only for the selected prefix. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the generated dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
-    const comparisonInstructions = `${mathematicalCheck} First check that the extracted statement faithfully represents the result asserted in the full text, preserving scope without leaking proof instructions. Also check imported support statements against their supplied full text. A bad extraction gives INCONCLUSIVE and is not a defect in the original mathematics. For generated notes, compare the original argument in the full text with the independent proof. Both arguments must establish that statement, including its hypotheses, quantitative guarantees, and permitted assumptions. The supplied premises records bind the exact external claims to source PASS or caller-import trust. Use those approved claims without demanding another proof or source search, but check their exact hypotheses and applications. A stronger theorem, an unmet hypothesis, or an undeclared inference is not approved. Supporting claims must follow declared transitive dependencies, in dependency order, without circular or unrelated assumptions. Code requires the whole generated dependency chain to pass; supporting lemmas need not solve the original task. An explicit conditional P implies Q may assume P, but does not establish P. For generated notes, PASS requires a correct original argument and a correct independent proof of the same claim. For an imported target, caller trust grants the original result and sources; no original proof is required. PASS requires faithful statement extraction and a complete correct independent proof of that exact claim. Caller trust does not replace reconstruction. FAIL requires a concrete defect in the original statement or argument. An incomplete, incorrect, or unsupported independent proof alone gives INCONCLUSIVE, even if it claims completeness. So do missing approval records or proof recipes leaked through the extracted statement or external premises. Distinguish a construction that is itself the claimed result from guidance for finding its proof. Never silently edit an approved premise. For generated notes, audit the original even when reconstruction is incomplete: identify whether it supplies the missing step. For FAIL or INCONCLUSIVE, begin with the exact blocker. Then report Original argument:, Independent proof:, and Statement and premises:. Explain concrete defects with a quotation, formula, or note ID, distinguishing mathematical errors from missing evidence, input problems, and harmless wording. No defect found does not establish correctness. Record unresolved obligations, not work requests.`;
-    try {
+      const supportFor = (group: Note[]) =>
+        closure(
+          group.flatMap((note) => note.support),
+          notes,
+        ).filter((note) => !group.includes(note));
+      const batching =
+        "Choose a manageable nonempty prefix of the requested notes in their supplied dependency order. Submit one complete result for every note in that prefix and no others. You may handle several notes together; later calls handle the remaining suffix. Estimate input, reasoning, complete written proofs or reports, and structured-output space before choosing the group. Leave room for the full result; an abbreviated answer does not establish that a proof fits. Around 5000–10000 written proof tokens is only initial sizing guidance, not a limit. Original text lengths are scheduling hints, not proof-size guarantees. ";
+      const instructions =
+        "Independently prove each statement in your selected prefix, returning one complete proof per selected note. Declared support outside that prefix may be assumed at its exact stated scope without reproving it. Check applicability and submit results only for the selected prefix. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the generated dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
+      const comparisonInstructions = `${mathematicalCheck} First check that the extracted statement faithfully represents the result asserted in the full text, preserving scope without leaking proof instructions. Also check imported support statements against their supplied full text. A bad extraction gives INCONCLUSIVE and is not a defect in the original mathematics. For generated notes, compare the original argument in the full text with the independent proof. Both arguments must establish that statement, including its hypotheses, quantitative guarantees, and permitted assumptions. The supplied premises records bind the exact external claims to source PASS or caller-import trust. Use those approved claims without demanding another proof or source search, but check their exact hypotheses and applications. A stronger theorem, an unmet hypothesis, or an undeclared inference is not approved. Supporting claims must follow declared transitive dependencies, in dependency order, without circular or unrelated assumptions. Code requires the whole generated dependency chain to pass; supporting lemmas need not solve the original task. An explicit conditional P implies Q may assume P, but does not establish P. For generated notes, PASS requires a correct original argument and a correct independent proof of the same claim. For an imported target, caller trust grants the original result and sources; no original proof is required. PASS requires faithful statement extraction and a complete correct independent proof of that exact claim. Caller trust does not replace reconstruction. FAIL requires a concrete defect in the original statement or argument. An incomplete, incorrect, or unsupported independent proof alone gives INCONCLUSIVE, even if it claims completeness. So do missing approval records or proof recipes leaked through the extracted statement or external premises. Distinguish a construction that is itself the claimed result from guidance for finding its proof. Never silently edit an approved premise. For generated notes, audit the original even when reconstruction is incomplete: identify whether it supplies the missing step. For FAIL or INCONCLUSIVE, begin with the exact blocker. Then report Original argument:, Independent proof:, and Statement and premises:. Explain concrete defects with a quotation, formula, or note ID, distinguishing mathematical errors from missing evidence, input problems, and harmless wording. No defect found does not establish correctness. Record unresolved obligations, not work requests.`;
       while (pending.length) {
         const proofs = await batch(
           "proof",
@@ -324,8 +337,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           for (const [index, judgment] of judgments.entries()) {
             const note = remaining[index]!;
             const proof = proofs[group.indexOf(note)]!;
-            const check: Check = { noteId: note.id };
-            recordCheck(note, check, "reconstruction", {
+            record(note, "reconstruction", {
               ...judgment,
               proof: proof.proof,
               ...(!proof.complete && judgment.verdict === "PASS"
@@ -335,8 +347,6 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
                   }
                 : {}),
             });
-            checks.push(check);
-            note.checks.push(check);
           }
           remaining = remaining.slice(judgments.length);
         }
@@ -351,12 +361,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         )
           break;
       }
-    } catch (error) {
-      const failure = verificationFailure(error, context);
-      if (checks.length) failure.result = { kind: "verification", checks };
-      throw failure;
-    }
-    return { kind: "verification", checks };
+    };
   };
   const functions = {
     capabilities(input: CoordinationInput) {
@@ -367,7 +372,14 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         sourceRetrieval: research.retrieval,
       };
     },
-    reconstruct,
+    async reconstruct(
+      input: ReconstructionInput,
+      runtime: RoleRuntime,
+      context: Context,
+    ) {
+      input = structuredClone(input);
+      return collectChecks(context, reconstruction(input, runtime, context));
+    },
     codex: options.codex ? codexWorker(askCodex) : unconfiguredCodex,
     async explorer(
       input: ExplorerInput,
@@ -456,17 +468,6 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
     ): Promise<SolverResult> {
       const notes = structuredClone(input.notes);
       refresh(notes);
-      const checks = new Map<string, Check>();
-      const retain = (check: Check) => {
-        const previous = checks.get(check.noteId);
-        checks.set(check.noteId, {
-          ...previous,
-          ...check,
-          ...(previous?.correction && check.correction
-            ? { correction: { ...previous.correction, ...check.correction } }
-            : {}),
-        });
-      };
       for (const target of input.targets)
         Assert(verificationStageSchema, target.through);
       const ordered = requiredStages(input.targets, notes);
@@ -476,52 +477,42 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
             ? [note]
             : [],
         );
-      const record = <Stage extends VerificationStage>(
-        note: Note,
-        stage: Stage,
-        result: StageResult<Stage>,
-      ) => {
-        const check = checks.get(note.id) ?? { noteId: note.id };
-        recordCheck(note, check, stage, result);
-        if (!checks.has(note.id)) {
-          checks.set(note.id, check);
-          note.checks.push(check);
-        }
-      };
-      const assess = async (
-        stage: "correctness" | "requirements",
-        instructions: string,
-      ) => {
-        const selected = pending(stage);
-        const support = closure(
-          selected.flatMap((note) => note.support),
-          notes,
-        ).filter((note) => !selected.includes(note));
-        const results = await batch(
-          stage,
-          `${stage === "correctness" ? mathematicalCheck : correctionInstructions} Check all requested notes together. The verifiedSupport IDs identify established support notes. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
-          {
-            task: input.task,
-            support: support.map(packet),
-            notes: selected.map(packet),
-            verifiedSupport: support
-              .filter((note) => note.verified)
-              .map((note) => note.id),
-            ...(stage === "requirements"
-              ? {
-                  sources: [...support, ...selected].map((note) => ({
-                    noteId: note.id,
-                    ...sourceRecord(note),
-                  })),
-                }
-              : {}),
-          },
-          runtime,
-          context,
-        );
-        selected.forEach((note, index) => record(note, stage, results[index]!));
-      };
-      try {
+      return collectChecks(context, async (record) => {
+        const assess = async (
+          stage: "correctness" | "requirements",
+          instructions: string,
+        ) => {
+          const selected = pending(stage);
+          const support = closure(
+            selected.flatMap((note) => note.support),
+            notes,
+          ).filter((note) => !selected.includes(note));
+          const results = await batch(
+            stage,
+            `${stage === "correctness" ? mathematicalCheck : correctionInstructions} Check all requested notes together. The verifiedSupport IDs identify established support notes. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
+            {
+              task: input.task,
+              support: support.map(packet),
+              notes: selected.map(packet),
+              verifiedSupport: support
+                .filter((note) => note.verified)
+                .map((note) => note.id),
+              ...(stage === "requirements"
+                ? {
+                    sources: [...support, ...selected].map((note) => ({
+                      noteId: note.id,
+                      ...sourceRecord(note),
+                    })),
+                  }
+                : {}),
+            },
+            runtime,
+            context,
+          );
+          selected.forEach((note, index) =>
+            record(note, stage, results[index]!),
+          );
+        };
         await assess(
           "correctness",
           `${importedStatementInstructions} For generated notes: identify the mathematical result expressly claimed by each note and return its exact statement, including definitions, hypotheses, quantifiers, conclusions, and conditionality. Exclude proof recipes, methods, and intermediate proof steps; a construction that is itself the claimed result is legitimate statement content. A research log, question, or strategy suggestion need not assert a result: return statement=null and INCONCLUSIVE when there is no mathematical claim to check. Do not invent a claim or turn conjecture into established fact. The statement will be frozen on PASS and sent to a prover without the full text. Judge each note's own claim; supporting lemmas and partial progress need not solve the original task. Only the later requirements check judges the original completion criteria. For an explicit conditional claim P implies Q, check the derivation of Q assuming P. Its hypothetical antecedent P is part of the claim, not an external theorem to establish; omit it from premises. Proving the implication does not establish P. An unstated assumption in an unconditional claim remains a gap: do not silently weaken the claim to an implication or promote a missing proof step to an external theorem. External results actually used to prove an implication still require the normal assessment below. For declared support checked in this batch or not yet verified, judge the dependent reasoning conditionally; code separately requires every dependency to pass before verification or acceptance. Check borrowed facts against each support's checked statement or the statement you extract in this batch. Additional facts from a support's proof need their own declared support or a proof in the consuming note. If the only unresolved issue is that a needed fact appears in declared support's proof but is omitted from its checked statement, return INCONCLUSIVE and identify the missing statement. Find missing cases, unsupported inferences, and undeclared substantive dependencies. Apply the task's proof rules. Do not excuse a forbidden black box or an unproved substantive step as background, even if the note calls it standard. A forbidden invocation is a defect. ${research.retrieval ? "Establish routine task-permitted background from mathematical knowledge and explain it in report. Do not externalize a fact proved in the argument or established by your check. List only directly needed nonroutine external claims that remain unproved, with their exact hypotheses and conclusions, including any invoked without citation. A cited theorem note may state such a result conditionally without reproving it. Check each application conditionally and explain it in report." : "This is a closed-book check: source retrieval is disabled. When the task permits standard background, check each such result's precise statement, hypotheses, and application from mathematical knowledge and explain that assessment in report. A background result established by this assessment need not be listed in premises. If permission, statement, or applicability is uncertain, retain the claim in premises; source checking will leave it INCONCLUSIVE. List all other unproved external claims with exact hypotheses and conclusion. Explain their applications in report."} Results explicitly granted as assumptions or permitted background by the supplied task need no external source check. Check their exact scope and application, and omit them from premises. A note merely claiming that permission is insufficient. Do not relist declared support results; check their applicability. Each premise must be a standalone statement preserving every relevant domain, dimension, compactness, regularity, and other hypothesis. Do not generalize beyond the form actually used in the argument. Source names and citations are allowed. Put proof ideas, application hints, and validation commentary in report, never in premises. Source checking will assess these exact strings, and reconstruction will receive them unchanged. Use [] only when no unresolved external premise remains under these rules. Correctness PASS is conditional on support and listed premises.`,
@@ -559,7 +550,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           "Decide whether each note meets every completion criterion of the original task. All supplied notes have established correctness and sources, through completed checks or caller import. The sources records supply their exact approved external premises, approval references, and passage IDs and URLs, or caller-import trust. Use this evidence metadata when the task explicitly requires external retrieval. Treat established mathematical results as given; do not repeat correctness or source verification. Check whether the stated result and supplied evidence satisfy the task. Historical prose about awaiting validation cannot override those records. Source PASS does not establish a stronger theorem, an unmet hypothesis, or an unrelated completion criterion. Caller import alone is not evidence of external retrieval when the task explicitly requires it. Check quantifiers, variants, parameters, computational model, and bounds. A proved implication does not establish its antecedent. If the task requires an unconditional conclusion, an extra hypothesis must be discharged by a proof within the note, established support, or the task's assumptions. A specific unmet completion criterion is a concrete reason for FAIL, even when the note is mathematically sound partial progress.",
         );
 
-        const reconstructed = await reconstruct(
+        await reconstruction(
           {
             task: input.task,
             notes,
@@ -567,19 +558,8 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           },
           runtime,
           context,
-        );
-        reconstructed.checks.forEach(retain);
-        return { kind: "verification", checks: [...checks.values()] };
-      } catch (error) {
-        const failure = verificationFailure(error, context);
-        failure.result?.checks.forEach(retain);
-        if (checks.size)
-          failure.result = {
-            kind: "verification",
-            checks: [...checks.values()],
-          };
-        throw failure;
-      }
+        )(record);
+      });
     },
 
     async literature(
