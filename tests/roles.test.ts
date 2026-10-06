@@ -239,9 +239,41 @@ function fixture(
           }
         : {}),
     });
-    return { harness, root };
+    return {
+      harness,
+      root,
+      closeAfterEntry(predicate: (entry: EntryRecord) => boolean | undefined) {
+        const closed = Promise.withResolvers<void>();
+        let closing = false;
+        harness.subscribeCommits(({ changes }) => {
+          if (
+            !closing &&
+            changes.some(
+              (change) => change.type === "entry" && predicate(change.value),
+            )
+          ) {
+            closing = true;
+            void harness.close(context).then(closed.resolve, closed.reject);
+          }
+        });
+        return {
+          promise: closed.promise,
+          get closing() {
+            return closing;
+          },
+        };
+      },
+      invoke: (input: Invocation) =>
+        root.commit(
+          (tx) =>
+            tx.createTask(Invoke, input, {
+              ownership: { kind: "conversation" },
+            }),
+          context,
+        ),
+    };
   }
-  return { calls, reports, roles, Invoke, workflow, open };
+  return { calls, reports, roles, workflow, open };
 }
 
 async function entries(harness: Harness): Promise<EntryRecord[]> {
@@ -338,27 +370,16 @@ test("Explorer retains frozen reads and private submissions across native reopen
     },
   });
   try {
-    const closed = Promise.withResolvers<void>();
-    let closing = false;
-    current.harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" &&
-            ToolResultEntry.is(change.value) &&
-            change.value.model?.some(
-              (message) =>
-                message.role === "toolResult" &&
-                message.toolName === "submit_explorer" &&
-                !message.isError,
-            ),
-        )
-      ) {
-        closing = true;
-        void current.harness.close(context).then(closed.resolve, closed.reject);
-      }
-    });
+    const closed = current.closeAfterEntry(
+      (entry) =>
+        ToolResultEntry.is(entry) &&
+        entry.model?.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === "submit_explorer" &&
+            !message.isError,
+        ),
+    );
     await current.root.commit(
       (tx) => provider.workflow.initialize(tx, current.root.id),
       context,
@@ -373,7 +394,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
           );
         },
         (error) => {
-          if (!closing) throw error;
+          if (!closed.closing) throw error;
           return closed.promise;
         },
       ),
@@ -564,47 +585,27 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
   });
   let current = await provider.open(directory);
   try {
-    const closed = Promise.withResolvers<void>();
-    let closing = false;
-    current.harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" &&
-            change.value.model?.some(
-              (message) =>
-                message.role === "toolResult" &&
-                message.toolName === "submit_reconstruction" &&
-                !message.isError,
-            ),
-        )
-      ) {
-        closing = true;
-        void current.harness.close(context).then(closed.resolve, closed.reject);
-      }
-    });
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "verifier",
-            input: {
-              task,
-              notes: [
-                note("n1"),
-                note("n2", ["n1"]),
-                { ...note("n3", ["n2"]), candidate: true },
-              ],
-              targets: ["n3"],
-              through: "reconstruction",
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
+    const closed = current.closeAfterEntry((entry) =>
+      entry.model?.some(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === "submit_reconstruction" &&
+          !message.isError,
+      ),
     );
+    const id = await current.invoke({
+      role: "verifier",
+      input: {
+        task,
+        notes: [
+          note("n1"),
+          note("n2", ["n1"]),
+          { ...note("n3", ["n2"]), candidate: true },
+        ],
+        targets: ["n3"],
+        through: "reconstruction",
+      },
+    });
     current.harness.resume();
     await closed.promise;
     current = await provider.open(directory);
@@ -697,23 +698,15 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
     }));
     const current = await provider.open(directory);
     const invoke = async () => {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "verifier",
-              input: {
-                task,
-                notes,
-                targets: ["n1", "n3", "n4", "n5"],
-                through: "reconstruction",
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes,
+          targets: ["n1", "n3", "n4", "n5"],
+          through: "reconstruction",
+        },
+      });
       const outcome = await resultOf(current.harness, id);
       if (outcome.status !== "completed")
         throw new Error(JSON.stringify(outcome));
@@ -901,27 +894,15 @@ test.each(["imported", "reconstructed"] as const)(
     });
     const current = await provider.open(directory);
     try {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "verifier",
-              input: {
-                task,
-                notes: [
-                  preparedNote("n3", ["n2"]),
-                  support,
-                  preparedNote("n1"),
-                ],
-                targets: ["n3"],
-                through: "reconstruction",
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [preparedNote("n3", ["n2"]), support, preparedNote("n1")],
+          targets: ["n3"],
+          through: "reconstruction",
+        },
+      });
       expect(await resultOf(current.harness, id)).toMatchObject({
         status: "completed",
         result: {
@@ -1273,23 +1254,15 @@ test.each([true, false])(
       }
     });
     try {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "verifier",
-              input: {
-                task,
-                notes: [imported],
-                targets: ["n1"],
-                through: "reconstruction",
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [imported],
+          targets: ["n1"],
+          through: "reconstruction",
+        },
+      });
       const result = await resultOf(current.harness, id);
       expect(result.status).toBe("completed");
       if (result.status !== "completed")
@@ -1351,25 +1324,17 @@ test("notes without a mathematical claim skip source and reconstruction", async 
   });
   const current = await provider.open(directory);
   try {
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "verifier",
-            input: {
-              task,
-              notes: [
-                { ...note("n1"), text: "Would a different construction help?" },
-              ],
-              targets: ["n1"],
-              through: "reconstruction",
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "verifier",
+      input: {
+        task,
+        notes: [
+          { ...note("n1"), text: "Would a different construction help?" },
+        ],
+        targets: ["n1"],
+        through: "reconstruction",
+      },
+    });
     expect(await resultOf(current.harness, id)).toEqual({
       status: "completed",
       result: {
@@ -1570,50 +1535,26 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
     );
     let current = await provider.open(directory, undefined, true);
     try {
-      const closed = Promise.withResolvers<void>();
-      let closing = false;
-      current.harness.subscribeCommits(({ changes }) => {
-        if (
-          !closing &&
-          changes.some(
-            (change) =>
-              change.type === "entry" &&
-              change.value.model?.some((message) =>
-                reason === "request"
-                  ? message.role === "toolResult" &&
-                    message.toolName === "submit_requirements" &&
-                    !message.isError
-                  : message.role === "assistant" &&
-                    message.rawStopReason ===
-                      (reason === "length"
-                        ? "incomplete.max_output_tokens"
-                        : reason),
-              ),
-          )
-        ) {
-          closing = true;
-          void current.harness
-            .close(context)
-            .then(closed.resolve, closed.reject);
-        }
-      });
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "verifier",
-              input: {
-                task,
-                notes: [{ ...note("n1"), candidate: true }],
-                targets: ["n1"],
-                through: "reconstruction",
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
+      const closed = current.closeAfterEntry((entry) =>
+        entry.model?.some((message) =>
+          reason === "request"
+            ? message.role === "toolResult" &&
+              message.toolName === "submit_requirements" &&
+              !message.isError
+            : message.role === "assistant" &&
+              message.rawStopReason ===
+                (reason === "length" ? "incomplete.max_output_tokens" : reason),
+        ),
       );
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [{ ...note("n1"), candidate: true }],
+          targets: ["n1"],
+          through: "reconstruction",
+        },
+      });
       current.harness.resume();
       await closed.promise;
       expect(sourceCalls).toBe(1);
@@ -1673,23 +1614,15 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
       ).toHaveLength(1);
       const mismatched = preparedNote("n1");
       mismatched.checks[0]!.source = source;
-      const rejected = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "verifier",
-              input: {
-                task,
-                notes: [mismatched],
-                targets: ["n1"],
-                through: "reconstruction",
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const rejected = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [mismatched],
+          targets: ["n1"],
+          through: "reconstruction",
+        },
+      });
       expect(await resultOf(current.harness, rejected)).toMatchObject({
         status: "faulted",
         error: {
@@ -1777,26 +1710,13 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   );
   let current = await provider.open(directory, undefined, true);
   try {
-    const stopped = Promise.withResolvers<void>();
-    let closing = false;
-    current.harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" &&
-            ToolResultEntry.is(change.value) &&
-            change.value.model?.some(
-              (message) => message.role === "toolResult" && message.isError,
-            ),
-        )
-      ) {
-        closing = true;
-        void current.harness
-          .close(context)
-          .then(stopped.resolve, stopped.reject);
-      }
-    });
+    const stopped = current.closeAfterEntry(
+      (entry) =>
+        ToolResultEntry.is(entry) &&
+        entry.model?.some(
+          (message) => message.role === "toolResult" && message.isError,
+        ),
+    );
     const input = {
       task,
       notes: [],
@@ -1806,15 +1726,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       explorerUsed: true,
     };
     for (let i = 0; i < 2; i++) {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            { role: "coordinator", input },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({ role: "coordinator", input });
       if (i === 0) {
         current.harness.resume();
         await stopped.promise;
@@ -1835,15 +1747,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       notes: [],
       candidate: false,
     });
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          { role: "coordinator", input },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({ role: "coordinator", input });
     expect(await resultOf(current.harness, id)).toMatchObject({
       status: "completed",
       result: { work: { kind: "codex" } },
@@ -1896,18 +1800,10 @@ test("Coordinator rejects used literature and multiple workers", async () => {
   };
   try {
     for (const literatureUsed of [true, false]) {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "coordinator" as const,
-              input: { ...input, literatureUsed } as JsonValue,
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({
+        role: "coordinator" as const,
+        input: { ...input, literatureUsed } as JsonValue,
+      });
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
         result: {
@@ -2030,18 +1926,10 @@ test("capacity after a frozen read hands off valid private notes without another
       imported: true,
       verified: true,
     };
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "explorer",
-            input: { task, notes: [large], guidance: "Continue" },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "explorer",
+      input: { task, notes: [large], guidance: "Continue" },
+    });
     const outcome = await resultOf(current.harness, id);
     expect(outcome).toMatchObject({
       status: "completed",
@@ -2061,18 +1949,10 @@ test("invalid submissions consume the response allowance and cannot publish part
   );
   const current = await provider.open(directory);
   try {
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "explorer",
-            input: { task, notes: [], guidance: "Continue" },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "explorer",
+      input: { task, notes: [], guidance: "Continue" },
+    });
     const outcome = await resultOf(current.harness, id);
     expect(outcome).toMatchObject({
       status: "faulted",
@@ -2113,22 +1993,14 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
   );
   const current = await provider.open(directory);
   try {
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "explorer",
-            input: {
-              task,
-              notes: [{ ...note("prior"), text: "sensitive full argument" }],
-              guidance: "Continue",
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "explorer",
+      input: {
+        task,
+        notes: [{ ...note("prior"), text: "sensitive full argument" }],
+        guidance: "Continue",
+      },
+    });
     expect((await resultOf(current.harness, id)).status).toBe("completed");
     expect(provider.calls).toHaveLength(4);
     const retained = (await entries(current.harness)).flatMap(
@@ -2185,22 +2057,14 @@ test("interrupted Codex workers retain old artifacts and replay in a fresh works
           });
         }
     });
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "codex",
-            input: {
-              task,
-              assignment: "Implement the concrete construction",
-              notes: [],
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "codex",
+      input: {
+        task,
+        assignment: "Implement the concrete construction",
+        notes: [],
+      },
+    });
     current.harness.resume();
     await entered.promise;
     await current.harness.close(context);
@@ -2235,22 +2099,14 @@ test("Codex preparation failures retain a task failure without admitting or reco
   );
   const current = await provider.open(join(directory, "storage"));
   try {
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "codex",
-            input: {
-              task,
-              assignment: "Implement the construction",
-              notes: [],
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "codex",
+      input: {
+        task,
+        assignment: "Implement the construction",
+        notes: [],
+      },
+    });
     current.harness.resume();
     expect(
       (await current.harness.waitForTask(id, context)).state.outcome.status,
@@ -2296,43 +2152,23 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
   );
   let current = await provider.open(join(directory, "storage"));
   try {
-    const closed = Promise.withResolvers<void>();
-    let closing = false;
-    current.harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" &&
-            change.value.model?.some(
-              (message) =>
-                message.role === "toolResult" &&
-                message.toolName === "submit_requirements" &&
-                !message.isError,
-            ),
-        )
-      ) {
-        closing = true;
-        void current.harness.close(context).then(closed.resolve, closed.reject);
-      }
-    });
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "verifier",
-            input: {
-              task,
-              notes: [{ ...note("n1"), candidate: true }],
-              targets: ["n1"],
-              through: "requirements",
-            },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
+    const closed = current.closeAfterEntry((entry) =>
+      entry.model?.some(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === "submit_requirements" &&
+          !message.isError,
+      ),
     );
+    const id = await current.invoke({
+      role: "verifier",
+      input: {
+        task,
+        notes: [{ ...note("n1"), candidate: true }],
+        targets: ["n1"],
+        through: "requirements",
+      },
+    });
     current.harness.resume();
     await closed.promise;
     current = await provider.open(join(directory, "storage"));
@@ -2358,15 +2194,7 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
       usage: { input_tokens: 17, output_tokens: 5, cached_input_tokens: 0 },
     });
     const run = async (role: Invocation["role"], input: JsonValue) => {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            { role, input },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({ role, input });
       return await resultOf(current.harness, id);
     };
     expect(
@@ -2463,25 +2291,17 @@ test.each([
     });
     const current = await provider.open(directory);
     try {
-      const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.Invoke,
-            {
-              role: "coordinator",
-              input: {
-                task,
-                notes: [note("prior")],
-                guidance: [],
-                failures: [],
-                explorerUsed: false,
-                literatureUsed: false,
-              },
-            },
-            { ownership: { kind: "conversation" } },
-          ),
-        context,
-      );
+      const id = await current.invoke({
+        role: "coordinator",
+        input: {
+          task,
+          notes: [note("prior")],
+          guidance: [],
+          failures: [],
+          explorerUsed: false,
+          literatureUsed: false,
+        },
+      });
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
         result: { work: { kind: "explorer", guidance: "Continue" } },
@@ -2545,18 +2365,10 @@ test("native mixed-round controls preserve read-only, partial, and invalid-submi
   );
   const current = await provider.open(directory);
   try {
-    const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.Invoke,
-          {
-            role: "explorer",
-            input: { task, notes: [note("prior")], guidance: "Continue" },
-          },
-          { ownership: { kind: "conversation" } },
-        ),
-      context,
-    );
+    const id = await current.invoke({
+      role: "explorer",
+      input: { task, notes: [note("prior")], guidance: "Continue" },
+    });
     expect(await resultOf(current.harness, id)).toEqual({
       status: "completed",
       result: {

@@ -100,20 +100,6 @@ if (import.meta.main) {
   };
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
-  const heartbeat = setInterval(() => {
-    void observe()
-      .then(({ report, rounds }) =>
-        console.log(
-          JSON.stringify({
-            status: report.status.status,
-            rounds,
-            calls: report.status.calls,
-            active: report.status.activity,
-          }),
-        ),
-      )
-      .catch(() => {});
-  }, 30_000);
   try {
     control = await serveControl(await realpath(database), (command) =>
       controlCommand(owner, command),
@@ -150,7 +136,6 @@ if (import.meta.main) {
     if (!shutdown) throw error;
     process.exitCode = 130;
   } finally {
-    clearInterval(heartbeat);
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
     await control?.close(true);

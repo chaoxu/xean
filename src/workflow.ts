@@ -79,7 +79,7 @@ type DecisionInput = {
   order?: TaskId;
 };
 type NativeRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
-const failedDecision = (task: NativeRecord) =>
+const failedTask = (task: NativeRecord) =>
   task.state.outcome !== undefined &&
   ["failed", "faulted", "orphaned"].includes(task.state.outcome.status);
 /** Pending and failed decisions remain native task records. */
@@ -95,7 +95,7 @@ export function pendingDecisions(
   return decisions.filter(
     (task) =>
       !replaced.has(task.id) &&
-      (task.state.status !== "terminal" || failedDecision(task)),
+      (task.state.status !== "terminal" || failedTask(task)),
   );
 }
 
@@ -103,7 +103,7 @@ export function pendingDecisions(
 export function blockedDecision(
   tasks: readonly NativeRecord[],
 ): NativeRecord | undefined {
-  return pendingDecisions(tasks).find(failedDecision);
+  return pendingDecisions(tasks).find(failedTask);
 }
 
 const decisionOrder = (task: NativeRecord) =>
@@ -170,39 +170,24 @@ export function createResearch(roles: Roles) {
             throw new Error("Worker admission requires a Coordinator decision");
           source = { root: task.conversationId, cutoff: at };
           const view = await readView(tx, task.conversationId, at);
-          name = request.kind;
-          switch (request.kind) {
-            case "explorer":
-              value = {
-                task: definition.task,
-                notes: view.notes,
-                guidance: request.guidance,
-              };
-              break;
-            case "verifier":
-              value = {
-                task: definition.task,
-                notes: closure(request.notes, view.notes),
-                targets: request.notes,
-                through: request.through,
-                evidence: sourceEvidence(view.notes),
-              };
-              break;
-            case "literature":
-              value = {
-                task: definition.task,
-                notes: view.notes.map(noteInfo),
-                query: request.query,
-              };
-              break;
-            case "codex":
-              value = {
-                task: definition.task,
-                notes: closure(request.notes, view.notes),
-                assignment: request.assignment,
-              };
-              break;
-          }
+          const { kind, ...assignment } = request;
+          name = kind;
+          value = {
+            ...assignment,
+            task: definition.task,
+            notes:
+              "notes" in request
+                ? closure(request.notes, view.notes)
+                : kind === "literature"
+                  ? view.notes.map(noteInfo)
+                  : view.notes,
+            ...(kind === "verifier"
+              ? {
+                  targets: request.notes,
+                  evidence: sourceEvidence(view.notes),
+                }
+              : {}),
+          };
         }, context);
         if (stopped) return;
         if (predecessor !== undefined)
@@ -262,27 +247,17 @@ export function createResearch(roles: Roles) {
       async freeze(task, runtime, context) {
         await runtime.commit(async (tx) => {
           const tasks = await scanTasks(tx, task.conversationId);
-          const decisions = tasks.filter(
-            (other) => other.kind === Coordinator.definition.name,
-          );
-          const on = decisions
+          const on = tasks
             .filter(
               (other) =>
-                (decisionOrder(other) < decisionOrder(task) ||
-                  (decisionOrder(other) === decisionOrder(task) &&
-                    other.id < task.id)) &&
-                other.state.status !== "terminal",
+                other.state.status !== "terminal" &&
+                (other.kind === Worker.definition.name ||
+                  (other.kind === Coordinator.definition.name &&
+                    (decisionOrder(other) < decisionOrder(task) ||
+                      (decisionOrder(other) === decisionOrder(task) &&
+                        other.id < task.id)))),
             )
             .map(({ id }) => id);
-          on.push(
-            ...tasks
-              .filter(
-                (worker) =>
-                  worker.kind === Worker.definition.name &&
-                  worker.state.status !== "terminal",
-              )
-              .map(({ id }) => id),
-          );
           // A manual resume preserves the failed decision's original order.
           if (on.length)
             return {
@@ -293,7 +268,7 @@ export function createResearch(roles: Roles) {
             };
           const state = await tx.doc(Control, task.conversationId);
           if (
-            blockedDecision(decisions) ||
+            blockedDecision(tasks) ||
             state.cancelled ||
             state.paused ||
             state.accepted !== null
@@ -321,8 +296,8 @@ export function createResearch(roles: Roles) {
           ).filter((worker) => worker.id < at);
         }, context);
         let next: WorkerInput | undefined;
-        const accepting =
-          !definition.mode && frozen.notes.some((note) => note.accepted);
+        const acceptedNote =
+          !definition.mode && frozen.notes.find((note) => note.accepted);
         if (definition.mode) {
           const prior = workers.at(-1);
           if (!prior || prior.state.outcome?.status !== "completed")
@@ -330,7 +305,7 @@ export function createResearch(roles: Roles) {
               standalone: true,
               ...(prior ? { retryOf: prior.id } : {}),
             };
-        } else if (!accepting) {
+        } else if (!acceptedNote) {
           // Freeze waits for prior workers to settle. Their outcomes are immutable.
           const kind = (work: (typeof workers)[number]) =>
             (work.input as WorkerInput & { request?: Request }).request?.kind;
@@ -347,20 +322,14 @@ export function createResearch(roles: Roles) {
                 worker.state.outcome?.status === "completed",
             ),
             explorerUsed,
-            failures: workers
-              .filter((worker) =>
-                ["failed", "faulted", "orphaned"].includes(
-                  worker.state.outcome?.status ?? "",
-                ),
-              )
-              .map((worker) => ({
-                id: String(worker.id),
-                role: kind(worker) ?? "standalone",
-                error:
-                  worker.state.outcome?.error?.message ??
-                  worker.state.outcome?.reason ??
-                  null,
-              })),
+            failures: workers.filter(failedTask).map((worker) => ({
+              id: String(worker.id),
+              role: kind(worker) ?? "standalone",
+              error:
+                worker.state.outcome?.error?.message ??
+                worker.state.outcome?.reason ??
+                null,
+            })),
           };
           const capabilities = roles.capabilities(coordination);
           const plan = await roles.coordinator(
@@ -379,11 +348,8 @@ export function createResearch(roles: Roles) {
             !control.cancelled &&
             control.accepted === null
           ) {
-            if (accepting) {
-              const current = await readView(tx, task.conversationId);
-              control.accepted =
-                current.notes.find((note) => note.accepted)?.id ?? null;
-            } else if (next) await worker(tx, task.conversationId, next);
+            if (acceptedNote) control.accepted = acceptedNote.id;
+            else if (next) await worker(tx, task.conversationId, next);
           }
           return {
             status: "terminal",
@@ -415,7 +381,7 @@ export function createResearch(roles: Roles) {
     initialize: enqueue,
     async resume(tx: Tx, root: ConversationId) {
       const tasks = await scanTasks(tx, root);
-      const pending = pendingDecisions(tasks).filter(failedDecision);
+      const pending = pendingDecisions(tasks).filter(failedTask);
       const control = await tx.doc(Control, root);
       if (control.cancelled || control.accepted !== null)
         throw new Error("Campaign is terminal");
