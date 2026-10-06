@@ -151,8 +151,7 @@ footer code {
 }
 
 h3,
-h4,
-h5 {
+h4 {
   font-weight: 500;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -163,10 +162,6 @@ h3 {
 h4 {
   font-size: 15px;
   margin-bottom: 10px;
-}
-h5 {
-  font-size: 14px;
-  margin-bottom: 8px;
 }
 input,
 select {
@@ -300,27 +295,18 @@ select {
   margin: 8px 0;
   overflow-wrap: anywhere;
 }
-.check,
-.check-stage,
 .usage-group {
   border-top: 1px solid var(--pf-border);
   padding-top: 8px;
   margin-top: 20px;
 }
-.check-stage h4 {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 10px;
+.result-fields dt {
+  font-weight: 500;
+  text-transform: capitalize;
 }
-.source-evidence {
-  margin-bottom: 22px;
+.result-fields dd {
+  margin: 6px 0 16px 16px;
   overflow-wrap: anywhere;
-}
-blockquote {
-  margin: 14px 0;
-  padding-left: 16px;
-  border-left: 2px solid var(--pf-border-strong);
 }
 .katex-display {
   overflow-x: auto;

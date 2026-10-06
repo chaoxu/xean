@@ -12,7 +12,6 @@ const app = document.querySelector<HTMLElement>("#app")!;
 const connection = document.querySelector<HTMLElement>("#connection")!;
 type Snapshot = NonNullable<Run["snapshot"]>;
 type Note = Snapshot["notes"][number];
-type Check = Note["checks"][number];
 type Patch = Record<string, string | number | null>;
 const pageSize = 50;
 let runs: RunStatus[] = [];
@@ -33,8 +32,6 @@ const age = (run: { observedAt: string }) => {
 };
 const math = (text: string) =>
   html`<div class="math" .mathSource=${text}></div>`;
-const json = (value: unknown) =>
-  html`<pre>${JSON.stringify(value, null, 2)}</pre>`;
 const badge = (label: string) => html`<span class="badge">${label}</span>`;
 const metrics = (
   values: Record<string, string | number | null | undefined | TemplateResult>,
@@ -142,73 +139,36 @@ function noteLinks(snapshot: Snapshot, ids: string[]) {
       </ul>`
     : html`<p class="muted">None recorded.</p>`;
 }
-function checksView(checks: Check[]) {
-  if (!checks.length) return html`<p class="muted">No checks recorded.</p>`;
-  return html`${checks.map(
-    (check, index) =>
-      html`<article class="check">
-        <h3>Check ${index + 1}</h3>
-        ${(
-          ["correctness", "source", "requirements", "reconstruction"] as const
-        ).map((stage) => {
-          const result = check[stage];
-          return html`<div class="check-stage">
-            <h4>
-              ${stage[0]!.toUpperCase() + stage.slice(1)}
-              ${result ? badge(result.verdict) : html`<span class="muted">Not checked here</span>`}
-            </h4>
-            ${
-              result
-                ? html`${math(result.report)}
-                  ${
-                    "premises" in result
-                      ? html`<h5>External premises</h5>
-                          ${
-                            result.premises.length
-                              ? html`<ol>
-                                  ${result.premises.map((premise) => html`<li>${math(premise)}</li>`)}
-                                </ol>`
-                              : html`<p class="muted">None reported.</p>`
-                          }`
-                      : ""
-                  }
-                  ${
-                    "passages" in result
-                      ? html`<h5>Source evidence</h5>
-                          ${
-                            result.passages.length
-                              ? result.passages.map(
-                                  (passage) =>
-                                    html`<div class="source-evidence">
-                                      <p>
-                                        Premise ${passage.premise + 1},
-                                        <code>${passage.id}</code>
-                                      </p>
-                                      ${math(passage.statement)}
-                                      <p>
-                                        ${/^https?:\/\//i.test(passage.url) ? html`<a href=${passage.url} target="_blank" rel="noopener noreferrer">${passage.url}</a>` : passage.url}
-                                      </p>
-                                      <blockquote>
-                                        ${math(passage.quote)}
-                                      </blockquote>
-                                    </div>`,
-                                )
-                              : html`<p class="muted">No passages recorded.</p>`
-                          }`
-                      : ""
-                  }
-                  ${
-                    "proof" in result
-                      ? html`<h5>Reconstructed proof</h5>
-                          ${math(result.proof)}`
-                      : ""
-                  } `
-                : ""
-            }
-          </div>`;
-        })}
-      </article>`,
-  )}`;
+function resultView(value: unknown): TemplateResult {
+  if (Array.isArray(value))
+    return value.length
+      ? html`<ol>
+          ${value.map((item) => html`<li>${resultView(item)}</li>`)}
+        </ol>`
+      : html`<span class="muted">None recorded.</span>`;
+  if (value !== null && typeof value === "object")
+    return html`<dl class="result-fields">
+      ${Object.entries(value).map(
+        ([key, item]) =>
+          html`<div>
+            <dt>
+              ${key === "premise" ? "Premise index (from 0)" : key.replace(/([a-z])([A-Z])/g, "$1 $2")}
+            </dt>
+            <dd>${resultView(item)}</dd>
+          </div>`,
+      )}
+    </dl>`;
+  if (typeof value === "string") {
+    if (["PASS", "FAIL", "INCONCLUSIVE"].includes(value)) return badge(value);
+    if (/^https?:\/\/\S+$/i.test(value))
+      return html`<a href=${value} target="_blank" rel="noopener noreferrer"
+        >${value}</a
+      >`;
+    return math(value);
+  }
+  return html`<span class="muted"
+    >${value === undefined ? "Not recorded" : String(value)}</span
+  >`;
 }
 function notesView(snapshot: Snapshot) {
   const query = (params.get("notesQuery") ?? "").toLocaleLowerCase();
@@ -271,7 +231,7 @@ function notesView(snapshot: Snapshot) {
                   </p>
                   ${noteBadges(snapshot, selected)}${math(selected.detailedSummary)}
                   ${disclosure("full", "Full note", () => math(selected.text))}
-                  ${disclosure("checks", `Checks (${selected.checks.length})`, () => checksView(selected.checks))}
+                  ${disclosure("checks", `Checks (${selected.checks.length})`, () => resultView(selected.checks))}
                   <h4>Dependencies</h4>
                   ${noteLinks(snapshot, selected.support)}
                   <h4>Used by</h4>
@@ -531,12 +491,7 @@ function detailView(run: Run) {
                             snapshot.status.acceptedNoteId,
                           ),
                         );
-                      return result &&
-                        typeof result === "object" &&
-                        "argument" in result &&
-                        typeof result.argument === "string"
-                        ? math(result.argument)
-                        : json(result);
+                      return resultView(result);
                     })}
                   </section>`
             }`

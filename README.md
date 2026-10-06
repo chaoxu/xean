@@ -3,7 +3,8 @@
 A mathematical research workflow built on Pi Durable. Explorer develops
 notes, Verifier checks their claims and dependencies, and Coordinator chooses
 further work. Each campaign runs Coordinator, one worker, then Coordinator again.
-The next decision sees the worker's committed result or failure. A worker may
+The next Coordinator task is admitted with its worker and waits for the worker's
+terminal outcome before deciding. A worker may
 parallelize its own internal work. Pi owns tasks, conversations, checkpoints,
 cancellation, and storage.
 
@@ -32,6 +33,8 @@ bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/apps/cli/index.ts status .
 
 `init` freezes the task and settings without model calls. `doctor` checks local
 setup without testing a live provider or Codex login. `run` performs research.
+Pausing retains inputs and worker outcomes. Resume makes a fresh decision over
+that accumulated state and explicitly replaces any failed decision.
 Campaign arguments accept explicit paths or names under `--campaign-dir`, which
 defaults to `.xean` relative to the calling directory.
 

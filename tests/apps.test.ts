@@ -147,39 +147,49 @@ test(
   "sealed acceptance, native note IDs, and latest standalone results reach reports and CLI export",
   () =>
     temporary(async (directory) => {
+      const trace: string[] = [];
       const path = join(directory, "campaign.sqlite");
       const owner = await open(path, {
         create: definition,
         roles: () => ({
-          coordinator: async (input) => ({
-            work: input.notes.length
-              ? {
-                  kind: "verifier",
-                  notes: [input.notes[0].id],
-                  through: "reconstruction",
-                }
-              : { kind: "explorer", guidance: "Prove equality." },
-          }),
-          explorer: async () => ({
-            kind: "notes",
-            notes: [draft],
-            candidate: true,
-          }),
-          verifier: async (input) => ({
-            kind: "verification",
-            checks: [
-              {
-                noteId: input.targets[0].id,
-                correctness: { ...pass, statement: "1 = 1", premises: [] },
-                source: pass,
-                requirements: pass,
-                reconstruction: {
-                  ...pass,
-                  proof: "Reflexivity.",
+          coordinator: async (input) => {
+            trace.push("coordinator");
+            return {
+              work: input.notes.length
+                ? {
+                    kind: "verifier",
+                    notes: [input.notes[0].id],
+                    through: "reconstruction",
+                  }
+                : { kind: "explorer", guidance: "Prove equality." },
+            };
+          },
+          explorer: async () => {
+            trace.push("explorer");
+            return {
+              kind: "notes",
+              notes: [draft],
+              candidate: true,
+            };
+          },
+          verifier: async (input) => {
+            trace.push("verifier");
+            return {
+              kind: "verification",
+              checks: [
+                {
+                  noteId: input.targets[0].id,
+                  correctness: { ...pass, statement: "1 = 1", premises: [] },
+                  source: pass,
+                  requirements: pass,
+                  reconstruction: {
+                    ...pass,
+                    proof: "Reflexivity.",
+                  },
                 },
-              },
-            ],
-          }),
+              ],
+            };
+          },
         }),
       });
       try {
@@ -190,6 +200,29 @@ test(
         expect(report.work[0]!.noteIds).toEqual([
           report.status.acceptedNoteId!,
         ]);
+        expect(trace).toEqual([
+          "coordinator",
+          "explorer",
+          "coordinator",
+          "verifier",
+        ]);
+        expect(report.notes).toHaveLength(1);
+        expect(report.work.map((work) => work.status)).toEqual([
+          "completed",
+          "completed",
+        ]);
+        expect(report.status.pendingDecisions).toBe(0);
+        await expect(
+          owner.root.commit(
+            (tx) =>
+              owner.workflow.input(tx, owner.root.id, {
+                kind: "guide",
+                id: "late",
+                text: "reopen",
+              }),
+            context,
+          ),
+        ).rejects.toThrow("terminal");
         const unsealed = await owner.root.commit(async (tx) => {
           (await tx.doc(Control, owner.root.id)).accepted = null;
           return readReport(tx, owner.root.id);
@@ -750,7 +783,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
           work: [],
         });
         if (outcome === "paused") {
-          expect((await observeOwner(stopped)).status.pendingDecisions).toBe(1);
+          expect((await observeOwner(stopped)).status.pendingDecisions).toBe(0);
           await controlCommand(stopped, { kind: "resume" });
           expect((await observeOwner(stopped)).work).toHaveLength(1);
         }

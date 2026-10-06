@@ -25,7 +25,7 @@ import {
   type Roles,
 } from "../src/workflow.ts";
 import { DefinitionDoc } from "../src/definition.ts";
-import { Events, readView } from "../src/math/state.ts";
+import { readView } from "../src/math/state.ts";
 import { readReport } from "../src/report.ts";
 import { RoleFailure } from "../src/roles/types.ts";
 import type { Note } from "../src/math/contracts.ts";
@@ -224,9 +224,10 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
   }
 });
 
-test("worker failures reach Coordinator, which chooses whether and how to retry", async () => {
+test("a worker fault wakes Coordinator after reopening without repeating the failed worker", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "worker-fault-recovery-"));
   let attempt = 0;
-  const { research, harness, root, view } = await setup({
+  const roles: Partial<Roles> = {
     coordinator: async (input) => {
       if (input.notes.length) return { work: null };
       if (input.failures.length)
@@ -243,23 +244,44 @@ test("worker failures reach Coordinator, which chooses whether and how to retry"
       expect(input.guidance).toBe("revised approach");
       return { kind: "notes", notes: [draft()], candidate: true };
     },
+  };
+  let owner = await setup(
+    roles,
+    await openNodeJsonlStorage(directory, context),
+  );
+  const closed = Promise.withResolvers<void>();
+  let closing = false;
+  owner.harness.subscribeCommits(({ changes }) => {
+    if (
+      !closing &&
+      changes.some(
+        (change) =>
+          change.type === "task" &&
+          change.value.kind === "research.worker" &&
+          change.value.state.outcome?.status === "faulted",
+      )
+    ) {
+      closing = true;
+      queueMicrotask(() => {
+        void owner.harness.close(context).then(closed.resolve, closed.reject);
+      });
+    }
   });
   try {
-    await root.commit(
-      (tx) =>
-        research.input(tx, root.id, {
-          kind: "guide",
-          id: "start",
-          text: "ready",
-        }),
+    await owner.root.commit(
+      (tx) => owner.research.initialize(tx, owner.root.id),
       context,
     );
-    await harness.waitForIdle(context);
+    owner.harness.resume();
+    await closed.promise;
+    expect(attempt).toBe(1);
+    owner = await setup(roles, await openNodeJsonlStorage(directory, context));
+    await owner.harness.waitForIdle(context);
     expect(attempt).toBe(2);
-    const current = await view();
-    expect(current.notes).toHaveLength(1);
+    expect((await owner.view()).notes).toHaveLength(1);
   } finally {
-    await harness.close(context);
+    await owner.harness.close(context);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -336,18 +358,6 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
       expect(outcome.status).toBe(mode === "cancelled" ? "aborted" : "faulted");
       expect(outcome.result).toBeUndefined();
       const current = await view();
-      const events = await root.commit(
-        (tx) => tx.scanEntries({ conversationId: root.id }, 128),
-        context,
-      );
-      expect(
-        events.items.filter(
-          (entry) =>
-            Events.is(entry) &&
-            entry.data.type === "result" &&
-            entry.data.task === worker!.id,
-        ),
-      ).toHaveLength(1);
       expect(current.notes).toHaveLength(1);
       expect(current.notes[0]).toMatchObject({
         ...draft(),
@@ -492,94 +502,18 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
   }
 });
 
-test("acceptance follows a complete worker result and rejects later input", async () => {
-  const trace: string[] = [];
-  const pass = { verdict: "PASS" as const, report: "Checked." };
-  const { research, harness, root, view } = await setup({
-    coordinator: async (input) => {
-      trace.push("coordinator");
-      return {
-        work: input.notes.length
-          ? {
-              kind: "verifier",
-              notes: [input.notes[0].id],
-              through: "reconstruction",
-            }
-          : { kind: "explorer", guidance: "Prove the claim" },
-      };
-    },
-    explorer: async () => {
-      trace.push("explorer");
-      return { kind: "notes", notes: [draft()], candidate: true };
-    },
-    verifier: async (input) => {
-      trace.push("verifier");
-      return {
-        kind: "verification",
-        checks: [
-          {
-            noteId: input.targets[0].id,
-            correctness: { ...pass, statement: "1 = 1", premises: [] },
-            source: pass,
-            requirements: pass,
-            reconstruction: { ...pass, proof: "Reflexivity." },
-          },
-        ],
-      };
-    },
-  });
-  try {
-    await root.commit((tx) => research.initialize(tx, root.id), context);
-    await harness.waitForIdle(context);
-    expect(trace).toEqual([
-      "coordinator",
-      "explorer",
-      "coordinator",
-      "verifier",
-    ]);
-    const notes = (await view()).notes;
-    expect(notes).toHaveLength(1);
-    expect(notes[0]!.accepted).toBe(true);
-    expect(
-      await root.commit(
-        async (tx) => (await tx.doc(Control, root.id)).accepted,
-        context,
-      ),
-    ).toBe(notes[0]!.id);
-    const tasks = await root.commit((tx) => scanTasks(tx, root.id), context);
-    const workers = tasks.filter((task) => task.kind === "research.worker");
-    expect(workers).toHaveLength(2);
-    expect(
-      workers.every((worker) => worker.state.outcome?.status === "completed"),
-    ).toBe(true);
-    expect(pendingDecisions(tasks)).toHaveLength(0);
-    await expect(
-      root.commit(
-        (tx) =>
-          research.input(tx, root.id, {
-            kind: "guide",
-            id: "late",
-            text: "reopen",
-          }),
-        context,
-      ),
-    ).rejects.toThrow("terminal");
-  } finally {
-    await harness.close(context);
-  }
-});
-
 test("failed decisions block queued work and inputs until explicit native-task resume", async () => {
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let calls = 0;
   const { research, harness, root } = await setup({
-    coordinator: async () => {
+    coordinator: async (input) => {
       if (++calls === 1) {
         started.resolve();
         await release.promise;
         throw new Error("decision failed");
       }
+      expect(input.guidance).toEqual(["first", "second"]);
       return { work: null };
     },
   });
@@ -605,10 +539,10 @@ test("failed decisions block queued work and inputs until explicit native-task r
     expect(calls).toBe(1);
     const before = await root.commit((tx) => scanTasks(tx, root.id), context);
     expect(blockedDecision(before)?.state.outcome?.status).toBe("faulted");
-    expect(pendingDecisions(before)).toHaveLength(2);
+    expect(pendingDecisions(before)).toHaveLength(1);
     const report = await root.commit((tx) => readReport(tx, root.id), context);
     expect(report.status.status).toBe("blocked");
-    expect(report.status.pendingDecisions).toBe(2);
+    expect(report.status.pendingDecisions).toBe(1);
     expect(
       await root.commit((tx) => research.input(tx, root.id, command), context),
     ).toBe(first);
@@ -628,7 +562,7 @@ test("failed decisions block queued work and inputs until explicit native-task r
       context,
     );
     await harness.waitForIdle(context);
-    expect(calls).toBe(3);
+    expect(calls).toBe(2);
     const after = await root.commit((tx) => scanTasks(tx, root.id), context);
     expect(blockedDecision(after)).toBeUndefined();
     expect(pendingDecisions(after)).toHaveLength(0);
@@ -794,10 +728,10 @@ test("pause retains worker failures and input for the next Coordinator on resume
     expect(decisions).toBe(1);
     const paused = await root.commit((tx) => readReport(tx, root.id), context);
     expect(paused.status.status).toBe("paused");
-    expect(paused.status.pendingDecisions).toBe(2);
+    expect(paused.status.pendingDecisions).toBe(0);
     await root.commit((tx) => research.resume(tx, root.id), context);
     await harness.waitForIdle(context);
-    expect(decisions).toBe(3);
+    expect(decisions).toBe(2);
     expect(attempts).toBe(1);
     expect((await view()).notes).toHaveLength(0);
     expect(

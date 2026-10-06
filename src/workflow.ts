@@ -78,17 +78,11 @@ type DecisionInput = {
   retryOf?: TaskId;
   order?: TaskId;
 };
-type DecisionResult = null | { deferred: true };
 type NativeRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
 const failedDecision = (task: NativeRecord) =>
   task.state.outcome !== undefined &&
   ["failed", "faulted", "orphaned"].includes(task.state.outcome.status);
-const deferredDecision = (task: NativeRecord) =>
-  task.state.outcome?.status === "completed" &&
-  (task.state.outcome.result as { deferred?: boolean } | null)?.deferred ===
-    true;
-
-/** Undelivered decisions remain native task records, including deferred work. */
+/** Pending and failed decisions remain native task records. */
 export function pendingDecisions(
   tasks: readonly NativeRecord[],
 ): NativeRecord[] {
@@ -101,9 +95,7 @@ export function pendingDecisions(
   return decisions.filter(
     (task) =>
       !replaced.has(task.id) &&
-      (task.state.status !== "terminal" ||
-        failedDecision(task) ||
-        deferredDecision(task)),
+      (task.state.status !== "terminal" || failedDecision(task)),
   );
 }
 
@@ -249,48 +241,18 @@ export function createResearch(roles: Roles) {
     abort,
   });
 
-  const Reporter = defineTask<TaskId, { phase: "deliver" }, null>({
-    name: "research.reporter",
-    version: 1,
-    initial: () => ({ phase: "deliver" }),
-    phases: {
-      async deliver(task, runtime, context) {
-        const source = await runtime.waitForTask(task.input, context);
-        await runtime.commit(async (tx) => {
-          // Worker.run publishes successful results and RoleFailure checks.
-          // Pi faults and cancellations still need their result event.
-          if (!["completed", "failed"].includes(source.state.outcome.status))
-            await tx.appendEntry(Events, task.conversationId, {
-              data: { type: "result", task: task.input },
-            });
-          if (!("standalone" in (source.input as object)))
-            await enqueue(tx, task.conversationId);
-          return {
-            status: "terminal",
-            outcome: { status: "completed", result: null },
-          };
-        }, context);
-      },
-    },
-    abort,
-  });
-
   async function worker(tx: Tx, root: ConversationId, input: WorkerInput) {
-    const id = await tx.createTask(Worker, input, {
+    await tx.createTask(Worker, input, {
       conversationId: root,
       ownership: { kind: "conversation" },
     });
-    await tx.createTask(Reporter, id, {
-      conversationId: root,
-      ownership: { kind: "conversation" },
-    });
-    return id;
+    if (!("standalone" in input)) await enqueue(tx, root);
   }
 
   const Coordinator = defineTask<
     DecisionInput,
     { phase: "freeze" } | { phase: "decide"; at: EntryId },
-    DecisionResult
+    null
   >({
     name: "research.coordinator",
     version: 1,
@@ -315,9 +277,8 @@ export function createResearch(roles: Roles) {
             ...tasks
               .filter(
                 (worker) =>
-                  [Worker.definition.name, Reporter.definition.name].includes(
-                    worker.kind,
-                  ) && worker.state.status !== "terminal",
+                  worker.kind === Worker.definition.name &&
+                  worker.state.status !== "terminal",
               )
               .map(({ id }) => id),
           );
@@ -329,21 +290,16 @@ export function createResearch(roles: Roles) {
               policy: "allSettled",
               checkpoint: { phase: "freeze" },
             };
-          if (blockedDecision(decisions))
-            return {
-              status: "terminal",
-              outcome: { status: "completed", result: { deferred: true } },
-            };
           const state = await tx.doc(Control, task.conversationId);
-          if (state.cancelled || state.accepted !== null)
+          if (
+            blockedDecision(decisions) ||
+            state.cancelled ||
+            state.paused ||
+            state.accepted !== null
+          )
             return {
               status: "terminal",
               outcome: { status: "completed", result: null },
-            };
-          if (state.paused)
-            return {
-              status: "terminal",
-              outcome: { status: "completed", result: { deferred: true } },
             };
           const at = (
             await tx.appendEntry(DecisionView, task.conversationId, {})
@@ -432,12 +388,7 @@ export function createResearch(roles: Roles) {
             status: "terminal",
             outcome: {
               status: "completed",
-              result:
-                control.paused &&
-                !control.cancelled &&
-                control.accepted === null
-                  ? { deferred: true }
-                  : null,
+              result: null,
             },
           };
         }, context);
@@ -458,14 +409,12 @@ export function createResearch(roles: Roles) {
   return {
     extension: defineExtension({
       name: "research",
-      tasks: [Coordinator, Worker, Reporter],
+      tasks: [Coordinator, Worker],
     }),
     initialize: enqueue,
     async resume(tx: Tx, root: ConversationId) {
       const tasks = await scanTasks(tx, root);
-      const pending = pendingDecisions(tasks).filter(
-        (task) => failedDecision(task) || deferredDecision(task),
-      );
+      const pending = pendingDecisions(tasks).filter(failedDecision);
       const control = await tx.doc(Control, root);
       if (control.cancelled || control.accepted !== null)
         throw new Error("Campaign is terminal");
