@@ -41,7 +41,7 @@ import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import type { Note, SolverResult } from "../src/math/contracts.ts";
 import { resolveResult, type SubmissionResult } from "../src/math/results.ts";
 import { DefinitionDoc, type Definition } from "../src/definition.ts";
-import { createResearch } from "../src/workflow.ts";
+import { createResearch, scanTasks } from "../src/workflow.ts";
 import { readReport, readUsage } from "../src/report.ts";
 import { readView } from "../src/math/state.ts";
 import { refresh, validateResult } from "../src/math/notes.ts";
@@ -359,16 +359,18 @@ test("Explorer retains frozen reads and private submissions across native reopen
         void current.harness.close(context).then(closed.resolve, closed.reject);
       }
     });
-    const id = await current.root.commit(
+    await current.root.commit(
       (tx) => provider.workflow.initialize(tx, current.root.id),
       context,
     );
     current.harness.resume();
     await Promise.race([
       closed.promise,
-      current.harness.waitForTask(id, context).then(
-        (record) => {
-          throw new Error(JSON.stringify(record.state.outcome));
+      current.harness.waitForIdle(context).then(
+        () => {
+          throw new Error(
+            "Worker settled before the private submission interruption",
+          );
         },
         (error) => {
           if (!closing) throw error;
@@ -379,6 +381,13 @@ test("Explorer retains frozen reads and private submissions across native reopen
     expect(provider.calls).toHaveLength(2);
     expect(cleaned).toEqual([provider.calls[0]!.session]);
     current = await provider.open(directory);
+    await current.harness.waitForIdle(context);
+    const id = (
+      await current.root.commit(
+        (tx) => scanTasks(tx, current.root.id, "research.worker"),
+        context,
+      )
+    )[0]!.id;
     const raw = (await current.harness.waitForTask(id, context)).state.outcome;
     expect(raw).toMatchObject({ status: "completed" });
     if (raw.status !== "completed") throw new Error(JSON.stringify(raw));
@@ -1869,10 +1878,17 @@ test.each([
       },
     });
     try {
-      const id = await current.root.commit(
+      await current.root.commit(
         (tx) => provider.workflow.initialize(tx, current.root.id),
         context,
       );
+      await current.harness.waitForIdle(context);
+      const id = (
+        await current.root.commit(
+          (tx) => scanTasks(tx, current.root.id, "research.worker"),
+          context,
+        )
+      )[0]!.id;
       const outcome = await resultOf(current.harness, id);
       expect(outcome).toMatchObject(
         submitted

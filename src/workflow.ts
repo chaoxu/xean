@@ -168,13 +168,6 @@ export function createResearch(roles: Roles) {
           }
           const definition = await readDefinition(tx, task.conversationId);
           if ("standalone" in task.input) {
-            if (
-              task.input.retryOf === undefined &&
-              (
-                await scanTasks(tx, task.conversationId, Worker.definition.name)
-              ).some((other) => other.id < task.id)
-            )
-              throw new Error("Standalone research is already initialized");
             const mode = definition.mode;
             if (!mode)
               throw new Error(
@@ -390,15 +383,14 @@ export function createResearch(roles: Roles) {
           await runtime.commit(async (tx) => {
             const control = await tx.doc(Control, task.conversationId);
             const prior = workers.at(-1);
-            const retry =
-              prior?.state.status === "terminal" &&
-              prior.state.outcome.status !== "completed" &&
+            const needed =
+              (!prior || prior.state.outcome?.status !== "completed") &&
               !control.cancelled &&
               !control.paused;
-            if (retry)
+            if (needed)
               await worker(tx, task.conversationId, {
                 standalone: true,
-                retryOf: prior.id,
+                ...(prior ? { retryOf: prior.id } : {}),
               });
             return {
               status: "terminal",
@@ -522,11 +514,7 @@ export function createResearch(roles: Roles) {
       name: "research",
       tasks: [Coordinator, Worker, Reporter],
     }),
-    async initialize(tx: Tx, root: ConversationId) {
-      return (await readDefinition(tx, root)).mode
-        ? worker(tx, root, { standalone: true })
-        : enqueue(tx, root);
-    },
+    initialize: enqueue,
     async resume(tx: Tx, root: ConversationId) {
       const tasks = await scanTasks(tx, root);
       const pending = pendingDecisions(tasks).filter(

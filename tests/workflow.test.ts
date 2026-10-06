@@ -85,10 +85,16 @@ async function setup(
   };
 }
 
-test("standalone initialization rejects duplicates before and after settlement", async () => {
-  const { research, harness, root } = await setup();
+test("standalone initialization serializes and reuses completed work", async () => {
+  let calls = 0;
+  const { research, harness, root } = await setup({
+    explorer: async () => {
+      calls++;
+      return empty();
+    },
+  });
   try {
-    const first = await root.commit(async (tx) => {
+    await root.commit(async (tx) => {
       (await tx.doc(DefinitionDoc, root.id)).mode = {
         role: "explorer",
         input: { notes: [], guidance: "Prove the claim" },
@@ -97,21 +103,15 @@ test("standalone initialization rejects duplicates before and after settlement",
     }, context);
     for (const settled of [false, true]) {
       if (settled) await harness.waitForIdle(context);
-      const duplicate = await root.commit(
-        (tx) => research.initialize(tx, root.id),
-        context,
-      );
-      const record = await harness.waitForTask(duplicate, context);
-      expect(record.state.outcome).toMatchObject({
-        status: "faulted",
-        error: { message: "Standalone research is already initialized" },
-      });
+      await root.commit((tx) => research.initialize(tx, root.id), context);
     }
-    expect(
-      (await harness.waitForTask(first, context)).state.outcome,
-    ).toMatchObject({
-      status: "completed",
-    });
+    await harness.waitForIdle(context);
+    await root.commit((tx) => research.resume(tx, root.id), context);
+    await harness.waitForIdle(context);
+    expect(calls).toBe(1);
+    const report = await root.commit((tx) => readReport(tx, root.id), context);
+    expect(report.status.status).toBe("completed");
+    expect(report.work).toHaveLength(1);
   } finally {
     await harness.close(context);
   }
