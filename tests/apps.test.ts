@@ -716,9 +716,10 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
       candidate: false,
     });
     for (const outcome of ["rejected", "paused", "cancelled"] as const) {
+      let decisions = 0;
       const roles: Pick<Roles, "coordinator" | "explorer"> = {
         coordinator: async (_input, runtime, invocation) => {
-          if (outcome !== "rejected")
+          if (outcome !== "rejected" && decisions++ === 0)
             await runtime.commit(async (tx) => {
               (await tx.doc(Control, runtime.conversationId))[outcome] = true;
             }, invocation);
@@ -748,6 +749,11 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
           status: { status: outcome === "rejected" ? "blocked" : outcome },
           work: [],
         });
+        if (outcome === "paused") {
+          expect((await observeOwner(stopped)).status.pendingDecisions).toBe(1);
+          await controlCommand(stopped, { kind: "resume" });
+          expect((await observeOwner(stopped)).work).toHaveLength(1);
+        }
       } finally {
         await stopped.close();
       }

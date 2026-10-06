@@ -362,89 +362,58 @@ export function createResearch(roles: Roles) {
             await scanTasks(tx, task.conversationId, Worker.definition.name)
           ).filter((worker) => worker.id < at);
         }, context);
+        let next: WorkerInput | undefined;
+        const accepting =
+          !definition.mode && frozen.notes.some((note) => note.accepted);
         if (definition.mode) {
-          await runtime.commit(async (tx) => {
-            const control = await tx.doc(Control, task.conversationId);
-            const prior = workers.at(-1);
-            const needed =
-              (!prior || prior.state.outcome?.status !== "completed") &&
-              !control.cancelled &&
-              !control.paused;
-            if (needed)
-              await worker(tx, task.conversationId, {
-                standalone: true,
-                ...(prior ? { retryOf: prior.id } : {}),
-              });
-            return {
-              status: "terminal",
-              outcome: {
-                status: "completed",
-                result:
-                  control.paused && !control.cancelled
-                    ? { deferred: true }
-                    : null,
-              },
+          const prior = workers.at(-1);
+          if (!prior || prior.state.outcome?.status !== "completed")
+            next = {
+              standalone: true,
+              ...(prior ? { retryOf: prior.id } : {}),
             };
-          }, context);
-          return;
+        } else if (!accepting) {
+          // Freeze waits for prior workers to settle. Their outcomes are immutable.
+          const kind = (work: (typeof workers)[number]) =>
+            (work.input as WorkerInput & { request?: Request }).request?.kind;
+          const explorerUsed = workers.some(
+            (worker) => kind(worker) === "explorer",
+          );
+          const coordination = {
+            task: definition.task,
+            notes: frozen.notes,
+            guidance: frozen.guidance,
+            literatureUsed: workers.some(
+              (worker) =>
+                kind(worker) === "literature" &&
+                worker.state.outcome?.status === "completed",
+            ),
+            explorerUsed,
+            failures: workers
+              .filter((worker) =>
+                ["failed", "faulted", "orphaned"].includes(
+                  worker.state.outcome?.status ?? "",
+                ),
+              )
+              .map((worker) => ({
+                id: String(worker.id),
+                role: kind(worker) ?? "standalone",
+                error:
+                  worker.state.outcome?.error?.message ??
+                  worker.state.outcome?.reason ??
+                  null,
+              })),
+          };
+          const capabilities = roles.capabilities(coordination);
+          const plan = await roles.coordinator(
+            { ...coordination, capabilities },
+            runtime,
+            context,
+            { root: task.conversationId, cutoff: at },
+          );
+          const { work } = validatePlan(plan, frozen.notes, capabilities);
+          if (work) next = { at, request: work };
         }
-        if (frozen.notes.some((note) => note.accepted)) {
-          await runtime.commit(async (tx) => {
-            const current = await readView(tx, task.conversationId);
-            const control = await tx.doc(Control, task.conversationId);
-            const accepted = current.notes.find((note) => note.accepted);
-            if (control.paused && !control.cancelled)
-              return {
-                status: "terminal",
-                outcome: { status: "completed", result: { deferred: true } },
-              };
-            if (!control.cancelled && accepted) control.accepted = accepted.id;
-            return {
-              status: "terminal",
-              outcome: { status: "completed", result: null },
-            };
-          }, context);
-          return;
-        }
-        // Freeze waits for prior workers to settle. Their outcomes are immutable.
-        const kind = (work: (typeof workers)[number]) =>
-          (work.input as WorkerInput & { request?: Request }).request?.kind;
-        const explorerUsed = workers.some(
-          (worker) => kind(worker) === "explorer",
-        );
-        const coordination = {
-          task: definition.task,
-          notes: frozen.notes,
-          guidance: frozen.guidance,
-          literatureUsed: workers.some(
-            (worker) =>
-              kind(worker) === "literature" &&
-              worker.state.outcome?.status === "completed",
-          ),
-          explorerUsed,
-          failures: workers
-            .filter((worker) =>
-              ["failed", "faulted", "orphaned"].includes(
-                worker.state.outcome?.status ?? "",
-              ),
-            )
-            .map((worker) => ({
-              id: String(worker.id),
-              role: kind(worker) ?? "standalone",
-              error:
-                worker.state.outcome?.error?.message ??
-                worker.state.outcome?.reason ??
-                null,
-            })),
-        };
-        const capabilities = roles.capabilities(coordination);
-        const plan = await roles.coordinator(
-          { ...coordination, capabilities },
-          runtime,
-          context,
-          { root: task.conversationId, cutoff: at },
-        );
-        const validated = validatePlan(plan, frozen.notes, capabilities);
         await runtime.commit(async (tx) => {
           const control = await tx.doc(Control, task.conversationId);
           if (
@@ -452,8 +421,11 @@ export function createResearch(roles: Roles) {
             !control.cancelled &&
             control.accepted === null
           ) {
-            const request = validated.work;
-            if (request) await worker(tx, task.conversationId, { at, request });
+            if (accepting) {
+              const current = await readView(tx, task.conversationId);
+              control.accepted =
+                current.notes.find((note) => note.accepted)?.id ?? null;
+            } else if (next) await worker(tx, task.conversationId, next);
           }
           return {
             status: "terminal",
