@@ -222,11 +222,12 @@ checked separately. Native Codex events confirmed web activity but did not
 identify a direct source-open operation. The receipt is
 `runs/smoke-golden-20261004-r03/qualification.json`.
 
-The Pi 1.0.4 smoke at revision `489d517` recorded internal acceptance, an
-independent PASS review, and credential-free reopening. Its receipt is
-`runs/golden-upgraded-20261006-r02/smoke-receipt.json`. The current sequential
-outer loop was added after this smoke and remains unqualified live. The ChatGPT
-Web, Anthropic, and Google paths also remain unqualified live.
+The sequential Pi 1.0.4 smoke at revision `0e74fc7` recorded internal acceptance,
+an independent PASS review, live Codex source checking, and credential-free
+reopening. Standalone verification also reconstructed a dependency chain and
+rejected a false claim. Receipts are
+`runs/golden-sequential-20261006-r04/{roles-receipt,source-check,smoke-receipt}.json`.
+The ChatGPT Web, Anthropic, and Google paths remain unqualified live.
 
 Pi 1.0.4 uses the official compiled release packages, pinned together to
 `7c10bd4337495ee613f2224843ecdf349b80d1df`. The packages include frozen model data.
