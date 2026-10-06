@@ -235,9 +235,7 @@ export async function open(path: string, options: OpenOptions = {}) {
       options.research,
     );
     const roles = Object.assign(builtins, options.roles?.(builtins));
-    const workflow = createResearch(roles, (id, context) =>
-      harness!.abortTask(id, context),
-    );
+    const workflow = createResearch(roles);
     const registry = options.registry ?? createRegistry();
     registry.install(builtins.extension);
     registry.install(workflow.extension);
@@ -261,8 +259,6 @@ export async function open(path: string, options: OpenOptions = {}) {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
         await tx.doc(Control, root);
         if (options.initialize) await options.initialize(tx, root);
-        else if (definition.mode)
-          await workflow.worker(tx, root, { standalone: true });
         else await workflow.initialize(tx, root);
       },
     });

@@ -2,7 +2,13 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ToolResultEntry } from "@earendil-works/pi-durable";
+import {
+  createRegistry,
+  defineExtension,
+  defineTask,
+  ToolResultEntry,
+} from "@earendil-works/pi-durable";
+import { awaitWithContext } from "@earendil-works/chord/context";
 import { open } from "../src/host.ts";
 import { scanTasks } from "../src/workflow.ts";
 import { readView } from "../src/math/state.ts";
@@ -15,6 +21,98 @@ import {
   recoveryRoles,
 } from "./fixture.ts";
 
+test("Coordinator children settle before its worker starts, including after reopening", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "coordinator-settlement-"));
+  const path = join(directory, "campaign.sqlite");
+  const release = Promise.withResolvers<void>();
+  let entered = Promise.withResolvers<void>();
+  const completing = Promise.withResolvers<void>();
+  const trace: string[] = [];
+  const Child = defineTask<null, { phase: "run" }, null>({
+    name: "test.coordinator-child",
+    version: 1,
+    initial: () => ({ phase: "run" }),
+    async abort(_task, runtime, ctx) {
+      await runtime.commit(
+        () => ({ status: "terminal", outcome: { status: "aborted" } }),
+        ctx,
+      );
+    },
+    phases: {
+      async run(_task, runtime, ctx) {
+        entered.resolve();
+        await awaitWithContext(release.promise, ctx);
+        trace.push("child");
+        await runtime.commit(
+          () => ({
+            status: "terminal",
+            outcome: { status: "completed", result: null },
+          }),
+          ctx,
+        );
+      },
+    },
+  });
+  const registry = createRegistry();
+  registry.install(
+    defineExtension({ name: "test.coordinator-settlement", tasks: [Child] }),
+  );
+  const options: Parameters<typeof open>[1] = {
+    registry,
+    roles: () => ({
+      coordinator: async (input, runtime, ctx) => {
+        trace.push("coordinator");
+        if (input.notes.length) return { work: null };
+        await runtime.commit(async (tx) => {
+          await tx.createTask(Child, null, {
+            ownership: { kind: "task", taskId: runtime.taskId },
+          });
+        }, ctx);
+        return { work: { kind: "explorer", guidance: "Prove the claim" } };
+      },
+      explorer: async () => {
+        trace.push("explorer");
+        return { kind: "notes", ...noteResult };
+      },
+    }),
+  };
+  let owner = await open(path, { ...options, create: { task, settings } });
+  const detach = owner.harness.subscribeCommits(({ changes }) => {
+    if (
+      changes.some(
+        (change) =>
+          change.type === "task" &&
+          change.value.kind === "research.coordinator" &&
+          change.value.state.status === "completing",
+      )
+    )
+      completing.resolve();
+  });
+  try {
+    owner.harness.resume();
+    await completing.promise;
+    await entered.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(trace).toEqual(["coordinator"]);
+    await owner.close();
+    detach();
+    entered = Promise.withResolvers<void>();
+    owner = await open(path, options);
+    owner.harness.resume();
+    await entered.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(trace).toEqual(["coordinator"]);
+    release.resolve();
+    await owner.root.waitForIdle(context);
+    expect(trace).toEqual(["coordinator", "child", "explorer", "coordinator"]);
+  } finally {
+    release.resolve();
+    detach();
+    await owner.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("closing at private submission and worker publication reuses each committed native result", async () => {
   const directory = await mkdtemp(join(tmpdir(), "research-recovery-"));
   const path = join(directory, "campaign.sqlite");
@@ -23,8 +121,8 @@ test("closing at private submission and worker publication reuses each committed
       ? noteResult
       : {
           work: input.notes.length
-            ? []
-            : [{ kind: "explorer", guidance: "prove" }],
+            ? null
+            : { kind: "explorer", guidance: "prove" },
         },
   );
   let owner = await open(path, {
@@ -120,7 +218,7 @@ test("SIGKILL recovers the product's native SQLite work without repeating its or
     child.kill("SIGKILL");
     await child.exited;
     const provider = fixture((role) =>
-      role === "explorer" ? noteResult : { work: [] },
+      role === "explorer" ? noteResult : { work: null },
     );
     const owner = await open(path, {
       models: provider.models,

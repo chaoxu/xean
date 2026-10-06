@@ -213,14 +213,9 @@ export function validatePlan(
   allowEmptyPlan = true,
 ): Plan {
   const plan = decode(planSchema(capabilities), value);
-  if (!allowEmptyPlan && plan.work.length === 0)
-    throw new Error(
-      "Return useful work while Explorer is available and no worker is active",
-    );
-  for (const request of plan.work)
-    if (request.kind === "codex") closure(request.notes, notes);
-  if (plan.work.filter(({ kind }) => kind === "literature").length > 1)
-    throw new Error("Literature already dispatched");
+  if (!allowEmptyPlan && plan.work === null)
+    throw new Error("Return useful work while Explorer is available");
+  if (plan.work?.kind === "codex") closure(plan.work.notes, notes);
   const targets = verificationTargets(plan);
   for (const { id } of targets) {
     const note = notes.find((note) => note.id === id);
@@ -242,13 +237,7 @@ export function validateResult(
     throw new Error(
       "Failed work can publish only completed verification checks",
     );
-  if (result.kind === "notes")
-    // Frozen support can become dead while a worker runs. Preserve its result;
-    // refresh derives invalidation from the now-dead dependency.
-    validateNotes(
-      result.notes,
-      notes.map(({ id }) => ({ id, dead: false })),
-    );
+  if (result.kind === "notes") validateNotes(result.notes, notes);
   else {
     const checked = new Set<string>();
     for (const check of result.checks) {

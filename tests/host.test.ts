@@ -266,7 +266,7 @@ test("reopening recorded cancellation aborts an interrupted decision and nested 
             });
           }, invocation);
           await runtime.waitForTask(child, invocation);
-          return { work: [] };
+          return { work: null };
         },
       }),
     });
@@ -316,7 +316,7 @@ test("usage overrides preserve frozen settings and completed custom-provider wor
       request = options;
       return fauxAssistantMessage(
         fauxToolCall("submit_coordinator", {
-          work: [{ kind: "explorer", guidance: "Prove the task." }],
+          work: { kind: "explorer", guidance: "Prove the task." },
         }),
         { stopReason: "toolUse" },
       );
@@ -538,7 +538,7 @@ test("nonfatal Pi reports remain diagnostic while a poisoned Session releases wa
           runtime.report(diagnostic);
           started.resolve();
           await release.promise;
-          return { work: [] };
+          return { work: null };
         },
       }),
     });
@@ -596,16 +596,14 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
         return {
           work:
             decisions === 1
-              ? [{ kind: "explorer", guidance: "first" }]
+              ? { kind: "explorer", guidance: "first" }
               : decisions === 2
-                ? [
-                    {
-                      kind: "codex",
-                      notes: [],
-                      assignment: "fixture implementation",
-                    },
-                  ]
-                : [],
+                ? {
+                    kind: "codex",
+                    notes: [],
+                    assignment: "fixture implementation",
+                  }
+                : null,
         };
       },
       explorer: async () => {
@@ -652,7 +650,7 @@ test.each([false, true])(
           coordinator: async (_input, _runtime, invocation) => {
             started.resolve();
             await awaitWithContext(new Promise(() => {}), invocation);
-            return { work: [] };
+            return { work: null };
           },
         }),
       });

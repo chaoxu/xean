@@ -178,10 +178,7 @@ function fixture(
   provider.setResponses([next]);
   const roles = createRoles({ ...options, profiles }, research);
   const reports: unknown[] = [];
-  let activeHarness: Harness;
-  const workflow = createResearch(roles, (id, context) =>
-    activeHarness.abortTask(id, context),
-  );
+  const workflow = createResearch(roles);
   const Invoke = defineTask<Invocation, { phase: "run" }, JsonValue, object>({
     name: "test.role",
     version: 1,
@@ -233,7 +230,6 @@ function fixture(
       },
       context,
     );
-    activeHarness = harness;
     const root = await harness.root(context, {
       ...(definition
         ? {
@@ -364,12 +360,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
       }
     });
     const id = await current.root.commit(
-      (tx) =>
-        tx.createTask(
-          provider.workflow.Worker,
-          { standalone: true },
-          { ownership: { kind: "conversation" } },
-        ),
+      (tx) => provider.workflow.initialize(tx, current.root.id),
       context,
     );
     current.harness.resume();
@@ -958,7 +949,7 @@ test.each([
     );
     provider.roles.coordinator = async (input) => {
       if (!input.notes.length)
-        return { work: [{ kind: "explorer", guidance: "Prove" }] };
+        return { work: { kind: "explorer", guidance: "Prove" } };
       if (input.failures.length) {
         expect(input.failures[0]!.error).toEqual(
           failure === "continuation"
@@ -972,16 +963,14 @@ test.each([
                   : "proof did not submit a structured result",
         );
         expect(input.notes[0]!.verified).toBe(!invalidSource);
-        if (!retry) return { work: [] };
+        if (!retry) return { work: null };
       }
       return {
-        work: [
-          {
-            kind: "verifier",
-            notes: [input.notes.at(-1)!.id],
-            through: "reconstruction",
-          },
-        ],
+        work: {
+          kind: "verifier",
+          notes: [input.notes.at(-1)!.id],
+          through: "reconstruction",
+        },
       };
     };
     let current = await provider.open(directory, {
@@ -1632,57 +1621,64 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   const directory = await mkdtemp(join(tmpdir(), "pi-role-coordinator-"));
   let count = 0;
   let retried = false;
-  const provider = fixture((_name, input, transcript) => {
-    expect(input.capabilities).toMatchObject({
-      explorer: false,
-      literature: false,
-      codex: count >= 3,
-    });
-    const tool = getCurrentTools(transcript.messages).find(
-      (tool) => tool.name === "submit_coordinator",
-    )!;
-    for (const request of [
-      { kind: "explorer", guidance: "Explore." },
-      { kind: "literature", query: "Find the theorem." },
-      { kind: "codex", assignment: "Check the construction.", notes: [] },
-    ])
-      expect(Check(tool.parameters, { work: [request] })).toBe(
-        input.capabilities[request.kind],
-      );
-    if (!retried) {
-      retried = true;
-      return {
-        ...fauxAssistantMessage("", {
-          stopReason: "error",
-          errorMessage: "Temporary provider failure",
-        }),
-        providerError: { status: 503 },
-      };
-    }
-    count++;
-    if (count === 1)
-      return {
-        work: [{ kind: "explorer", guidance: "Duplicate active work" }],
-      };
-    if (count === 2)
-      expect(
-        transcript.messages.some(
-          (message) => message.role === "toolResult" && message.isError,
-        ),
-      ).toBe(true);
-    return count >= 4
-      ? {
-          work: [
-            {
+  const provider = fixture(
+    (_name, input, transcript) => {
+      expect(input.capabilities).toMatchObject({
+        explorer: false,
+        literature: false,
+        codex: count >= 3,
+      });
+      const tool = getCurrentTools(transcript.messages).find(
+        (tool) => tool.name === "submit_coordinator",
+      )!;
+      for (const request of [
+        { kind: "explorer", guidance: "Explore." },
+        { kind: "literature", query: "Find the theorem." },
+        { kind: "codex", assignment: "Check the construction.", notes: [] },
+      ])
+        expect(Check(tool.parameters, { work: request })).toBe(
+          input.capabilities[request.kind],
+        );
+      if (!retried) {
+        retried = true;
+        return {
+          ...fauxAssistantMessage("", {
+            stopReason: "error",
+            errorMessage: "Temporary provider failure",
+          }),
+          providerError: { status: 503 },
+        };
+      }
+      count++;
+      if (count === 1)
+        return {
+          work: { kind: "explorer", guidance: "Unavailable Explorer" },
+        };
+      if (count === 2)
+        expect(
+          transcript.messages.some(
+            (message) => message.role === "toolResult" && message.isError,
+          ),
+        ).toBe(true);
+      return count >= 4
+        ? {
+            work: {
               kind: "codex",
               assignment:
                 "Implement the specified construction and check its constraints",
               notes: [],
             },
-          ],
-        }
-      : { work: [] };
-  });
+          }
+        : { work: null };
+    },
+    {
+      research: false,
+      chatgpt: {
+        baseUrl: "http://127.0.0.1:17841/v1",
+        model: "chatgpt-web/gpt-6-pro",
+      },
+    },
+  );
   let current = await provider.open(directory, undefined, true);
   try {
     const stopped = Promise.withResolvers<void>();
@@ -1711,13 +1707,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       failures: [],
       guidance: [],
       literatureUsed: false,
-      explorerUsed: false,
-      active: [
-        {
-          id: 5,
-          input: { request: { kind: "explorer", guidance: "Continue" } },
-        },
-      ],
+      explorerUsed: true,
     };
     for (let i = 0; i < 2; i++) {
       const id = await current.root.commit(
@@ -1736,7 +1726,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       }
       expect(await resultOf(current.harness, id)).toMatchObject({
         status: "completed",
-        result: { work: [] },
+        result: { work: null },
       });
     }
     expect(provider.calls).toHaveLength(4);
@@ -1760,7 +1750,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
     );
     expect(await resultOf(current.harness, id)).toMatchObject({
       status: "completed",
-      result: { work: [{ kind: "codex" }] },
+      result: { work: { kind: "codex" } },
     });
   } finally {
     await current.harness.close(context);
@@ -1768,7 +1758,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   }
 });
 
-test("built-in Coordinator excludes active literature and rejects multiple Explorers", async () => {
+test("Coordinator rejects used literature and multiple workers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-role-policy-"));
   let response = 0;
   const provider = fixture(
@@ -1780,7 +1770,7 @@ test("built-in Coordinator excludes active literature and rejects multiple Explo
       });
       if (response === 1)
         return {
-          work: [{ kind: "literature", query: "Duplicate active search" }],
+          work: { kind: "literature", query: "Repeat a completed search" },
         };
       if (response === 3)
         return {
@@ -1794,9 +1784,7 @@ test("built-in Coordinator excludes active literature and rejects multiple Explo
           (message) => message.role === "toolResult" && message.isError,
         ),
       ).toBe(true);
-      return response === 4
-        ? { work: [{ kind: "explorer", guidance: "Continue" }] }
-        : { work: [] };
+      return { work: { kind: "explorer", guidance: "Continue" } };
     },
     { research: false, literature: true },
     131072,
@@ -1810,22 +1798,16 @@ test("built-in Coordinator excludes active literature and rejects multiple Explo
     guidance: [],
     literatureUsed: false,
     explorerUsed: false,
-    active: [
-      {
-        id: 5,
-        input: { request: { kind: "literature", query: "A source gap" } },
-      },
-    ],
   };
   try {
-    for (const active of [input.active, []]) {
+    for (const literatureUsed of [true, false]) {
       const id = await current.root.commit(
         (tx) =>
           tx.createTask(
             provider.Invoke,
             {
               role: "coordinator" as const,
-              input: { ...input, active } as JsonValue,
+              input: { ...input, literatureUsed } as JsonValue,
             },
             { ownership: { kind: "conversation" } },
           ),
@@ -1834,19 +1816,11 @@ test("built-in Coordinator excludes active literature and rejects multiple Explo
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
         result: {
-          work: active?.length
-            ? []
-            : [{ kind: "explorer", guidance: "Continue" }],
+          work: { kind: "explorer", guidance: "Continue" },
         },
       });
     }
     expect(provider.calls).toHaveLength(4);
-    expect(
-      provider.roles.capabilities({
-        ...input,
-        active: [{ id: 6, input: { request: { kind: "explorer" } } }],
-      }).explorer,
-    ).toBe(true);
   } finally {
     await current.harness.close(context);
     await rm(directory, { recursive: true, force: true });
@@ -1896,12 +1870,7 @@ test.each([
     });
     try {
       const id = await current.root.commit(
-        (tx) =>
-          tx.createTask(
-            provider.workflow.Worker,
-            { standalone: true },
-            { ownership: { kind: "conversation" } },
-          ),
+        (tx) => provider.workflow.initialize(tx, current.root.id),
         context,
       );
       const outcome = await resultOf(current.harness, id);
@@ -2386,7 +2355,9 @@ test.each([
         return fauxAssistantMessage("Unnecessary truncated response", {
           stopReason: "length",
         });
-      const submit = fauxToolCall("submit_coordinator", { work: [] });
+      const submit = fauxToolCall("submit_coordinator", {
+        work: { kind: "explorer", guidance: "Continue" },
+      });
       const read = fauxToolCall("read_notes", {
         ids: validRead ? ["prior"] : [],
         level: "full",
@@ -2410,14 +2381,6 @@ test.each([
                 failures: [],
                 explorerUsed: false,
                 literatureUsed: false,
-                active: [
-                  {
-                    id: 1,
-                    input: {
-                      request: { kind: "explorer", guidance: "Continue" },
-                    },
-                  },
-                ],
               },
             },
             { ownership: { kind: "conversation" } },
@@ -2426,7 +2389,7 @@ test.each([
       );
       expect(await resultOf(current.harness, id)).toEqual({
         status: "completed",
-        result: { work: [] },
+        result: { work: { kind: "explorer", guidance: "Continue" } },
       });
       expect(calls).toBe(1);
       const retained = await entries(current.harness);

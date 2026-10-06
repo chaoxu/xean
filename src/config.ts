@@ -94,11 +94,6 @@ export const settingsSchema = object({
     object({ ...researchSchema.properties, workspace: text }),
   ),
   usagePrefix: Type.Optional(Type.String({ ...usageTagSchema, maxLength: 91 })),
-  limits: Type.Optional(
-    object({
-      concurrency: Type.Optional(positive),
-    }),
-  ),
 });
 export type Settings = Static<typeof settingsSchema>;
 export const defaultSettings: Settings = {

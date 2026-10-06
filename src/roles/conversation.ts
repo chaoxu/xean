@@ -202,17 +202,12 @@ export function conversations(profiles: Profiles) {
               throw new Error("A solution claim needs a new note");
             done = draft.candidate || draft.notes.length === 0;
           } else if (name === "coordinator") {
-            const plan = validatePlan(
+            validatePlan(
               value,
               available,
               call.capabilities!,
               call.allowEmptyPlan,
             );
-            if (
-              plan.work.filter((request) => request.kind === "explorer")
-                .length > 1
-            )
-              throw new Error("Dispatch at most one Explorer");
           } else {
             const results = (value as { results: { noteId: string }[] })
               .results;

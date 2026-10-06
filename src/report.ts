@@ -171,10 +171,7 @@ export async function readReport(
             : task.state.outcome.status === "aborted"
               ? "cancelled"
               : "failed"
-          : task.state.status === "pending" ||
-              task.state.status === "waiting" ||
-              (task.state.checkpoint as { phase?: string } | undefined)
-                ?.phase === "wait"
+          : task.state.status === "pending" || task.state.status === "waiting"
             ? "queued"
             : "active",
       retryOf: input.retryOf === undefined ? null : String(input.retryOf),

@@ -238,7 +238,7 @@ export const planSchema = (capabilities: {
   explorer: boolean;
 }) =>
   object({
-    work: Type.Array(
+    work: Type.Union([
       Type.Union(
         workPlan.anyOf.filter(
           (plan) =>
@@ -246,7 +246,8 @@ export const planSchema = (capabilities: {
             capabilities[plan.properties.kind.const],
         ),
       ) as typeof workPlan,
-    ),
+      Type.Null(),
+    ]),
   });
 export type Plan = Static<ReturnType<typeof planSchema>>;
 export const submissionSchemas = {
@@ -257,13 +258,11 @@ export const submissionSchemas = {
   proof: batchSchema(proofSchema),
   reconstruction: batchSchema(verdictSchema),
 };
-/** One verification batch checks common support once across all requests. */
-export const verificationTargets = (plan: Plan) =>
-  plan.work.flatMap((request) =>
-    request.kind === "verifier"
-      ? request.notes.map((id) => ({ id, through: request.through }))
-      : [],
-  );
+/** One Verifier checks its requested notes and shared support together. */
+export const verificationTargets = ({ work }: Plan) =>
+  work?.kind === "verifier"
+    ? work.notes.map((id) => ({ id, through: work.through }))
+    : [];
 export type SolverInput = { task: Task; notes: Note[] };
 export type NoteInfo = Pick<
   Note,

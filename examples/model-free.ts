@@ -20,14 +20,12 @@ const owner = await open(path, {
   roles: () => ({
     coordinator: async (input) => ({
       work: input.notes.length
-        ? [
-            {
-              kind: "verifier",
-              notes: [input.notes[0].id],
-              through: "reconstruction",
-            },
-          ]
-        : [{ kind: "explorer", guidance: "Use reflexivity." }],
+        ? {
+            kind: "verifier",
+            notes: [input.notes[0].id],
+            through: "reconstruction",
+          }
+        : { kind: "explorer", guidance: "Use reflexivity." },
     }),
     explorer: async () => ({
       kind: "notes",

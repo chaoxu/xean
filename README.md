@@ -2,8 +2,9 @@
 
 A mathematical research workflow built on Pi Durable. Explorer develops
 notes, Verifier checks their claims and dependencies, and Coordinator chooses
-further work. Each input or worker outcome starts a fresh Coordinator decision
-while independent workers continue. Pi owns tasks, conversations, checkpoints,
+further work. Each campaign runs Coordinator, one worker, then Coordinator again.
+The next decision sees the worker's committed result or failure. A worker may
+parallelize its own internal work. Pi owns tasks, conversations, checkpoints,
 cancellation, and storage.
 
 The implementation includes staged verification, blind reconstruction, imported
@@ -62,7 +63,8 @@ note index and has no note reader or further browser attempt.
 [The public entry point](src/index.ts) exports `open`, `inspect`, `createResearch`,
 mathematical types, note projections, and reports. Construct the built-in solver
 through `open`, which returns the native Harness, root Conversation, workflow,
-and `close`. Its options accept native Pi `models`, a `roles` callback that
+and `close`. Coordinator returns one `work` request, or `work: null` to wait.
+Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
 receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
 
@@ -176,8 +178,8 @@ X-Codex-LB-Required-Capability = "usage_tag_v1"
 
 [bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
 from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
-`--offline` options. A round is a Coordinator decision that commits new workers,
-including verification. Empty waits and internal proof or comparison calls add
+`--offline` options. A round is a Coordinator decision that admits one worker,
+including a Verifier. Empty waits and internal proof or comparison calls add
 no rounds. The count derives from Pi's worker records and remains outside model
 inputs. Response and usage counters remain observational.
 [prompt-eval.ts](scripts/prompt-eval.ts) takes settings and a new output directory
@@ -191,6 +193,11 @@ From Fleet Infra, run the socket-free checks and the source distribution check:
 bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/scripts/dev.ts check
 bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/scripts/dev.ts distribution
 ```
+
+Start interface changes with focused contract tests and model behavior changes
+with small standalone roles, using the CLI `role` command and frozen inputs.
+Inspect their actual submissions before running a complete campaign smoke.
+Use the golden problems after those checks pass.
 
 `check` runs TypeScript, formatting, dependency integrity, and scripted tests.
 `distribution` checks an unpacked source archive with production dependencies,
@@ -210,11 +217,13 @@ The later golden smoke completed a solve, source check, independent PASS review,
 and credential-free reopening. Its source quotations and exact theorem were
 checked separately. Native Codex events confirmed web activity but did not
 identify a direct source-open operation. The receipt is
-`runs/smoke-golden-20261004-r03/qualification.json`. This predates the Observe
-and direct ChatGPT simplification and the current note and verification changes,
-including statement extraction and reconstruction batching. Those changes and
-the ChatGPT Web, Anthropic, and Google paths remain unqualified live. The prototype
-has not been deployed.
+`runs/smoke-golden-20261004-r03/qualification.json`.
+
+The Pi 1.0.4 smoke at revision `489d517` recorded internal acceptance, an
+independent PASS review, and credential-free reopening. Its receipt is
+`runs/golden-upgraded-20261006-r02/smoke-receipt.json`. The current sequential
+outer loop was added after this smoke and remains unqualified live. The ChatGPT
+Web, Anthropic, and Google paths also remain unqualified live.
 
 Pi 1.0.4 uses the official compiled release packages, pinned together to
 `7c10bd4337495ee613f2224843ecdf349b80d1df`. The packages include frozen model data.

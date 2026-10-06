@@ -60,16 +60,18 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
 });
 const capabilities = { explorer: true, literature: false, codex: false };
 
-test("custom Coordinators can plan more than one Explorer", () => {
+test("Coordinator plans contain one worker or an intentional wait", () => {
   const plan: Plan = {
-    work: [
-      { kind: "explorer", guidance: "Explore the combinatorial route" },
-      { kind: "explorer", guidance: "Explore the algebraic route" },
-    ],
+    work: { kind: "explorer", guidance: "Explore the combinatorial route" },
   };
   expect(validatePlan(plan, [], capabilities)).toEqual(plan);
-  expect(validatePlan({ work: [] }, [], capabilities)).toEqual({ work: [] });
-  expect(() => validatePlan({ work: [] }, [], capabilities, false)).toThrow(
+  expect(() =>
+    validatePlan({ work: [plan.work, plan.work] }, [], capabilities),
+  ).toThrow("Invalid value");
+  expect(validatePlan({ work: null }, [], capabilities)).toEqual({
+    work: null,
+  });
+  expect(() => validatePlan({ work: null }, [], capabilities, false)).toThrow(
     "Return useful work",
   );
 });
@@ -97,14 +99,16 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
   expect(
     validatePlan(
       {
-        work: [
-          { kind: "verifier", notes: [target.id], through: "reconstruction" },
-        ],
+        work: {
+          kind: "verifier",
+          notes: [target.id],
+          through: "reconstruction",
+        },
       },
       notes,
       capabilities,
     ).work,
-  ).toHaveLength(1);
+  ).toMatchObject({ kind: "verifier", notes: [target.id] });
   base.checks.push({
     reconstruction: {
       ...pass,
@@ -121,9 +125,11 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
   expect(() =>
     validatePlan(
       {
-        work: [
-          { kind: "verifier", notes: [target.id], through: "reconstruction" },
-        ],
+        work: {
+          kind: "verifier",
+          notes: [target.id],
+          through: "reconstruction",
+        },
       },
       notes,
       capabilities,
@@ -151,7 +157,7 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
       },
       notes,
     ),
-  ).not.toThrow();
+  ).toThrow("Unknown, dead, or forward support: base");
 });
 
 test.each([false, true])(
@@ -256,7 +262,7 @@ test("committed source verdicts are final and reused evidence retains immutable 
     expect(stagePending(frozen, "source")).toBe(false);
     expect(() =>
       validatePlan(
-        { work: [{ kind: "verifier", notes: [frozen.id], through: "source" }] },
+        { work: { kind: "verifier", notes: [frozen.id], through: "source" } },
         [frozen],
         capabilities,
       ),

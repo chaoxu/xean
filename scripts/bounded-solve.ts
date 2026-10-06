@@ -11,15 +11,15 @@ import { serveControl } from "../apps/cli/control.ts";
 import { controlCommand, ownerReceipt } from "../apps/cli/lifecycle.ts";
 
 export async function readRounds(tx: Tx, root: ConversationId) {
-  const rounds = new Set<EntryId>();
+  const rounds: EntryId[] = [];
   for (const task of await scanTasks(tx, root, "research.worker")) {
     const input = task.input as WorkerInput;
-    if ("at" in input) rounds.add(input.at);
+    if ("at" in input) rounds.push(input.at);
   }
-  return [...rounds];
+  return rounds;
 }
 
-/** Each decision's committed worker batch counts once, outside role inputs. */
+/** Each admitted worker counts once, outside role inputs. */
 export function limitRounds(roles: Pick<Roles, "coordinator">, limit = 20) {
   assert.ok(Number.isSafeInteger(limit) && limit >= 0, "Invalid round limit");
   const plan = roles.coordinator;
@@ -31,7 +31,7 @@ export function limitRounds(roles: Pick<Roles, "coordinator">, limit = 20) {
       assert.ok(rounds.length <= limit, "Experiment exceeded its round limit");
       available = rounds.length < limit;
     }, context);
-    return available ? plan(...args) : { work: [] };
+    return available ? plan(...args) : { work: null };
   };
 }
 

@@ -1,5 +1,4 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
-import { withCancel } from "@earendil-works/chord/context";
 import {
   defineDoc,
   defineEntry,
@@ -24,7 +23,6 @@ import {
   sourceEvidence,
   validatePlan,
   validateResult,
-  verificationPending,
 } from "./math/notes.ts";
 import { closure } from "./math/argument.ts";
 import { Events, readView } from "./math/state.ts";
@@ -76,13 +74,11 @@ export type Roles = Record<RoleName, Role> & {
   };
 };
 type Request =
-  | Exclude<Plan["work"][number], { kind: "verifier" }>
+  | Exclude<NonNullable<Plan["work"]>, { kind: "verifier" }>
   | {
       kind: "verifier";
       targets: VerifierInput["targets"];
     };
-const isVerifier = (input: WorkerInput) =>
-  "request" in input && input.request.kind === "verifier";
 export type WorkerInput = { retryOf?: TaskId } & (
   { at: EntryId; request: Request } | { standalone: true }
 );
@@ -152,82 +148,18 @@ async function abort(_task: unknown, runtime: Runtime, context: Context) {
   );
 }
 
-export function createResearch(
-  roles: Roles,
-  abortTask: (id: TaskId, context: Context) => Promise<unknown>,
-) {
-  const Worker = defineTask<
-    WorkerInput,
-    { phase: "wait" } | { phase: "run"; at?: EntryId },
-    JsonValue
-  >({
+export function createResearch(roles: Roles) {
+  const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
     name: "research.worker",
     version: 1,
-    initial: () => ({ phase: "wait" }),
+    initial: () => ({ phase: "run" }),
     phases: {
-      async wait(task, runtime, context) {
-        for (;;) {
-          let blockedOn: TaskId[] = [];
-          await runtime.commit(async (tx) => {
-            const definition = await readDefinition(tx, task.conversationId);
-            const control = await tx.doc(Control, task.conversationId);
-            if (control.accepted !== null || control.cancelled)
-              return { status: "terminal", outcome: { status: "aborted" } };
-            const workers = await scanTasks(
-              tx,
-              task.conversationId,
-              Worker.definition.name,
-            );
-            const running = workers.filter(
-              (other) =>
-                other.id !== task.id &&
-                other.state.status !== "terminal" &&
-                (other.state.status === "completing" ||
-                  (other.state.checkpoint as { phase?: string } | undefined)
-                    ?.phase === "run"),
-            );
-            const verifying = isVerifier(task.input)
-              ? running.filter((other) =>
-                  isVerifier(other.input as WorkerInput),
-                )
-              : [];
-            if (verifying.length) {
-              blockedOn = verifying.map(({ id }) => id);
-              return;
-            }
-            if (
-              running.length >= (definition.settings.limits?.concurrency ?? 4)
-            ) {
-              blockedOn = running.map(({ id }) => id);
-              return;
-            }
-            return {
-              status: "running",
-              checkpoint: {
-                phase: "run",
-                ...(isVerifier(task.input)
-                  ? { at: (await readView(tx, task.conversationId)).cutoff! }
-                  : {}),
-              },
-            };
-          }, context);
-          if (!blockedOn.length) return;
-          const waiting = withCancel(context);
-          try {
-            await Promise.race(
-              blockedOn.map((id) => runtime.waitForTask(id, waiting.context)),
-            );
-          } finally {
-            waiting.cancel();
-          }
-        }
-      },
       async run(task, runtime, context) {
         let value: unknown;
         let name: RoleName;
         let source: Source | undefined;
+        let predecessor: TaskId | undefined;
         let stopped = false;
-        let pending = true;
         await runtime.commit(async (tx) => {
           const control = await tx.doc(Control, task.conversationId);
           if (control.accepted !== null || control.cancelled) {
@@ -236,6 +168,13 @@ export function createResearch(
           }
           const definition = await readDefinition(tx, task.conversationId);
           if ("standalone" in task.input) {
+            if (
+              task.input.retryOf === undefined &&
+              (
+                await scanTasks(tx, task.conversationId, Worker.definition.name)
+              ).some((other) => other.id < task.id)
+            )
+              throw new Error("Standalone research is already initialized");
             const mode = definition.mode;
             if (!mode)
               throw new Error(
@@ -249,7 +188,10 @@ export function createResearch(
             return;
           }
           const { request } = task.input;
-          const at = task.state.checkpoint.at ?? task.input.at;
+          const at = task.input.at;
+          predecessor = (await tx.entry(DecisionView, at))?.byTaskId;
+          if (predecessor === undefined)
+            throw new Error("Worker admission requires a Coordinator decision");
           source = { root: task.conversationId, cutoff: at };
           const view = await readView(tx, task.conversationId, at);
           name = request.kind;
@@ -262,7 +204,6 @@ export function createResearch(
               };
               break;
             case "verifier":
-              pending = verificationPending(request.targets, view.notes);
               value = {
                 task: definition.task,
                 notes: closure(
@@ -290,11 +231,11 @@ export function createResearch(
           }
         }, context);
         if (stopped) return;
+        if (predecessor !== undefined)
+          await runtime.waitForTask(predecessor, context);
         let outcome: TaskOutcome<JsonValue>;
         try {
-          const result = pending
-            ? await roles[name!](value, runtime, context, source)
-            : { kind: "verification", checks: [] };
+          const result = await roles[name!](value, runtime, context, source);
           outcome = { status: "completed", result };
         } catch (error) {
           if (!(error instanceof RoleFailure)) throw error;
@@ -370,9 +311,7 @@ export function createResearch(
 
   const Coordinator = defineTask<
     DecisionInput,
-    | { phase: "freeze" }
-    | { phase: "decide"; at: EntryId }
-    | { phase: "finish" },
+    { phase: "freeze" } | { phase: "decide"; at: EntryId },
     DecisionResult
   >({
     name: "research.coordinator",
@@ -395,6 +334,16 @@ export function createResearch(
                 other.state.status !== "terminal",
             )
             .map(({ id }) => id);
+          on.push(
+            ...(await scanTasks(tx, task.conversationId))
+              .filter(
+                (worker) =>
+                  [Worker.definition.name, Reporter.definition.name].includes(
+                    worker.kind,
+                  ) && worker.state.status !== "terminal",
+              )
+              .map(({ id }) => id),
+          );
           // A manual resume preserves the failed decision's original order.
           if (on.length)
             return {
@@ -467,18 +416,6 @@ export function createResearch(
         if (frozen.notes.some((note) => note.accepted)) {
           await runtime.commit(async (tx) => {
             const current = await readView(tx, task.conversationId);
-            const tasks = await scanTasks(tx, task.conversationId);
-            const records = new Map(tasks.map((record) => [record.id, record]));
-            const pending =
-              pendingDecisions(tasks).some((record) => record.id !== task.id) ||
-              tasks.some(
-                (record) =>
-                  record.kind === Reporter.definition.name &&
-                  record.state.status !== "terminal" &&
-                  records.get(record.input as TaskId<JsonValue>)?.state
-                    .outcome !== undefined,
-              ) ||
-              (current.cutoff !== undefined && current.cutoff > at);
             const control = await tx.doc(Control, task.conversationId);
             const accepted = current.notes.find((note) => note.accepted);
             if (control.paused && !control.cancelled)
@@ -486,10 +423,7 @@ export function createResearch(
                 status: "terminal",
                 outcome: { status: "completed", result: { deferred: true } },
               };
-            if (!control.cancelled && !pending && accepted) {
-              control.accepted = accepted.id;
-              return { status: "running", checkpoint: { phase: "finish" } };
-            }
+            if (!control.cancelled && accepted) control.accepted = accepted.id;
             return {
               status: "terminal",
               outcome: { status: "completed", result: null },
@@ -502,7 +436,6 @@ export function createResearch(
         const settled = new Map(
           frozen.results.map((result) => [result.task, result.outcome]),
         );
-        const active = workers.filter((worker) => !settled.has(worker.id));
         const kind = (work: (typeof workers)[number]) =>
           (work.input as WorkerInput & { request?: Request }).request?.kind;
         const explorerUsed = workers.some(
@@ -518,7 +451,6 @@ export function createResearch(
               settled.get(worker.id)?.status === "completed",
           ),
           explorerUsed,
-          active: active.map(({ id, input }) => ({ id, input })),
           failures: workers
             .filter((worker) =>
               ["failed", "faulted", "orphaned"].includes(
@@ -534,9 +466,7 @@ export function createResearch(
                 null,
             })),
         };
-        const capabilitiesFor = (explorerUsed: boolean) =>
-          roles.capabilities({ ...coordination, explorerUsed });
-        const capabilities = capabilitiesFor(explorerUsed);
+        const capabilities = roles.capabilities(coordination);
         const plan = await roles.coordinator(
           { ...coordination, capabilities },
           runtime,
@@ -544,15 +474,6 @@ export function createResearch(
           { root: task.conversationId, cutoff: at },
         );
         const validated = validatePlan(plan, frozen.notes, capabilities);
-        let plannedExplorer = explorerUsed;
-        for (const request of validated.work) {
-          if (request.kind !== "explorer") continue;
-          if (!capabilitiesFor(plannedExplorer).explorer)
-            throw new Error(
-              "Explorer is unavailable: its one-shot allowance was used",
-            );
-          plannedExplorer = true;
-        }
         await runtime.commit(async (tx) => {
           const control = await tx.doc(Control, task.conversationId);
           if (
@@ -560,21 +481,17 @@ export function createResearch(
             !control.cancelled &&
             control.accepted === null
           ) {
-            const targets = verificationTargets(validated);
-            const pending =
-              targets.length &&
-              verificationPending(
-                targets,
-                (await readView(tx, task.conversationId)).notes,
-              );
-            for (const request of validated.work) {
-              if (request.kind === "verifier") continue;
-              await worker(tx, task.conversationId, { at, request });
-            }
-            if (pending)
+            const request = validated.work;
+            if (request)
               await worker(tx, task.conversationId, {
                 at,
-                request: { kind: "verifier", targets },
+                request:
+                  request.kind === "verifier"
+                    ? {
+                        kind: "verifier",
+                        targets: verificationTargets(validated),
+                      }
+                    : request,
               });
           }
           return {
@@ -591,26 +508,6 @@ export function createResearch(
           };
         }, context);
       },
-      async finish(task, runtime, context) {
-        let ids: TaskId[] = [];
-        await runtime.commit(async (tx) => {
-          ids = (
-            await scanTasks(tx, task.conversationId, Worker.definition.name)
-          )
-            .filter((worker) => worker.state.status !== "terminal")
-            .map((worker) => worker.id);
-        }, context);
-        if (ids.length) {
-          await Promise.all(ids.map((id) => abortTask(id, context)));
-        }
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result: null },
-          }),
-          context,
-        );
-      },
     },
     abort,
   });
@@ -625,11 +522,11 @@ export function createResearch(
       name: "research",
       tasks: [Coordinator, Worker, Reporter],
     }),
-    Coordinator,
-    Worker,
-    Reporter,
-    worker,
-    initialize: enqueue,
+    async initialize(tx: Tx, root: ConversationId) {
+      return (await readDefinition(tx, root)).mode
+        ? worker(tx, root, { standalone: true })
+        : enqueue(tx, root);
+    },
     async resume(tx: Tx, root: ConversationId) {
       const tasks = await scanTasks(tx, root);
       const pending = pendingDecisions(tasks).filter(

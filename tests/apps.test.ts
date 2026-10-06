@@ -150,14 +150,12 @@ test(
         roles: () => ({
           coordinator: async (input) => ({
             work: input.notes.length
-              ? [
-                  {
-                    kind: "verifier",
-                    notes: [input.notes[0].id],
-                    through: "reconstruction",
-                  },
-                ]
-              : [{ kind: "explorer", guidance: "Prove equality." }],
+              ? {
+                  kind: "verifier",
+                  notes: [input.notes[0].id],
+                  through: "reconstruction",
+                }
+              : { kind: "explorer", guidance: "Prove equality." },
           }),
           explorer: async () => ({
             kind: "notes",
@@ -574,7 +572,7 @@ test("closed-book executable rejects retrieval and reopens without calls", () =>
     }
   }));
 
-test("round allowance counts worker batches, excludes empty waits, and resumes only extra rounds", () =>
+test("round allowance counts workers, excludes empty waits, and resumes only extra rounds", () =>
   temporary(async (directory) => {
     let calls = 0;
     const role = async (input: unknown) => {
@@ -583,11 +581,8 @@ test("round allowance counts worker batches, excludes empty waits, and resumes o
       return {
         work:
           calls === 1
-            ? []
-            : [
-                { kind: "explorer" as const, guidance: "First worker." },
-                { kind: "explorer" as const, guidance: "Second worker." },
-              ],
+            ? null
+            : { kind: "explorer" as const, guidance: "Next worker." },
       };
     };
     const roles = {
@@ -607,7 +602,7 @@ test("round allowance counts worker batches, excludes empty waits, and resumes o
       expect(
         await owner.root.commit((tx) => readRounds(tx, owner.root.id), context),
       ).toHaveLength(1);
-      expect((await observeOwner(owner)).work).toHaveLength(2);
+      expect((await observeOwner(owner)).work).toHaveLength(1);
       expect(calls).toBe(2);
       await controlCommand(owner, { kind: "pause" });
       await owner.close();
@@ -620,7 +615,7 @@ test("round allowance counts worker batches, excludes empty waits, and resumes o
         context,
       );
       expect(admitted).toHaveLength(3);
-      expect((await observeOwner(owner)).work).toHaveLength(6);
+      expect((await observeOwner(owner)).work).toHaveLength(3);
       expect(calls).toBe(4);
       await owner.close();
       const reduced = { coordinator: role };
@@ -654,12 +649,10 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
               (await tx.doc(Control, runtime.conversationId))[outcome] = true;
             }, invocation);
           return {
-            work: [
-              {
-                kind: "explorer",
-                guidance: outcome === "rejected" ? "" : "Explore.",
-              },
-            ],
+            work: {
+              kind: "explorer",
+              guidance: outcome === "rejected" ? "" : "Explore.",
+            },
           };
         },
         explorer,
@@ -694,7 +687,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
       coordinator: async (_input, runtime, invocation, source) => {
         entered.resolve({ taskId: runtime.taskId, cutoff: source!.cutoff });
         await awaitWithContext(pending.promise, invocation);
-        return { work: [] };
+        return { work: null };
       },
     };
     limitRounds(first, 1);
@@ -711,7 +704,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
       const next: Pick<Roles, "coordinator" | "explorer"> = {
         coordinator: async (_input, runtime) => {
           recovered.push(runtime.taskId);
-          return { work: [{ kind: "explorer", guidance: "Explore." }] };
+          return { work: { kind: "explorer", guidance: "Explore." } };
         },
         explorer,
       };

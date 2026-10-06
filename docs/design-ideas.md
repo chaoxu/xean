@@ -1,5 +1,13 @@
 # Design ideas
 
+## Concurrent outer workers
+
+Outer concurrency is deferred. The current contract is Coordinator, one worker,
+then Coordinator again after that worker's complete result or failure commits.
+A worker may parallelize its internal work. Reconsider overlapping outer workers
+only after the sequential workflow is stable, with evidence that the benefit
+justifies the additional scheduling and consistency rules.
+
 ## Verified exploration
 
 Consider exposing exploration and verification as one operation to Coordinator.

@@ -12,14 +12,19 @@ Read README.md and the pinned Pi implementation before changing the design.
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
-- Coordinator decisions are short-lived. Fresh events get fresh conversations,
-  interrupted decisions recover private progress, and workers have independent
-  ownership. Preserve atomic publication and durable event delivery.
+- The outer loop is strictly sequential: Coordinator chooses one worker, that
+  worker commits its complete result or failure, then Coordinator chooses again.
+  This applies to replacement roles too. A worker may parallelize its own work.
+  Use Pi's native task waits. Keep no outer concurrency setting or worker queue.
+  Interrupted decisions and workers recover private progress. Preserve atomic
+  publication and durable event delivery.
 - Have a separate agent review each substantial design change specifically for
   native Pi alternatives and unnecessary application machinery. Resolve findings
   against Pi's implementation before declaring the change complete.
 - Use locked Fleet Bun and socket-free Nix checks. Keep tests focused on
   consequential workflow failures. Report runtime and test line counts.
+- Reproduce interface failures with local contract tests. Screen model behavior
+  with small standalone-role inputs before a full campaign smoke or golden run.
 - Preserve the Yean and Xean checkouts and historical runs. No compatibility,
   migrations, remote publication, or production cutover is implied.
 - Apply the prose-writing skill to documentation and obtain separate verifier

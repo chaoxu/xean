@@ -335,7 +335,7 @@ test("native worker recovery refuses to resend an interrupted ChatGPT request", 
     await owner.root.waitForIdle(context);
     const root = owner.root;
     const workers = await root.commit(
-      (tx) => scanTasks(tx, root.id, owner!.workflow.Worker.definition.name),
+      (tx) => scanTasks(tx, root.id, "research.worker"),
       context,
     );
     expect(workers).toHaveLength(1);
