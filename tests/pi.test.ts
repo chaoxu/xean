@@ -85,6 +85,38 @@ function call(
   ).result();
 }
 
+test.each([false, true])(
+  "Responses message limits remain separate from token limits and terminal errors (Codex=%s)",
+  async (useCodex) => {
+    for (const reason of [
+      "max_messages",
+      "max_output_tokens",
+      "max_messages_extra",
+      "content_filter",
+    ]) {
+      const result = await call(useCodex, [
+        terminal("incomplete", { incomplete_details: { reason } }),
+      ]);
+      expect(result.rawStopReason).toBe(`incomplete.${reason}`);
+      expect(result.stopReason).toBe(
+        reason === "max_output_tokens" ? "length" : "error",
+      );
+      expect(isRetryableAssistantError(result)).toBe(reason === "max_messages");
+      if (reason === "max_messages") {
+        for (const code of [
+          "context_length_exceeded",
+          "insufficient_quota",
+          "authentication_error",
+          "invalid_request_error",
+        ])
+          expect(
+            isRetryableAssistantError({ ...result, providerError: { code } }),
+          ).toBe(false);
+      }
+    }
+  },
+);
+
 test("HTTP status survives adapter catches for native retry classification", async () => {
   const original = globalThis.fetch;
   try {
@@ -241,6 +273,7 @@ test("Codex preserves account limits and switches transient WebSocket failures t
   for (const [errorMessage, retry] of [
     ["JSON Parse error: Unterminated string", false],
     ["Connection terminated unexpectedly", true],
+    ["The pending stream has been canceled", true],
     ["invalid_request_error: timeout", false],
     ["project_spend_limit_exceeded: 429", false],
     ["credit_balance_exhausted: 429", false],

@@ -210,7 +210,7 @@ export function codexCalls(options: {
       const value = decode(schema, transcript.value);
       if (shell)
         for (const note of (value as Exploration).notes)
-          note.argument += `\n\nArtifacts: ${workspace}`;
+          note.text += `\n\nArtifacts: ${workspace}`;
       return {
         value,
         operationId,

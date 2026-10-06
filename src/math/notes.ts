@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { closure } from "./argument.ts";
+import { closure, verdict } from "./argument.ts";
 import {
   decode,
   planSchema,
@@ -17,7 +17,7 @@ import {
 
 /** Shared correction policy for mathematical checks and source checks. */
 export const correctionInstructions =
-  "On PASS, you may supply correction for harmless typos, formatting, or unambiguous notation. Supply the complete replacement for each changed field, and null for each unchanged field; code retains unchanged bytes. Keep statement, argument, summary, and detailedSummary consistent. When this check otherwise warrants PASS and a mismatch is confined to the summaries, correct them to match the authoritative full statement and proof instead of failing only for that mismatch. Leave statement and argument null for summary-only corrections. Restore only hypotheses, conclusions, bounds, conditionality, and limitations already explicit in the statement and argument, and explain the correction in report. Preserve dependencies and external premises. Never add assumptions to the full statement, repair a proof gap, or use a summary correction to satisfy an unmet task criterion; substantive changes require a new note.";
+  "On PASS, you may supply correction for harmless typos, formatting, or unambiguous notation. Supply the complete replacement for each changed field, and null for each unchanged field; code retains unchanged bytes. Keep text, summary, and detailedSummary consistent. When a mismatch is confined to the summaries, correct them to match the authoritative full text instead of failing only for that mismatch. Leave text null for summary-only corrections. Restore only hypotheses, conclusions, bounds, conditionality, and limitations already explicit in the text, and explain the correction in report. Preserve dependencies, the checked claim, and external premises. Never add assumptions, repair a proof gap, or use a summary correction to satisfy an unmet task criterion; substantive changes require a new note.";
 
 const fatalStages = ["correctness", "reconstruction"] as const;
 const stageRank = (stage: VerificationStage) =>
@@ -65,33 +65,19 @@ export function validateNotes(
   }
 }
 
-export function verdict<Stage extends VerificationStage>(
-  note: Note,
-  name: Stage,
-): Note["checks"][number][Stage] {
-  let result: Note["checks"][number][Stage] = undefined;
-  for (const check of note.checks) {
-    const value = check[name];
-    if (!value) continue;
-    if (value.verdict === "FAIL") return value;
-    if (value.verdict === "PASS" || result?.verdict !== "PASS") result = value;
-  }
-  return result;
-}
-
 /** Caller trust establishes an import's correctness and sources. */
 export function stagePassed(note: Note, stage: VerificationStage): boolean {
+  if (!verdict(note, "correctness")?.statement) return false;
   const result = verdict(note, stage);
   return (
     result?.verdict === "PASS" ||
-    (note.imported &&
-      (stage === "correctness" || stage === "source") &&
-      result?.verdict !== "FAIL")
+    (note.imported && stage === "source" && result?.verdict !== "FAIL")
   );
 }
 
 /** Source verdicts and FAIL outcomes are final per note ID. */
 export function stagePending(note: Note, stage: VerificationStage): boolean {
+  if (verdict(note, "correctness")?.statement === null) return false;
   if (
     note.dead ||
     verdict(note, stage)?.verdict === "FAIL" ||
@@ -274,6 +260,14 @@ export function validateResult(
         throw new Error(`Verification refers to unknown note: ${check.noteId}`);
       const correctness = verdict(note, "correctness");
       const source = verdict(note, "source");
+      if (
+        check.correctness &&
+        (correctness?.statement === null ||
+          (check.correctness.verdict === "PASS" &&
+            correctness?.verdict === "PASS")) &&
+        check.correctness.statement !== correctness.statement
+      )
+        throw new Error(`Correctness statement is final: ${check.noteId}`);
       if (
         check.correctness?.verdict === "PASS" &&
         (correctness?.verdict === "PASS" || source) &&

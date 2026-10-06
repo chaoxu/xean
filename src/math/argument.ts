@@ -1,7 +1,17 @@
-import type { Note } from "./contracts.ts";
+import type { Note, VerificationStage } from "./contracts.ts";
 
-export function renderNote(note: Pick<Note, "statement" | "argument">): string {
-  return `${note.statement}\n\n${note.argument}`;
+export function verdict<Stage extends VerificationStage>(
+  note: Note,
+  name: Stage,
+): Note["checks"][number][Stage] {
+  let result: Note["checks"][number][Stage] = undefined;
+  for (const check of note.checks) {
+    const value = check[name];
+    if (!value) continue;
+    if (value.verdict === "FAIL") return value;
+    if (value.verdict === "PASS" || result?.verdict !== "PASS") result = value;
+  }
+  return result;
 }
 
 /** Support is a mathematical dependency, not a record of everything read. */
@@ -34,6 +44,12 @@ export function acceptedArgument(
   if (!notes.find((note) => note.id === noteId)?.accepted)
     throw new Error("No accepted argument");
   return closure([noteId], notes)
-    .map((note) => `## ${note.id}\n\n${renderNote(note)}`)
+    .map(
+      (note) =>
+        `## ${note.id}\n\n${note.text}` +
+        (note.imported && note.id === noteId
+          ? `\n\n### Independent proof\n\n${verdict(note, "reconstruction")!.proof}`
+          : ""),
+    )
     .join("\n\n");
 }

@@ -206,10 +206,12 @@ export function createRuntime(
       stream: (model, input, request = {}) =>
         lazyStream(model, async () => {
           const transcript = normalizeContext(input);
-          if (
-            clampMaxTokensToContext(model, transcript, model.maxTokens) <
-            model.maxTokens
-          )
+          const maxTokens = clampMaxTokensToContext(
+            model,
+            transcript,
+            request.maxTokens ?? model.maxTokens,
+          );
+          if (request.maxTokens === undefined && maxTokens < model.maxTokens)
             throw new Error(capacityError);
           const apiKey = explicit ? await key() : request.apiKey;
           if (explicit && !apiKey)
@@ -221,6 +223,7 @@ export function createRuntime(
             transcript,
             {
               ...request,
+              maxTokens,
               apiKey,
               transport: configured.transport ?? request.transport,
               samplingParams: {

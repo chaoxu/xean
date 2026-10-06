@@ -26,6 +26,7 @@ import { bindCodex } from "../src/math/evidence.ts";
 import { Events, readView } from "../src/math/state.ts";
 import {
   refresh,
+  stagePassed,
   sourceEvidence,
   stagePending,
   validateNotes,
@@ -35,11 +36,10 @@ import {
 import { acceptedArgument, closure } from "../src/math/argument.ts";
 
 const pass = { verdict: "PASS" as const, report: "Checked exact statement." };
-const content = (statement: string) => ({
-  summary: statement,
-  detailedSummary: statement,
-  statement,
-  argument: `Proof of ${statement}.`,
+const content = (claim: string) => ({
+  summary: claim,
+  detailedSummary: claim,
+  text: `${claim}\n\nProof of ${claim}.`,
 });
 const note = (id: string, support: string[] = [], imported = false): Note => ({
   id,
@@ -48,9 +48,12 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
   imported,
   revision: 0,
   candidate: false,
-  checks: imported
-    ? []
-    : [{ correctness: { ...pass, premises: [] }, source: pass }],
+  checks: [
+    {
+      correctness: { ...pass, statement: id, premises: [] },
+      ...(imported ? {} : { source: pass }),
+    },
+  ],
   verified: false,
   accepted: false,
   dead: false,
@@ -127,7 +130,12 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
     ),
   ).toThrow("no pending checks");
   base.checks.push({
-    correctness: { verdict: "FAIL", report: "Concrete defect", premises: [] },
+    correctness: {
+      verdict: "FAIL",
+      report: "Concrete defect",
+      statement: base.id,
+      premises: [],
+    },
   });
   refresh(notes);
   expect(notes.every((entry) => entry.dead)).toBe(true);
@@ -147,52 +155,89 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
 });
 
 test.each([false, true])(
-  "correctness PASS fixes premises without suppressing FAIL, source committed=%s",
+  "correctness PASS fixes statement and premises without suppressing FAIL, source committed=%s",
   (sourceCommitted) => {
     const established = note("established");
     if (!sourceCommitted) delete established.checks[0]!.source;
     const dependent = note("dependent", [established.id]);
-    const late = {
-      kind: "verification" as const,
-      checks: [
-        {
-          noteId: established.id,
-          correctness: { ...pass, premises: ["Previously unchecked premise"] },
-        },
-      ],
-    };
-    expect(() => validateResult(late, [established])).toThrow(
-      "Correctness premises are final",
-    );
-    late.checks[0]!.correctness.premises = [];
-    expect(validateResult(late, [established])).toEqual(late);
-    const failure = {
-      ...late,
+    const binding = established.checks[0]!.correctness!;
+    const late: SolverResult = {
+      kind: "verification",
       checks: [
         {
           noteId: established.id,
           correctness: {
-            verdict: "FAIL" as const,
-            report: "The argument has an unsupported step.",
-            premises: ["Different unresolved premise"],
+            ...binding,
+            premises: ["Previously unchecked premise"],
           },
         },
       ],
     };
-    expect(validateResult(failure, [established])).toEqual(failure);
-    established.checks.push(...failure.checks);
+    const check = late.checks[0]!.correctness!;
+    expect(() => validateResult(late, [established])).toThrow(
+      "Correctness premises are final",
+    );
+    check.premises = [];
+    expect(validateResult(late, [established])).toEqual(late);
+    check.statement = "A stronger unchecked claim";
+    expect(() => validateResult(late, [established])).toThrow(
+      "Correctness statement is final",
+    );
+    established.checks[0]!.correctness = {
+      ...binding,
+      verdict: "INCONCLUSIVE",
+      statement: null,
+    };
+    expect(() => validateResult(late, [established])).toThrow(
+      "Correctness statement is final",
+    );
+    check.verdict = "INCONCLUSIVE";
+    expect(() => validateResult(late, [established])).toThrow(
+      "Correctness statement is final",
+    );
+    established.checks[0]!.correctness = binding;
+    check.statement = binding.statement;
+    check.verdict = "FAIL";
+    check.report = "The argument has an unsupported step.";
+    check.premises = ["Different unresolved premise"];
+    expect(validateResult(late, [established])).toEqual(late);
+    established.checks.push(...late.checks);
     expect(refresh([established, dependent]).every((note) => note.dead)).toBe(
       true,
     );
   },
 );
 
+test("a null checked statement cannot establish support or acceptance even with PASS records", () => {
+  const question = note("question", [], true);
+  question.text = "Could an exchange argument settle the conjecture?";
+  question.checks[0]!.correctness!.statement = null;
+  const candidate = note("candidate", [question.id]);
+  for (const entry of [question, candidate])
+    entry.checks.push({
+      requirements: pass,
+      reconstruction: { ...pass, proof: "Depends on the unresolved question." },
+    });
+  for (const entry of refresh([candidate, question]))
+    expect(entry).toMatchObject({
+      verified: false,
+      accepted: false,
+      dead: false,
+    });
+  expect(stagePassed(question, "source")).toBe(false);
+  expect(stagePending(question, "correctness")).toBe(false);
+});
+
 test("committed source verdicts are final and reused evidence retains immutable original bindings", () => {
   for (const verdict of ["PASS", "FAIL", "INCONCLUSIVE"] as const) {
     const frozen = note("frozen");
     frozen.checks = [
       {
-        correctness: { ...pass, premises: ["Exact frozen premise"] },
+        correctness: {
+          ...pass,
+          statement: frozen.id,
+          premises: ["Exact frozen premise"],
+        },
         source: { verdict, report: "Judged the frozen external claim" },
         reconstruction: { ...pass, proof: "Independent supporting proof" },
       },
@@ -229,7 +274,11 @@ test("committed source verdicts are final and reused evidence retains immutable 
           checks: [
             {
               noteId: frozen.id,
-              correctness: { ...pass, premises: ["Repaired premise"] },
+              correctness: {
+                ...pass,
+                statement: frozen.id,
+                premises: ["Repaired premise"],
+              },
             },
           ],
         },
@@ -246,6 +295,7 @@ test("committed source verdicts are final and reused evidence retains immutable 
   };
   const claimed = {
     operationId: "source",
+    reportedAt: "2026-10-05T00:00:00Z",
     searches: 0,
     value: {
       ...pass,
@@ -291,7 +341,11 @@ test("committed source verdicts are final and reused evidence retains immutable 
   const established = note("established");
   established.checks = [
     {
-      correctness: { ...pass, premises: [evidence.statement] },
+      correctness: {
+        ...pass,
+        statement: established.id,
+        premises: [evidence.statement],
+      },
       source: {
         ...pass,
         kind: "codex-report",
@@ -318,7 +372,11 @@ test("committed source verdicts are final and reused evidence retains immutable 
   const unchecked = note("unchecked");
   unchecked.checks = [
     {
-      correctness: { ...pass, premises: ["Different exact premise"] },
+      correctness: {
+        ...pass,
+        statement: unchecked.id,
+        premises: ["Different exact premise"],
+      },
     },
   ];
   expect(() =>
@@ -368,10 +426,12 @@ test("batch responses and note support reject missing, duplicate, extra, dead an
       ],
     ),
   ).toThrow("exactly one result per requested note");
-  for (const statement of [" ", "claim\u0000", "claim\u001b"])
-    expect(() => decode(noteContentSchema, content(statement))).toThrow();
-  expect(decode(noteContentSchema, content("$x \\to 0$\n")).statement).toBe(
-    "$x \\to 0$\n",
+  for (const text of [" ", "claim\u0000", "claim\u001b"])
+    expect(() =>
+      decode(noteContentSchema, { ...content("claim"), text }),
+    ).toThrow();
+  expect(decode(noteContentSchema, content("$x \\to 0$\n")).text).toBe(
+    content("$x \\to 0$\n").text,
   );
   const draft = (id: string, support: string[]) => ({
     id,
@@ -532,26 +592,21 @@ test("native result references preserve frozen views and late corrections across
       harness.commit((tx) => readView(tx, root.id, at), context);
     const frozen = await read(frozenAt);
     expect(
-      frozen.notes.map(
-        ({ statement, argument, revision, candidate, support }) => ({
-          statement,
-          argument,
-          revision,
-          candidate,
-          support,
-        }),
-      ),
+      frozen.notes.map(({ text, revision, candidate, support }) => ({
+        text,
+        revision,
+        candidate,
+        support,
+      })),
     ).toEqual([
       {
-        statement: "IMPORTED SUPPORT",
-        argument: "Proof of IMPORTED SUPPORT.",
+        text: content("IMPORTED SUPPORT").text,
         revision: 0,
         candidate: false,
         support: [],
       },
       {
-        statement: "ORIGINAL TEXT",
-        argument: "Proof of ORIGINAL TEXT.",
+        text: content("ORIGINAL TEXT").text,
         revision: 0,
         candidate: true,
         support: ["input/seed/n1"],
@@ -559,14 +614,14 @@ test("native result references preserve frozen views and late corrections across
     ]);
     const latest = await read();
     expect(latest.notes[1]).toMatchObject({
-      statement: "NEWER TEXT",
-      argument: "Proof of NEWER TEXT.",
+      text: content("NEWER TEXT").text,
       summary: "NEWER TEXT",
       revision: 1,
       imported: true,
-      verified: true,
+      verified: false,
       accepted: false,
     });
+    expect(stagePending(latest.notes[1]!, "correctness")).toBe(true);
     expect(latest.notes[1]!.checks).toEqual([{ requirements: pass }]);
     expect(latest.results).toHaveLength(2);
     expect(latest.guidance).toHaveLength(129);

@@ -20,7 +20,7 @@ export {
 export { readCommand, type SolverCommand } from "./math/commands.ts";
 export { readView } from "./math/state.ts";
 export { noteInfo } from "./math/notes.ts";
-export { acceptedArgument, closure, renderNote } from "./math/argument.ts";
+export { acceptedArgument, closure } from "./math/argument.ts";
 export type {
   Task,
   Note,

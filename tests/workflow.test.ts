@@ -47,8 +47,7 @@ const draft = (id = "n1") => ({
   id,
   summary: "Reflexivity",
   detailedSummary: "Equality is reflexive.",
-  statement: "1 = 1",
-  argument: "By reflexivity, 1 = 1.",
+  text: "1 = 1\n\nBy reflexivity, 1 = 1.",
   support: [],
 });
 
@@ -116,8 +115,7 @@ test("input replay is idempotent after projection and frozen workers retain old 
       revision: 0,
       summary: "Equality",
       detailedSummary: "Reflexivity proves equality.",
-      statement: "1=1",
-      argument: "By reflexivity, 1=1.",
+      text: "1=1\n\nBy reflexivity, 1=1.",
     };
     const revised = await root.commit(
       (tx) => research.input(tx, root.id, correction),
@@ -321,8 +319,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
               correction: {
                 revision: 0,
                 summary: "Reflexive equality",
-                statement: "1=1",
-                argument: "Reflexivity proves 1=1.",
+                text: "1=1\n\nReflexivity proves 1=1.",
               },
             },
           ],
@@ -516,7 +513,7 @@ test("Verifier admission merges requests, reuses PASS, and preserves Explorer co
             .filter((note) => !stagePassed(note, "source"))
             .map((note) => ({
               noteId: note.id,
-              correctness: { ...pass, premises: [] },
+              correctness: { ...pass, statement: "1 = 1", premises: [] },
               source: pass,
             })),
         };
@@ -636,8 +633,7 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
   let carriedOnClose = false;
   const seen: {
     revision: number;
-    statement: string;
-    argument: string;
+    text: string;
     cutoff: number;
   }[] = [];
   const roles: Partial<Roles> = {
@@ -645,8 +641,7 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
       const note = input.notes[0];
       seen.push({
         revision: note.revision,
-        statement: note.statement,
-        argument: note.argument,
+        text: note.text,
         cutoff: source!.cutoff,
       });
       const result = {
@@ -717,8 +712,7 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
           revision: 0,
           summary: "Equality",
           detailedSummary: "Reflexivity proves equality.",
-          statement: "1=1",
-          argument: "By reflexivity, 1=1.",
+          text: "1=1\n\nBy reflexivity, 1=1.",
         }),
       context,
     );
@@ -735,14 +729,12 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
     expect(seen).toEqual([
       {
         revision: 0,
-        statement: draft().statement,
-        argument: draft().argument,
+        text: draft().text,
         cutoff: at,
       },
       {
         revision: 0,
-        statement: draft().statement,
-        argument: draft().argument,
+        text: draft().text,
         cutoff: at,
       },
     ]);
@@ -775,7 +767,7 @@ test("acceptance waits for newer input and aborts late worker results", async ()
       checks: [
         {
           noteId: input.targets[0].id,
-          correctness: { ...pass, premises: [] },
+          correctness: { ...pass, statement: "1 = 1", premises: [] },
           source: pass,
           requirements: pass,
           reconstruction: {

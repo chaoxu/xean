@@ -99,8 +99,7 @@ export async function readView(
       else if (command.kind === "guide") view.guidance.push(command.text);
       else {
         const note = view.notes.find((note) => note.id === command.note)!;
-        note.statement = command.statement;
-        note.argument = command.argument;
+        note.text = command.text;
         note.summary = command.summary;
         note.detailedSummary = command.detailedSummary;
         note.revision++;

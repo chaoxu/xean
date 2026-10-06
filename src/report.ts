@@ -16,8 +16,8 @@ import {
 } from "./workflow.ts";
 import { readView } from "./math/state.ts";
 import { resolveResult } from "./math/results.ts";
-import { closure } from "./math/argument.ts";
-import { stagePassed, verdict } from "./math/notes.ts";
+import { closure, verdict } from "./math/argument.ts";
+import { stagePassed } from "./math/notes.ts";
 import { verificationStages, type SolverResult } from "./math/contracts.ts";
 import { CodexLog, CodexRequest } from "./roles/codex.ts";
 

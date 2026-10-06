@@ -16,7 +16,7 @@ export function bindCodex(
     value: Static<typeof sourceSchema> | Static<typeof reviewSchema>;
     operationId: string;
     searches: number;
-    reportedAt?: string;
+    reportedAt: string;
   },
   premises: readonly string[],
   evidence: readonly SourceEvidence[] = [],
@@ -68,7 +68,7 @@ export function bindCodex(
     passages,
     kind: "codex-report",
     operationId,
-    reportedAt: result.reportedAt ?? new Date().toISOString(),
+    reportedAt: result.reportedAt,
     ...(value.verdict === "PASS" && !valid
       ? {
           verdict: "INCONCLUSIVE",

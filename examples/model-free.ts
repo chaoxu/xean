@@ -37,8 +37,7 @@ const owner = await open(path, {
           id: "n1",
           summary: "Equality is reflexive.",
           detailedSummary: "Reflexivity proves the equality.",
-          statement: "1 = 1.",
-          argument: "By reflexivity, 1 = 1.",
+          text: "1 = 1.\n\nBy reflexivity, 1 = 1.",
           support: [],
         },
       ],
@@ -48,7 +47,7 @@ const owner = await open(path, {
       checks: [
         {
           noteId: input.targets[0].id,
-          correctness: { ...pass, premises: [] },
+          correctness: { ...pass, statement: "1 = 1.", premises: [] },
           source: pass,
           requirements: pass,
           reconstruction: {

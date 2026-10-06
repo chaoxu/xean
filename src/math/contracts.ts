@@ -10,7 +10,7 @@ import type { TObject } from "typebox";
 const text = Type.String({
   minLength: 1,
   // Reject non-whitespace ASCII controls without rewriting mathematical text.
-  pattern: "^(?=[\\s\\S]*\\S)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f]+$",
+  pattern: "^\\s*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x08\\x0e-\\x1f\\x7f]*$",
 });
 export const object = <T extends Record<string, TSchema>>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -55,16 +55,10 @@ export const noteContentSchema = object({
     description:
       "Detailed summary of the actual claims or findings, decisive conditions, bounds, and unresolved gaps. Preserve conditionality and negative conclusions. It may explain methods but does not replace the full note.",
   }),
-  statement: Type.String({
+  text: Type.String({
     ...text,
     description:
-      "Authoritative mathematical claim with every definition, hypothesis, quantifier, and conclusion. Include the answer for a determination claim. Keep proof recipes and derivations in argument.",
-  }),
-  argument: Type.String({
-    minLength: 1,
-    pattern: "\\S",
-    description:
-      "Proof, evidence, or analysis justifying the statement, including unresolved gaps.",
+      "Complete authoritative note: claims, proofs, observations, failed approaches, questions, or analysis. Preserve all hypotheses, qualifications, and unresolved gaps.",
   }),
 });
 export type NoteContent = Static<typeof noteContentSchema>;
@@ -84,8 +78,7 @@ const correctionSchema = object({
     noteContentSchema.properties.detailedSummary,
     Type.Null(),
   ]),
-  statement: Type.Union([noteContentSchema.properties.statement, Type.Null()]),
-  argument: Type.Union([noteContentSchema.properties.argument, Type.Null()]),
+  text: Type.Union([noteContentSchema.properties.text, Type.Null()]),
 });
 export const verdictSchema = object({
   verdict: StringEnum(["PASS", "FAIL", "INCONCLUSIVE"] as const),
@@ -99,9 +92,19 @@ const premisesSchema = Type.Array(text, {
 });
 export const correctnessSchema = object({
   ...verdictSchema.properties,
+  statement: Type.Union([text, Type.Null()], {
+    description:
+      "Exact claim checked in this note, preserving definitions, hypotheses, quantifiers, and conclusions, without proof recipes or methods. Null when the note asserts no mathematical result; do not invent a claim.",
+  }),
   premises: premisesSchema,
 });
-export const proofSchema = object({ proof: text, complete: Type.Boolean() });
+export const proofSchema = object({
+  proof: text,
+  complete: Type.Boolean({
+    description:
+      "True only when this note's mathematical statement is fully proved under its declared support and approved premises. Source retrieval and overall task requirements are checked separately; lack of a fresh source search does not make this proof incomplete.",
+  }),
+});
 const passageSchema = object({
   premise: Type.Integer({ minimum: 0 }),
   url: text,

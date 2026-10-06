@@ -3,7 +3,7 @@ import { keyed } from "lit-html/directives/keyed.js";
 import { repeat } from "lit-html/directives/repeat.js";
 import renderMath from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
-import { acceptedArgument, renderNote } from "../../../src/math/argument.ts";
+import { acceptedArgument } from "../../../src/math/argument.ts";
 import type { Run } from "../read.ts";
 import type { RunStatus } from "../server.ts";
 import { noteStatus } from "./notes.ts";
@@ -270,7 +270,7 @@ function notesView(snapshot: Snapshot) {
                     <code>${selected.id}</code>, revision ${selected.revision}
                   </p>
                   ${noteBadges(snapshot, selected)}${math(selected.detailedSummary)}
-                  ${disclosure("full", "Full note", () => math(renderNote(selected)))}
+                  ${disclosure("full", "Full note", () => math(selected.text))}
                   ${disclosure("checks", `Checks (${selected.checks.length})`, () => checksView(selected.checks))}
                   <h4>Dependencies</h4>
                   ${noteLinks(snapshot, selected.support)}

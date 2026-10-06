@@ -66,10 +66,31 @@ and `close`. Its options accept native Pi `models`, a `roles` callback that
 receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
 
-Notes store an authoritative `statement` and `argument` alongside the index and
-detailed summaries. `renderNote` combines the statement and argument for full
-reads, Observe, and export. The index, detailed summary, and full note remain
-separate reading levels.
+Notes store `summary`, `detailedSummary`, and authoritative free-form `text`.
+The text can record proofs, conjectures, observations, questions, or failed
+approaches. Correctness records a separate nullable `statement` for later
+verification. Notes with no mathematical claim remain context and cannot
+become verified support or an accepted solution.
+The note reader includes the existing checked statement. Explorer and Verifier
+use it to distinguish granted support from additional facts that need a proof
+or a separate supporting lemma.
+
+Blind reconstruction lets the prover choose how many pending notes to prove
+together, in dependency order. The comparer can likewise submit a smaller group
+of complete judgments. Further native conversations handle the remaining notes.
+There are no separate planning calls or fixed note counts. Prompts ask the
+models to allow for input, reasoning, complete written output, and structure.
+Pi estimates context use and the provider guard reserves the model's full output
+allowance. Inputs that leave insufficient space are rejected. Token-truncated
+responses continue the same assignment within the
+[response and continuation allowances](docs/parity.md#pi-integration).
+Tools from truncated responses never execute.
+Pi reuses committed proofs and comparisons after reopening, and an ordinary
+failure retains earlier completed checks.
+If an unresolved generated claim supports a later proof group, Verifier finishes
+the current group's comparisons and returns its checks. Coordinator then decides
+whether to retry, repair the mathematics, or continue other work. Further worker
+admissions use the existing outer round allowance.
 
 The [model-free example](examples/model-free.ts) supplies scripted roles and
 prints the resulting campaign status without provider credentials. Its fixed
@@ -111,10 +132,13 @@ progress. A request interrupted before its answer commits may repeat, except
 that an ambiguously sent ChatGPT Web request is rejected on recovery.
 Completed source checks are memoized before later verification stages. Codex
 executes inside its worker and may repeat if interrupted before that boundary
-or worker completion. A model or Codex execution failure can publish fully
-completed verification checks with the failure in the same native task outcome.
-A new Verifier reuses completed PASS checks and final source verdicts. Faults
-and cancellation do not publish partial checks. Cancellation stops the Codex
+or worker completion. The built-in Verifier preserves structurally validated
+completed checks when a stage fails. It publishes those checks with the error
+in a failed native task outcome. Cancellation, invalid final publications, and
+faults in opaque custom roles publish no partial checks. A new Verifier reuses
+completed PASS checks and final source verdicts. Cleanup errors use Pi's nonfatal
+reporting, preserving submitted results and the primary failure when a call fails.
+Cancellation stops the Codex
 process tree and may leave usage unknown. Implementation artifacts remain in
 their workspace.
 
@@ -153,8 +177,9 @@ X-Codex-LB-Required-Capability = "usage_tag_v1"
 [bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
 from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
 `--offline` options. A round is a Coordinator decision that commits new workers,
-including verification. Empty waits consume no rounds. The count derives from
-Pi's worker records and remains outside model inputs.
+including verification. Empty waits and internal proof or comparison calls add
+no rounds. The count derives from Pi's worker records and remains outside model
+inputs. Response and usage counters remain observational.
 [prompt-eval.ts](scripts/prompt-eval.ts) takes settings and a new output directory
 to prepare frozen cases and commands without model calls.
 
@@ -186,12 +211,14 @@ and credential-free reopening. Its source quotations and exact theorem were
 checked separately. Native Codex events confirmed web activity but did not
 identify a direct source-open operation. The receipt is
 `runs/smoke-golden-20261004-r03/qualification.json`. This predates the Observe
-and direct ChatGPT simplification, the current note format, and the verification
-changes. ChatGPT Web, Anthropic, and Google remain unqualified live. The prototype
+and direct ChatGPT simplification and the current note and verification changes,
+including statement extraction and reconstruction batching. Those changes and
+the ChatGPT Web, Anthropic, and Google paths remain unqualified live. The prototype
 has not been deployed.
 
-Matching Pi packages are pinned to `b2b5c42f6138b73ec4b2f49ec0ca468800f88586`
-with artifact and patch hashes in [provenance](vendor/pi/provenance.json).
+Pi 1.0.4 uses the official compiled release packages, pinned together to
+`7c10bd4337495ee613f2224843ecdf349b80d1df`. The packages include frozen model data.
+Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.
 This is a private [MIT-licensed](LICENSE) source package. Historical Yean and

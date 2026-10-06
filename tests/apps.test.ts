@@ -19,7 +19,6 @@ import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/definition.ts";
 import { Control, type Roles } from "../src/workflow.ts";
 import { readReport, readUsage } from "../src/report.ts";
-import { renderNote } from "../src/math/argument.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
@@ -38,8 +37,7 @@ const draft = {
   id: "n1",
   summary: "Equality",
   detailedSummary: "Equality is reflexive.",
-  statement: "1 = 1",
-  argument: "PROOF: By reflexivity, 1 = 1.",
+  text: "1 = 1\n\nPROOF: By reflexivity, 1 = 1.",
   support: [],
 };
 const pass = { verdict: "PASS" as const, report: "Checked." };
@@ -120,7 +118,7 @@ test(
         (await cli(...prefix, "status", "named")).stdout,
       );
       expect(compact.pendingDecisions).toBe(2);
-      expect(JSON.stringify(compact)).not.toContain(draft.argument);
+      expect(JSON.stringify(compact)).not.toContain(draft.text);
       expect((await cli(...prefix, "export", "named")).code).not.toBe(0);
       expect((await cli(...prefix, "cancel", "named")).code).toBe(0);
       expect(
@@ -171,7 +169,7 @@ test(
             checks: [
               {
                 noteId: input.targets[0].id,
-                correctness: { ...pass, premises: [] },
+                correctness: { ...pass, statement: "1 = 1", premises: [] },
                 source: pass,
                 requirements: pass,
                 reconstruction: {
@@ -214,7 +212,7 @@ test(
       const exported = await cli("export", path);
       expect(exported.stderr).toBe("");
       expect(exported.code).toBe(0);
-      expect(exported.stdout).toContain(renderNote(draft));
+      expect(exported.stdout).toContain(draft.text);
       const standalonePath = join(directory, "standalone.sqlite");
       let attempts = 0;
       const standalone = await open(standalonePath, {
@@ -766,8 +764,7 @@ test(
           join(output, example.id, "input.json"),
         ).json();
         expect(input.notes[0]).toMatchObject({
-          statement: example.statement,
-          argument: example.argument,
+          text: `${example.statement}\n\n${example.argument}`,
         });
         expect(JSON.stringify(input)).not.toContain(example.expected.reason);
         expect(input).not.toHaveProperty("expected");

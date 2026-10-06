@@ -3,13 +3,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createInitialSystemMessage, Type } from "@earendil-works/pi-ai";
+import {
+  createInitialSystemMessage,
+  fauxAssistantMessage,
+  fauxToolCall,
+  Type,
+  type Message,
+} from "@earendil-works/pi-ai";
 import type { GenerationHooks, HookApi } from "@earendil-works/pi-durable";
 import { createRuntime, defaultSettings, readSettings } from "../src/config.ts";
 import { open } from "../src/host.ts";
 import { scanTasks } from "../src/workflow.ts";
 import { explorationSchema, type Note } from "../src/math/contracts.ts";
-import { conversations } from "../src/roles/conversation.ts";
+import { conversations, modelMessages } from "../src/roles/conversation.ts";
 import { createRoles } from "../src/roles/index.ts";
 import { chatgpt } from "../src/roles/chatgpt.ts";
 import type { RoleRuntime } from "../src/roles/types.ts";
@@ -29,6 +35,78 @@ const messages = [
   createInitialSystemMessage("Submit a result", [submission])!,
   { role: "user" as const, content: "Solve", timestamp: 0 },
 ];
+test("role input preserves only valid same-model reasoning and complete tool calls", () => {
+  const runtime = createRuntime(defaultSettings, { key: "fixture" });
+  const model = runtime.models.getModel("openai", "gpt-6-astra")!;
+  const thought = (id: string, status: string | null = "completed") => ({
+    type: "thinking" as const,
+    thinking: id,
+    thinkingSignature: JSON.stringify({
+      type: "reasoning",
+      id,
+      encrypted_content: `encrypted-${id}`,
+      status,
+      summary: [],
+    }),
+  });
+  const failed = {
+    ...fauxAssistantMessage(
+      [
+        thought("completed"),
+        thought("completed"),
+        thought("unfinished", "in_progress"),
+        { type: "thinking", thinking: "unsigned" },
+        {
+          type: "thinking",
+          thinking: "malformed",
+          thinkingSignature: "not JSON",
+        },
+        { type: "text", text: "Failed text" },
+        fauxToolCall("submit_proof", { proof: "FAILED_TOOL" }),
+      ],
+      { stopReason: "error" },
+    ),
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+  };
+  const partial = fauxToolCall("submit_proof", { proof: "PARTIAL_TOOL" });
+  const history: Message[] = [
+    ...messages,
+    failed,
+    ...[
+      { api: "other" },
+      { provider: "other" },
+      { model: "other" },
+      { responseModel: "other" },
+    ].map((identity) => ({
+      ...failed,
+      content: [thought("wrong identity")],
+      ...identity,
+    })),
+    {
+      ...failed,
+      stopReason: "length",
+      content: [
+        thought("completed"),
+        thought("continued", null),
+        { type: "text", text: "Preserved text" },
+        partial,
+      ],
+    },
+  ];
+  const original = structuredClone(history);
+  const replay = modelMessages(history, model)
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => message.content);
+  expect(replay).toEqual([
+    thought("completed"),
+    thought("continued", null),
+    { type: "text", text: "Preserved text" },
+  ]);
+  expect(history).toEqual(original);
+});
+
 test("failed assignment reads and reminder writes stop requests before provider dispatch", async () => {
   const runtime = createRuntime(defaultSettings, { key: "fixture" });
   const before = conversations(runtime.profiles).extension.hooks![0]!
@@ -50,7 +128,7 @@ test("failed assignment reads and reminder writes stop requests before provider 
       },
     } as unknown as HookApi;
     const selected = await before.beforeRequest(
-      { messages, stream },
+      { messages, stream, entries: [] },
       api,
       context,
     );
@@ -83,8 +161,7 @@ const selection = {
       id: "n1",
       summary: "Reflexivity",
       detailedSummary: "Equality is reflexive.",
-      statement: "1 = 1",
-      argument: "By reflexivity, 1 = 1.",
+      text: "1 = 1\n\nBy reflexivity, 1 = 1.",
       support: [],
     },
   ],
@@ -125,8 +202,7 @@ test("direct ChatGPT Explorer sends the index once and accepts only its final an
     id: "prior/n1",
     summary: "Index description",
     detailedSummary: "UNREAD DETAIL",
-    statement: "UNREAD CLAIM",
-    argument: "UNREAD FULL PROOF",
+    text: "UNREAD CLAIM\n\nUNREAD FULL PROOF",
     revision: 0,
     imported: true,
     verified: true,

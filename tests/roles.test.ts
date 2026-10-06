@@ -36,7 +36,7 @@ import {
 } from "../src/roles/index.ts";
 import type { RoleRuntime } from "../src/roles/types.ts";
 import { closedBookResearch, type Research } from "../src/roles/research.ts";
-import { createRuntime } from "../src/config.ts";
+import { capacityError, createRuntime } from "../src/config.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import type { Note, SolverResult } from "../src/math/contracts.ts";
 import { resolveResult, type SubmissionResult } from "../src/math/results.ts";
@@ -44,6 +44,8 @@ import { DefinitionDoc, type Definition } from "../src/definition.ts";
 import { createResearch } from "../src/workflow.ts";
 import { readReport, readUsage } from "../src/report.ts";
 import { readView } from "../src/math/state.ts";
+import { refresh, validateResult } from "../src/math/notes.ts";
+import { acceptedArgument } from "../src/math/argument.ts";
 import type { TaskId } from "@earendil-works/pi-durable";
 
 const context = BACKGROUND_CONTEXT;
@@ -67,8 +69,7 @@ const draft = (id: string, support: string[] = []) => ({
   id,
   summary: `${id} claim`,
   detailedSummary: `${id} detailed claim`,
-  statement: `${id} exact claim`,
-  argument: `${id} secret original proof`,
+  text: `${id} exact claim\n\n${id} secret original proof`,
   support,
 });
 const note = (id: string, support: string[] = []): Note => ({
@@ -81,6 +82,21 @@ const note = (id: string, support: string[] = []): Note => ({
   accepted: false,
   candidate: false,
 });
+const preparedNote = (id: string, support: string[] = []): Note => ({
+  ...note(id, support),
+  checks: [
+    {
+      correctness: {
+        verdict: "PASS",
+        report: "Checked",
+        statement: `${id} exact claim`,
+        premises: [],
+      },
+      source: { verdict: "PASS", report: "Checked" },
+      requirements: { verdict: "PASS", report: "Checked" },
+    },
+  ],
+});
 type Invocation = {
   role:
     "coordinator" | "explorer" | "verifier" | "literature" | "review" | "codex";
@@ -92,8 +108,10 @@ function fixture(
   options: Omit<RoleOptions, "profiles"> = { research: false },
   contextWindow = 131072,
   research?: Research,
+  api?: string,
 ) {
   const provider = fauxProvider({
+    api,
     provider: "openai",
     models: [{ id: "roles", reasoning: true, contextWindow, maxTokens: 8192 }],
   });
@@ -159,6 +177,7 @@ function fixture(
   };
   provider.setResponses([next]);
   const roles = createRoles({ ...options, profiles }, research);
+  const reports: unknown[] = [];
   let activeHarness: Harness;
   const workflow = createResearch(roles, (id, context) =>
     activeHarness.abortTask(id, context),
@@ -205,6 +224,7 @@ function fixture(
       {
         registry,
         models,
+        onReport: (error) => reports.push(error),
         settings: {
           compaction: { enabled: false },
           retry: { enabled: retry, baseDelayMs: 0 },
@@ -225,7 +245,7 @@ function fixture(
     });
     return { harness, root };
   }
-  return { calls, roles, Invoke, workflow, open };
+  return { calls, reports, roles, Invoke, workflow, open };
 }
 
 async function entries(harness: Harness): Promise<EntryRecord[]> {
@@ -258,7 +278,11 @@ test("Explorer retains frozen reads and private submissions across native reopen
     cleaned.push(sessionId),
   );
   const directory = await mkdtemp(join(tmpdir(), "pi-role-explorer-"));
-  const inputNote = { ...note("prior"), imported: true, verified: true };
+  const inputNote = {
+    ...preparedNote("prior"),
+    imported: true,
+    verified: true,
+  };
   let response = 0;
   const provider = fixture(
     (_name, input, transcript) => {
@@ -272,7 +296,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
           task,
           notes: [{ id: inputNote.id, summary: inputNote.summary }],
         });
-        expect(JSON.stringify(transcript)).not.toContain(inputNote.argument);
+        expect(JSON.stringify(transcript)).not.toContain(inputNote.text);
         expect(JSON.stringify(transcript)).not.toContain(
           inputNote.detailedSummary,
         );
@@ -281,6 +305,20 @@ test("Explorer retains frozen reads and private submissions across native reopen
           arguments: { ids: ["prior"], level: "full" },
         };
       }
+      const read = transcript.messages.find(
+        (message) =>
+          message.role === "toolResult" && message.toolName === "read_notes",
+      );
+      if (read?.role !== "toolResult" || read.content[0]?.type !== "text")
+        throw new Error("Expected frozen note read");
+      expect(JSON.parse(read.content[0].text.split("\n\n")[0]!)).toEqual([
+        {
+          id: inputNote.id,
+          detailedSummary: inputNote.detailedSummary,
+          statement: inputNote.checks[0]!.correctness!.statement,
+          text: inputNote.text,
+        },
+      ]);
       if (response === 2)
         return { notes: [draft("n1", ["prior"])], candidate: false };
       expect(JSON.stringify(transcript)).toContain(
@@ -351,7 +389,7 @@ test("Explorer retains frozen reads and private submissions across native reopen
     expect(cleaned).toEqual([provider.calls[0]!.session]);
     current = await provider.open(directory);
     const raw = (await current.harness.waitForTask(id, context)).state.outcome;
-    expect(raw.status).toBe("completed");
+    expect(raw).toMatchObject({ status: "completed" });
     if (raw.status !== "completed") throw new Error(JSON.stringify(raw));
     const reference = raw.result as SubmissionResult;
     const outcome = await resultOf(current.harness, id);
@@ -429,19 +467,41 @@ test("Explorer retains frozen reads and private submissions across native reopen
   }
 });
 
-test("verification reuses completed stages and blinds reconstruction across the dependency chain", async () => {
+test("model-selected proof and comparison batches preserve blindness, IDs, and progress after reopen", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-role-verifier-"));
-  const provider = fixture((name, input) => {
+  let rejectedIds = false;
+  const invalidPrefixes = [[], ["n2"], ["n1", "n1"]];
+  const provider = fixture((name, input, transcript) => {
+    const tool = getCurrentTools(transcript.messages).find(
+      (tool) => tool.name === `submit_${name}`,
+    )!;
+    expect(tool.parameters).toHaveProperty(
+      "properties.results.items.properties.noteId.enum",
+      input.notes.map(({ id }: { id: string }) => id),
+    );
     if (name === "proof") {
       expect(JSON.stringify(input)).not.toContain("secret original proof");
       expect(JSON.stringify(input)).not.toContain("detailed claim");
+      expect(JSON.stringify(input)).not.toContain("Private comparison report");
       expect(
         input.notes.every((note: object) => !Object.hasOwn(note, "summary")),
       ).toBe(true);
-      expect(input.notes.map((value: { id: string }) => value.id)).toEqual([
-        "n1",
-        "n2",
-      ]);
+      expect(input.notes.map(({ id }: { id: string }) => id)).toEqual(
+        input.notes[0].id === "n1" ? ["n1", "n2", "n3"] : ["n3"],
+      );
+      expect(input.support.map(({ id }: { id: string }) => id)).toEqual(
+        input.notes[0].id === "n1" ? [] : ["n1", "n2"],
+      );
+    }
+    if (name === "reconstruction") {
+      for (const note of input.notes)
+        expect(note.text).toBe(draft(note.id).text);
+      expect(input.independent).toEqual(
+        input.notes.map(({ id }: { id: string }) => ({
+          noteId: id,
+          result: { complete: true, proof: "Independent complete proof." },
+        })),
+      );
     }
     const value =
       name === "correctness"
@@ -452,17 +512,40 @@ test("verification reuses completed stages and blinds reconstruction across the 
             correction: {
               summary: "Harmless clarification",
               detailedSummary: null,
-              statement: null,
-              argument: null,
+              text: null,
             },
           }
         : name === "proof"
           ? { proof: "Independent complete proof.", complete: true }
-          : { verdict: "PASS", report: "Checked." };
+          : { verdict: "PASS", report: "Private comparison report" };
+    if (
+      name === "proof" &&
+      input.notes[0].id === "n1" &&
+      invalidPrefixes.length
+    )
+      return {
+        results: invalidPrefixes
+          .shift()!
+          .map((noteId) => ({ noteId, ...value })),
+      };
+    if (name === "proof" && input.notes[0].id === "n3" && !rejectedIds) {
+      rejectedIds = true;
+      return { results: ["n2", "n3"].map((noteId) => ({ noteId, ...value })) };
+    }
+    const selected =
+      name === "proof"
+        ? input.notes.slice(0, 2)
+        : name === "reconstruction"
+          ? input.notes.slice(0, 1)
+          : input.notes;
     return {
-      results: [...input.notes]
-        .reverse()
-        .map((note: { id: string }) => ({ noteId: note.id, ...value })),
+      results: [...selected].reverse().map((note: { id: string }) => ({
+        noteId: note.id,
+        ...value,
+        ...(name === "correctness"
+          ? { statement: `${note.id} exact claim` }
+          : {}),
+      })),
     };
   });
   let current = await provider.open(directory);
@@ -478,7 +561,7 @@ test("verification reuses completed stages and blinds reconstruction across the 
             change.value.model?.some(
               (message) =>
                 message.role === "toolResult" &&
-                message.toolName === "submit_proof" &&
+                message.toolName === "submit_reconstruction" &&
                 !message.isError,
             ),
         )
@@ -495,8 +578,12 @@ test("verification reuses completed stages and blinds reconstruction across the 
             role: "verifier",
             input: {
               task,
-              notes: [note("n1"), { ...note("n2", ["n1"]), candidate: true }],
-              targets: [{ id: "n2", through: "reconstruction" }],
+              notes: [
+                note("n1"),
+                note("n2", ["n1"]),
+                { ...note("n3", ["n2"]), candidate: true },
+              ],
+              targets: [{ id: "n3", through: "reconstruction" }],
             },
           },
           { ownership: { kind: "conversation" } },
@@ -514,7 +601,7 @@ test("verification reuses completed stages and blinds reconstruction across the 
       SolverResult,
       { kind: "verification" }
     >;
-    expect(result.checks).toHaveLength(2);
+    expect(result.checks).toHaveLength(3);
     expect(
       result.checks.every(
         (check) =>
@@ -523,322 +610,659 @@ test("verification reuses completed stages and blinds reconstruction across the 
       ),
     ).toBe(true);
     expect(result.checks[0]!.requirements).toBeUndefined();
-    expect(result.checks[1]!.requirements?.verdict).toBe("PASS");
+    expect(result.checks[1]!.requirements).toBeUndefined();
+    expect(result.checks[2]!.requirements?.verdict).toBe("PASS");
     expect(result.checks[0]!.correction).toEqual({
       revision: 0,
       summary: "Harmless clarification",
     });
-    expect(provider.calls.map(({ name }) => name)).toEqual([
-      "correctness",
-      "requirements",
-      "proof",
-      "reconstruction",
+    expect(
+      provider.calls.map(({ name, input }) => [
+        name,
+        input.notes.map(({ id }: { id: string }) => id),
+      ]),
+    ).toEqual([
+      ["correctness", ["n1", "n2", "n3"]],
+      ["requirements", ["n3"]],
+      ...Array.from({ length: 4 }, () => ["proof", ["n1", "n2", "n3"]]),
+      ["reconstruction", ["n1", "n2"]],
+      ["reconstruction", ["n2"]],
+      ["proof", ["n3"]],
+      ["proof", ["n3"]],
+      ["reconstruction", ["n3"]],
     ]);
+    const proofs = provider.calls.filter(({ name }) => name === "proof");
+    expect(new Set(proofs.slice(0, 4).map(({ session }) => session)).size).toBe(
+      1,
+    );
+    expect(proofs.at(-2)!.session).toBe(proofs.at(-1)!.session);
+    expect(new Set(provider.calls.map(({ session }) => session)).size).toBe(7);
+    expect(JSON.stringify(proofs[3]!.transcript)).toContain(
+      "Submit at least one requested note",
+    );
+    expect(JSON.stringify(proofs.at(-1)!.transcript)).toContain(
+      "Batch results must contain exactly one result per requested note",
+    );
   } finally {
     await current.harness.close(context);
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("failed verification publishes completed checks once and a fresh worker reuses them", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-verifier-failure-"));
-  let proofs = 0,
-    sources = 0,
-    retry = false;
-  const provider = fixture(
-    (name, input) => {
-      if (name === "explorer") return { notes: [draft("n1")], candidate: true };
-      if (name === "proof" && ++proofs === 1)
-        return fauxAssistantMessage([], {
-          stopReason: "error",
-          errorMessage: "Response incomplete: max_messages",
-        });
-      const value =
-        name === "correctness"
-          ? {
-              verdict: "PASS",
-              report: "Checked",
-              premises: ["External theorem"],
-              correction: {
-                summary: "Corrected summary",
-                detailedSummary: null,
-                statement: null,
-                argument: null,
-              },
-            }
-          : name === "proof"
-            ? { complete: true, proof: "Independent proof" }
-            : { verdict: "PASS", report: "Checked" };
-      return {
-        results: input.notes.map(({ id }: { id: string }) => ({
+test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
+  "reconstruction finishes produced proofs before handling %s pending support",
+  async (boundary) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-role-support-"));
+    const refuted = boundary === "refuted";
+    const dependent = boundary === "dependent";
+    const notes = [
+      { ...preparedNote("n1"), imported: boundary === "imported" },
+      preparedNote("n2", ["n1"]),
+      preparedNote("n3", ["n2"]),
+      preparedNote("n4"),
+      preparedNote("n5", dependent || boundary === "imported" ? ["n3"] : []),
+    ];
+    let retry = false;
+    const provider = fixture((name, input) => ({
+      results: input.notes
+        .slice(0, name === "proof" ? 4 : 1)
+        .map(({ id }: { id: string }) => ({
           noteId: id,
-          ...value,
+          ...(name === "proof"
+            ? {
+                complete: id !== "n1" || refuted || retry,
+                proof: "Independent proof",
+              }
+            : {
+                verdict: id === "n1" && refuted ? "FAIL" : "PASS",
+                report: "Checked",
+              }),
         })),
-      };
-    },
-    { research: false },
-    131072,
-    {
-      ...closedBookResearch,
-      retrieval: true,
-      async source(input) {
-        sources++;
-        return input.notes.map(({ id }) => ({
-          noteId: id,
-          verdict: "PASS",
-          report: "Source established",
-        }));
-      },
-    },
-  );
-  provider.roles.coordinator = async (input) => {
-    if (!input.notes.length)
-      return { work: [{ kind: "explorer", guidance: "Prove" }] };
-    if (input.failures.length) {
-      expect(input.failures[0]!.error).toBe(
-        "Response incomplete: max_messages",
+    }));
+    const current = await provider.open(directory);
+    const invoke = async () => {
+      const id = await current.root.commit(
+        (tx) =>
+          tx.createTask(
+            provider.Invoke,
+            {
+              role: "verifier",
+              input: {
+                task,
+                notes,
+                targets: ["n1", "n3", "n4", "n5"].map((id) => ({
+                  id,
+                  through: "reconstruction",
+                })),
+              },
+            },
+            { ownership: { kind: "conversation" } },
+          ),
+        context,
       );
-      expect(input.notes[0]!.verified).toBe(true);
-      if (!retry) return { work: [] };
+      const outcome = await resultOf(current.harness, id);
+      if (outcome.status !== "completed")
+        throw new Error(JSON.stringify(outcome));
+      return outcome.result as Extract<SolverResult, { kind: "verification" }>;
+    };
+    try {
+      const result = await invoke();
+      expect(
+        result.checks.map((check) => [
+          check.noteId,
+          check.reconstruction?.verdict,
+        ]),
+      ).toEqual([
+        ["n1", refuted ? "FAIL" : "INCONCLUSIVE"],
+        ...["n2", "n3"].map((id) => [id, refuted ? "INCONCLUSIVE" : "PASS"]),
+        ["n4", "PASS"],
+        ...(dependent ? [] : [["n5", "PASS"]]),
+      ]);
+      expect(
+        provider.calls.map(({ name, input }) => [
+          name,
+          input.notes.map(({ id }: { id: string }) => id),
+        ]),
+      ).toEqual([
+        ["proof", ["n1", "n2", "n3", "n4", "n5"]],
+        ["reconstruction", ["n1", "n2", "n3", "n4"]],
+        ...(refuted
+          ? []
+          : [
+              ["reconstruction", ["n2", "n3", "n4"]],
+              ["reconstruction", ["n3", "n4"]],
+            ]),
+        ["reconstruction", ["n4"]],
+        ...(dependent
+          ? []
+          : [
+              ["proof", ["n5"]],
+              ["reconstruction", ["n5"]],
+            ]),
+      ]);
+      if (dependent) {
+        for (const check of result.checks)
+          notes.find(({ id }) => id === check.noteId)!.checks.push(check);
+        retry = true;
+        const before = provider.calls.length;
+        expect(await invoke()).toMatchObject({
+          checks: ["n1", "n5"].map((noteId) => ({
+            noteId,
+            reconstruction: { verdict: "PASS" },
+          })),
+        });
+        expect(
+          provider.calls
+            .slice(before)
+            .map(({ name, input }) => [
+              name,
+              input.notes.map(({ id }: { id: string }) => id),
+            ]),
+        ).toEqual([
+          ["proof", ["n1", "n5"]],
+          ["reconstruction", ["n1", "n5"]],
+          ["reconstruction", ["n5"]],
+        ]);
+      }
+    } finally {
+      await current.harness.close(context);
+      await rm(directory, { recursive: true, force: true });
     }
+  },
+);
+
+test.each(["imported", "reconstructed"] as const)(
+  "reconstruction checks ancestors of %s support without repeating its proof",
+  async (middle) => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "pi-role-transitive-support-"),
+    );
+    const support = preparedNote("n2", ["n1"]);
+    if (middle === "imported") support.imported = true;
+    else
+      support.checks.push({
+        reconstruction: {
+          verdict: "PASS",
+          report: "Previously checked",
+          proof: "Earlier proof",
+        },
+      });
+    const provider = fixture((name, input) => {
+      const id = input.notes[0].id;
+      expect(input.support.map(({ id }: { id: string }) => id)).toEqual(
+        id === "n3" ? ["n1", "n2"] : name === "proof" ? ["n2"] : [],
+      );
+      const middleInput = input.support.find(
+        ({ id }: { id: string }) => id === "n2",
+      );
+      expect(middleInput?.text).toBe(
+        name === "reconstruction" && middle === "imported" && id === "n3"
+          ? support.text
+          : undefined,
+      );
+      if (name === "proof")
+        expect(JSON.stringify(input)).not.toContain("secret original proof");
+      return {
+        results: [
+          {
+            noteId: id,
+            ...(name === "proof"
+              ? { complete: true, proof: "Independent proof" }
+              : { verdict: "PASS", report: "Checked" }),
+          },
+        ],
+      };
+    });
+    const current = await provider.open(directory);
+    try {
+      const id = await current.root.commit(
+        (tx) =>
+          tx.createTask(
+            provider.Invoke,
+            {
+              role: "verifier",
+              input: {
+                task,
+                notes: [
+                  preparedNote("n3", ["n2"]),
+                  support,
+                  preparedNote("n1"),
+                ],
+                targets: [{ id: "n3", through: "reconstruction" }],
+              },
+            },
+            { ownership: { kind: "conversation" } },
+          ),
+        context,
+      );
+      expect(await resultOf(current.harness, id)).toMatchObject({
+        status: "completed",
+        result: {
+          checks: ["n1", "n3"].map((noteId) => ({
+            noteId,
+            reconstruction: { verdict: "PASS" },
+          })),
+        },
+      });
+      expect(
+        provider.calls.map(({ name, input }) => [name, input.notes[0].id]),
+      ).toEqual([
+        ["proof", "n1"],
+        ["reconstruction", "n1"],
+        ["proof", "n3"],
+        ["reconstruction", "n3"],
+      ]);
+    } finally {
+      await current.harness.close(context);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each([
+  "malformed",
+  "source IDs",
+  "source premises",
+  "cleanup",
+  "continuation",
+] as const)(
+  "late %s failure preserves completed verification and a fresh worker reuses it",
+  async (failure) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-verifier-failure-"));
+    const invalidSource =
+      failure === "source IDs" || failure === "source premises";
+    let proofs = 0,
+      sources = 0,
+      retry = false,
+      cleanupFailed = false;
+    const provider = fixture(
+      (name, input) => {
+        if (name === "explorer")
+          return { notes: [draft("n1"), draft("n2", ["n1"])], candidate: true };
+        if (name === "proof" && ++proofs > 1 && !retry) {
+          if (failure === "continuation")
+            return "Unsubmitted proof: " + "x".repeat(80000);
+          if (failure === "cleanup")
+            return fauxAssistantMessage([], {
+              stopReason: "error",
+              errorMessage: "Response incomplete: max_messages",
+            });
+          if (failure === "malformed" && proofs === 2)
+            return {
+              results: [
+                { noteId: input.notes[0].id, proof: "Missing completeness" },
+              ],
+            };
+          return "No structured proof submitted.";
+        }
+        const value =
+          name === "correctness"
+            ? {
+                verdict: "PASS",
+                report: "Checked",
+                premises: ["External theorem"],
+                correction: {
+                  summary: "Corrected summary",
+                  detailedSummary: null,
+                  text: null,
+                },
+              }
+            : name === "proof"
+              ? { complete: true, proof: "Independent proof" }
+              : { verdict: "PASS", report: "Checked" };
+        return {
+          results: (name === "proof"
+            ? input.notes.slice(0, 1)
+            : input.notes
+          ).map(({ id }: { id: string }) => ({
+            noteId: id,
+            ...value,
+            ...(name === "correctness"
+              ? { statement: `${id} exact claim` }
+              : {}),
+          })),
+        };
+      },
+      { research: false },
+      failure === "continuation" ? 32768 : 131072,
+      {
+        ...closedBookResearch,
+        retrieval: true,
+        async source(input) {
+          sources++;
+          return input.notes.map(({ id }) => ({
+            noteId: failure === "source IDs" && !retry ? "unrequested" : id,
+            verdict: "PASS",
+            report: "Source established",
+            ...(failure === "source premises" && !retry
+              ? {
+                  kind: "codex-report" as const,
+                  operationId: "mismatched-source",
+                  reportedAt: "2026-10-05T00:00:00Z",
+                  premises: ["Different external theorem"],
+                  passages: [],
+                  correction: {
+                    summary: "Invalid source correction",
+                    detailedSummary: null,
+                    text: null,
+                  },
+                }
+              : {}),
+          }));
+        },
+      },
+    );
+    provider.roles.coordinator = async (input) => {
+      if (!input.notes.length)
+        return { work: [{ kind: "explorer", guidance: "Prove" }] };
+      if (input.failures.length) {
+        expect(input.failures[0]!.error).toEqual(
+          failure === "continuation"
+            ? capacityError
+            : failure === "cleanup"
+              ? "Response incomplete: max_messages"
+              : failure === "source IDs"
+                ? "Batch results must contain exactly one result per requested note"
+                : failure === "source premises"
+                  ? `Source-checked premises do not match correctness for ${input.notes[0]!.id}`
+                  : "proof did not submit a structured result",
+        );
+        expect(input.notes[0]!.verified).toBe(!invalidSource);
+        if (!retry) return { work: [] };
+      }
+      return {
+        work: [
+          {
+            kind: "verifier",
+            notes: [input.notes.at(-1)!.id],
+            through: "reconstruction",
+          },
+        ],
+      };
+    };
+    let current = await provider.open(directory, {
+      task,
+      settings: {
+        profiles: { default: { provider: "openai", model: "roles" } },
+      },
+    });
+    const unregister = registerSessionResourceCleanup((sessionId) => {
+      if (
+        failure === "cleanup" &&
+        !cleanupFailed &&
+        sessionId !== undefined &&
+        sessionId ===
+          provider.calls.filter(({ name }) => name === "proof")[1]?.session
+      ) {
+        cleanupFailed = true;
+        throw new Error("Fixture session cleanup failure");
+      }
+    });
+    try {
+      await current.root.commit(
+        (tx) => provider.workflow.initialize(tx, current.root.id),
+        context,
+      );
+      await current.root.waitForIdle(context);
+      const view = await current.root.commit(
+        (tx) => readView(tx, current.root.id),
+        context,
+      );
+      const failed = view.results.find(
+        ({ outcome }) => outcome.status === "failed",
+      )!;
+      expect(failed.outcome).toMatchObject({
+        status: "failed",
+        result: {
+          checks: ["reconstruction", "requirements"].map((stage) => ({
+            correctness: { verdict: "PASS", premises: ["External theorem"] },
+            ...(!invalidSource
+              ? { source: { verdict: "PASS" }, [stage]: { verdict: "PASS" } }
+              : {}),
+          })),
+        },
+      });
+      if (invalidSource) {
+        expect(view.notes.map((note) => note.checks[0]!.source)).toEqual([
+          undefined,
+          undefined,
+        ]);
+        expect(provider.calls.map(({ name }) => name)).toEqual([
+          "explorer",
+          "correctness",
+        ]);
+      }
+      if (failure === "cleanup")
+        expect(provider.reports.map(String)).toContain(
+          "AggregateError: Failed to cleanup session resources",
+        );
+      expect(view.notes[0]).toMatchObject({
+        verified: !invalidSource,
+        accepted: false,
+        revision: 1,
+        summary: "Corrected summary",
+      });
+      const before = await current.root.commit(
+        (tx) => readView(tx, current.root.id, view.results[0]!.id),
+        context,
+      );
+      expect(before.notes[0]!.checks).toEqual([]);
+      const report = await current.root.commit(
+        (tx) => readReport(tx, current.root.id),
+        context,
+      );
+      expect(
+        report.work.find(({ id }) => id === String(failed.task)),
+      ).toMatchObject({ status: "failed", checkCount: 2 });
+      await current.harness.close(context);
+      current = await provider.open(directory);
+      expect(
+        (
+          await current.root.commit(
+            (tx) => readView(tx, current.root.id),
+            context,
+          )
+        ).notes,
+      ).toEqual(view.notes);
+      retry = true;
+      await current.root.commit(
+        (tx) =>
+          provider.workflow.input(tx, current.root.id, {
+            kind: "guide",
+            id: "retry",
+            text: "Retry the incomplete stage",
+          }),
+        context,
+      );
+      await current.root.waitForIdle(context);
+      const finished = await current.root.commit(
+        (tx) => readReport(tx, current.root.id),
+        context,
+      );
+      expect(finished.status.status).toBe("completed");
+      expect(finished.status.work.failed).toBe(1);
+      expect(finished.notes[0]!.revision).toBe(1);
+      expect(sources).toBe(invalidSource ? 2 : 1);
+      if (failure === "malformed")
+        expect(
+          (await entries(current.harness)).some((entry) =>
+            entry.model?.some(
+              (message) =>
+                message.role === "toolResult" &&
+                message.toolName === "submit_proof" &&
+                message.isError,
+            ),
+          ),
+        ).toBe(true);
+      expect(provider.calls.map(({ name }) => name)).toEqual([
+        "explorer",
+        "correctness",
+        "requirements",
+        "proof",
+        "reconstruction",
+        ...Array(
+          failure === "cleanup" || failure === "continuation"
+            ? 1
+            : failure === "malformed"
+              ? 3
+              : 0,
+        ).fill("proof"),
+        "proof",
+        "reconstruction",
+      ]);
+    } finally {
+      unregister();
+      await current.harness.close(context);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each([true, false])(
+  "an imported candidate needs independent reconstruction, complete=%s, despite cleanup failure",
+  async (complete) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-imported-candidate-"));
+    const imported = {
+      ...note("n1"),
+      imported: true,
+      candidate: true,
+      text: "For every real x >= 1, x squared is at least x.",
+    };
+    const provider = fixture(
+      (name, input, transcript) => {
+        if (name === "reconstruction") {
+          expect(JSON.stringify(transcript)).toContain(
+            "For an imported target, caller trust grants the original result and sources; no original proof is required.",
+          );
+          expect(input.notes[0]).toMatchObject({
+            imported: true,
+            text: imported.text,
+          });
+          expect(input.premises[0].source).toEqual({ kind: "caller-import" });
+        }
+        return {
+          results: [
+            {
+              noteId: "n1",
+              ...(name === "proof"
+                ? {
+                    complete,
+                    proof: complete
+                      ? "x(x-1) >= 0 proves the claim."
+                      : "The proof remains incomplete.",
+                  }
+                : {
+                    verdict: "PASS",
+                    report: "Checked",
+                    ...(name === "correctness"
+                      ? { statement: imported.text, premises: [] }
+                      : {}),
+                  }),
+            },
+          ],
+        };
+      },
+      { research: false },
+      131072,
+      {
+        ...closedBookResearch,
+        async source() {
+          throw new Error("Caller imports already grant source trust");
+        },
+      },
+    );
+    const current = await provider.open(directory);
+    let cleanupFailed = false;
+    const unregister = registerSessionResourceCleanup((sessionId) => {
+      if (
+        !cleanupFailed &&
+        sessionId !== undefined &&
+        sessionId ===
+          provider.calls.find(({ name }) => name === "reconstruction")?.session
+      ) {
+        cleanupFailed = true;
+        throw new Error("Successful comparison cleanup failed");
+      }
+    });
+    try {
+      const id = await current.root.commit(
+        (tx) =>
+          tx.createTask(
+            provider.Invoke,
+            {
+              role: "verifier",
+              input: {
+                task,
+                notes: [imported],
+                targets: [{ id: "n1", through: "reconstruction" }],
+              },
+            },
+            { ownership: { kind: "conversation" } },
+          ),
+        context,
+      );
+      const result = await resultOf(current.harness, id);
+      expect(result.status).toBe("completed");
+      if (result.status !== "completed")
+        throw new Error("Missing imported verification result");
+      const verification = validateResult(result.result, [imported]);
+      if (verification.kind !== "verification")
+        throw new Error("Missing imported verification checks");
+      expect(verification.checks).toHaveLength(1);
+      expect(verification.checks[0]!.source).toBeUndefined();
+      expect(verification.checks[0]!.reconstruction?.verdict).toBe(
+        complete ? "PASS" : "INCONCLUSIVE",
+      );
+      imported.checks.push(...verification.checks);
+      expect(refresh([imported])[0]!.accepted).toBe(complete);
+      if (complete) {
+        expect(acceptedArgument([imported], imported.id)).toContain(
+          "x(x-1) >= 0 proves the claim.",
+        );
+        expect(imported.text).toBe(
+          "For every real x >= 1, x squared is at least x.",
+        );
+      } else
+        expect(() => acceptedArgument([imported], imported.id)).toThrow(
+          "No accepted argument",
+        );
+      expect(cleanupFailed).toBe(true);
+      expect(provider.reports.map(String)).toContain(
+        "AggregateError: Failed to cleanup session resources",
+      );
+      expect(provider.calls.map(({ name }) => name)).toEqual([
+        "correctness",
+        "requirements",
+        "proof",
+        "reconstruction",
+      ]);
+    } finally {
+      unregister();
+      await current.harness.close(context);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("notes without a mathematical claim skip source and reconstruction", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-role-context-note-"));
+  const provider = fixture((name, input) => {
+    expect(name).toBe("correctness");
+    expect(input.notes[0].text).toBe("Would a different construction help?");
     return {
-      work: [
+      results: [
         {
-          kind: "verifier",
-          notes: [input.notes[0]!.id],
-          through: "reconstruction",
+          noteId: "n1",
+          verdict: "PASS",
+          statement: null,
+          premises: [],
+          report: "The note records a question without asserting a result.",
         },
       ],
     };
-  };
-  let current = await provider.open(directory, {
-    task,
-    settings: { profiles: { default: { provider: "openai", model: "roles" } } },
   });
+  const current = await provider.open(directory);
   try {
-    await current.root.commit(
-      (tx) => provider.workflow.initialize(tx, current.root.id),
-      context,
-    );
-    await current.root.waitForIdle(context);
-    const view = await current.root.commit(
-      (tx) => readView(tx, current.root.id),
-      context,
-    );
-    const failed = view.results.find(
-      ({ outcome }) => outcome.status === "failed",
-    )!;
-    expect(failed.outcome).toMatchObject({
-      status: "failed",
-      result: {
-        checks: [
-          {
-            correctness: { verdict: "PASS" },
-            source: { verdict: "PASS" },
-            requirements: { verdict: "PASS" },
-          },
-        ],
-      },
-    });
-    expect(view.notes[0]).toMatchObject({
-      verified: true,
-      accepted: false,
-      revision: 1,
-      summary: "Corrected summary",
-    });
-    const before = await current.root.commit(
-      (tx) => readView(tx, current.root.id, view.results[0]!.id),
-      context,
-    );
-    expect(before.notes[0]!.checks).toEqual([]);
-    const report = await current.root.commit(
-      (tx) => readReport(tx, current.root.id),
-      context,
-    );
-    expect(
-      report.work.find(({ id }) => id === String(failed.task)),
-    ).toMatchObject({ status: "failed", checkCount: 1 });
-    await current.harness.close(context);
-    current = await provider.open(directory);
-    expect(
-      (
-        await current.root.commit(
-          (tx) => readView(tx, current.root.id),
-          context,
-        )
-      ).notes,
-    ).toEqual(view.notes);
-    retry = true;
-    await current.root.commit(
-      (tx) =>
-        provider.workflow.input(tx, current.root.id, {
-          kind: "guide",
-          id: "retry",
-          text: "Retry the incomplete stage",
-        }),
-      context,
-    );
-    await current.root.waitForIdle(context);
-    const finished = await current.root.commit(
-      (tx) => readReport(tx, current.root.id),
-      context,
-    );
-    expect(finished.status.status).toBe("completed");
-    expect(finished.status.work.failed).toBe(1);
-    expect(finished.notes[0]!.revision).toBe(1);
-    expect(sources).toBe(1);
-    expect(provider.calls.map(({ name }) => name)).toEqual([
-      "explorer",
-      "correctness",
-      "requirements",
-      "proof",
-      "proof",
-      "reconstruction",
-    ]);
-  } finally {
-    await current.harness.close(context);
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("source recovery retains evidence and corrections while incomplete reconstruction cannot pass", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-role-custom-source-"));
-  let sourceCalls = 0;
-  const premise = "Every finite example satisfies the external theorem.";
-  const source = {
-    verdict: "PASS" as const,
-    report: "SOURCE_REPORT_SENTINEL: stronger unrelated target theorem.",
-    kind: "codex-report" as const,
-    operationId: "custom-source",
-    reportedAt: "2026-10-04T00:00:00Z",
-    premises: [premise],
-    passages: [
-      {
-        premise: 0,
-        id: "external/0",
-        statement: premise,
-        url: "https://example.org/theorem",
-        quote: "SOURCE_QUOTATION_SENTINEL",
-      },
-    ],
-  };
-  const provider = fixture(
-    (name, input) => {
-      if (name === "requirements") {
-        expect(input.notes[0].summary).toBe("Source-checked clarification");
-        expect(input.sources).toEqual([
-          {
-            noteId: "n1",
-            premises: [premise],
-            source: {
-              kind: "source-check",
-              verdict: "PASS",
-              operationId: "custom-source",
-              passages: [
-                {
-                  id: "external/0",
-                  url: "https://example.org/theorem",
-                  premise: 0,
-                },
-              ],
-            },
-          },
-        ]);
-        expect(JSON.stringify(input)).not.toContain(source.report);
-        expect(JSON.stringify(input)).not.toContain(
-          "SOURCE_QUOTATION_SENTINEL",
-        );
-      }
-      if (name === "proof") {
-        expect(input.notes[0].premises).toEqual([premise]);
-        expect(JSON.stringify(input)).not.toContain("secret original proof");
-        expect(JSON.stringify(input)).not.toContain(source.report);
-        expect(JSON.stringify(input)).not.toContain(
-          "SOURCE_QUOTATION_SENTINEL",
-        );
-        expect(input.notes[0].statement).toBe("n1 exact claim");
-      }
-      if (name === "reconstruction")
-        expect(input.premises).toEqual([
-          {
-            noteId: "n1",
-            premises: [premise],
-            source: {
-              kind: "source-check",
-              verdict: "PASS",
-              operationId: "custom-source",
-              passages: [
-                {
-                  id: "external/0",
-                  url: "https://example.org/theorem",
-                  premise: 0,
-                },
-              ],
-            },
-          },
-        ]);
-      const result =
-        name === "correctness"
-          ? {
-              verdict: "PASS",
-              report: "Conditional on the exact theorem.",
-              premises: [premise],
-            }
-          : name === "proof"
-            ? {
-                proof: "Incomplete argument using the permitted theorem.",
-                complete: false,
-              }
-            : { verdict: "PASS", report: "Checked." };
-      return { results: [{ noteId: "n1", ...result }] };
-    },
-    { research: false },
-    131072,
-    {
-      ...closedBookResearch,
-      retrieval: true,
-      async source(input) {
-        sourceCalls++;
-        expect(
-          input.notes.map(({ id, premises }) => ({ id, premises })),
-        ).toEqual([{ id: "n1", premises: [premise] }]);
-        return [
-          {
-            noteId: "n1",
-            ...source,
-            correction: {
-              summary: "Source-checked clarification",
-              detailedSummary: null,
-              statement: null,
-              argument: null,
-            },
-          },
-        ];
-      },
-    },
-  );
-  let current = await provider.open(directory);
-  try {
-    const closed = Promise.withResolvers<void>();
-    let closing = false;
-    current.harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" &&
-            change.value.model?.some(
-              (message) =>
-                message.role === "toolResult" &&
-                message.toolName === "submit_requirements" &&
-                !message.isError,
-            ),
-        )
-      ) {
-        closing = true;
-        void current.harness.close(context).then(closed.resolve, closed.reject);
-      }
-    });
     const id = await current.root.commit(
       (tx) =>
         tx.createTask(
@@ -847,7 +1271,9 @@ test("source recovery retains evidence and corrections while incomplete reconstr
             role: "verifier",
             input: {
               task,
-              notes: [{ ...note("n1"), candidate: true }],
+              notes: [
+                { ...note("n1"), text: "Would a different construction help?" },
+              ],
               targets: [{ id: "n1", through: "reconstruction" }],
             },
           },
@@ -855,44 +1281,344 @@ test("source recovery retains evidence and corrections while incomplete reconstr
         ),
       context,
     );
-    current.harness.resume();
-    await closed.promise;
-    expect(sourceCalls).toBe(1);
-    current = await provider.open(directory);
-    const result = await resultOf(current.harness, id);
-    expect(result).toMatchObject({
+    expect(await resultOf(current.harness, id)).toEqual({
       status: "completed",
       result: {
+        kind: "verification",
         checks: [
           {
-            source,
-            correction: {
-              revision: 0,
-              summary: "Source-checked clarification",
+            noteId: "n1",
+            correctness: {
+              verdict: "INCONCLUSIVE",
+              statement: null,
+              premises: [],
+              report: expect.any(String),
             },
-            reconstruction: { verdict: "INCONCLUSIVE" },
           },
         ],
       },
     });
-    expect(sourceCalls).toBe(1);
-    expect(provider.calls.map(({ name }) => name)).toEqual([
-      "correctness",
-      "requirements",
-      "proof",
-      "reconstruction",
-    ]);
+    expect(provider.calls.map(({ name }) => name)).toEqual(["correctness"]);
   } finally {
     await current.harness.close(context);
     await rm(directory, { recursive: true, force: true });
   }
 });
 
+test.each(["request", "incomplete.max_messages", "length"] as const)(
+  "source recovery preserves checks and rejects incomplete proofs after %s",
+  async (reason) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-role-custom-source-"));
+    let sourceCalls = 0;
+    let proofs = 0;
+    const premise = "Every finite example satisfies the external theorem.";
+    const source = {
+      verdict: "PASS" as const,
+      report: "SOURCE_REPORT_SENTINEL: stronger unrelated target theorem.",
+      kind: "codex-report" as const,
+      operationId: "custom-source",
+      reportedAt: "2026-10-04T00:00:00Z",
+      premises: [premise],
+      passages: [
+        {
+          premise: 0,
+          id: "external/0",
+          statement: premise,
+          url: "https://example.org/theorem",
+          quote: "SOURCE_QUOTATION_SENTINEL",
+        },
+      ],
+    };
+    const provider = fixture(
+      (name, input, transcript) => {
+        input = JSON.parse(
+          String(
+            transcript.messages.find((message) => message.role === "user")!
+              .content,
+          ),
+        );
+        if (name === "proof" && reason !== "request" && ++proofs === 1)
+          return {
+            ...fauxAssistantMessage(
+              [
+                {
+                  type: "thinking",
+                  thinking: "Completed preliminary lemma",
+                  thinkingSignature: JSON.stringify({
+                    type: "reasoning",
+                    id: "rs_complete",
+                    status: "completed",
+                    encrypted_content: "encrypted-complete",
+                    summary: [],
+                  }),
+                },
+                { type: "text", text: "Interrupted proof text" },
+                fauxToolCall("submit_proof", {
+                  results: [
+                    {
+                      noteId: "n1",
+                      proof: "PARTIAL_TOOL_PROOF",
+                      complete: true,
+                    },
+                  ],
+                }),
+              ],
+              { stopReason: reason === "length" ? "length" : "error" },
+            ),
+            rawStopReason:
+              reason === "length" ? "incomplete.max_output_tokens" : reason,
+            errorMessage:
+              reason === "length"
+                ? undefined
+                : "Response incomplete: max_messages",
+          };
+        if (name === "proof" && proofs > 1) {
+          const body = JSON.stringify(transcript);
+          expect(body).toContain("Completed preliminary lemma");
+          expect(body).not.toContain("PARTIAL_TOOL_PROOF");
+          expect(body).not.toContain("missing_result");
+          if (reason !== "length")
+            expect(body).not.toContain("Interrupted proof text");
+        }
+        if (name === "requirements") {
+          expect(input.notes[0].summary).toBe("Source-checked clarification");
+          expect(input.sources).toEqual([
+            {
+              noteId: "n1",
+              premises: [premise],
+              source: {
+                kind: "source-check",
+                verdict: "PASS",
+                operationId: "custom-source",
+                passages: [
+                  {
+                    id: "external/0",
+                    url: "https://example.org/theorem",
+                    premise: 0,
+                  },
+                ],
+              },
+            },
+          ]);
+          expect(JSON.stringify(input)).not.toContain(source.report);
+          expect(JSON.stringify(input)).not.toContain(
+            "SOURCE_QUOTATION_SENTINEL",
+          );
+        }
+        if (name === "proof") {
+          const tool = getCurrentTools(transcript.messages).find(
+            (tool) => tool.name === "submit_proof",
+          )!;
+          expect(JSON.stringify(tool.parameters)).toContain(
+            "lack of a fresh source search does not make this proof incomplete",
+          );
+          expect(input.notes[0].premises).toEqual([premise]);
+          expect(JSON.stringify(input)).not.toContain("secret original proof");
+          expect(JSON.stringify(input)).not.toContain(source.report);
+          expect(JSON.stringify(input)).not.toContain(
+            "SOURCE_QUOTATION_SENTINEL",
+          );
+          expect(input.notes[0].statement).toBe("n1 exact claim");
+        }
+        if (name === "reconstruction")
+          expect(input.premises).toEqual([
+            {
+              noteId: "n1",
+              premises: [premise],
+              source: {
+                kind: "source-check",
+                verdict: "PASS",
+                operationId: "custom-source",
+                passages: [
+                  {
+                    id: "external/0",
+                    url: "https://example.org/theorem",
+                    premise: 0,
+                  },
+                ],
+              },
+            },
+          ]);
+        const result =
+          name === "correctness"
+            ? {
+                verdict: "PASS",
+                report: "Conditional on the exact theorem.",
+                statement: "n1 exact claim",
+                premises: [premise],
+              }
+            : name === "proof"
+              ? {
+                  proof: "Argument using the permitted theorem.",
+                  complete: reason === "incomplete.max_messages",
+                }
+              : { verdict: "PASS", report: "Checked." };
+        return { results: [{ noteId: "n1", ...result }] };
+      },
+      { research: false },
+      131072,
+      {
+        ...closedBookResearch,
+        retrieval: true,
+        async source(input) {
+          sourceCalls++;
+          expect(
+            input.notes.map(({ id, premises }) => ({ id, premises })),
+          ).toEqual([{ id: "n1", premises: [premise] }]);
+          return [
+            {
+              noteId: "n1",
+              ...source,
+              correction: {
+                summary: "Source-checked clarification",
+                detailedSummary: null,
+                text: null,
+              },
+            },
+          ];
+        },
+      },
+      "openai-responses",
+    );
+    let current = await provider.open(directory, undefined, true);
+    try {
+      const closed = Promise.withResolvers<void>();
+      let closing = false;
+      current.harness.subscribeCommits(({ changes }) => {
+        if (
+          !closing &&
+          changes.some(
+            (change) =>
+              change.type === "entry" &&
+              change.value.model?.some((message) =>
+                reason === "request"
+                  ? message.role === "toolResult" &&
+                    message.toolName === "submit_requirements" &&
+                    !message.isError
+                  : message.role === "assistant" &&
+                    message.rawStopReason ===
+                      (reason === "length"
+                        ? "incomplete.max_output_tokens"
+                        : reason),
+              ),
+          )
+        ) {
+          closing = true;
+          void current.harness
+            .close(context)
+            .then(closed.resolve, closed.reject);
+        }
+      });
+      const id = await current.root.commit(
+        (tx) =>
+          tx.createTask(
+            provider.Invoke,
+            {
+              role: "verifier",
+              input: {
+                task,
+                notes: [{ ...note("n1"), candidate: true }],
+                targets: [{ id: "n1", through: "reconstruction" }],
+              },
+            },
+            { ownership: { kind: "conversation" } },
+          ),
+        context,
+      );
+      current.harness.resume();
+      await closed.promise;
+      expect(sourceCalls).toBe(1);
+      current = await provider.open(directory, undefined, true);
+      const result = await resultOf(current.harness, id);
+      expect(result).toMatchObject({
+        status: "completed",
+        result: {
+          checks: [
+            {
+              source,
+              correction: {
+                revision: 0,
+                summary: "Source-checked clarification",
+              },
+              reconstruction: {
+                verdict:
+                  reason === "incomplete.max_messages"
+                    ? "PASS"
+                    : "INCONCLUSIVE",
+              },
+            },
+          ],
+        },
+      });
+      expect(sourceCalls).toBe(1);
+      expect(provider.calls.map(({ name }) => name)).toEqual([
+        "correctness",
+        "requirements",
+        ...(reason === "request" ? [] : ["proof"]),
+        "proof",
+        "reconstruction",
+      ]);
+      const proofCalls = provider.calls.filter(({ name }) => name === "proof");
+      if (proofCalls.length > 1) {
+        expect(proofCalls[1]!.session).toBe(proofCalls[0]!.session);
+        expect(
+          proofCalls[1]!.transcript.messages.find(
+            (message) => message.role === "user",
+          ),
+        ).toEqual(
+          proofCalls[0]!.transcript.messages.find(
+            (message) => message.role === "user",
+          ),
+        );
+      }
+      expect(
+        (await entries(current.harness)).filter(
+          (entry) =>
+            ToolResultEntry.is(entry) &&
+            entry.model?.some(
+              (message) =>
+                message.role === "toolResult" &&
+                message.toolName === "submit_proof",
+            ),
+        ),
+      ).toHaveLength(1);
+      const mismatched = preparedNote("n1");
+      mismatched.checks[0]!.source = source;
+      const rejected = await current.root.commit(
+        (tx) =>
+          tx.createTask(
+            provider.Invoke,
+            {
+              role: "verifier",
+              input: {
+                task,
+                notes: [mismatched],
+                targets: [{ id: "n1", through: "reconstruction" }],
+              },
+            },
+            { ownership: { kind: "conversation" } },
+          ),
+        context,
+      );
+      expect(await resultOf(current.harness, rejected)).toMatchObject({
+        status: "faulted",
+        error: {
+          message: "Source-checked premises do not match correctness for n1",
+        },
+      });
+      expect(provider.calls).toHaveLength(reason === "request" ? 4 : 5);
+    } finally {
+      await current.harness.close(context);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 async function fakeCodex(directory: string) {
   const executable = join(directory, "codex-fixture");
   await writeFile(
     executable,
-    `#!${process.execPath}\nconst input = await Bun.stdin.json();\nif (input.assignment && !process.argv.includes('web_search="disabled"')) throw new Error("Worker enabled web search");\nif (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }\nlet value;\nif (input.query || input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",statement:"Finding",argument:"Evidence",support:[]}],...(input.assignment?{candidate:false}:{})};\nelse if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};\nelse value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));\nconsole.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));\n`,
+    `#!${process.execPath}\nconst input = await Bun.stdin.json();\nif (input.assignment && !process.argv.includes('web_search="disabled"')) throw new Error("Worker enabled web search");\nif (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }\nlet value;\nif (input.query || input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[]}],...(input.assignment?{candidate:false}:{})};\nelse if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};\nelse value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));\nconsole.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));\nconsole.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));\n`,
   );
   await chmod(executable, 0o700);
   return executable;
@@ -1123,29 +1849,36 @@ test("built-in Coordinator excludes active literature and rejects multiple Explo
   }
 });
 
-test.each([false, true])(
-  "truncated Explorer responses fail atomically after prior submission=%s",
-  async (submitted) => {
+test.each([
+  [false, 2, 2],
+  [true, 2, 2],
+  [false, 16, 9],
+] as const)(
+  "truncated Explorer responses retain only prior complete submissions (saved=%s, allowance=%s, calls=%s)",
+  async (submitted, allowance, expectedCalls) => {
     const directory = await mkdtemp(join(tmpdir(), "pi-role-truncated-"));
     const cleaned: (string | undefined)[] = [];
     const unregister = registerSessionResourceCleanup((sessionId) =>
       cleaned.push(sessionId),
     );
     let response = 0;
-    const provider = fixture(() => {
-      response++;
-      if (submitted && response === 1)
-        return { notes: [draft("n1")], candidate: false };
-      return fauxAssistantMessage(
-        [
-          fauxToolCall("submit_explorer", {
-            notes: [draft("n2")],
-            candidate: true,
-          }),
-        ],
-        { stopReason: "length" },
-      );
-    });
+    const provider = fixture(
+      () => {
+        response++;
+        if (submitted && response === 1)
+          return { notes: [draft("n1")], candidate: false };
+        return fauxAssistantMessage(
+          [
+            fauxToolCall("submit_explorer", {
+              notes: [draft("n2")],
+              candidate: true,
+            }),
+          ],
+          { stopReason: "length" },
+        );
+      },
+      { research: false, maxExplorerResponses: allowance },
+    );
     const current = await provider.open(directory, {
       task,
       settings: {
@@ -1167,16 +1900,25 @@ test.each([false, true])(
           ),
         context,
       );
-      const outcome = (await current.harness.waitForTask(id, context)).state
-        .outcome;
-      expect(outcome).toMatchObject({
-        status: "failed",
-        error: {
-          message:
-            "explorer response was truncated; the worker result was not published",
-        },
-      });
-      expect(provider.calls).toHaveLength(submitted ? 2 : 1);
+      const outcome = await resultOf(current.harness, id);
+      expect(outcome).toMatchObject(
+        submitted
+          ? {
+              status: "completed",
+              result: {
+                kind: "notes",
+                candidate: false,
+                notes: [{ id: "n1" }],
+              },
+            }
+          : {
+              status: "failed",
+              error: {
+                message: "explorer did not submit a structured result",
+              },
+            },
+      );
+      expect(provider.calls).toHaveLength(expectedCalls);
       expect(cleaned).toEqual([provider.calls[0]!.session]);
       const retained = await entries(current.harness);
       expect(retained.filter(ToolResultEntry.is)).toHaveLength(
@@ -1187,7 +1929,7 @@ test.each([false, true])(
         context,
       );
       expect(report.notes).toEqual([]);
-      expect(report.result).toBeUndefined();
+      if (!submitted) expect(report.result).toBeUndefined();
     } finally {
       await current.harness.close(context);
       unregister();
@@ -1211,7 +1953,7 @@ test("capacity after a frozen read hands off valid private notes without another
   try {
     const large = {
       ...note("large"),
-      argument: "exact mathematical text ".repeat(20000),
+      text: "exact mathematical text ".repeat(20000),
       imported: true,
       verified: true,
     };
@@ -1308,9 +2050,7 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
             role: "explorer",
             input: {
               task,
-              notes: [
-                { ...note("prior"), argument: "sensitive full argument" },
-              ],
+              notes: [{ ...note("prior"), text: "sensitive full argument" }],
               guidance: "Continue",
             },
           },
@@ -1468,7 +2208,12 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
         noteId: note.id,
         verdict: "PASS",
         report: "Conditional on the exact premise",
-        ...(name === "correctness" ? { premises: ["External premise"] } : {}),
+        ...(name === "correctness"
+          ? {
+              statement: `${note.id} exact claim`,
+              premises: ["External premise"],
+            }
+          : {}),
       })),
     }),
     {
@@ -1590,7 +2335,7 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
         entry.data.workspace.startsWith(join(directory, "artifacts")),
       )!.data;
     expect(worker.result).toMatchObject({
-      notes: [{ argument: expect.stringContaining(`Artifacts: ${workspace}`) }],
+      notes: [{ text: expect.stringContaining(`Artifacts: ${workspace}`) }],
     });
     expect(await readFile(join(workspace, "input.json"), "utf8")).toContain(
       "finite construction",

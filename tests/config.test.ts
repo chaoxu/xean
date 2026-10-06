@@ -393,7 +393,7 @@ test("native stream routes require and preserve usage attribution headers", asyn
   expect(faux.state.callCount).toBe(1);
 });
 
-test("caller native custom-provider routes retain context guards", async () => {
+test("native custom-provider routes guard implicit limits and clamp explicit ceilings", async () => {
   const faux = fauxProvider({
     provider: "custom",
     models: [{ id: "small", contextWindow: 8192, maxTokens: 1024 }],
@@ -415,7 +415,45 @@ test("caller native custom-provider routes retain context guards", async () => {
     ).errorMessage,
   ).toBe(capacityError);
   expect(faux.state.callCount).toBe(0);
-  faux.setResponses([fauxAssistantMessage("ok")]);
+  faux.setResponses([
+    (_context, options) => {
+      expect(options?.maxTokens).toBe(512);
+      return fauxAssistantMessage("ok");
+    },
+    (_context, options) => {
+      expect(options!.maxTokens!).toBeLessThan(512);
+      expect(options!.maxTokens!).toBeGreaterThan(400);
+      return fauxAssistantMessage("ok");
+    },
+    fauxAssistantMessage("ok"),
+  ]);
+  const constrained: Context = {
+    messages: [{ role: "user", content: "x".repeat(14336), timestamp: 0 }],
+  };
+  const first = await complete(runtime, "proof", constrained, {
+    maxTokens: 512,
+  });
+  expect(first.stopReason).toBe("stop");
+  expect(
+    (
+      await complete(
+        runtime,
+        "proof",
+        {
+          messages: [
+            ...constrained.messages,
+            first,
+            {
+              role: "user",
+              content: "x".repeat(100),
+              timestamp: first.timestamp + 1,
+            },
+          ],
+        },
+        { maxTokens: 512 },
+      )
+    ).stopReason,
+  ).toBe("stop");
   const retried = [
     input.messages[0]!,
     fauxAssistantMessage("", {
@@ -430,5 +468,5 @@ test("caller native custom-provider routes retain context guards", async () => {
       })
     ).stopReason,
   ).toBe("stop");
-  expect(faux.state.callCount).toBe(1);
+  expect(faux.state.callCount).toBe(3);
 });

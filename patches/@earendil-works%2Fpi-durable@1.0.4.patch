@@ -9,7 +9,7 @@
 -                const replaced = await hook({ messages }, runtime, context);
 -                if (replaced !== undefined)
 -                    messages = replaced.messages;
-+                const replaced = await hook({ messages, stream }, runtime, context);
++                const replaced = await hook({ messages, stream, entries: view.entries }, runtime, context);
 +                messages = replaced?.messages ?? messages;
 +                stream = replaced?.stream ?? stream;
              });
@@ -44,7 +44,7 @@
              // never gets past it, so it never leaves a partial.
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -537,11 +537,13 @@
+@@ -537,11 +537,15 @@
  export type HookResult<T> = T | undefined | Promise<T | undefined>;
  /** Hooks of the built-in generation task. */
  export interface GenerationHooks {
@@ -53,6 +53,8 @@
      beforeRequest(request: {
          readonly messages: readonly Message[];
 +        readonly stream: Models["streamSimple"];
++        /** Raw active entries at this request's cutoff, before model filtering. */
++        readonly entries: readonly EntryRecord[];
      }, api: HookApi, context: Context): HookResult<{
 -        readonly messages: readonly Message[];
 +        readonly messages?: readonly Message[];
