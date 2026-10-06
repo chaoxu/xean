@@ -25,7 +25,7 @@ import {
   type Roles,
 } from "../src/workflow.ts";
 import { DefinitionDoc } from "../src/definition.ts";
-import { readView } from "../src/math/state.ts";
+import { Events, readView } from "../src/math/state.ts";
 import { readReport } from "../src/report.ts";
 import { RoleFailure } from "../src/roles/types.ts";
 import type { Note } from "../src/math/contracts.ts";
@@ -258,9 +258,6 @@ test("worker failures reach Coordinator, which chooses whether and how to retry"
     expect(attempt).toBe(2);
     const current = await view();
     expect(current.notes).toHaveLength(1);
-    expect(
-      current.results.filter((result) => result.outcome.status === "faulted"),
-    ).toHaveLength(1);
   } finally {
     await harness.close(context);
   }
@@ -339,8 +336,17 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
       expect(outcome.status).toBe(mode === "cancelled" ? "aborted" : "faulted");
       expect(outcome.result).toBeUndefined();
       const current = await view();
+      const events = await root.commit(
+        (tx) => tx.scanEntries({ conversationId: root.id }, 128),
+        context,
+      );
       expect(
-        current.results.filter((result) => result.task === worker!.id),
+        events.items.filter(
+          (entry) =>
+            Events.is(entry) &&
+            entry.data.type === "result" &&
+            entry.data.task === worker!.id,
+        ),
       ).toHaveLength(1);
       expect(current.notes).toHaveLength(1);
       expect(current.notes[0]).toMatchObject({
@@ -458,7 +464,6 @@ test("Verifier recovery retains its admission cutoff after a harmless correction
     expect(carriedOnClose).toBe(true);
     owner = await setup(roles, await openNodeJsonlStorage(directory, context));
     expect((await owner.view()).notes[0]!.checks).toEqual([]);
-    expect((await owner.view()).results).toEqual([]);
     expect(
       (await owner.harness.getTask(worker!.id, context))!.state.outcome,
     ).toBeUndefined();

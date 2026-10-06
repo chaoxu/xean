@@ -1,4 +1,3 @@
-import type { JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import {
   defineEntry,
@@ -6,7 +5,6 @@ import {
   type Cursor,
   type EntryId,
   type TaskId,
-  type TaskOutcome,
   type Tx,
   type TypedEntry,
 } from "@earendil-works/pi-durable";
@@ -34,8 +32,6 @@ export type MathView = {
   notes: Note[];
   guidance: string[];
   inputs: { id: EntryId; command: SolverCommand }[];
-  results: { id: EntryId; task: TaskId; outcome: TaskOutcome<JsonValue> }[];
-  cutoff?: EntryId;
 };
 
 /** Replay immutable root entries and referenced outcomes; persist no second corpus. */
@@ -56,9 +52,7 @@ export async function readView(
     cursor = page.next;
   } while (cursor);
   entries.reverse();
-  const view: MathView = { notes: [], guidance: [], inputs: [], results: [] };
-  if (cutoff !== undefined || entries.length)
-    view.cutoff = cutoff ?? entries.at(-1)!.id;
+  const view: MathView = { notes: [], guidance: [], inputs: [] };
   const inputIds = new Set<string>();
   const resultIds = new Set<TaskId>();
   const append = (
@@ -119,7 +113,6 @@ export async function readView(
           `Result does not reference a settled worker in this campaign: ${event.task}`,
         );
       const outcome = worker.state.outcome;
-      view.results.push({ id: entry.id, task: worker.id, outcome });
       const standalone =
         worker.input !== null &&
         typeof worker.input === "object" &&

@@ -629,7 +629,6 @@ test("native result references preserve frozen views and late corrections across
     });
     expect(stagePending(latest.notes[1]!, "correctness")).toBe(true);
     expect(latest.notes[1]!.checks).toEqual([{ requirements: pass }]);
-    expect(latest.results).toHaveLength(2);
     expect(latest.guidance).toHaveLength(129);
     const stored = await harness.commit((tx) => tx.task(worker), context);
     expect(stored!.state.outcome).toMatchObject({

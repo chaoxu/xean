@@ -132,12 +132,10 @@ async function send(target: string, command: OwnerCommand) {
   ) {
     if (flags.expectedOwnerId !== undefined)
       throw new Error("Execution overrides require local ownership");
-    return withOwner(path, undefined, async (owner) =>
-      print(await controlCommand(owner, command)),
-    );
+  } else {
+    const receipt = await requestOwner(path, command, flags.expectedOwnerId);
+    if (receipt !== undefined) return print(receipt);
   }
-  const receipt = await requestOwner(path, command, flags.expectedOwnerId);
-  if (receipt !== undefined) return print(receipt);
   return withOwner(path, undefined, async (owner) =>
     print(await controlCommand(owner, command)),
   );
@@ -185,10 +183,7 @@ program
   });
 program.command("export <campaign>").action(async (campaign: string) => {
   const report = await inspect(campaignPath(campaign), readReport);
-  if (
-    report.status.status !== "completed" ||
-    report.status.acceptedNoteId === null
-  )
+  if (report.status.acceptedNoteId === null)
     throw new Error("No accepted argument");
   await Bun.write(
     Bun.stdout,

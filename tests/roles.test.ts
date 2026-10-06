@@ -43,7 +43,7 @@ import { resolveResult, type SubmissionResult } from "../src/math/results.ts";
 import { DefinitionDoc, type Definition } from "../src/definition.ts";
 import { createResearch, scanTasks } from "../src/workflow.ts";
 import { readReport, readUsage } from "../src/report.ts";
-import { readView } from "../src/math/state.ts";
+import { Events, readView } from "../src/math/state.ts";
 import { refresh, validateResult } from "../src/math/notes.ts";
 import { acceptedArgument } from "../src/math/argument.ts";
 import type { TaskId } from "@earendil-works/pi-durable";
@@ -832,11 +832,11 @@ test("standalone reconstruction retains completed checks and corrections after a
       context,
     );
     await current.root.waitForIdle(context);
-    const view = await current.root.commit(
-      (tx) => readView(tx, current.root.id),
+    const workers = await current.root.commit(
+      (tx) => scanTasks(tx, current.root.id, "research.worker"),
       context,
     );
-    expect(view.results[0]!.outcome).toMatchObject({
+    expect(workers[0]!.state.outcome).toMatchObject({
       status: "failed",
       error: { message: "Comparison unavailable" },
       result: {
@@ -1099,10 +1099,16 @@ test.each([
         (tx) => readView(tx, current.root.id),
         context,
       );
-      const failed = view.results.find(
-        ({ outcome }) => outcome.status === "failed",
+      const report = await current.root.commit(
+        (tx) => readReport(tx, current.root.id, { records: true }),
+        context,
+      );
+      const failed = report.tasks!.find(
+        (task) =>
+          task.kind === "research.worker" &&
+          task.state.outcome?.status === "failed",
       )!;
-      expect(failed.outcome).toMatchObject({
+      expect(failed.state.outcome).toMatchObject({
         status: "failed",
         result: {
           checks: ["reconstruction", "requirements"].map((stage) => ({
@@ -1133,17 +1139,16 @@ test.each([
         revision: 1,
         summary: "Corrected summary",
       });
+      const published = report.records!.find(
+        (entry) => Events.is(entry) && entry.data.type === "result",
+      )!;
       const before = await current.root.commit(
-        (tx) => readView(tx, current.root.id, view.results[0]!.id),
+        (tx) => readView(tx, current.root.id, published.id),
         context,
       );
       expect(before.notes[0]!.checks).toEqual([]);
-      const report = await current.root.commit(
-        (tx) => readReport(tx, current.root.id),
-        context,
-      );
       expect(
-        report.work.find(({ id }) => id === String(failed.task)),
+        report.work.find(({ id }) => id === String(failed.id)),
       ).toMatchObject({ status: "failed", checkCount: 2 });
       await current.harness.close(context);
       current = await provider.open(directory);
