@@ -13,11 +13,7 @@ import {
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import {
-  verificationTargets,
-  type Plan,
-  type VerifierInput,
-} from "./math/contracts.ts";
+import { verificationTargets, type Plan } from "./math/contracts.ts";
 import {
   noteInfo,
   sourceEvidence,
@@ -73,17 +69,11 @@ export type Roles = Record<RoleName, Role> & {
     sourceRetrieval?: boolean;
   };
 };
-type Request =
-  | Exclude<NonNullable<Plan["work"]>, { kind: "verifier" }>
-  | {
-      kind: "verifier";
-      targets: VerifierInput["targets"];
-    };
+type Request = NonNullable<Plan["work"]>;
 export type WorkerInput = { retryOf?: TaskId } & (
   { at: EntryId; request: Request } | { standalone: true }
 );
 type DecisionInput = {
-  event?: EntryId;
   retryOf?: TaskId;
   order?: TaskId;
 };
@@ -199,11 +189,8 @@ export function createResearch(roles: Roles) {
             case "verifier":
               value = {
                 task: definition.task,
-                notes: closure(
-                  request.targets.map(({ id }) => id),
-                  view.notes,
-                ),
-                targets: request.targets,
+                notes: closure(request.notes, view.notes),
+                targets: verificationTargets({ work: request }),
                 evidence: sourceEvidence(view.notes),
               };
               break;
@@ -269,17 +256,14 @@ export function createResearch(roles: Roles) {
       async deliver(task, runtime, context) {
         const source = await runtime.waitForTask(task.input, context);
         await runtime.commit(async (tx) => {
-          const view = await readView(tx, task.conversationId);
-          const published = view.results.find(
-            (result) => result.task === task.input,
-          );
-          const event =
-            published ??
-            (await tx.appendEntry(Events, task.conversationId, {
+          // Worker.run publishes successful results and RoleFailure checks.
+          // Pi faults and cancellations still need their result event.
+          if (!["completed", "failed"].includes(source.state.outcome.status))
+            await tx.appendEntry(Events, task.conversationId, {
               data: { type: "result", task: task.input },
-            }));
+            });
           if (!("standalone" in (source.input as object)))
-            await enqueue(tx, task.conversationId, event.id);
+            await enqueue(tx, task.conversationId);
           return {
             status: "terminal",
             outcome: { status: "completed", result: null },
@@ -313,10 +297,9 @@ export function createResearch(roles: Roles) {
     phases: {
       async freeze(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          const decisions = await scanTasks(
-            tx,
-            task.conversationId,
-            Coordinator.definition.name,
+          const tasks = await scanTasks(tx, task.conversationId);
+          const decisions = tasks.filter(
+            (other) => other.kind === Coordinator.definition.name,
           );
           const on = decisions
             .filter(
@@ -328,7 +311,7 @@ export function createResearch(roles: Roles) {
             )
             .map(({ id }) => id);
           on.push(
-            ...(await scanTasks(tx, task.conversationId))
+            ...tasks
               .filter(
                 (worker) =>
                   [Worker.definition.name, Reporter.definition.name].includes(
@@ -423,11 +406,7 @@ export function createResearch(roles: Roles) {
           }, context);
           return;
         }
-        // Events bound completion visibility. Task inputs are immutable; live
-        // task state must not change an interrupted decision's prompt.
-        const settled = new Map(
-          frozen.results.map((result) => [result.task, result.outcome]),
-        );
+        // Freeze waits for prior workers to settle. Their outcomes are immutable.
         const kind = (work: (typeof workers)[number]) =>
           (work.input as WorkerInput & { request?: Request }).request?.kind;
         const explorerUsed = workers.some(
@@ -440,21 +419,21 @@ export function createResearch(roles: Roles) {
           literatureUsed: workers.some(
             (worker) =>
               kind(worker) === "literature" &&
-              settled.get(worker.id)?.status === "completed",
+              worker.state.outcome?.status === "completed",
           ),
           explorerUsed,
           failures: workers
             .filter((worker) =>
               ["failed", "faulted", "orphaned"].includes(
-                settled.get(worker.id)?.status ?? "",
+                worker.state.outcome?.status ?? "",
               ),
             )
             .map((worker) => ({
               id: String(worker.id),
               role: kind(worker) ?? "standalone",
               error:
-                settled.get(worker.id)?.error?.message ??
-                settled.get(worker.id)?.reason ??
+                worker.state.outcome?.error?.message ??
+                worker.state.outcome?.reason ??
                 null,
             })),
         };
@@ -474,17 +453,7 @@ export function createResearch(roles: Roles) {
             control.accepted === null
           ) {
             const request = validated.work;
-            if (request)
-              await worker(tx, task.conversationId, {
-                at,
-                request:
-                  request.kind === "verifier"
-                    ? {
-                        kind: "verifier",
-                        targets: verificationTargets(validated),
-                      }
-                    : request,
-              });
+            if (request) await worker(tx, task.conversationId, { at, request });
           }
           return {
             status: "terminal",
@@ -504,11 +473,15 @@ export function createResearch(roles: Roles) {
     abort,
   });
 
-  const enqueue = (tx: Tx, root: ConversationId, event?: EntryId) =>
-    tx.createTask(Coordinator, event === undefined ? {} : { event }, {
-      conversationId: root,
-      ownership: { kind: "conversation" },
-    });
+  const enqueue = (tx: Tx, root: ConversationId) =>
+    tx.createTask(
+      Coordinator,
+      {},
+      {
+        conversationId: root,
+        ownership: { kind: "conversation" },
+      },
+    );
   return {
     extension: defineExtension({
       name: "research",
@@ -564,7 +537,7 @@ export function createResearch(roles: Roles) {
       const event = await tx.appendEntry(Events, root, {
         data: { type: "input", command },
       });
-      await enqueue(tx, root, event.id);
+      await enqueue(tx, root);
       return event.id;
     },
   };

@@ -586,7 +586,7 @@ test("failed decisions block queued work and inputs until explicit native-task r
     );
     harness.resume();
     await started.promise;
-    const second = await root.commit(
+    await root.commit(
       (tx) =>
         research.input(tx, root.id, {
           kind: "guide",
@@ -630,15 +630,8 @@ test("failed decisions block queued work and inputs until explicit native-task r
     expect(
       after
         .filter(({ id }) => resumed.includes(id))
-        .map(({ input }) => (input as { event: number }).event),
-    ).toEqual([first, second]);
-    expect(
-      after
-        .filter(({ id }) => resumed.includes(id))
-        .every(
-          ({ input }) => (input as { retryOf?: number }).retryOf !== undefined,
-        ),
-    ).toBe(true);
+        .map(({ input }) => (input as { retryOf: number }).retryOf),
+    ).toEqual(pendingDecisions(before).map(({ id }) => id));
   } finally {
     release.resolve();
     await harness.close(context);

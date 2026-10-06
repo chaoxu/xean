@@ -56,7 +56,6 @@ type Call = {
   noteSource?: NoteReference;
   ids?: string[];
   capabilities?: { explorer: boolean; literature: boolean; codex: boolean };
-  allowEmptyPlan?: boolean;
   maxResponses?: number;
   maxReads?: number;
 };
@@ -206,7 +205,7 @@ export function conversations(profiles: Profiles) {
               value,
               available,
               call.capabilities!,
-              call.allowEmptyPlan,
+              !call.capabilities!.explorer,
             );
           } else {
             const results = (value as { results: { noteId: string }[] })

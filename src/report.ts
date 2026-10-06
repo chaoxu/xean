@@ -212,7 +212,9 @@ export async function readReport(
       ? standalone
       : blockedDecision(tasks);
   const status =
-    acceptedNoteId !== null || standalone?.state.outcome?.status === "completed"
+    acceptedNoteId !== null ||
+    (standalone?.state.status === "terminal" &&
+      standalone.state.outcome.status === "completed")
       ? "completed"
       : control.cancelled
         ? "cancelled"

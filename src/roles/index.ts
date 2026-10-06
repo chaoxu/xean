@@ -450,7 +450,6 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           read: notes.length > 0,
           ...(source ? { noteSource: source } : { notes }),
           capabilities: prompt.capabilities,
-          allowEmptyPlan: !capabilities.explorer,
         },
       ).then((result) => result.at(-1)!.value);
     },

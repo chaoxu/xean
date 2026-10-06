@@ -10,6 +10,9 @@ import {
 } from "@earendil-works/chord/context";
 import {
   AssistantEntry,
+  createRegistry,
+  defineExtension,
+  defineTask,
   type EntryId,
   type TaskId,
 } from "@earendil-works/pi-durable";
@@ -255,6 +258,77 @@ test(
     }),
   30_000,
 );
+
+test("standalone completion waits for owned children and still permits cancellation", () =>
+  temporary(async (directory) => {
+    const completing = Promise.withResolvers<void>();
+    let aborted = false;
+    const Child = defineTask<null, { phase: "run" }, null>({
+      name: "test.standalone-child",
+      version: 1,
+      initial: () => ({ phase: "run" }),
+      phases: {
+        async run(_task, _runtime, ctx) {
+          await awaitWithContext(new Promise<never>(() => {}), ctx);
+        },
+      },
+      async abort(_task, runtime, ctx) {
+        aborted = true;
+        await runtime.commit(
+          () => ({ status: "terminal", outcome: { status: "aborted" } }),
+          ctx,
+        );
+      },
+    });
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({ name: "test.standalone-child", tasks: [Child] }),
+    );
+    const owner = await open(join(directory, "standalone.sqlite"), {
+      create: { ...definition, mode: { role: "review", input: {} } },
+      registry,
+      roles: () => ({
+        review: async (_input, runtime, ctx) => {
+          await runtime.commit(async (tx) => {
+            await tx.createTask(Child, null, {
+              ownership: { kind: "task", taskId: runtime.taskId },
+            });
+          }, ctx);
+          return pass;
+        },
+      }),
+    });
+    owner.harness.subscribeCommits(({ changes }) => {
+      if (
+        changes.some(
+          (change) =>
+            change.type === "task" &&
+            change.value.kind === "research.worker" &&
+            change.value.state.status === "completing",
+        )
+      )
+        completing.resolve();
+    });
+    try {
+      owner.harness.resume();
+      await completing.promise;
+      const pending = await observeOwner(owner);
+      expect(pending.status.status).toBe("running");
+      expect(pending.status.work.active).toBe(1);
+      expect(pending.result).toBeUndefined();
+      await controlCommand(owner, { kind: "cancel" });
+      expect(aborted).toBe(true);
+      expect(
+        await owner.root.commit(
+          async (tx) => (await tx.doc(Control, owner.root.id)).cancelled,
+          context,
+        ),
+      ).toBe(true);
+      expect((await observeOwner(owner)).result).toEqual(pass);
+    } finally {
+      await owner.close();
+    }
+  }));
 
 test("native usage distinguishes absent placeholders and explicit zero, deduplicates forks, and bounds groups", () =>
   temporary(async (directory) => {
