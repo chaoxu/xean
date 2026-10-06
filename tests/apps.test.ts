@@ -173,6 +173,9 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
     await owner.root.waitForIdle(context);
     const report = await observeOwner(owner);
     expect(report.status.status).toBe("completed");
+    expect(await controlCommand(owner, { kind: "pause" })).toEqual(
+      report.status,
+    );
     expect(report.status.acceptedNoteId).toMatch(/^\d+\/n1$/);
     expect(report.work[0]!.noteIds).toEqual([report.status.acceptedNoteId!]);
     expect(trace).toEqual([
@@ -243,8 +246,9 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   try {
     await standalone.root.waitForIdle(context);
     expect((await observeOwner(standalone)).status.status).toBe("blocked");
-    await controlCommand(standalone, { kind: "resume" });
+    const receipt = await controlCommand(standalone, { kind: "resume" });
     const report = await observeOwner(standalone);
+    expect(receipt).toEqual(report.status);
     expect(report.status.status).toBe("completed");
     expect(report.kind).toBe("review");
     expect(report.result).toEqual(pass);
@@ -361,8 +365,11 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         });
         if (index === 0) forkAt = entry.id;
       }
-      for (const usage of [null, { input_tokens: 0 }]) {
-        const operationId = usage === null ? "unknown" : "zero";
+      for (const [operationId, usage] of [
+        ["unknown", null],
+        ["zero", { input_tokens: 0 }],
+        ["interrupted", undefined],
+      ] as const) {
         await tx.appendEntry(CodexRequest, owner.root.id, {
           data: {
             operationId,
@@ -373,27 +380,18 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
             usageTag: null,
           },
         });
-        for (const recorded of [{ input_tokens: 999 }, usage])
-          await tx.appendEntry(CodexLog, owner.root.id, {
-            data: {
-              operationId,
-              stdout: "",
-              stderr: "",
-              exitCode: 0,
-              usage: recorded,
-            },
-          });
+        if (usage !== undefined)
+          for (const recorded of [{ input_tokens: 999 }, usage])
+            await tx.appendEntry(CodexLog, owner.root.id, {
+              data: {
+                operationId,
+                stdout: "",
+                stderr: "",
+                exitCode: 0,
+                usage: recorded,
+              },
+            });
       }
-      await tx.appendEntry(CodexRequest, owner.root.id, {
-        data: {
-          operationId: "interrupted",
-          model: "codex",
-          workspace: "/fixture",
-          reasoning: "max",
-          profile: null,
-          usageTag: null,
-        },
-      });
       return forkAt!;
     }, context);
     await owner.root.commit(
@@ -475,6 +473,11 @@ test("live owner controls reject foreign identity and execution overrides withou
     expect(
       (await cli("--usage-prefix", "new-owner", "pause", path)).stderr,
     ).toContain("already has an owner");
+    for (const flag of ["--usage-prefix", "--owner-id"])
+      expect(
+        (await cli("--expected-owner-id", "previous", flag, "", "resume", path))
+          .stderr,
+      ).toContain("Execution overrides require local ownership");
     expect((await observeOwner(owner)).status.status).toBe("running");
     await requestOwner(canonical, { kind: "cancel" }, "active");
     expect((await observeOwner(owner)).status.status).toBe("cancelled");
@@ -658,10 +661,9 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
     };
   };
   const roles = {
-    coordinator: role,
+    coordinator: limitRounds(role, 1),
     explorer: async () => ({ kind: "notes", notes: [], candidate: false }),
   };
-  limitRounds(roles, 1);
   const path = join(directory, "campaign.sqlite");
   let owner = await open(path, { create: definition, roles: () => roles });
   try {
@@ -678,8 +680,7 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
     expect(calls).toBe(2);
     await controlCommand(owner, { kind: "pause" });
     await owner.close();
-    const resumed = { ...roles, coordinator: role };
-    limitRounds(resumed, 3);
+    const resumed = { ...roles, coordinator: limitRounds(role, 3) };
     owner = await open(path, { roles: () => resumed });
     await controlCommand(owner, { kind: "resume" });
     const admitted = await owner.root.commit(
@@ -690,8 +691,7 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
     expect((await observeOwner(owner)).work).toHaveLength(3);
     expect(calls).toBe(4);
     await owner.close();
-    const reduced = { coordinator: role };
-    limitRounds(reduced, 2);
+    const reduced = { coordinator: limitRounds(role, 2) };
     owner = await open(path, { roles: () => reduced });
     expect(await controlCommand(owner, { kind: "resume" })).toMatchObject({
       status: "blocked",
@@ -716,7 +716,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
   for (const outcome of ["rejected", "paused", "cancelled"] as const) {
     let decisions = 0;
     const roles: Pick<Roles, "coordinator" | "explorer"> = {
-      coordinator: async (_input, runtime, invocation) => {
+      coordinator: limitRounds(async (_input, runtime, invocation) => {
         if (outcome !== "rejected" && decisions++ === 0)
           await runtime.commit(async (tx) => {
             (await tx.doc(Control, runtime.conversationId))[outcome] = true;
@@ -727,10 +727,9 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
             guidance: outcome === "rejected" ? "" : "Explore.",
           },
         };
-      },
+      }, 1),
       explorer,
     };
-    limitRounds(roles, 1);
     const stopped = await open(join(directory, `${outcome}.sqlite`), {
       create: definition,
       roles: () => roles,
@@ -762,13 +761,12 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
   }>();
   const pending = Promise.withResolvers<void>();
   const first: Pick<Roles, "coordinator"> = {
-    coordinator: async (_input, runtime, invocation, source) => {
+    coordinator: limitRounds(async (_input, runtime, invocation, source) => {
       entered.resolve({ taskId: runtime.taskId, cutoff: source!.cutoff });
       await awaitWithContext(pending.promise, invocation);
       return { work: null };
-    },
+    }, 1),
   };
-  limitRounds(first, 1);
   const path = join(directory, "campaign.sqlite");
   let owner = await open(path, { create: definition, roles: () => first });
   try {
@@ -780,13 +778,12 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
     await owner.close();
     const recovered: TaskId[] = [];
     const next: Pick<Roles, "coordinator" | "explorer"> = {
-      coordinator: async (_input, runtime) => {
+      coordinator: limitRounds(async (_input, runtime) => {
         recovered.push(runtime.taskId);
         return { work: { kind: "explorer", guidance: "Explore." } };
-      },
+      }, 1),
       explorer,
     };
-    limitRounds(next, 1);
     owner = await open(path, { roles: () => next });
     await owner.root.waitForIdle(context);
     expect(recovered).toEqual([original.taskId]);

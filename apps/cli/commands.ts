@@ -9,12 +9,7 @@ import { acceptedArgument } from "../../src/math/argument.ts";
 import { readReport } from "../../src/report.ts";
 import { version } from "../../package.json";
 import { requestOwner, serveControl, type OwnerCommand } from "./control.ts";
-import {
-  controlCommand,
-  observeOwner,
-  ownerReceipt,
-  type Owner,
-} from "./lifecycle.ts";
+import { controlCommand, observeOwner, type Owner } from "./lifecycle.ts";
 import { doctor } from "./doctor.ts";
 import { verifyInstall } from "../../scripts/dependencies.ts";
 
@@ -82,16 +77,6 @@ async function runCampaign(
   resume = false,
 ) {
   const flags = program.opts<Flags>();
-  if (resume && !flags.ownerId && !flags.usagePrefix && !flags.keyStdin) {
-    const receipt = await requestOwner(
-      await realpath(campaignPath(target)),
-      { kind: "resume" },
-      flags.expectedOwnerId,
-    );
-    if (receipt !== undefined) return print(receipt);
-  }
-  if (flags.expectedOwnerId !== undefined)
-    throw new Error("Expected campaign owner is unavailable");
   return withOwner(target, create, async (owner, path) => {
     const control = await serveControl(
       path,
@@ -109,7 +94,7 @@ async function runCampaign(
       if (resume) await controlCommand(owner, { kind: "resume" });
       else await owner.root.waitForIdle(BACKGROUND_CONTEXT);
       await control.close();
-      if (!shutdown) await print(ownerReceipt(await observeOwner(owner)));
+      if (!shutdown) await print((await observeOwner(owner)).status);
     } catch (error) {
       if (!shutdown) throw error;
       process.exitCode = 130;
@@ -136,6 +121,7 @@ async function send(target: string, command: OwnerCommand) {
     const receipt = await requestOwner(path, command, flags.expectedOwnerId);
     if (receipt !== undefined) return print(receipt);
   }
+  if (command.kind === "resume") return runCampaign(path, undefined, true);
   return withOwner(path, undefined, async (owner) =>
     print(await controlCommand(owner, command)),
   );
@@ -154,14 +140,14 @@ program
       settings: await read(settings),
     };
     await withOwner(campaign, definition, async (owner) =>
-      print(ownerReceipt(await observeOwner(owner))),
+      print((await observeOwner(owner)).status),
     );
   });
 program.command("run <campaign>").action(async (campaign: string) => {
   await runCampaign(campaign);
 });
 program.command("resume <campaign>").action(async (campaign: string) => {
-  await runCampaign(campaign, undefined, true);
+  await send(campaign, { kind: "resume" });
 });
 for (const kind of ["pause", "cancel"] as const)
   program.command(`${kind} <campaign>`).action(async (campaign: string) => {

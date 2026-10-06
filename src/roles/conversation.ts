@@ -55,7 +55,7 @@ type Call = {
   notes?: Note[];
   noteSource?: NoteReference;
   ids?: string[];
-  capabilities?: { explorer: boolean; literature: boolean; codex: boolean };
+  capabilities?: Parameters<typeof planSchema>[0];
   maxResponses?: number;
   maxReads?: number;
 };

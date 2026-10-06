@@ -226,7 +226,7 @@ export const codexPlan = object({
       "Relevant note IDs. Their full text and dependencies are supplied automatically. Use [] when none are needed.",
   }),
 });
-const workPlan = Type.Union([
+export const workPlan = Type.Union([
   explorePlan,
   verifyPlan,
   literaturePlan,

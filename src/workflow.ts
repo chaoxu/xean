@@ -12,7 +12,7 @@ import {
   type TaskOutcome,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { type Plan } from "./math/contracts.ts";
+import { workPlan, type Plan, type planSchema } from "./math/contracts.ts";
 import {
   noteInfo,
   sourceEvidence,
@@ -54,19 +54,13 @@ type Role = (
 ) => Promise<any>;
 export const roleNames = [
   "coordinator",
-  "explorer",
-  "verifier",
+  ...workPlan.anyOf.map((plan) => plan.properties.kind.const),
   "reconstruct",
-  "literature",
-  "codex",
   "review",
 ] as const;
 export type RoleName = (typeof roleNames)[number];
 export type Roles = Record<RoleName, Role> & {
-  capabilities: (input: any) => {
-    explorer: boolean;
-    literature: boolean;
-    codex: boolean;
+  capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
     sourceRetrieval?: boolean;
   };
 };
@@ -364,21 +358,17 @@ export function createResearch(roles: Roles) {
     abort,
   });
 
-  const enqueue = (tx: Tx, root: ConversationId) =>
-    tx.createTask(
-      Coordinator,
-      {},
-      {
-        conversationId: root,
-        ownership: { kind: "conversation" },
-      },
-    );
+  const enqueue = (tx: Tx, root: ConversationId, input: DecisionInput = {}) =>
+    tx.createTask(Coordinator, input, {
+      conversationId: root,
+      ownership: { kind: "conversation" },
+    });
   return {
     extension: defineExtension({
       name: "research",
       tasks: [Coordinator, Worker],
     }),
-    initialize: enqueue,
+    initialize: (tx: Tx, root: ConversationId) => enqueue(tx, root),
     async resume(tx: Tx, root: ConversationId) {
       const tasks = await scanTasks(tx, root);
       const pending = pendingDecisions(tasks).filter(failedTask);
@@ -391,15 +381,11 @@ export function createResearch(roles: Roles) {
       for (const previous of pending) {
         const input = previous.input as DecisionInput;
         resumed.push(
-          await tx.createTask(
-            Coordinator,
-            {
-              ...input,
-              retryOf: previous.id,
-              order: input.order ?? previous.id,
-            },
-            { conversationId: root, ownership: { kind: "conversation" } },
-          ),
+          await enqueue(tx, root, {
+            ...input,
+            retryOf: previous.id,
+            order: input.order ?? previous.id,
+          }),
         );
       }
       return resumed;

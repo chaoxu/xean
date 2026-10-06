@@ -1,5 +1,5 @@
 import { lstatSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtempDisposable, realpath, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
@@ -104,28 +104,24 @@ export function openReadDatabase(path: string) {
 }
 
 function recognize(path: string, live = false) {
-  const database = openReadDatabase(path);
-  try {
-    const tables = database
-      .prepare(
-        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .all() as { name: string }[];
-    const native = tables.some(({ name }) => name === "durable_schema");
-    if (!native && tables.length)
-      throw new Error("Not a Pi Durable research database");
-    if (
-      native &&
-      live &&
-      database
-        .prepare("SELECT version FROM durable_schema WHERE singleton = 1")
-        .get()?.version !== CURRENT_SQLITE_SCHEMA_VERSION
+  using database = openReadDatabase(path);
+  const tables = database
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     )
-      throw new Error("Live inspection requires the current Pi SQLite schema");
-    return native;
-  } finally {
-    database.close();
-  }
+    .all() as { name: string }[];
+  const native = tables.some(({ name }) => name === "durable_schema");
+  if (!native && tables.length)
+    throw new Error("Not a Pi Durable research database");
+  if (
+    native &&
+    live &&
+    database
+      .prepare("SELECT version FROM durable_schema WHERE singleton = 1")
+      .get()?.version !== CURRENT_SQLITE_SCHEMA_VERSION
+  )
+    throw new Error("Live inspection requires the current Pi SQLite schema");
+  return native;
 }
 
 async function openOwnedStorage(path: string) {
@@ -271,27 +267,22 @@ export async function inspect<T>(
   { live = false }: { live?: boolean } = {},
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  const directory = live
+  await using directory = live
     ? undefined
-    : await mkdtemp(join(tmpdir(), "research-snapshot-"));
-  let session: ReturnType<typeof createSession> | undefined;
+    : await mkdtempDisposable(join(tmpdir(), "research-snapshot-"));
+  const database = directory ? join(directory.path, "snapshot.sqlite") : path;
+  if (directory) {
+    using source = openReadDatabase(path);
+    await backup(source, database);
+  }
+  if (!recognize(database, live)) throw new UninitializedResearchError();
+  const storage = await openNodeSqliteStorage(database);
+  if (live)
+    storage.commit = async () => {
+      throw new Error("Live inspection cannot change campaign state");
+    };
+  const session = createSession(storage);
   try {
-    const database = directory ? join(directory, "snapshot.sqlite") : path;
-    if (directory) {
-      const source = openReadDatabase(path);
-      try {
-        await backup(source, database);
-      } finally {
-        source.close();
-      }
-    }
-    if (!recognize(database, live)) throw new UninitializedResearchError();
-    const storage = await openNodeSqliteStorage(database);
-    if (live)
-      storage.commit = async () => {
-        throw new Error("Live inspection cannot change campaign state");
-      };
-    session = createSession(storage);
     return await session.commit(async (tx) => {
       if (!(await tx.conversation(ROOT_CONVERSATION_ID)))
         throw new UninitializedResearchError();
@@ -299,10 +290,6 @@ export async function inspect<T>(
       return read(tx, ROOT_CONVERSATION_ID);
     }, context);
   } finally {
-    try {
-      await session?.close(context);
-    } finally {
-      if (directory) await rm(directory, { recursive: true, force: true });
-    }
+    await session.close(context);
   }
 }

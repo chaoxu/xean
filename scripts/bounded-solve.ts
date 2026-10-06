@@ -8,7 +8,7 @@ import { open, readReport, readSettings, type Roles } from "../src/index.ts";
 import { scanTasks, type WorkerInput } from "../src/workflow.ts";
 import { verifyInstall } from "./dependencies.ts";
 import { serveControl } from "../apps/cli/control.ts";
-import { controlCommand, ownerReceipt } from "../apps/cli/lifecycle.ts";
+import { controlCommand } from "../apps/cli/lifecycle.ts";
 
 export async function readRounds(tx: Tx, root: ConversationId) {
   const rounds: EntryId[] = [];
@@ -20,10 +20,9 @@ export async function readRounds(tx: Tx, root: ConversationId) {
 }
 
 /** Each admitted worker counts once, outside role inputs. */
-export function limitRounds(roles: Pick<Roles, "coordinator">, limit = 20) {
+export function limitRounds(plan: Roles["coordinator"], limit = 20) {
   assert.ok(Number.isSafeInteger(limit) && limit >= 0, "Invalid round limit");
-  const plan = roles.coordinator;
-  roles.coordinator = async (...args) => {
+  return async (...args: Parameters<Roles["coordinator"]>) => {
     const [, runtime, context] = args;
     let available = false;
     await runtime.commit(async (tx) => {
@@ -78,11 +77,9 @@ if (import.meta.main) {
   const database = resolve(directory, "campaign.sqlite");
   const owner = await open(database, {
     create: { task, settings },
-    roles: (builtins) => {
-      const roles = { coordinator: builtins.coordinator };
-      limitRounds(roles, roundLimit);
-      return roles;
-    },
+    roles: ({ coordinator }) => ({
+      coordinator: limitRounds(coordinator, roundLimit),
+    }),
   });
   const observe = () =>
     owner.root.commit(
@@ -116,7 +113,7 @@ if (import.meta.main) {
         ({ report, rounds } = await observe());
       }
       const result = {
-        ...ownerReceipt(report),
+        ...report.status,
         outcome:
           report.status.status === "completed"
             ? "accepted"
