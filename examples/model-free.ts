@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { defaultSettings, inspect, open, readReport } from "xean-pi-prototype";
+import { defaultSettings, inspect, open, readReport } from "xean";
 
 if (process.argv.length !== 3)
   throw new Error("Usage: examples/model-free.ts NEW_DATABASE.sqlite");

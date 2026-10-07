@@ -1,6 +1,6 @@
-# Xean Pi prototype
+# Xean
 
-A mathematical research workflow built on Pi Durable. Explorer develops
+Xean runs a mathematical research workflow on Pi Durable. Explorer develops
 notes, Verifier checks their claims and dependencies, and Coordinator chooses
 further work. Each campaign runs Coordinator, one worker, then Coordinator again.
 The next Coordinator task is admitted with its worker and waits for the worker's
@@ -18,17 +18,24 @@ Unimplemented proposals live in [design ideas](docs/design-ideas.md).
 
 ## Run a campaign
 
-Use Fleet's locked Bun from the adjacent Fleet Infra checkout. The example
-settings select `gpt-6-astra` with `max` reasoning and read `OPENAI_API_KEY` from
-the environment. Keep credential values outside task and settings files.
+Use Bun 1.4.2 or later on macOS or Linux, then install dependencies from the root
+of the extracted source archive:
 
 ```sh
-cd ../fleet-infra
-bin/fleet-nix run .#fleet-run -- install --cwd ../xean-pi-prototype --frozen-lockfile --ignore-scripts
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/apps/cli/index.ts doctor ../xean-pi-prototype/examples/settings.json
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/apps/cli/index.ts init ../xean-pi-prototype/examples/task.json ../xean-pi-prototype/.xean/demo/campaign.sqlite ../xean-pi-prototype/examples/settings.json
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/apps/cli/index.ts run ../xean-pi-prototype/.xean/demo/campaign.sqlite
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/apps/cli/index.ts status ../xean-pi-prototype/.xean/demo/campaign.sqlite
+bun install --production --frozen-lockfile --ignore-scripts
+```
+
+Set `OPENAI_API_KEY` in your environment. The [example settings](examples/settings.json)
+use public OpenAI with `gpt-6-astra` and `max` reasoning. They set `research: false`
+for a closed-book elementary example: no external source retrieval or independent
+Codex review. Explorer and Verifier still use the configured model. Keep credential
+values outside task and settings files.
+
+```sh
+bun run xean doctor examples/settings.json
+bun run xean init examples/task.json .xean/demo/campaign.sqlite examples/settings.json
+bun run xean run .xean/demo/campaign.sqlite
+bun run xean status .xean/demo/campaign.sqlite
 ```
 
 `init` freezes the task and settings without model calls. `doctor` checks local
@@ -45,14 +52,19 @@ a stable `--id` for exact retries. Live mutations reach the active owner.
 `review TASK ARGUMENT CAMPAIGN SETTINGS` records an independent review. Use
 `--help` for arguments and owner, credential, and usage-attribution options.
 
-[Settings](src/config.ts) support per-role OpenAI, Codex, Anthropic, and Google
-profiles. Literature is
-disabled by default. Custom Responses gateways use `openai` with `baseUrl`.
-`openai-codex` uses Pi's native subscription authentication and transport.
-Codex source checking and review use native Codex
-configuration. `settings.codex` enables implementation work in a retained
-workspace. [Example inputs](examples/task.json) and [settings](examples/settings.json)
-show the minimum solver configuration.
+[Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
+Anthropic, and Google, with per-role overrides. Custom Responses gateways use
+`openai` with `baseUrl`. For a custom CA, set `NODE_EXTRA_CA_CERTS` to its PEM
+certificate bundle. Stored OAuth for `openai-codex` requires an authenticated Pi
+`Models` instance passed as `models` to the library's `open` function.
+The Xean CLI does not inherit a Codex CLI login.
+
+To enable the default Codex research backend, remove `research: false` and install
+and authenticate the Codex CLI. Source checking and independent review use its
+native configuration. Literature is disabled by default, but `literature: false`
+alone leaves source checking and review enabled. External premises remain
+INCONCLUSIVE when research is disabled. `settings.codex` separately enables
+implementation work in a retained workspace.
 
 For a one-response ChatGPT Web Explorer, set
 `chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
@@ -99,16 +111,16 @@ admissions use the existing outer round allowance.
 
 The [model-free example](examples/model-free.ts) supplies scripted roles and
 prints the resulting campaign status without provider credentials. Its fixed
-judgments demonstrate the workflow, not mathematical performance. From Fleet
-Infra, give it a new database path:
+judgments demonstrate the workflow, not mathematical performance. From the
+package root, give it a new database path:
 
 ```sh
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/examples/model-free.ts ../xean-pi-prototype/.xean/scripted/campaign.sqlite
+bun examples/model-free.ts .xean/scripted/campaign.sqlite
 ```
 
 ```ts
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { defaultSettings, inspect, open, readReport } from "xean-pi-prototype";
+import { defaultSettings, inspect, open, readReport } from "xean";
 
 const path = "campaign.sqlite";
 const owner = await open(path, {
@@ -117,7 +129,7 @@ const owner = await open(path, {
       problem: "For every real x >= 1, prove x squared >= x.",
       completionCriteria: "Give a self-contained elementary proof.",
     },
-    settings: defaultSettings,
+    settings: { ...defaultSettings, research: false },
   },
 });
 try {
@@ -149,10 +161,15 @@ their workspace.
 
 ## Observation and experiments
 
-Observe runs separately through [apps/observe/server.ts](apps/observe/server.ts).
-Its configuration is an array such as
-`[{"id":"demo","database":"/absolute/path/to/campaign.sqlite"}]`. It listens on
-`127.0.0.1:8797` and serves `/api/runs` and `/api/runs/ID`, with `?view=status`
+Observe runs separately. Save a configuration file such as `observe.json` containing
+`[{"id":"demo","database":".xean/demo/campaign.sqlite"}]`, with database paths
+relative to that file, then run:
+
+```sh
+bun run observe observe.json
+```
+
+It listens on `127.0.0.1:8797` and serves `/api/runs` and `/api/runs/ID`, with `?view=status`
 for compact reports. Run it on the campaign host and arrange remote access
 yourself, for example with an SSH tunnel. Independent-review databases can be
 listed as separate sources. The viewer shows note indexes, detailed summaries,
@@ -167,17 +184,8 @@ Web usage is unmeasured and excluded. Missing native usage remains unknown.
 Process health, internal acceptance, and independent review are
 separate observations.
 
-`usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. Its native provider
-configuration must forward that environment variable. For a provider named
-`gateway` using codex-lb:
-
-```toml
-[model_providers.gateway.env_http_headers]
-X-Codex-LB-Usage-Tag = "XEAN_CODEX_USAGE_TAG"
-
-[model_providers.gateway.http_headers]
-X-Codex-LB-Required-Capability = "usage_tag_v1"
-```
+`usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. A custom provider's native
+configuration can forward it as an HTTP header for usage attribution.
 
 [bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
 from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
@@ -190,11 +198,13 @@ to prepare frozen cases and commands without model calls.
 
 ## Checks and current limits
 
-From Fleet Infra, run the socket-free checks and the source distribution check:
+Install development dependencies to run checks and create a source archive:
 
 ```sh
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/scripts/dev.ts check
-bin/fleet-nix run .#fleet-run -- ../xean-pi-prototype/scripts/dev.ts distribution
+bun install --frozen-lockfile --ignore-scripts
+bun run check
+bun run check:distribution
+bun run pack
 ```
 
 Start interface changes with focused contract tests and model behavior changes
@@ -203,36 +213,34 @@ Inspect their actual submissions before running a complete campaign smoke.
 Use the golden problems after those checks pass.
 
 `check` runs TypeScript, formatting, dependency integrity, and scripted tests.
-`distribution` checks an unpacked source archive with production dependencies,
+`check:distribution` checks an unpacked source archive with production dependencies,
 including the model-free workflow, CLI, local observation, browser assets, and licenses.
-A clean production installation passed on locked Bun 1.4.2, `darwin-arm64`.
+`pack` runs the same distribution check and writes the source archive under
+`dist/`. The source-package smoke passed on Bun 1.4.2 for macOS ARM64 and Linux
+ARM64 with only Bun on `PATH` and no provider credentials.
 
-Earlier local live smokes used `gpt-5.6-luna` with `max` reasoning. These receipts
-predate the latest fixes. Pi Explorer committed
-one response through codex-lb RelayAPI and reopened without credentials with an
-identical report. Gateway tag and token counts matched. A separate native Codex
-review returned PASS in one invocation with no external premises. Its provider
-did not forward the usage tag, so that mapping remains unqualified. Local receipts are
-`runs/live-2026-10-04T10-13-25-409Z/{live,review,gateway-usage}.json`, outside the
-source package.
+At revision `0e74fc7`, all six sequential golden campaigns reached internal
+acceptance and independent PASS review, then reopened without credentials.
+Standalone verification also reconstructed a dependency chain and rejected a
+false claim. These runs used `gpt-6-astra` with `max` reasoning through codex-lb's
+OpenAI `/v1` route and SSE. They qualify that gateway configuration, not public
+OpenAI or Pi's subscription `openai-codex` transport. Source checking recorded
+web activity without a directly observed source-open operation. Receipts and the
+golden report are in `runs/golden-sequential-20261006-r04/`.
 
-The later golden smoke completed a solve, source check, independent PASS review,
-and credential-free reopening. Its source quotations and exact theorem were
-checked separately. Native Codex events confirmed web activity but did not
-identify a direct source-open operation. The receipt is
-`runs/smoke-golden-20261004-r03/qualification.json`.
-
-The sequential Pi 1.0.4 smoke at revision `0e74fc7` recorded internal acceptance,
-an independent PASS review, live Codex source checking, and credential-free
-reopening. Standalone verification also reconstructed a dependency chain and
-rejected a false claim. Receipts are
-`runs/golden-sequential-20261006-r04/{roles-receipt,source-check,smoke-receipt}.json`.
-The ChatGPT Web, Anthropic, and Google paths remain unqualified live.
+An earlier ChatGPT Web smoke passed standalone submission and credential-free
+reopening. Its adapter is unchanged, but live interruption and cancellation
+remain untested. ChatGPT Web has no end-to-end qualification on the current build.
+Anthropic, Google, literature, and the implementation worker also
+lack prototype live qualification. The provider assessment is
+`runs/replacement-readiness-20261007/providers.result.txt`, and the ChatGPT receipt
+is `runs/chatgpt-live-20261005T043613Z/execution/qualification.json`. These local
+run artifacts are outside the source package.
 
 Pi 1.0.4 uses the official compiled release packages, pinned together to
 `7c10bd4337495ee613f2224843ecdf349b80d1df`. The packages include frozen model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.
-This is a private [MIT-licensed](LICENSE) source package. Historical Yean and
+This is an [MIT-licensed](LICENSE) source package. Historical Yean and
 Xean campaigns retain their original runtimes and readers.

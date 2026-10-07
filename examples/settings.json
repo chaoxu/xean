@@ -7,5 +7,6 @@
       "apiKeyEnv": "OPENAI_API_KEY"
     }
   },
-  "literature": false
+  "literature": false,
+  "research": false
 }

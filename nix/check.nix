@@ -6,23 +6,18 @@ let
   bun = fleet.packages.${system}.bun;
   source = builtins.path {
     path = builtins.toPath projectRoot;
-    name = "xean-pi-prototype-source";
+    name = "xean-source";
     filter = path: type:
       let top = builtins.head (pkgs.lib.splitString "/" (pkgs.lib.removePrefix (projectRoot + "/") (toString path)));
-      in path == projectRoot || !(builtins.elem top [ ".git" "runs" ".xean" ]);
+      in path == projectRoot || !(builtins.elem top [ ".git" "runs" ".xean" "dist" ]);
   };
-in pkgs.runCommand "xean-pi-prototype-check" {
+in pkgs.runCommand "xean-check" {
   nativeBuildInputs = [ bun ];
 } ''
   cp -R ${source} source
   chmod -R u+w source
   cd source
-  ${pkgs.lib.optionalString (mode == "check") ''
-    bun --no-install --no-env-file node_modules/typescript/bin/tsc --noEmit
-    bun --no-install --no-env-file node_modules/prettier/bin/prettier.cjs --check src apps tests scripts examples docs package.json tsconfig.json README.md AGENTS.md
-    bun --no-install --no-env-file scripts/dependencies.ts
-  ''}
   ${if mode == "distribution" then "bun --no-install --no-env-file scripts/check-distribution.ts"
-    else "bun --no-install --no-env-file test ${if tests == "" then "tests" else tests}"}
+    else "bun --no-install --no-env-file scripts/dev.ts ${mode} ${tests}"}
   touch "$out"
 ''

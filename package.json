@@ -1,6 +1,7 @@
 {
-  "name": "xean-pi-prototype",
-  "version": "0.0.0",
+  "name": "xean",
+  "version": "3.0.0-rc.1",
+  "description": "A mathematical research workflow built on Pi Durable",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -18,7 +19,6 @@
     "examples/",
     "vendor/",
     "tests/",
-    "nix/",
     "docs/",
     "README.md",
     "AGENTS.md",
@@ -34,6 +34,7 @@
   "scripts": {
     "check": "bun scripts/dev.ts check",
     "check:distribution": "bun scripts/dev.ts distribution",
+    "pack": "bun scripts/dev.ts pack",
     "xean": "bun apps/cli/index.ts",
     "observe": "bun apps/observe/server.ts"
   },

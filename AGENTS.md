@@ -1,4 +1,4 @@
-# Working on the Pi prototype
+# Working on Xean
 
 Read README.md and the pinned Pi implementation before changing the design.
 
@@ -21,8 +21,10 @@ Read README.md and the pinned Pi implementation before changing the design.
 - Have a separate agent review each substantial design change specifically for
   native Pi alternatives and unnecessary application machinery. Resolve findings
   against Pi's implementation before declaring the change complete.
-- Use locked Fleet Bun and socket-free Nix checks. Keep tests focused on
-  consequential workflow failures. Report runtime and test line counts.
+- Use Bun and the package commands `bun run check`, `bun run check:distribution`,
+  and `bun run pack`. Internal Fleet validation may additionally use locked
+  Fleet Bun and socket-free Nix checks. Keep tests focused on consequential
+  workflow failures. Report runtime and test line counts.
 - Reproduce interface failures with local contract tests. Screen model behavior
   with small standalone-role inputs before a full campaign smoke or golden run.
 - Preserve the Yean and Xean checkouts and historical runs. No compatibility,

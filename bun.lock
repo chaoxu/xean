@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "xean-pi-prototype",
+      "name": "xean",
       "dependencies": {
         "@earendil-works/chord": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-chord-1.0.4.tgz",
         "@earendil-works/pi-ai": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-ai-1.0.4.tgz",
