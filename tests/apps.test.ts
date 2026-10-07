@@ -17,7 +17,7 @@ import {
   type TaskId,
 } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
-import { defaultSettings } from "../src/config.ts";
+import { createRuntime, defaultSettings } from "../src/config.ts";
 import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/definition.ts";
 import { Control, type Roles } from "../src/workflow.ts";
@@ -57,6 +57,53 @@ async function command(file: string, ...args: string[]) {
   };
 }
 const cli = (...args: string[]) => command("apps/cli/index.ts", ...args);
+
+test("CLI doctor reuses saved Pi ChatGPT and Claude logins without refreshing or exposing them", async () => {
+  const directory = await temporaryDirectory("xean-pi-auth-");
+  const file = join(directory, "settings.json");
+  const authFile = join(directory, "auth.json");
+  const credentials = Object.fromEntries(
+    ["openai", "anthropic"].map((provider) => [
+      provider,
+      {
+        type: "oauth",
+        access: "private-fixture-access",
+        refresh: "private-fixture-refresh",
+        expires: 0,
+      },
+    ]),
+  );
+  const bytes = JSON.stringify(credentials);
+  const native = createRuntime(defaultSettings).models;
+  for (const provider of ["openai", "anthropic"]) {
+    await Bun.write(
+      file,
+      JSON.stringify({
+        profiles: {
+          default: { provider, model: native.getModels(provider)[0]!.id },
+        },
+        research: false,
+      }),
+    );
+    await Bun.write(authFile, bytes);
+    const result =
+      await $`${process.execPath} --no-install --no-env-file ${join(root, "apps/cli/index.ts")} doctor ${file} < /dev/null`
+        .env({
+          ...process.env,
+          PI_CODING_AGENT_DIR: directory,
+          OPENAI_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+        })
+        .quiet()
+        .nothrow();
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).ok).toBe(true);
+    expect(result.stdout.toString() + result.stderr.toString()).not.toContain(
+      "private-fixture",
+    );
+    expect(await Bun.file(authFile).text()).toBe(bytes);
+  }
+});
 
 test("CLI offline inputs are durable, idempotent after cancellation, and do not start providers", async () => {
   const directory = await temporaryDirectory("xean-apps-");

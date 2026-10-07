@@ -80,6 +80,12 @@ verification, and operator interfaces through native tasks and documents.
 Pi preserves rotated OAuth tokens after cancellation and retries HTTP/2 requests
 whose pending stream was cancelled. These use native provider behavior.
 
+The CLI reuses coding-agent's public `ModelRuntime` for Pi's persistent
+credentials and refresh locking. Login and logout use the bundled Pi CLI.
+Xean supplies its own frozen settings and model catalog, with no Pi model-file
+loading or startup catalog refresh. The core library still accepts caller-owned
+`Models` and does not load a user's credentials by default.
+
 Native tasks, tool controls, session resource cleanup, provider authentication,
 and SQLite configuration supply the execution behavior. Structured submissions
 stay in Pi tool-result details. Only note reads override output limits to preserve

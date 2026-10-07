@@ -46,6 +46,51 @@
       "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-durable-1.0.4.tgz",
       "registryIntegrity": "sha512-i22unyhavxrTF/KS/JcBOKprQRgepufOIztnqBKZXJCWbEHsXDzcINtjmmBSbFB/3S+4FWIl3eJ5FMbRe33Ybg==",
       "tarball": "https://registry.npmjs.org/@earendil-works/pi-durable/-/pi-durable-1.0.4.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-coding-agent",
+      "version": "1.0.4",
+      "bytes": 7487637,
+      "sha256": "04910bdae661a6529e9d6869b04006f6aad01186398b04a16c6d9793667b96c5",
+      "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-coding-agent-1.0.4.tgz",
+      "registryIntegrity": "sha512-+956nfMFHr5lDUVY/2Q4k+YzojzBuCaBXFgj0eSlXVGr7QVliVddKdc1Pz6yVg1dOlJQmb67doOVrlMsIcIdaw==",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.4.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-mcp",
+      "version": "1.0.4",
+      "bytes": 90993,
+      "sha256": "61d2fde996ddd2da612a5ba08b9175d8a934b1131bb2de93a2c1084a9bd1f9dc",
+      "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-mcp-1.0.4.tgz",
+      "registryIntegrity": "sha512-I6SqOqrKED+XrjkkFIXY7Ze38QtXtjojPJlQsJ2v5soCPV4QI1bNxXDwQaqzZ2a+6pNN8meWrRw1qkSMbPy9QQ==",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.0.4.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-tui",
+      "version": "1.0.4",
+      "bytes": 513772,
+      "sha256": "1d560dbae406967e82279c702a2ad115322e8f005bb116edbfe6be776678a77a",
+      "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-tui-1.0.4.tgz",
+      "registryIntegrity": "sha512-TgvDJohtxvG3XWQID5w6bwEyBocywdG0F9yHZtP+Ywvtiq9RgeSMbeB8quUobk7/4ko6IvFOQo45AqIqNVr8Rg==",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.0.4.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-codemode",
+      "version": "1.0.4",
+      "bytes": 58800,
+      "sha256": "f207efc8bddecc6fb51f89c573865937c44da60f7fc9e67753cc0764dd8d8529",
+      "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-codemode-1.0.4.tgz",
+      "registryIntegrity": "sha512-e198pjBsdEQJ/RCjJ9ZeYIjRaQYWUgtoZbPCmJ57auuOsiRsBXeSZ1aiWtTah0/7gx97WIOD1XqHvgRU0gOXtg==",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.0.4.tgz"
+    },
+    {
+      "name": "@earendil-works/pi-agent-core",
+      "version": "1.0.4",
+      "bytes": 61366,
+      "sha256": "5906d63d015e50eb610bae42175c8f10e43ed291bbd786b2c7ec4e1f229ff59b",
+      "path": "vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-agent-core-1.0.4.tgz",
+      "registryIntegrity": "sha512-/xGICE+N/+G9N7KfYFSxlE8G8fQcBlLHKiY+j1Ehz9vvb1zhvGneWosFK56d2qmA5oteafeG7yKr2nqU4ed9ig==",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.0.4.tgz"
     }
   ],
   "patches": [

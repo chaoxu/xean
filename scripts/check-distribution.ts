@@ -44,6 +44,10 @@ try {
     manifest.version,
   );
   assert.match(await run(manifest.bin.xean, "--help"), /inspect/);
+  assert.match(
+    await $`${process.execPath} run pi --help`.cwd(root).quiet().text(),
+    /auth/,
+  );
   const task = join(root, "examples/task.json");
   const initialized = JSON.parse(
     await run(

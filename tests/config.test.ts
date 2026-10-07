@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { temporaryDirectory } from "./directory.ts";
 import {
   createModels,
   envApiKeyAuth,
@@ -37,6 +40,87 @@ const complete = (
     options,
   ).result();
 };
+
+test("Pi login credentials persist and refresh across Xean model runtimes", async () => {
+  const authPath = join(await temporaryDirectory("xean-login-"), "auth.json");
+  const faux = fauxProvider({
+    provider: "anthropic",
+    models: [{ id: "fixture" }],
+  });
+  let refreshes = 0;
+  const provider = {
+    ...faux.provider,
+    auth: {
+      apiKey: envApiKeyAuth("Fixture key", []),
+      oauth: {
+        name: "Fixture login",
+        login: async () => ({
+          type: "oauth" as const,
+          access: "old-fixture",
+          refresh: "rotate-fixture",
+          expires: 0,
+        }),
+        refresh: async () => {
+          refreshes++;
+          return {
+            type: "oauth" as const,
+            access: "new-fixture",
+            refresh: "rotated-fixture",
+            expires: Date.now() + 3_600_000,
+          };
+        },
+        toAuth: async (credential: { access: string }) => ({
+          headers: { Authorization: `Bearer ${credential.access}` },
+        }),
+      },
+    },
+  };
+  const reopen = async () => {
+    const models = await ModelRuntime.create({
+      authPath,
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    models.registerNativeProvider(provider);
+    return models;
+  };
+  const first = await reopen();
+  await first.login("anthropic", "oauth", {
+    prompt: async () => "",
+    notify() {},
+  });
+  expect(refreshes).toBe(0);
+  const models = await reopen();
+  const settings = {
+    profiles: { default: { provider: "anthropic", model: "fixture" } },
+  };
+  const runtime = createRuntime(settings, { models });
+  const seen: unknown[] = [];
+  const response = (_input: unknown, options: any) => {
+    seen.push({ key: options.apiKey, headers: options.headers });
+    return fauxAssistantMessage("done");
+  };
+  faux.setResponses([response, response, response]);
+  expect((await complete(runtime, "coordinator")).stopReason).toBe("stop");
+  expect(refreshes).toBe(1);
+  expect((await Bun.file(authPath).json()).anthropic.refresh).toBe(
+    "rotated-fixture",
+  );
+  const reopened = createRuntime(settings, { models: await reopen() });
+  expect((await complete(reopened, "coordinator")).stopReason).toBe("stop");
+  expect(refreshes).toBe(1);
+  expect(seen.slice(0, 2)).toEqual(
+    Array(2).fill({
+      key: undefined,
+      headers: { Authorization: "Bearer new-fixture" },
+    }),
+  );
+  const explicit = createRuntime(settings, { models, key: "explicit-fixture" });
+  expect((await complete(explicit, "coordinator")).stopReason).toBe("stop");
+  expect(seen[2]).toMatchObject({ key: "explicit-fixture" });
+  await models.logout("anthropic");
+  expect(await (await reopen()).checkAuth("anthropic")).toBeUndefined();
+});
 
 test("settings reject credential literals, unsafe endpoints, and non-ChatGPT browser routes", () => {
   expect(() =>

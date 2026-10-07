@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { createRuntime, readSettings } from "../../src/config.ts";
 import { verifyInstall } from "../../scripts/dependencies.ts";
+import { cliModels } from "./models.ts";
 
 /** Local setup only: never creates a campaign or invokes a provider or Codex. */
 export async function doctor(settingsPath: string) {
@@ -14,7 +15,9 @@ export async function doctor(settingsPath: string) {
       throw new Error(`Cannot read settings JSON: ${resolve(settingsPath)}`);
     }
     const settings = readSettings(value);
-    const { models, profiles } = createRuntime(settings);
+    const { models, profiles } = createRuntime(settings, {
+      models: await cliModels(),
+    });
     for (const [name, { model, checkAuth }] of Object.entries(profiles)) {
       if (name === "explorer" && settings.chatgpt) continue;
       if (!models.getModel(model.provider, model.modelId))

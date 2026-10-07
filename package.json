@@ -36,6 +36,7 @@
     "check:distribution": "bun scripts/dev.ts distribution",
     "pack": "bun scripts/dev.ts pack",
     "xean": "bun apps/cli/index.ts",
+    "pi": "bun node_modules/.bin/pi",
     "observe": "bun apps/observe/server.ts"
   },
   "dependencies": {
@@ -46,13 +47,19 @@
     "@earendil-works/chord": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-chord-1.0.4.tgz",
     "@earendil-works/pi-ai": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-ai-1.0.4.tgz",
     "@earendil-works/pi-durable": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-durable-1.0.4.tgz",
-    "typebox": "1.3.27"
+    "typebox": "1.3.27",
+    "@earendil-works/pi-coding-agent": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-coding-agent-1.0.4.tgz"
   },
   "overrides": {
     "@earendil-works/chord": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-chord-1.0.4.tgz",
     "@earendil-works/pi-ai": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-ai-1.0.4.tgz",
     "@earendil-works/pi-durable": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-durable-1.0.4.tgz",
-    "@earendil-works/pi-telemetry": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-telemetry-1.0.4.tgz"
+    "@earendil-works/pi-telemetry": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-telemetry-1.0.4.tgz",
+    "@earendil-works/pi-coding-agent": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-coding-agent-1.0.4.tgz",
+    "@earendil-works/pi-mcp": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-mcp-1.0.4.tgz",
+    "@earendil-works/pi-tui": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-tui-1.0.4.tgz",
+    "@earendil-works/pi-codemode": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-codemode-1.0.4.tgz",
+    "@earendil-works/pi-agent-core": "file:vendor/pi/7c10bd4337495ee613f2224843ecdf349b80d1df/earendil-works-pi-agent-core-1.0.4.tgz"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",

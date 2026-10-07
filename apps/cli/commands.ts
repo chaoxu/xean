@@ -11,6 +11,7 @@ import { version } from "../../package.json";
 import { requestOwner, serveControl, type OwnerCommand } from "./control.ts";
 import { controlCommand, observeOwner, type Owner } from "./lifecycle.ts";
 import { doctor } from "./doctor.ts";
+import { cliModels } from "./models.ts";
 import { verifyInstall } from "../../scripts/dependencies.ts";
 
 const print = (value: unknown) =>
@@ -63,7 +64,12 @@ async function withOwner(
   const { keyStdin, usagePrefix } = program.opts<Flags>();
   const key = keyStdin ? (await Bun.stdin.text()).trim() : undefined;
   if (keyStdin && !key) throw new Error("Expected a credential on stdin");
-  const owner = await open(path, { create, key, usagePrefix });
+  const owner = await open(path, {
+    create,
+    key,
+    usagePrefix,
+    models: await cliModels(),
+  });
   try {
     return await action(owner, await realpath(path));
   } finally {

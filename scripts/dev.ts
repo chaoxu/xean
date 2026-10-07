@@ -57,6 +57,7 @@ if (command === "check" || command === "test") {
   const env = {
     PATH: dirname(process.execPath),
     BUN_INSTALL_CACHE_DIR: resolve(directory.path, "cache"),
+    PI_CODING_AGENT_DIR: resolve(directory.path, "pi"),
   };
   const archive = resolve(directory.path, "source.tgz");
   await run(

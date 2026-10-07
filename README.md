@@ -25,7 +25,8 @@ of the extracted source archive:
 bun install --production --frozen-lockfile --ignore-scripts
 ```
 
-Set `OPENAI_API_KEY` in your environment. The [example settings](examples/settings.json)
+Set `OPENAI_API_KEY` in your environment, or use a saved Pi login as described
+below. The [example settings](examples/settings.json)
 use public OpenAI with `gpt-6-astra` and `max` reasoning. They set `research: false`
 for a closed-book elementary example: no external source retrieval or independent
 Codex review. Explorer and Verifier still use the configured model. Keep credential
@@ -55,9 +56,17 @@ a stable `--id` for exact retries. Live mutations reach the active owner.
 [Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
 Anthropic, and Google, with per-role overrides. Custom Responses gateways use
 `openai` with `baseUrl`. For a custom CA, set `NODE_EXTRA_CA_CERTS` to its PEM
-certificate bundle. Stored OAuth for `openai-codex` requires an authenticated Pi
-`Models` instance passed as `models` to the library's `open` function.
-The Xean CLI does not inherit a Codex CLI login.
+certificate bundle.
+
+For ChatGPT or Claude subscriptions, start the bundled Pi CLI with
+`bun run pi`, enter `/login`, and select OpenAI or Anthropic. Set the Xean
+profile's provider to `openai` or `anthropic` and choose a model available to that
+account. Xean's CLI and `doctor` reuse Pi's `~/.pi/agent/auth.json`, including
+native token refresh. `PI_CODING_AGENT_DIR` selects another Pi directory for both
+commands. Explicit `apiKeyEnv` or `--key-stdin` credentials take precedence.
+Login and logout remain Pi commands, and Xean model selection remains in its
+settings file. Codex CLI login is separate. Library callers can pass authenticated
+Pi `Models` to `open`.
 
 To enable the default Codex research backend, remove `research: false` and install
 and authenticate the Codex CLI. Source checking and independent review use its
