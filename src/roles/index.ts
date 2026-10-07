@@ -1,9 +1,12 @@
 import type { Context } from "@earendil-works/chord";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import { Assert } from "typebox/value";
 import {
   batchResults,
+  submissionSchemas,
   noteContentSchema,
   verdictSchema,
   verificationStageSchema,
@@ -225,7 +228,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
     const model = runtime.models.getModel(ref.provider, ref.modelId)!;
     const result = await ask(
       profile,
-      `Return results only for requested IDs in notes, never additional results for support. ${instructions}`,
+      `Return exactly one result for every requested ID in notes, never additional results for support. ${instructions}`,
       {
         ...input,
         capacity: {
@@ -240,10 +243,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       },
     );
     const results = result.at(-1)!.value.results;
-    return batchResults<Submission<P>["results"][number]>(
-      ids.slice(0, results.length),
-      results,
-    );
+    return batchResults<Submission<P>["results"][number]>(ids, results);
   };
   const reconstruction = (
     input: ReconstructionInput,
@@ -286,48 +286,106 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           group.flatMap((note) => note.support),
           notes,
         ).filter((note) => !group.includes(note));
-      const batching =
-        "Choose a manageable nonempty prefix of the requested notes in their supplied dependency order. Submit one complete result for every note in that prefix and no others. You may handle several notes together; later calls handle the remaining suffix. Estimate input, reasoning, complete written proofs or reports, and structured-output space before choosing the group. Leave room for the full result; an abbreviated answer does not establish that a proof fits. Around 5000–10000 written proof tokens is only initial sizing guidance, not a limit. Original text lengths are scheduling hints, not proof-size guarantees. ";
+      const select = (
+        profile: "proof" | "reconstruction",
+        pending: Note[],
+        instructions: string,
+        inputFor: (group: Note[]) => unknown,
+        writtenTokens: (note: Note) => number,
+      ) => {
+        const ref = options.profiles[profile].model;
+        const model = runtime.models.getModel(ref.provider, ref.modelId)!;
+        let count = 1;
+        let output = 0;
+        for (let size = 1; size <= pending.length; size++) {
+          const group = pending.slice(0, size);
+          // Reserve complete writing, JSON framing, and three times as much
+          // reasoning. These estimates are scheduling hints, never output caps.
+          output += Math.max(512, writtenTokens(group.at(-1)!)) + 128;
+          const content = JSON.stringify([
+            instructions,
+            inputFor(group),
+            submissionSchemas[profile],
+            group.map((note) => note.id),
+          ]);
+          const room = clampMaxTokensToContext(
+            { ...model, contextWindow: model.contextWindow * 0.8 },
+            normalizeContext({
+              messages: [{ role: "user", content, timestamp: 0 }],
+            }),
+            model.maxTokens,
+          );
+          if (
+            output * (model.reasoning ? 4 : 1) > model.maxTokens * 0.8 ||
+            room < model.maxTokens
+          )
+            break;
+          count = size;
+        }
+        // An oversized estimate gets one note, subject to Pi's input guard.
+        return pending.slice(0, count);
+      };
       const instructions =
-        "Independently prove each statement in your selected prefix, returning one complete proof per selected note. Declared support outside that prefix may be assumed at its exact stated scope without reproving it. Check applicability and submit results only for the selected prefix. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the generated dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
+        "Independently prove every requested statement, returning one complete proof per note. Declared support outside the assigned group may be assumed at its exact stated scope without reproving it. Check applicability and submit results for every assigned note. Write complete arguments, not abbreviated sketches. Original arguments, methods, summaries, and comparison reports are withheld. Use only each note's declared transitive support, its listed external premises, and background permitted by the task. Approved external premises may be assumed at exactly their stated scope; check their hypotheses and applications. Previously attempted support may be assumed conditionally, but final acceptance still requires reconstruction throughout the generated dependency chain. Never use a descendant or unrelated claim. Prove every new step, including composition and theorem applicability. To prove P implies Q, assume P and derive Q; this does not establish P. Set complete=false and state the unresolved gap when you cannot complete a proof. Supporting lemmas need not solve the original task.";
       const comparisonInstructions = `${mathematicalCheck} First check that the extracted statement faithfully represents the result asserted in the full text, preserving scope without leaking proof instructions. Also check imported support statements against their supplied full text. A bad extraction gives INCONCLUSIVE and is not a defect in the original mathematics. For generated notes, compare the original argument in the full text with the independent proof. Both arguments must establish that statement, including its hypotheses, quantitative guarantees, and permitted assumptions. The supplied premises records bind the exact external claims to source PASS or caller-import trust. Use those approved claims without demanding another proof or source search, but check their exact hypotheses and applications. A stronger theorem, an unmet hypothesis, or an undeclared inference is not approved. Supporting claims must follow declared transitive dependencies, in dependency order, without circular or unrelated assumptions. Code requires the whole generated dependency chain to pass; supporting lemmas need not solve the original task. An explicit conditional P implies Q may assume P, but does not establish P. For generated notes, PASS requires a correct original argument and a correct independent proof of the same claim. For an imported target, caller trust grants the original result and sources; no original proof is required. PASS requires faithful statement extraction and a complete correct independent proof of that exact claim. Caller trust does not replace reconstruction. FAIL requires a concrete defect in the original statement or argument. An incomplete, incorrect, or unsupported independent proof alone gives INCONCLUSIVE, even if it claims completeness. So do missing approval records or proof recipes leaked through the extracted statement or external premises. Distinguish a construction that is itself the claimed result from guidance for finding its proof. Never silently edit an approved premise. For generated notes, audit the original even when reconstruction is incomplete: identify whether it supplies the missing step. For FAIL or INCONCLUSIVE, begin with the exact blocker. Then report Original argument:, Independent proof:, and Statement and premises:. Explain concrete defects with a quotation, formula, or note ID, distinguishing mathematical errors from missing evidence, input problems, and harmless wording. No defect found does not establish correctness. Record unresolved obligations, not work requests.`;
       while (pending.length) {
+        const proofInput = (group: Note[]) => ({
+          task: input.task,
+          notes: group.map(statement),
+          support: supportFor(group).map(statement),
+        });
+        const group = select(
+          "proof",
+          pending,
+          instructions,
+          proofInput,
+          (note) =>
+            3 *
+            Math.max(
+              estimateTextTokens(note.text),
+              estimateTextTokens(JSON.stringify(statement(note))),
+            ),
+        );
         const proofs = await batch(
           "proof",
-          batching + instructions,
-          {
-            task: input.task,
-            notes: pending.map((note) => ({
-              ...statement(note),
-              originalTextTokens: estimateTextTokens(note.text),
-            })),
-            support: supportFor(pending).map(statement),
-          },
+          instructions,
+          proofInput(group),
           runtime,
           context,
         );
-        const group = pending.slice(0, proofs.length);
         let remaining = group;
         while ((remaining = unblocked(remaining)).length) {
-          const support = supportFor(remaining);
-          const judgments = await batch(
-            "reconstruction",
-            batching + comparisonInstructions,
-            {
+          const comparisonInput = (selected: Note[]) => {
+            const support = supportFor(selected);
+            return {
               task: input.task,
               support: support.map((note) =>
                 note.imported ? packet(note) : statement(note),
               ),
-              notes: remaining.map(packet),
-              premises: [...support, ...remaining].map((note) => ({
+              notes: selected.map(packet),
+              premises: [...support, ...selected].map((note) => ({
                 noteId: note.id,
                 ...sourceRecord(note),
               })),
-              independent: remaining.map((note) => ({
+              independent: selected.map((note) => ({
                 noteId: note.id,
                 result: proofs[group.indexOf(note)]!,
               })),
-            },
+            };
+          };
+          const comparisonGroup = select(
+            "reconstruction",
+            remaining,
+            comparisonInstructions,
+            comparisonInput,
+            (note) =>
+              estimateTextTokens(note.text) +
+              estimateTextTokens(proofs[group.indexOf(note)]!.proof),
+          );
+          const judgments = await batch(
+            "reconstruction",
+            comparisonInstructions,
+            comparisonInput(comparisonGroup),
             runtime,
             context,
           );

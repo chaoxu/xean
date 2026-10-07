@@ -487,11 +487,16 @@ test("Explorer retains frozen reads and private submissions across native reopen
   }
 });
 
-test("model-selected proof and comparison batches preserve blindness, IDs, and progress after reopen", async () => {
+test("assigned proof and comparison groups preserve blindness, exact IDs, and progress after reopen", async () => {
   const directory = await temporaryDirectory("pi-role-verifier-");
+  const proofText = (id: string) =>
+    `${id} independent complete proof. `.repeat(
+      ["n1", "n2"].includes(id) ? 120 : 1,
+    );
   let rejectedIds = false;
   const schemaChecks: boolean[] = [];
-  const invalidPrefixes = [[], ["n2"], ["n1", "n1"]];
+  const invalidProofIds = [[], ["n1"], ["n2"], ["n1", "n1"]];
+  const invalidComparisonIds = [[], ["n3"], ["n4"], ["n3", "n3"]];
   const provider = fixture((name, input, transcript) => {
     expect(input).not.toHaveProperty("verifiedSupport");
     const tool = getCurrentTools(transcript.messages).find(
@@ -505,6 +510,14 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
       "properties.results.items.properties.noteId.enum",
       input.notes.map(({ id }: { id: string }) => id),
     );
+    expect(tool.parameters).toHaveProperty(
+      "properties.results.minItems",
+      input.notes.length,
+    );
+    expect(tool.parameters).toHaveProperty(
+      "properties.results.maxItems",
+      input.notes.length,
+    );
     if (name === "proof") {
       expect(JSON.stringify(input)).not.toContain("secret original proof");
       expect(JSON.stringify(input)).not.toContain("detailed claim");
@@ -513,7 +526,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
         input.notes.every((note: object) => !Object.hasOwn(note, "summary")),
       ).toBe(true);
       expect(input.notes.map(({ id }: { id: string }) => id)).toEqual(
-        input.notes[0].id === "n1" ? ["n1", "n2", "n3"] : ["n3"],
+        input.notes[0].id === "n1" ? ["n1", "n2"] : ["n3", "n4"],
       );
       expect(input.support.map(({ id }: { id: string }) => id)).toEqual(
         input.notes[0].id === "n1" ? [] : ["n1", "n2"],
@@ -525,7 +538,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
       expect(input.independent).toEqual(
         input.notes.map(({ id }: { id: string }) => ({
           noteId: id,
-          result: { complete: true, proof: "Independent complete proof." },
+          result: { complete: true, proof: proofText(id) },
         })),
       );
     }
@@ -542,7 +555,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
             },
           }
         : name === "proof"
-          ? { proof: "Independent complete proof.", complete: true }
+          ? { complete: true }
           : {
               verdict: "PASS",
               report: "Private comparison report",
@@ -556,34 +569,33 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
                   }
                 : {}),
             };
-    if (
-      name === "proof" &&
-      input.notes[0].id === "n1" &&
-      invalidPrefixes.length
-    )
+    const resultFor = (noteId: string) => ({
+      noteId,
+      ...value,
+      ...(name === "correctness"
+        ? { statement: `${noteId} exact claim` }
+        : name === "proof"
+          ? { proof: proofText(noteId) }
+          : {}),
+    });
+    const invalidIds =
+      name === "proof" && input.notes[0].id === "n1"
+        ? invalidProofIds
+        : name === "reconstruction" && input.notes[0].id === "n3"
+          ? invalidComparisonIds
+          : [];
+    if (invalidIds.length)
       return {
-        results: invalidPrefixes
-          .shift()!
-          .map((noteId) => ({ noteId, ...value })),
+        results: invalidIds.shift()!.map(resultFor),
       };
     if (name === "proof" && input.notes[0].id === "n3" && !rejectedIds) {
       rejectedIds = true;
-      return { results: ["n2", "n3"].map((noteId) => ({ noteId, ...value })) };
+      return { results: ["n2", "n3", "n4"].map(resultFor) };
     }
-    const selected =
-      name === "proof"
-        ? input.notes.slice(0, 2)
-        : name === "reconstruction"
-          ? input.notes.slice(0, 1)
-          : input.notes;
     const result = {
-      results: [...selected].reverse().map((note: { id: string }) => ({
-        noteId: note.id,
-        ...value,
-        ...(name === "correctness"
-          ? { statement: `${note.id} exact claim` }
-          : {}),
-      })),
+      results: [...input.notes]
+        .reverse()
+        .map(({ id }: { id: string }) => resultFor(id)),
     };
     schemaChecks.push(Check(tool.parameters, result));
     return result;
@@ -605,14 +617,20 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
         notes: [
           note("n1"),
           note("n2", ["n1"]),
-          { ...note("n3", ["n2"]), candidate: true },
+          note("n3", ["n2"]),
+          { ...note("n4", ["n3"]), candidate: true },
         ],
-        targets: ["n3"],
+        targets: ["n4"],
         through: "reconstruction",
       },
     });
     current.harness.resume();
     await closed.promise;
+    expect(
+      provider.calls
+        .filter(({ name }) => name === "reconstruction")
+        .map(({ input }) => input.notes.map(({ id }: { id: string }) => id)),
+    ).toEqual([["n1"]]);
     current = await provider.open(directory);
     const outcome = await resultOf(current.harness, id);
     expect(outcome.status).toBe("completed");
@@ -622,7 +640,7 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
       SolverResult,
       { kind: "verification" }
     >;
-    expect(result.checks).toHaveLength(3);
+    expect(result.checks).toHaveLength(4);
     expect(
       result.checks.every(
         (check) =>
@@ -630,9 +648,12 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
           check.reconstruction?.verdict === "PASS",
       ),
     ).toBe(true);
+    for (const check of result.checks)
+      expect(check.reconstruction?.proof).toBe(proofText(check.noteId));
     expect(result.checks[0]!.requirements).toBeUndefined();
     expect(result.checks[1]!.requirements).toBeUndefined();
-    expect(result.checks[2]!.requirements?.verdict).toBe("PASS");
+    expect(result.checks[2]!.requirements).toBeUndefined();
+    expect(result.checks[3]!.requirements?.verdict).toBe("PASS");
     expect(result.checks[0]!.correction).toEqual({
       revision: 0,
       summary: "Harmless clarification",
@@ -644,32 +665,111 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
         input.notes.map(({ id }: { id: string }) => id),
       ]),
     ).toEqual([
-      ["correctness", ["n1", "n2", "n3"]],
-      ["requirements", ["n3"]],
-      ...Array.from({ length: 4 }, () => ["proof", ["n1", "n2", "n3"]]),
-      ["reconstruction", ["n1", "n2"]],
+      ["correctness", ["n1", "n2", "n3", "n4"]],
+      ["requirements", ["n4"]],
+      ...Array.from({ length: 5 }, () => ["proof", ["n1", "n2"]]),
+      ["reconstruction", ["n1"]],
       ["reconstruction", ["n2"]],
-      ["proof", ["n3"]],
-      ["proof", ["n3"]],
-      ["reconstruction", ["n3"]],
+      ["proof", ["n3", "n4"]],
+      ["proof", ["n3", "n4"]],
+      ...Array.from({ length: 5 }, () => ["reconstruction", ["n3", "n4"]]),
     ]);
     const proofs = provider.calls.filter(({ name }) => name === "proof");
-    expect(new Set(proofs.slice(0, 4).map(({ session }) => session)).size).toBe(
+    expect(new Set(proofs.slice(0, 5).map(({ session }) => session)).size).toBe(
       1,
     );
     expect(proofs.at(-2)!.session).toBe(proofs.at(-1)!.session);
     expect(new Set(provider.calls.map(({ session }) => session)).size).toBe(7);
-    expect(JSON.stringify(proofs[3]!.transcript)).toContain(
-      "Submit at least one requested note",
+    const comparisons = provider.calls.filter(
+      ({ name }) => name === "reconstruction",
     );
-    expect(JSON.stringify(proofs.at(-1)!.transcript)).toContain(
-      "Batch results must contain exactly one result per requested note",
-    );
+    expect(
+      new Set(comparisons.slice(2).map(({ session }) => session)).size,
+    ).toBe(1);
+    for (const call of [proofs[4]!, proofs.at(-1)!, comparisons.at(-1)!])
+      expect(JSON.stringify(call.transcript)).toContain(
+        "Batch results must contain exactly one result per requested note",
+      );
     expect(schemaChecks.every(Boolean)).toBe(true);
   } finally {
     await current.harness.close(context);
   }
 });
+
+test.each(["oversized writing", "limited context", "native reserve"] as const)(
+  "reconstruction attempts singleton groups for %s and respects Pi's input guard",
+  async (limit) => {
+    const directory = await temporaryDirectory("pi-reconstruction-capacity-");
+    const notes = [preparedNote("n1"), preparedNote("n2")];
+    if (limit === "oversized writing")
+      notes[0]!.text += "Original proof detail. ".repeat(1500);
+    else
+      for (const note of notes.slice()) {
+        const support = preparedNote(`${note.id}-support`);
+        support.imported = true;
+        support.checks[0]!.correctness!.statement += "Condition. ".repeat(
+          limit === "native reserve" ? 650 : 4000,
+        );
+        note.support = [support.id];
+        notes.push(support);
+      }
+    const provider = fixture(
+      (name, input) => ({
+        results: input.notes.map(({ id }: { id: string }) => ({
+          noteId: id,
+          ...(name === "proof"
+            ? { complete: true, proof: "Independent complete proof" }
+            : { verdict: "PASS", report: "Checked" }),
+        })),
+      }),
+      { research: false },
+      limit === "native reserve" ? 16384 : 32768,
+    );
+    const current = await provider.open(directory);
+    const invoke = () =>
+      current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes,
+          targets: ["n1", "n2"],
+          through: "reconstruction",
+        },
+      });
+    try {
+      expect(await resultOf(current.harness, await invoke())).toMatchObject({
+        status: "completed",
+        result: {
+          checks: ["n1", "n2"].map((noteId) => ({
+            noteId,
+            reconstruction: { verdict: "PASS" },
+          })),
+        },
+      });
+      expect(
+        provider.calls.map(({ name, input }) => [
+          name,
+          input.notes.map(({ id }: { id: string }) => id),
+        ]),
+      ).toEqual([
+        ["proof", ["n1"]],
+        ["reconstruction", ["n1"]],
+        ["proof", ["n2"]],
+        ["reconstruction", ["n2"]],
+      ]);
+      notes[0]!.checks[0]!.correctness!.statement += "Condition. ".repeat(
+        20000,
+      );
+      expect(await resultOf(current.harness, await invoke())).toMatchObject({
+        status: "faulted",
+        error: { message: capacityError },
+      });
+      expect(provider.calls).toHaveLength(4);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
   "reconstruction finishes produced proofs before handling %s pending support",
@@ -677,29 +777,27 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
     const directory = await temporaryDirectory("pi-role-support-");
     const refuted = boundary === "refuted";
     const dependent = boundary === "dependent";
+    const proof = "Independent proof. ".repeat(180);
     const notes = [
       { ...preparedNote("n1"), imported: boundary === "imported" },
       preparedNote("n2", ["n1"]),
-      preparedNote("n3", ["n2"]),
+      preparedNote("n3", boundary === "unrelated" ? [] : ["n2"]),
       preparedNote("n4"),
-      preparedNote("n5", dependent || boundary === "imported" ? ["n3"] : []),
     ];
     let retry = false;
     const provider = fixture((name, input) => ({
-      results: input.notes
-        .slice(0, name === "proof" ? 4 : 1)
-        .map(({ id }: { id: string }) => ({
-          noteId: id,
-          ...(name === "proof"
-            ? {
-                complete: id !== "n1" || refuted || retry,
-                proof: "Independent proof",
-              }
-            : {
-                verdict: id === "n1" && refuted ? "FAIL" : "PASS",
-                report: "Checked",
-              }),
-        })),
+      results: input.notes.map(({ id }: { id: string }) => ({
+        noteId: id,
+        ...(name === "proof"
+          ? {
+              complete: id !== "n1" || refuted || retry,
+              proof,
+            }
+          : {
+              verdict: id === "n1" && refuted ? "FAIL" : "PASS",
+              report: "Checked",
+            }),
+      })),
     }));
     const current = await provider.open(directory);
     const invoke = async () => {
@@ -708,7 +806,7 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
         input: {
           task,
           notes,
-          targets: ["n1", "n3", "n4", "n5"],
+          targets: ["n1", "n2", "n3", "n4"],
           through: "reconstruction",
         },
       });
@@ -726,30 +824,34 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
         ]),
       ).toEqual([
         ["n1", refuted ? "FAIL" : "INCONCLUSIVE"],
-        ...["n2", "n3"].map((id) => [id, refuted ? "INCONCLUSIVE" : "PASS"]),
-        ["n4", "PASS"],
-        ...(dependent ? [] : [["n5", "PASS"]]),
+        ["n2", refuted ? "INCONCLUSIVE" : "PASS"],
+        ...(dependent
+          ? []
+          : [
+              ["n3", refuted ? "INCONCLUSIVE" : "PASS"],
+              ["n4", "PASS"],
+            ]),
       ]);
+      if (refuted)
+        for (const check of result.checks.slice(1, 3))
+          expect(check.reconstruction?.report).toContain(
+            "A declared dependency was refuted",
+          );
       expect(
         provider.calls.map(({ name, input }) => [
           name,
           input.notes.map(({ id }: { id: string }) => id),
         ]),
       ).toEqual([
-        ["proof", ["n1", "n2", "n3", "n4", "n5"]],
-        ["reconstruction", ["n1", "n2", "n3", "n4"]],
-        ...(refuted
-          ? []
-          : [
-              ["reconstruction", ["n2", "n3", "n4"]],
-              ["reconstruction", ["n3", "n4"]],
-            ]),
-        ["reconstruction", ["n4"]],
+        ["proof", ["n1", "n2"]],
+        ["reconstruction", ["n1"]],
+        ...(refuted ? [] : [["reconstruction", ["n2"]]]),
         ...(dependent
           ? []
           : [
-              ["proof", ["n5"]],
-              ["reconstruction", ["n5"]],
+              ["proof", refuted ? ["n4"] : ["n3", "n4"]],
+              ...(refuted ? [] : [["reconstruction", ["n3"]]]),
+              ["reconstruction", ["n4"]],
             ]),
       ]);
       if (dependent) {
@@ -758,7 +860,7 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
         retry = true;
         const before = provider.calls.length;
         expect(await invoke()).toMatchObject({
-          checks: ["n1", "n5"].map((noteId) => ({
+          checks: ["n1", "n3", "n4"].map((noteId) => ({
             noteId,
             reconstruction: { verdict: "PASS" },
           })),
@@ -771,9 +873,11 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
               input.notes.map(({ id }: { id: string }) => id),
             ]),
         ).toEqual([
-          ["proof", ["n1", "n5"]],
-          ["reconstruction", ["n1", "n5"]],
-          ["reconstruction", ["n5"]],
+          ["proof", ["n1", "n3"]],
+          ["reconstruction", ["n1"]],
+          ["reconstruction", ["n3"]],
+          ["proof", ["n4"]],
+          ["reconstruction", ["n4"]],
         ]);
       }
     } finally {
@@ -785,12 +889,13 @@ test.each(["refuted", "dependent", "unrelated", "imported"] as const)(
 test("standalone reconstruction retains completed checks and corrections after a later failure", async () => {
   const directory = await temporaryDirectory("pi-reconstruct-failure-");
   const notes = [preparedNote("n1"), preparedNote("n2", ["n1"])];
+  const proof = "Independent complete proof. ".repeat(120);
   const provider = fixture((name, input) => {
     if (name === "proof")
       return {
         results: input.notes.map(({ id }: { id: string }) => ({
           noteId: id,
-          proof: "Independent complete proof",
+          proof,
           complete: true,
         })),
       };
@@ -841,16 +946,21 @@ test("standalone reconstruction retains completed checks and corrections after a
             correction: { revision: 0, summary: "Clarified summary" },
             reconstruction: {
               verdict: "PASS",
-              proof: "Independent complete proof",
+              proof,
             },
           },
         ],
       },
     });
-    expect(provider.calls.map(({ name }) => name)).toEqual([
-      "proof",
-      "reconstruction",
-      "reconstruction",
+    expect(
+      provider.calls.map(({ name, input }) => [
+        name,
+        input.notes.map(({ id }: { id: string }) => id),
+      ]),
+    ).toEqual([
+      ["proof", ["n1", "n2"]],
+      ["reconstruction", ["n1"]],
+      ["reconstruction", ["n2"]],
     ]);
   } finally {
     await current.harness.close(context);
@@ -872,29 +982,24 @@ test.each(["imported", "reconstructed"] as const)(
         },
       });
     const provider = fixture((name, input) => {
-      const id = input.notes[0].id;
-      expect(input.support.map(({ id }: { id: string }) => id)).toEqual(
-        id === "n3" ? ["n1", "n2"] : name === "proof" ? ["n2"] : [],
-      );
+      expect(input.support.map(({ id }: { id: string }) => id)).toEqual(["n2"]);
       const middleInput = input.support.find(
         ({ id }: { id: string }) => id === "n2",
       );
       expect(middleInput?.text).toBe(
-        name === "reconstruction" && middle === "imported" && id === "n3"
+        name === "reconstruction" && middle === "imported"
           ? support.text
           : undefined,
       );
       if (name === "proof")
         expect(JSON.stringify(input)).not.toContain("secret original proof");
       return {
-        results: [
-          {
-            noteId: id,
-            ...(name === "proof"
-              ? { complete: true, proof: "Independent proof" }
-              : { verdict: "PASS", report: "Checked" }),
-          },
-        ],
+        results: input.notes.map(({ id }: { id: string }) => ({
+          noteId: id,
+          ...(name === "proof"
+            ? { complete: true, proof: "Independent proof" }
+            : { verdict: "PASS", report: "Checked" }),
+        })),
       };
     });
     const current = await provider.open(directory);
@@ -918,12 +1023,13 @@ test.each(["imported", "reconstructed"] as const)(
         },
       });
       expect(
-        provider.calls.map(({ name, input }) => [name, input.notes[0].id]),
+        provider.calls.map(({ name, input }) => [
+          name,
+          input.notes.map(({ id }: { id: string }) => id),
+        ]),
       ).toEqual([
-        ["proof", "n1"],
-        ["reconstruction", "n1"],
-        ["proof", "n3"],
-        ["reconstruction", "n3"],
+        ["proof", ["n1", "n3"]],
+        ["reconstruction", ["n1", "n3"]],
       ]);
     } finally {
       await current.harness.close(context);
@@ -950,7 +1056,16 @@ test.each([
     const provider = fixture(
       (name, input) => {
         if (name === "explorer")
-          return { notes: [draft("n1"), draft("n2", ["n1"])], candidate: true };
+          return {
+            notes: [
+              draft("n1"),
+              {
+                ...draft("n2", ["n1"]),
+                text: `${draft("n2").text}\n\n${"Original proof detail. ".repeat(75)}`,
+              },
+            ],
+            candidate: true,
+          };
         if (name === "proof" && ++proofs > 1 && !retry) {
           if (failure === "continuation")
             return "Unsubmitted proof: " + "x".repeat(80000);
@@ -983,10 +1098,7 @@ test.each([
               ? { complete: true, proof: "Independent proof" }
               : { verdict: "PASS", report: "Checked" };
         return {
-          results: (name === "proof"
-            ? input.notes.slice(0, 1)
-            : input.notes
-          ).map(({ id }: { id: string }) => ({
+          results: input.notes.map(({ id }: { id: string }) => ({
             noteId: id,
             ...value,
             ...(name === "correctness"

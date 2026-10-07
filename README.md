@@ -92,14 +92,15 @@ The note reader includes the existing checked statement. Explorer and Verifier
 use it to distinguish granted support from additional facts that need a proof
 or a separate supporting lemma.
 
-Blind reconstruction lets the prover choose how many pending notes to prove
-together, in dependency order. The comparer can likewise submit a smaller group
-of complete judgments. Further native conversations handle the remaining notes.
-There are no separate planning calls or fixed note counts. Prompts ask the
-models to allow for input, reasoning, complete written output, and structure.
-Pi estimates context use and the provider guard reserves the model's full output
-allowance. Inputs that leave insufficient space are rejected. Token-truncated
-responses continue the same assignment within the
+Blind reconstruction assigns batches in dependency order. Code greedily packs
+notes using original text lengths, Pi's token estimator, and the configured
+model's context and output capacities. It reserves space for complete writing,
+reasoning, structured results, and headroom. Comparisons use the actual returned
+proof lengths and may need smaller batches. Each call must submit every assigned
+note. These estimates guide grouping and do not cap responses or guarantee that
+a proof fits. An oversized note is assigned alone, subject to Pi's input guard.
+Pi checks context use and the provider guard reserves the full output allowance.
+Token-truncated responses continue the same assignment within the
 [response and continuation allowances](docs/parity.md#pi-integration).
 Tools from truncated responses never execute.
 Pi reuses committed proofs and comparisons after reopening, and an ordinary

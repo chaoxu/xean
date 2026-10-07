@@ -211,13 +211,7 @@ export function conversations(profiles: Profiles) {
           } else {
             const results = (value as { results: { noteId: string }[] })
               .results;
-            const partial = name === "proof" || name === "reconstruction";
-            if (partial && !results.length)
-              throw new Error("Submit at least one requested note");
-            batchResults(
-              partial ? call.ids!.slice(0, results.length) : call.ids!,
-              results,
-            );
+            batchResults(call.ids!, results);
           }
           const count = responses(history);
           done ||= count >= (call.maxResponses ?? Infinity);
@@ -373,6 +367,10 @@ export function conversations(profiles: Profiles) {
                             ? planSchema(call.capabilities)
                             : structuredClone(submissionSchemas[call.profile!]);
                           if (call.ids && "results" in parameters.properties) {
+                            Object.assign(parameters.properties.results, {
+                              minItems: call.ids.length,
+                              maxItems: call.ids.length,
+                            });
                             const fields =
                               parameters.properties.results.items.properties;
                             fields.noteId = Type.String({
