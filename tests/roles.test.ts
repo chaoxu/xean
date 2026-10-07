@@ -1770,6 +1770,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
   const provider = fixture(
     (_name, input, transcript) => {
       expect(input.capabilities).toMatchObject({
+        verifier: true,
         explorer: false,
         literature: false,
         codex: count >= 3,
@@ -1778,6 +1779,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
         (tool) => tool.name === "submit_coordinator",
       )!;
       for (const request of [
+        { kind: "verifier", notes: ["n1"], through: "reconstruction" },
         { kind: "explorer", guidance: "Explore." },
         { kind: "literature", query: "Find the theorem." },
         { kind: "codex", assignment: "Check the construction.", notes: [] },
@@ -1815,7 +1817,13 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
               notes: [],
             },
           }
-        : { work: null };
+        : {
+            work: {
+              kind: "verifier",
+              notes: ["n1"],
+              through: "reconstruction",
+            },
+          };
     },
     {
       research: false,
@@ -1836,7 +1844,7 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
     );
     const input = {
       task,
-      notes: [],
+      notes: [{ ...note("n1"), candidate: true }],
       failures: [],
       guidance: [],
       literatureUsed: false,
@@ -1851,7 +1859,9 @@ test("Coordinator capabilities survive retry and reopen; fresh decisions get fre
       }
       expect(await resultOf(current.harness, id)).toMatchObject({
         status: "completed",
-        result: { work: null },
+        result: {
+          work: { kind: "verifier", notes: ["n1"], through: "reconstruction" },
+        },
       });
     }
     expect(provider.calls).toHaveLength(4);

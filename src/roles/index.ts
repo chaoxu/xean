@@ -421,6 +421,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
   const functions = {
     capabilities(input: CoordinationInput) {
       return {
+        verifier: true,
         explorer: !singleShot || !input.explorerUsed,
         codex: functions.codex !== unconfiguredCodex,
         literature: literature && !input.literatureUsed,
