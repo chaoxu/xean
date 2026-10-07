@@ -371,17 +371,30 @@ test("custom gateways use native OpenAI Responses and API-key authentication", a
   );
   const ref = runtime.profiles.coordinator.model;
   const model = runtime.models.getModel(ref.provider, ref.modelId)!;
+  const tool = conversations(runtime.profiles).extension.tools!.find(
+    (tool) => tool.name === "submit_correctness",
+  )!;
   let headers: Headers | undefined;
   const answer = await runtime.profiles.coordinator.stream!(
     model,
-    { messages: [{ role: "user", content: "x", timestamp: 0 }] },
+    {
+      messages: [
+        createInitialSystemMessage("Submit", [tool])!,
+        { role: "user", content: "x", timestamp: 0 },
+      ],
+    },
     {
       fetch: fixtureFetch(async (_url, options) => {
         headers = new Headers(options?.headers);
-        expect(await new Response(options?.body).json()).toMatchObject({
+        const body = await new Response(options?.body).json();
+        expect(body).toMatchObject({
           parallel_tool_calls: false,
           tool_choice: "required",
         });
+        expect(body.tools[0].strict).toBe(true);
+        expect(
+          body.tools[0].parameters.properties.results.items.required,
+        ).toContain("noteId");
         return new Response(
           `data: ${JSON.stringify({
             type: "response.completed",

@@ -493,9 +493,14 @@ test("model-selected proof and comparison batches preserve blindness, IDs, and p
   const schemaChecks: boolean[] = [];
   const invalidPrefixes = [[], ["n2"], ["n1", "n1"]];
   const provider = fixture((name, input, transcript) => {
+    expect(input).not.toHaveProperty("verifiedSupport");
     const tool = getCurrentTools(transcript.messages).find(
       (tool) => tool.name === `submit_${name}`,
     )!;
+    expect(tool.constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "prefer",
+    });
     expect(tool.parameters).toHaveProperty(
       "properties.results.items.properties.noteId.enum",
       input.notes.map(({ id }: { id: string }) => id),

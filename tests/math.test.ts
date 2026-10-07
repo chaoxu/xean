@@ -80,6 +80,7 @@ test("correctness targets still establish sources when they support another targ
   delete base.checks[0]!.source;
   const target = note("target", [base.id]);
   const notes = refresh([base, target]);
+  expect(notes.map((note) => note.verified)).toEqual([false, false]);
   const request = {
     targets: [base.id, target.id],
     through: "correctness" as const,
@@ -98,6 +99,7 @@ test("correctness targets still establish sources when they support another targ
   expect(validatePlan(plan, notes, capabilities).work).not.toBeNull();
   base.checks.push({ source: pass });
   refresh(notes);
+  expect(notes.map((note) => note.verified)).toEqual([true, true]);
   expect(() => validatePlan(plan, notes, capabilities)).toThrow(
     "no pending checks",
   );

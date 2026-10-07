@@ -479,14 +479,11 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           ).filter((note) => !selected.includes(note));
           const results = await batch(
             stage,
-            `${stage === "correctness" ? mathematicalCheck : correctionInstructions} Check all requested notes together. The verifiedSupport IDs identify established support notes. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
+            `${stage === "correctness" ? mathematicalCheck : correctionInstructions} Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
             {
               task: input.task,
               support: support.map(packet),
               notes: selected.map(packet),
-              verifiedSupport: support
-                .filter((note) => note.verified)
-                .map((note) => note.id),
               ...(stage === "requirements"
                 ? {
                     sources: [...support, ...selected].map((note) => ({

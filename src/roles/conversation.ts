@@ -173,6 +173,7 @@ export function conversations(profiles: Profiles) {
         description:
           "Submit complete structured results for this assignment. For Explorer, submit only new notes.",
         parameters: submissionSchemas[name],
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
         replay: "safe",
         executionMode: "sequential",
         async execute(value, api, context) {

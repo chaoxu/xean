@@ -124,6 +124,8 @@ the original archives. The dependency check verifies both changed and untouched
 files.
 
 Native retry defaults and response-based accounting remain in effect.
+Submission tools prefer Pi's JSON-schema constrained sampling. Pi falls back
+when a provider or schema does not support it. Local result validation still applies.
 Message-limit recovery replays only completed encrypted reasoning from the same
 API, provider, and model. Pi attaches reasoning signatures at completed-item
 events. The projection validates those signatures and deduplicates item IDs,
