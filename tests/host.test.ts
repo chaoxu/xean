@@ -16,6 +16,8 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   createModels,
+  envApiKeyAuth,
+  InMemoryCredentialStore,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
@@ -422,13 +424,25 @@ test("custom role extensions compose with built-in mathematical conversations", 
     provider: "custom",
     models: [{ id: "fixture" }],
   });
-  const models = createModels();
-  models.setProvider(faux.provider);
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("custom", async () => ({
+    type: "api_key",
+    key: "stored-fixture",
+  }));
+  const models = createModels({ credentials });
+  models.setProvider({
+    ...faux.provider,
+    auth: { apiKey: envApiKeyAuth("Fixture", []) },
+  });
   faux.setResponses([
     fauxAssistantMessage(
       fauxToolCall("submit_explorer", { notes: [], candidate: false }),
       { stopReason: "toolUse" },
     ),
+    (_input, options) => {
+      expect(options?.apiKey).toBe("stored-fixture");
+      return fauxAssistantMessage("Native conversation authenticated.");
+    },
   ]);
   let calls = 0;
   const Custom = defineTask<null, { phase: "run" }, null>({
@@ -489,6 +503,21 @@ test("custom role extensions compose with built-in mathematical conversations", 
     await owner.root.waitForIdle(context);
     expect(calls).toBe(1);
     expect(faux.state.callCount).toBe(1);
+    const native = await owner.harness.createConversation(
+      {
+        ownership: { kind: "ownerless" },
+        agent: { model: { provider: "custom", modelId: "fixture" } },
+      },
+      context,
+    );
+    await (
+      await native.submit(
+        { type: "input", content: "Authenticate outside the role profile." },
+        context,
+      )
+    ).wait(context);
+    await native.waitForIdle(context);
+    expect(faux.state.callCount).toBe(2);
     const tasks = await owner.root.commit(
       (tx) => tx.scanTasks({}, 30),
       context,

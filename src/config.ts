@@ -134,6 +134,18 @@ export function readSettings(value: unknown): Settings {
   return settings;
 }
 
+function builtinModels(authContext: AuthContext) {
+  const models = createModels({ authContext });
+  for (const provider of [
+    openaiProvider(),
+    openaiCodexProvider(),
+    anthropicProvider(),
+    googleProvider(),
+  ])
+    models.setProvider(provider);
+  return models;
+}
+
 /** Profiles retain native model identities and configure each request. */
 export function createRuntime(
   value: Settings,
@@ -145,15 +157,7 @@ export function createRuntime(
 ) {
   const settings = readSettings(value);
   const authContext = options.authContext ?? defaultProviderAuthContext();
-  const models = createModels({ authContext });
-  for (const provider of [
-    openaiProvider(),
-    openaiCodexProvider(),
-    anthropicProvider(),
-    googleProvider(),
-    ...(options.models?.getProviders() ?? []),
-  ])
-    models.setProvider(provider);
+  const models = options.models ?? builtinModels(authContext);
   const requestHeaders = (
     request: SimpleStreamOptions,
     headers: ProviderHeaders,
@@ -178,12 +182,11 @@ export function createRuntime(
   const profiles = {} as Record<ProfileName, Profile>;
   for (const name of profileNames) {
     const configured = settings.profiles[name] ?? settings.profiles.default;
-    const source = options.models?.getProvider(configured.provider)
-      ? options.models
-      : models;
     const explicit = configured.apiKeyEnv || options.key;
+    if (configured.baseUrl && !explicit)
+      throw new Error("Custom baseUrl requires apiKeyEnv or --key-stdin");
     const key = async () => {
-      if (!source.getProvider(configured.provider)?.auth.apiKey)
+      if (!models.getProvider(configured.provider)?.auth.apiKey)
         throw new Error(
           `${configured.provider} does not support API-key authentication`,
         );
@@ -197,7 +200,7 @@ export function createRuntime(
       checkAuth: async () =>
         explicit
           ? !!(await key())
-          : !!(await source.checkAuth(configured.provider)),
+          : !!(await models.checkAuth(configured.provider)),
       stream: (model, input, request = {}) =>
         lazyStream(model, async () => {
           const transcript = normalizeContext(input);
@@ -211,7 +214,7 @@ export function createRuntime(
           const apiKey = explicit ? await key() : request.apiKey;
           if (explicit && !apiKey)
             throw new Error(`No credential in ${configured.apiKeyEnv}`);
-          return source.streamSimple(
+          return models.streamSimple(
             configured.baseUrl
               ? { ...model, baseUrl: configured.baseUrl }
               : model,

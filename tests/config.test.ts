@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "./directory.ts";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import {
   createModels,
   envApiKeyAuth,
@@ -251,6 +253,65 @@ test("native routes retain per-profile auth and transport without persisting cre
   expect(JSON.stringify(runtime.profiles)).not.toContain("fixture");
 });
 
+test("custom endpoints require an explicit key instead of inheriting Pi subscription credentials", async () => {
+  for (const provider of [openaiProvider(), anthropicProvider()]) {
+    const credentials = new InMemoryCredentialStore();
+    const models = createModels({ credentials });
+    const faux = fauxProvider({
+      provider: provider.id,
+      models: [{ id: "fixture" }],
+    });
+    models.setProvider({ ...faux.provider, auth: provider.auth });
+    await credentials.modify(provider.id, async () => ({
+      type: "oauth",
+      access: "subscription-fixture",
+      refresh: "refresh-fixture",
+      expires: Date.now() + 3_600_000,
+    }));
+    const settings = {
+      profiles: {
+        default: {
+          provider: provider.id,
+          model: models.getModels(provider.id)[0]!.id,
+          baseUrl: "https://gateway.invalid/v1",
+        },
+      },
+    };
+    expect(() => createRuntime(settings, { models })).toThrow(
+      "Custom baseUrl requires apiKeyEnv or --key-stdin",
+    );
+    const explicit = createRuntime(settings, {
+      models,
+      key: "gateway-fixture",
+    });
+    expect(await explicit.profiles.coordinator.checkAuth!()).toBe(true);
+    faux.setResponses([
+      (_input, options, _state, model) => {
+        expect(options?.apiKey).toBe("gateway-fixture");
+        expect(model.baseUrl).toBe("https://gateway.invalid/v1");
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    expect((await complete(explicit, "coordinator")).stopReason).toBe("stop");
+    const missing = createRuntime(
+      {
+        profiles: {
+          default: {
+            ...settings.profiles.default,
+            apiKeyEnv: "MISSING_FIXTURE_KEY",
+          },
+        },
+      },
+      { models, authContext: auth({}) },
+    );
+    expect(await missing.profiles.coordinator.checkAuth!()).toBe(false);
+    expect((await complete(missing, "coordinator")).errorMessage).toContain(
+      "MISSING_FIXTURE_KEY",
+    );
+    expect(faux.state.callCount).toBe(1);
+  }
+});
+
 test("caller credential stores retain API keys, native OAuth refresh, and authentication context", async () => {
   const credentials = new InMemoryCredentialStore();
   const supplied = createModels({
@@ -297,7 +358,6 @@ test("caller credential stores retain API keys, native OAuth refresh, and authen
   const profile = {
     provider: "custom",
     model: "fixture",
-    baseUrl: "https://configured.invalid",
   };
   const runtime = createRuntime(
     {

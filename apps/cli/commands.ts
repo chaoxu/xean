@@ -61,12 +61,10 @@ async function withOwner(
 ) {
   const requested = campaignPath(target);
   const path = create ? requested : await realpath(requested);
-  const { keyStdin, usagePrefix } = program.opts<Flags>();
-  const key = keyStdin ? (await Bun.stdin.text()).trim() : undefined;
-  if (keyStdin && !key) throw new Error("Expected a credential on stdin");
+  const { usagePrefix } = program.opts<Flags>();
   const owner = await open(path, {
     create,
-    key,
+    key: await readKey(),
     usagePrefix,
     models: await cliModels(),
   });
@@ -75,6 +73,13 @@ async function withOwner(
   } finally {
     await owner.close();
   }
+}
+
+async function readKey() {
+  if (!program.opts<Flags>().keyStdin) return undefined;
+  const key = (await Bun.stdin.text()).trim();
+  if (!key) throw new Error("Expected a credential on stdin");
+  return key;
 }
 
 async function runCampaign(
@@ -134,7 +139,7 @@ async function send(target: string, command: OwnerCommand) {
 }
 
 program.command("doctor <settings>").action(async (file: string) => {
-  const result = await doctor(file);
+  const result = await doctor(file, await readKey());
   await print(result);
   if (!result.ok) process.exitCode = 1;
 });

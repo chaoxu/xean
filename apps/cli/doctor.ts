@@ -4,7 +4,7 @@ import { verifyInstall } from "../../scripts/dependencies.ts";
 import { cliModels } from "./models.ts";
 
 /** Local setup only: never creates a campaign or invokes a provider or Codex. */
-export async function doctor(settingsPath: string) {
+export async function doctor(settingsPath: string, key?: string) {
   try {
     await verifyInstall();
     let value: unknown;
@@ -17,6 +17,7 @@ export async function doctor(settingsPath: string) {
     const settings = readSettings(value);
     const { models, profiles } = createRuntime(settings, {
       models: await cliModels(),
+      key,
     });
     for (const [name, { model, checkAuth }] of Object.entries(profiles)) {
       if (name === "explorer" && settings.chatgpt) continue;

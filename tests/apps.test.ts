@@ -17,7 +17,8 @@ import {
   type TaskId,
 } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
-import { createRuntime, defaultSettings } from "../src/config.ts";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { defaultSettings } from "../src/config.ts";
 import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/definition.ts";
 import { Control, type Roles } from "../src/workflow.ts";
@@ -48,6 +49,10 @@ const root = resolve(import.meta.dir, "..");
 async function command(file: string, ...args: string[]) {
   const result =
     await $`${process.execPath} --no-install --no-env-file ${join(root, file)} ${args} < /dev/null`
+      .env({
+        ...process.env,
+        PI_CODING_AGENT_DIR: await temporaryDirectory("xean-cli-auth-"),
+      })
       .quiet()
       .nothrow();
   return {
@@ -74,13 +79,12 @@ test("CLI doctor reuses saved Pi ChatGPT and Claude logins without refreshing or
     ]),
   );
   const bytes = JSON.stringify(credentials);
-  const native = createRuntime(defaultSettings).models;
-  for (const provider of ["openai", "anthropic"]) {
+  for (const provider of ["openai", "anthropic"] as const) {
     await Bun.write(
       file,
       JSON.stringify({
         profiles: {
-          default: { provider, model: native.getModels(provider)[0]!.id },
+          default: { provider, model: getBuiltinModels(provider)[0]!.id },
         },
         research: false,
       }),
@@ -102,6 +106,22 @@ test("CLI doctor reuses saved Pi ChatGPT and Claude logins without refreshing or
       "private-fixture",
     );
     expect(await Bun.file(authFile).text()).toBe(bytes);
+    await Bun.write(authFile, "{}");
+    const explicit =
+      await $`${process.execPath} --no-install --no-env-file ${join(root, "apps/cli/index.ts")} --key-stdin doctor ${file} < ${Buffer.from("explicit-fixture-key")}`
+        .env({
+          ...process.env,
+          PI_CODING_AGENT_DIR: directory,
+          OPENAI_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+        })
+        .quiet()
+        .nothrow();
+    expect(explicit.exitCode).toBe(0);
+    expect(JSON.parse(explicit.stdout.toString()).ok).toBe(true);
+    expect(
+      explicit.stdout.toString() + explicit.stderr.toString(),
+    ).not.toContain("explicit-fixture-key");
   }
 });
 

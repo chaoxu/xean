@@ -55,7 +55,9 @@ a stable `--id` for exact retries. Live mutations reach the active owner.
 
 [Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
 Anthropic, and Google, with per-role overrides. Custom Responses gateways use
-`openai` with `baseUrl`. For a custom CA, set `NODE_EXTRA_CA_CERTS` to its PEM
+`openai` with `baseUrl` and an explicit `apiKeyEnv` or `--key-stdin` credential.
+This keeps saved subscription credentials on their native provider route.
+For a custom CA, set `NODE_EXTRA_CA_CERTS` to its PEM
 certificate bundle.
 
 For ChatGPT or Claude subscriptions, start the bundled Pi CLI with
@@ -67,6 +69,8 @@ commands. Explicit `apiKeyEnv` or `--key-stdin` credentials take precedence.
 Login and logout remain Pi commands, and Xean model selection remains in its
 settings file. Codex CLI login is separate. Library callers can pass authenticated
 Pi `Models` to `open`.
+The supplied instance owns all configured providers and is reused by native
+conversations and replacement roles.
 
 To enable the default Codex research backend, remove `research: false` and install
 and authenticate the Codex CLI. Source checking and independent review use its
