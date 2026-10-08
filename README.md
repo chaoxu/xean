@@ -3,10 +3,8 @@
 Xean runs a mathematical research workflow on Pi Durable. Explorer develops
 notes, Verifier checks their claims and dependencies, and Coordinator chooses
 further work. Each campaign runs Coordinator, one worker, then Coordinator again.
-The next Coordinator task is admitted with its worker and waits for the worker's
-terminal outcome before deciding. A worker may
-parallelize its own internal work. Pi owns tasks, conversations, checkpoints,
-cancellation, and storage.
+A worker may parallelize its own internal work. Pi owns tasks, conversations,
+checkpoints, cancellation, and storage.
 
 The implementation includes staged verification, blind reconstruction, imported
 notes, harmless corrections, optional literature and Codex implementation work,
@@ -16,10 +14,35 @@ review remains a separate result. The [capability inventory](docs/parity.md)
 maps this behavior to implementation and tests.
 Unimplemented proposals live in [design ideas](docs/design-ideas.md).
 
+## Principles
+
+Models choose mathematical strategy. Xean preserves the exact task, declared
+dependencies, and evidence needed to check a result. Notes carry shared memory
+through an index, detailed summaries, and full text, including failed approaches.
+Pi supplies durable execution and storage. Xean keeps research policy in a small
+layer over Pi's native APIs.
+
+Acceptance requires checks across the complete generated dependency chain.
+Blind reconstruction receives exact statements and approved premises without
+the original proofs. INCONCLUSIVE remains unresolved. Model judgments can be
+wrong, and independent review is recorded separately from internal acceptance.
+
+Xean 3.0 replaces the previous implementation and uses new APIs, settings, and
+campaign formats. Start new campaigns with this release. Preserve earlier
+campaigns together with their original runtimes.
+
 ## Run a campaign
 
-Use Bun 1.4.2 or later on macOS or Linux, then install dependencies from the root
-of the extracted source archive:
+Install [Bun](https://bun.sh/docs/installation) 1.4.2 or later on macOS or Linux.
+Download the source archive from [Releases](https://github.com/chaoxu/xean/releases)
+and extract it, or clone the repository:
+
+```sh
+git clone https://github.com/chaoxu/xean.git
+cd xean
+```
+
+From the source root, install dependencies:
 
 ```sh
 bun install --production --frozen-lockfile --ignore-scripts
@@ -41,6 +64,8 @@ bun run xean status .xean/demo/campaign.sqlite
 
 `init` freezes the task and settings without model calls. `doctor` checks local
 setup without testing a live provider or Codex login. `run` performs research.
+Read the returned JSON status: a successful CLI exit can report a blocked
+campaign, including when a provider is not configured.
 Pausing retains inputs and worker outcomes. Resume makes a fresh decision over
 that accumulated state and explicitly replaces any failed decision.
 Campaign arguments accept explicit paths or names under `--campaign-dir`, which
@@ -74,8 +99,8 @@ The supplied instance owns all configured providers and is reused by native
 conversations and replacement roles.
 
 To enable the default Codex research backend, remove `research: false` and install
-and authenticate the Codex CLI. Source checking and independent review use its
-native configuration. Literature is disabled by default, but `literature: false`
+and authenticate the [Codex CLI](https://developers.openai.com/codex/cli).
+Source checking and independent review use its native configuration. Literature is disabled by default, but `literature: false`
 alone leaves source checking and review enabled. External premises remain
 INCONCLUSIVE when research is disabled. `settings.codex` separately enables
 implementation work in a retained workspace.
@@ -262,8 +287,10 @@ test failed with `model_version_unavailable` before the service sent the message
 Xean made no second browser request and reopened the failed campaign unchanged.
 Successful current-build ChatGPT Web generation and live cancellation remain
 unqualified. Literature retrieval passed with independently checked quotations.
-The implementation worker's Linux container could not create Codex's sandbox
-namespace, so artifact generation remains unqualified in that environment.
+At `e40b85e`, the implementation worker passed on native macOS, including
+independent artifact checks and credential-free reopening. The tested Linux
+container could not create Codex's sandbox namespace, so implementation work
+remains unavailable in that environment.
 Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
 package.
 
@@ -273,5 +300,5 @@ This commit follows the 1.0.4 release. The packages include frozen model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.
-This is an [MIT-licensed](LICENSE) source package. Historical Yean and
-Xean campaigns retain their original runtimes and readers.
+This is an [MIT-licensed](LICENSE) source package. Bun and provider access suffice
+for the core workflow. Fleet, Nix, and private Xean Lab are not required for installation.

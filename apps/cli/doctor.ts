@@ -43,7 +43,7 @@ export async function doctor(settingsPath: string, key?: string) {
     return {
       ok: true,
       message:
-        "Pinned artifacts, Pi versions, settings, models, credential configuration, and Codex executables are available. Provider authentication, browser sessions, and Codex login were not checked.",
+        "Local setup checks passed for the configured roles. Provider authentication, browser sessions, and Codex login were not checked.",
     };
   } catch (error) {
     return {
