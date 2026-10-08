@@ -232,7 +232,7 @@ export async function open(path: string, options: OpenOptions = {}) {
       {
         registry,
         models: runtime.models,
-        settings: { compaction: { enabled: false } },
+        settings: { compaction: { enabled: false }, contextRetentionMs: 0 },
         onReport: report,
       },
       context,

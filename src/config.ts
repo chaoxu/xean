@@ -1,6 +1,5 @@
 import { isAbsolute } from "node:path";
 import {
-  createModels,
   defaultProviderAuthContext,
   lazyStream,
   normalizeContext,
@@ -15,11 +14,8 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ThinkingLevelSchema } from "@earendil-works/pi-ai/providers/model-schema";
-import { googleProvider } from "@earendil-works/pi-ai/providers/google";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { Check } from "typebox/value";
 import { object, submissionSchemas } from "./math/contracts.ts";
 
@@ -133,18 +129,6 @@ export function readSettings(value: unknown): Settings {
   return settings;
 }
 
-function builtinModels(authContext: AuthContext) {
-  const models = createModels({ authContext });
-  for (const provider of [
-    openaiProvider(),
-    openaiCodexProvider(),
-    anthropicProvider(),
-    googleProvider(),
-  ])
-    models.setProvider(provider);
-  return models;
-}
-
 /** Profiles retain native model identities and configure each request. */
 export function createRuntime(
   value: Settings,
@@ -156,7 +140,7 @@ export function createRuntime(
 ) {
   const settings = readSettings(value);
   const authContext = options.authContext ?? defaultProviderAuthContext();
-  const models = options.models ?? builtinModels(authContext);
+  const models = options.models ?? builtinModels({ authContext });
   const requestHeaders = (
     request: SimpleStreamOptions,
     headers: ProviderHeaders,
