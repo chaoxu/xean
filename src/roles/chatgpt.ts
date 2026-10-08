@@ -52,8 +52,12 @@ export async function chatgpt(
   if (!response.ok) throw new Error(`ChatGPT HTTP ${response.status}`);
   const result = await response.json();
   context.abortSignal?.throwIfAborted();
-  if (result.status !== "completed")
-    throw new Error(`ChatGPT ${result.status}`);
+  if (result.status !== "completed") {
+    const detail = [result.error?.code, result.error?.message]
+      .filter((part) => typeof part === "string" && part)
+      .join(": ");
+    throw new Error(`ChatGPT ${result.status}${detail ? `: ${detail}` : ""}`);
+  }
   const answers = result.output.filter(
     (item: any) =>
       item.type === "message" &&

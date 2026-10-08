@@ -63,7 +63,8 @@ certificate bundle.
 For ChatGPT or Claude subscriptions, start the bundled Pi CLI with
 `bun run pi`, enter `/login`, and select OpenAI or Anthropic. Set the Xean
 profile's provider to `openai` or `anthropic` and choose a model available to that
-account. Xean's CLI and `doctor` reuse Pi's `~/.pi/agent/auth.json`, including
+account. Existing OpenAI Codex logins use `openai-codex` instead of `openai`.
+Xean's CLI and `doctor` reuse Pi's `~/.pi/agent/auth.json`, including
 native token refresh. `PI_CODING_AGENT_DIR` selects another Pi directory for both
 commands. Explicit `apiKeyEnv` or `--key-stdin` credentials take precedence.
 Login and logout remain Pi commands, and Xean model selection remains in its
@@ -236,7 +237,7 @@ Use the golden problems after those checks pass.
 including the model-free workflow, CLI, local observation, browser assets, and licenses.
 `pack` runs the same distribution check and writes the source archive under
 `dist/`. The source-package smoke passed on Bun 1.4.2 for macOS ARM64 and Linux
-ARM64 with only Bun on `PATH` and no provider credentials.
+ARM64 and x86-64 with only Bun on `PATH` and no provider credentials.
 
 At revision `0e74fc7`, all six sequential golden campaigns reached internal
 acceptance and independent PASS review, then reopened without credentials.
@@ -247,14 +248,22 @@ OpenAI or Pi's subscription `openai-codex` transport. Source checking recorded
 web activity without a directly observed source-open operation. Receipts and the
 golden report are in `runs/golden-sequential-20261006-r04/`.
 
-An earlier ChatGPT Web smoke passed standalone submission and credential-free
-reopening. Its adapter is unchanged, but live interruption and cancellation
-remain untested. ChatGPT Web has no end-to-end qualification on the current build.
-Anthropic, Google, literature, and the implementation worker also
-lack live qualification on the current implementation. The provider assessment is
-`runs/replacement-readiness-20261007/providers.result.txt`, and the ChatGPT receipt
-is `runs/chatgpt-live-20261005T043613Z/execution/qualification.json`. These local
-run artifacts are outside the source package.
+Release checks at `e40b85e` passed installed CLI use of a saved Pi OpenAI Codex
+login, note reading, complete verification, and credential-free reopening with
+`openai-codex/gpt-5.6-luna` at `max` reasoning. Gateway checks reconstructed a valid
+proof chain, rejected invalid arguments, and left a claimless note INCONCLUSIVE.
+Process tests covered live controls, writer exclusion, interrupted private work,
+completed-result recovery, and dependency-complete export.
+
+Public OpenAI, the new direct OpenAI subscription login, fresh login, OAuth
+refresh, Anthropic, and Google remain unqualified live. Available credentials
+covered only the gateway and existing OpenAI Codex login. The latest ChatGPT Web
+test failed with `model_version_unavailable` before the service sent the message.
+Xean made no second browser request and reopened the failed campaign unchanged.
+Successful current-build ChatGPT Web generation and live cancellation remain
+unqualified. Literature and implementation-worker qualification is pending.
+Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
+package.
 
 Pi packages are built together from upstream commit
 `f10993bc7f28145df1375f3ff39c7f5c4cfc05f0` using Pi's `pack:packages` command.

@@ -262,6 +262,13 @@ test("direct ChatGPT Explorer sends the index once and accepts only its final an
 
 test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without retrying", async () => {
   const valid = JSON.stringify(selection);
+  const unavailable = Response.json({
+    status: "failed",
+    error: {
+      code: "model_version_unavailable",
+      message: "Could not select ChatGPT model 6.",
+    },
+  });
   for (const returned of [
     response([]),
     response([valid, valid]),
@@ -271,13 +278,18 @@ test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without 
     response(['{"notes":[],"candidate":"yes"}']),
     response([valid], "incomplete"),
     response([valid], "failed"),
+    unavailable,
     new Response("Service unavailable", { status: 503 }),
   ]) {
     const request = spyOn(globalThis, "fetch").mockResolvedValue(returned);
     try {
       await expect(
         chatgpt(settings.chatgpt!, "Solve", [], runtime(), context),
-      ).rejects.toThrow();
+      ).rejects.toThrow(
+        returned === unavailable
+          ? "model_version_unavailable: Could not select ChatGPT model 6."
+          : undefined,
+      );
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
       request.mockRestore();
