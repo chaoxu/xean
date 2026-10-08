@@ -1441,58 +1441,77 @@ test.each([true, false])(
   },
 );
 
-test("notes without a mathematical claim skip source and reconstruction", async () => {
-  const directory = await temporaryDirectory("pi-role-context-note-");
-  const provider = fixture((name, input) => {
-    expect(name).toBe("correctness");
-    expect(input.notes[0].text).toBe("Would a different construction help?");
-    return {
-      results: [
-        {
-          noteId: "n1",
-          verdict: "PASS",
-          statement: null,
-          premises: [],
-          report: "The note records a question without asserting a result.",
-        },
-      ],
-    };
-  });
-  const current = await provider.open(directory);
-  try {
-    const id = await current.invoke({
-      role: "verifier",
-      input: {
-        task,
-        notes: [
-          { ...note("n1"), text: "Would a different construction help?" },
-        ],
-        targets: ["n1"],
-        through: "reconstruction",
-      },
-    });
-    expect(await resultOf(current.harness, id)).toEqual({
-      status: "completed",
-      result: {
-        kind: "verification",
-        checks: [
-          {
-            noteId: "n1",
-            correctness: {
-              verdict: "INCONCLUSIVE",
-              statement: null,
+test.each([null, "Every graph in the family has property P."])(
+  "unresolved claims skip source and reconstruction: %s",
+  async (statement) => {
+    const text = statement
+      ? `${statement} Earlier campaign notes give the construction.`
+      : "Would a different construction help?";
+    const directory = await temporaryDirectory("pi-role-context-note-");
+    const provider = fixture(
+      (name, input) => {
+        expect(name).toBe("correctness");
+        expect(input.notes[0].text).toBe(text);
+        return {
+          results: [
+            {
+              noteId: "n1",
+              verdict: statement ? "INCONCLUSIVE" : "PASS",
+              statement,
               premises: [],
-              report: expect.any(String),
+              report: statement
+                ? "The claimed construction relies on undeclared campaign support."
+                : "The note records a question without asserting a result.",
             },
-          },
-        ],
+          ],
+        };
       },
-    });
-    expect(provider.calls.map(({ name }) => name)).toEqual(["correctness"]);
-  } finally {
-    await current.harness.close(context);
-  }
-});
+      {},
+      131072,
+      {
+        ...closedBookResearch,
+        retrieval: true,
+        async source() {
+          throw new Error(
+            "Unresolved correctness must not dispatch source checking",
+          );
+        },
+      },
+    );
+    const current = await provider.open(directory);
+    try {
+      const id = await current.invoke({
+        role: "verifier",
+        input: {
+          task,
+          notes: [{ ...note("n1"), text }],
+          targets: ["n1"],
+          through: "reconstruction",
+        },
+      });
+      expect(await resultOf(current.harness, id)).toEqual({
+        status: "completed",
+        result: {
+          kind: "verification",
+          checks: [
+            {
+              noteId: "n1",
+              correctness: {
+                verdict: "INCONCLUSIVE",
+                statement,
+                premises: [],
+                report: expect.any(String),
+              },
+            },
+          ],
+        },
+      });
+      expect(provider.calls.map(({ name }) => name)).toEqual(["correctness"]);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
 
 test.each(["request", "incomplete.max_messages", "length"] as const)(
   "source recovery preserves checks and rejects incomplete proofs after %s",
