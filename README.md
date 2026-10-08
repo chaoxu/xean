@@ -261,7 +261,9 @@ covered only the gateway and existing OpenAI Codex login. The latest ChatGPT Web
 test failed with `model_version_unavailable` before the service sent the message.
 Xean made no second browser request and reopened the failed campaign unchanged.
 Successful current-build ChatGPT Web generation and live cancellation remain
-unqualified. Literature and implementation-worker qualification is pending.
+unqualified. Literature retrieval passed with independently checked quotations.
+The implementation worker's Linux container could not create Codex's sandbox
+namespace, so artifact generation remains unqualified in that environment.
 Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
 package.
 

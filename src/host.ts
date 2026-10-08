@@ -217,7 +217,7 @@ export async function open(path: string, options: OpenOptions = {}) {
       { ...settings, profiles: runtime.profiles },
       options.research,
     );
-    const roles = Object.assign(builtins, options.roles?.(builtins));
+    const roles = Object.assign(builtins, options.roles?.({ ...builtins }));
     const workflow = createResearch(roles);
     const registry = options.registry ?? createRegistry();
     registry.install(builtins.extension);

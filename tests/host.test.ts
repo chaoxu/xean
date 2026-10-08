@@ -486,8 +486,9 @@ test("custom role extensions compose with built-in mathematical conversations", 
     },
     models,
     registry,
-    roles: ({ explorer }) => ({
+    roles: (builtins) => ({
       explorer: async (input, runtime, invocation, source) => {
+        expect(calls).toBe(0);
         let id!: TaskId<null>;
         await runtime.commit(async (tx) => {
           id = await tx.createTask(Custom, null, {
@@ -495,7 +496,7 @@ test("custom role extensions compose with built-in mathematical conversations", 
           });
         }, invocation);
         await runtime.waitForTask(id, invocation);
-        return explorer(input, runtime, invocation, source);
+        return builtins.explorer(input, runtime, invocation, source);
       },
     }),
   });
