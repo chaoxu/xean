@@ -251,7 +251,7 @@ An earlier ChatGPT Web smoke passed standalone submission and credential-free
 reopening. Its adapter is unchanged, but live interruption and cancellation
 remain untested. ChatGPT Web has no end-to-end qualification on the current build.
 Anthropic, Google, literature, and the implementation worker also
-lack prototype live qualification. The provider assessment is
+lack live qualification on the current implementation. The provider assessment is
 `runs/replacement-readiness-20261007/providers.result.txt`, and the ChatGPT receipt
 is `runs/chatgpt-live-20261005T043613Z/execution/qualification.json`. These local
 run artifacts are outside the source package.
