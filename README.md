@@ -1,242 +1,266 @@
 # Xean
 
-Xean coordinates durable mathematical work over Pi. The kernel handles campaign
-admission, atomic publication, operational limits, and recovery policy. Model-call
-counts and token or cost usage are retained as observations; they never stop a
-campaign. An outer experiment runner may impose an explicit round limit. The
-solver adds notes,
-exploration, verification, and exact-task acceptance. Pi supplies model and tool
-execution, private conversation recovery, task dispatch, storage records, and
-atomic batches. Built-in model roles retain completed reads and submissions
-across restarts, while shared notes publish only with a complete worker result. Chord supplies
-invocation context and prepared state changes. Harness execution uses the
-local controls documented in [Pi alignment](docs/pi-alignment.md#durable-integration).
+Xean runs a mathematical research workflow on Pi Durable. Explorer develops
+notes, Verifier checks their claims and dependencies, and Coordinator chooses
+further work. Each campaign runs Coordinator, one worker, then Coordinator again.
+The next Coordinator task is admitted with its worker and waits for the worker's
+terminal outcome before deciding. A worker may
+parallelize its own internal work. Pi owns tasks, conversations, checkpoints,
+cancellation, and storage.
 
-The repository contains a core library and two optional applications:
+The implementation includes staged verification, blind reconstruction, imported
+notes, harmless corrections, optional literature and Codex implementation work,
+independent review, a CLI, and Observe. Exact-task acceptance requires the
+candidate and its generated support to pass the required checks. Independent
+review remains a separate result. The [capability inventory](docs/parity.md)
+maps this behavior to implementation and tests.
+Unimplemented proposals live in [design ideas](docs/design-ideas.md).
 
-| Package        | Location           | Responsibility                                                        |
-| -------------- | ------------------ | --------------------------------------------------------------------- |
-| `xean`         | `packages/core`    | Kernel, mathematical solver, providers, and shared inspection reports |
-| `xean-cli`     | `packages/cli`     | Command parsing, terminal output, and live owner control              |
-| `xean-observe` | `packages/observe` | Read-only dashboard, snapshot publisher, and bundled theme assets     |
+## Run a campaign
 
-Both applications depend on core's public APIs. Core depends on neither app,
-and the apps do not depend on each other. Library callers can use `xean`,
-`xean/solve`, `xean/pi`, and `xean/report` directly. Shared status projection
-belongs to `xean/report`; command transport and presentation belong to the apps.
-Repository checks enforce these dependency directions and public imports.
-
-The CLI runs only when invoked. The [observer](packages/observe/README.md) runs
-as a separate process and reads local campaigns or exported snapshots. Its
-dashboard, publisher, HTML, CSS, and shared theme form one app. Solver execution
-does not start or wait for it. The source archive and development setup include
-all three packages, with one dependency lock and aligned package versions.
-
-- [Philosophy](docs/philosophy.md): mathematical autonomy, shared memory, trust, and evaluation.
-- [Kernel contract](docs/kernel.md): execution, publication, limits, and storage.
-- [Solver guide](docs/solver.md): roles, verification, CLI commands, and configuration.
-- [Glossary](docs/glossary.md): canonical terminology.
-- [Pi alignment](docs/pi-alignment.md): native APIs and deferred adoption.
-- [Verification](docs/kernel-smoke.md): checks and provider smoke procedures.
-- [Changelog](CHANGELOG.md): changes and compatibility.
-- [Contributor rules](AGENTS.md): design priorities and repository boundaries.
-
-Matching Pi packages are pinned to one exact source commit in `package.json`.
-The [artifact record](vendor/pi/provenance.json) records that source revision,
-build, frozen model data, and hashes. The `main` branch contains the unreleased
-3.0 candidate. New campaigns use campaign format 13 and solver declaration
-version 16. Observer snapshots use `xean-observe/v5`. Historical campaigns require
-their original source revision and runtime, and historical snapshots require
-their matching observer. No migration is provided. Existing releases and tags
-remain historical archives.
-
-## Install and run
-
-Use Bun 1.4.2 on Linux or macOS. Use the complete prepared source archive or clone
-`main` and install its locked dependencies. The distribution includes the library,
-CLI, observer, pinned Pi packages, patches, and dependency lockfile.
-Individual workspace packages are private and are not installed from npm.
+Use Bun 1.4.2 or later on macOS or Linux, then install dependencies from the root
+of the extracted source archive:
 
 ```sh
-git clone --branch main https://github.com/chaoxu/xean.git
-cd xean
-bun run setup
-bun run xean --help
+bun install --production --frozen-lockfile --ignore-scripts
 ```
 
-`setup` installs the frozen dependency lockfile without lifecycle scripts and
-records the installation's dependency inputs, Bun version, operating system,
-and architecture. Run it again after changing those inputs or copying a checkout
-to another platform. `bun run xean --version` reports the package version.
-Keep the exact source commit, lockfile, and runtime version with each campaign.
-Package versions alone do not identify a `main` revision.
-After updating the checkout, start new campaigns with the new runtime. Continue
-existing campaigns from their original checkout and settings.
-
-Check the installation without credentials or model calls:
+Set `OPENAI_API_KEY` in your environment, or use a saved Pi login as described
+below. The [example settings](examples/settings.json)
+use public OpenAI with `gpt-6-astra` and `max` reasoning. They set `research: false`
+for a closed-book elementary example: no external source retrieval or independent
+Codex review. Explorer and Verifier still use the configured model. Keep credential
+values outside task and settings files.
 
 ```sh
+bun run xean doctor examples/settings.json
+bun run xean init examples/task.json .xean/demo/campaign.sqlite examples/settings.json
+bun run xean run .xean/demo/campaign.sqlite
+bun run xean status .xean/demo/campaign.sqlite
+```
+
+`init` freezes the task and settings without model calls. `doctor` checks local
+setup without testing a live provider or Codex login. `run` performs research.
+Pausing retains inputs and worker outcomes. Resume makes a fresh decision over
+that accumulated state and explicitly replaces any failed decision.
+Campaign arguments accept explicit paths or names under `--campaign-dir`, which
+defaults to `.xean` relative to the calling directory.
+
+The same CLI provides `pause`, `resume`, `cancel`, `inspect [--records]`, and
+accepted-only Markdown `export`. `submit`, `guide`, and `correct` take a file and
+a stable `--id` for exact retries. Live mutations reach the active owner.
+`role NAME INPUT CAMPAIGN SETTINGS` runs a standalone procedure, and
+`review TASK ARGUMENT CAMPAIGN SETTINGS` records an independent review. Use
+`--help` for arguments and owner, credential, and usage-attribution options.
+
+[Settings](src/config.ts) use native Pi profiles for OpenAI, `openai-codex`,
+Anthropic, and Google, with per-role overrides. Custom Responses gateways use
+`openai` with `baseUrl` and an explicit `apiKeyEnv` or `--key-stdin` credential.
+This keeps saved subscription credentials on their native provider route.
+For a custom CA, set `NODE_EXTRA_CA_CERTS` to its PEM
+certificate bundle.
+
+For ChatGPT or Claude subscriptions, start the bundled Pi CLI with
+`bun run pi`, enter `/login`, and select OpenAI or Anthropic. Set the Xean
+profile's provider to `openai` or `anthropic` and choose a model available to that
+account. Xean's CLI and `doctor` reuse Pi's `~/.pi/agent/auth.json`, including
+native token refresh. `PI_CODING_AGENT_DIR` selects another Pi directory for both
+commands. Explicit `apiKeyEnv` or `--key-stdin` credentials take precedence.
+Login and logout remain Pi commands, and Xean model selection remains in its
+settings file. Codex CLI login is separate. Library callers can pass authenticated
+Pi `Models` to `open`.
+The supplied instance owns all configured providers and is reused by native
+conversations and replacement roles.
+
+To enable the default Codex research backend, remove `research: false` and install
+and authenticate the Codex CLI. Source checking and independent review use its
+native configuration. Literature is disabled by default, but `literature: false`
+alone leaves source checking and review enabled. External premises remain
+INCONCLUSIVE when research is disabled. `settings.codex` separately enables
+implementation work in a retained workspace.
+
+For a one-response ChatGPT Web Explorer, set
+`chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
+in settings. Xean calls the external `codex-chatgpt-web` service's non-streaming
+Responses API and validates its JSON answer. Run that service separately in
+`browser-only` mode. This Explorer receives the
+note index and has no note reader or further browser attempt.
+
+## Library
+
+[The public entry point](src/index.ts) exports `open`, `inspect`, `createResearch`,
+mathematical types, note projections, and reports. Construct the built-in solver
+through `open`, which returns the native Harness, root Conversation, workflow,
+and `close`. Coordinator returns one `work` request, or `work: null` to wait.
+Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
+receives the built-in functions, and a custom `Research` implementation through
+`research`. Register custom tools and tasks through Pi's native `registry` option.
+
+Notes store `summary`, `detailedSummary`, and authoritative free-form `text`.
+The text can record proofs, conjectures, observations, questions, or failed
+approaches. Correctness records a separate nullable `statement` for later
+verification. Notes with no mathematical claim remain context and cannot
+become verified support or an accepted solution.
+The note reader includes the existing checked statement. Explorer and Verifier
+use it to distinguish granted support from additional facts that need a proof
+or a separate supporting lemma.
+
+Explorer continues its Pi conversation after partial submissions. A claimed
+complete solution, an empty submission, or reaching the response allowance ends
+the invocation. Pi retains earlier private submissions and publishes the
+accumulated notes when the worker returns.
+
+Blind reconstruction assigns batches in dependency order. Code greedily packs
+notes using original text lengths, Pi's token estimator, and the configured
+model's context and output capacities. It reserves space for complete writing,
+reasoning, structured results, and headroom. Comparisons use the actual returned
+proof lengths and may need smaller batches. Each call must submit every assigned
+note. These estimates guide grouping and do not cap responses or guarantee that
+a proof fits. An oversized note is assigned alone, subject to Pi's input guard.
+Pi checks context use and the provider guard reserves the full output allowance.
+Token-truncated responses continue the same assignment within the
+[response and continuation allowances](docs/parity.md#pi-integration).
+Tools from truncated responses never execute.
+Pi reuses committed proofs and comparisons after reopening, and an ordinary
+failure retains earlier completed checks.
+If an unresolved generated claim supports a later proof group, Verifier finishes
+the current group's comparisons and returns its checks. Coordinator then decides
+whether to retry, repair the mathematics, or continue other work. Further worker
+admissions use the existing outer round allowance.
+
+The [model-free example](examples/model-free.ts) supplies scripted roles and
+prints the resulting campaign status without provider credentials. Its fixed
+judgments demonstrate the workflow, not mathematical performance. From the
+package root, give it a new database path:
+
+```sh
+bun examples/model-free.ts .xean/scripted/campaign.sqlite
+```
+
+```ts
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { defaultSettings, inspect, open, readReport } from "xean";
+
+const path = "campaign.sqlite";
+const owner = await open(path, {
+  create: {
+    task: {
+      problem: "For every real x >= 1, prove x squared >= x.",
+      completionCriteria: "Give a self-contained elementary proof.",
+    },
+    settings: { ...defaultSettings, research: false },
+  },
+});
+try {
+  await owner.root.waitForIdle(context);
+} finally {
+  await owner.close();
+}
+console.log((await inspect(path, readReport)).status);
+```
+
+The host uses Pi's native SQLite adapter with FULL synchronization and excludes
+a second owner. Notes resolve from Pi's committed submissions and task outcomes.
+Imports and corrections are Pi entries. By default, `inspect` reads a consistent backup
+through a Pi Session without recovering live work.
+Closing suspends unfinished execution. Reopening reuses Pi's committed private
+progress. A request interrupted before its answer commits may repeat, except
+that an ambiguously sent ChatGPT Web request is rejected on recovery.
+Completed source checks are memoized before later verification stages. Codex
+executes inside its worker and may repeat if interrupted before that boundary
+or worker completion. The built-in Verifier preserves structurally validated
+completed checks when a stage fails. It publishes those checks with the error
+in a failed native task outcome. Cancellation, invalid final publications, and
+faults in opaque custom roles publish no partial checks. A new Verifier reuses
+completed PASS checks and final source verdicts. Cleanup errors use Pi's nonfatal
+reporting, preserving submitted results and the primary failure when a call fails.
+Cancellation stops the Codex
+process tree and may leave usage unknown. Implementation artifacts remain in
+their workspace.
+
+## Observation and experiments
+
+Observe runs separately. Save a configuration file such as `observe.json` containing
+`[{"id":"demo","database":".xean/demo/campaign.sqlite"}]`, with database paths
+relative to that file, then run:
+
+```sh
+bun run observe observe.json
+```
+
+It listens on `127.0.0.1:8797` and serves `/api/runs` and `/api/runs/ID`, with `?view=status`
+for compact reports. Run it on the campaign host and arrange remote access
+yourself, for example with an SSH tunnel. Independent-review databases can be
+listed as separate sources. The viewer shows note indexes, detailed summaries,
+full notes, checks, dependencies, and usage.
+Each refresh uses a fresh Pi Session on the live database, with no database copy.
+Concurrent campaign updates can produce a temporarily inconsistent display.
+CLI inspection and export retain consistent snapshots.
+
+Usage reports count committed assistant responses and recorded Codex invocations.
+They cannot establish every outbound request or provider retry. Direct ChatGPT
+Web usage is unmeasured and excluded. Missing native usage remains unknown.
+Process health, internal acceptance, and independent review are
+separate observations.
+
+`usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. A custom provider's native
+configuration can forward it as an HTTP header for usage attribution.
+
+[bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
+from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
+`--offline` options. A round is a Coordinator decision that admits one worker,
+including a Verifier. Empty waits and internal proof or comparison calls add
+no rounds. The count derives from Pi's worker records and remains outside model
+inputs. Response and usage counters remain observational.
+[prompt-eval.ts](scripts/prompt-eval.ts) takes settings and a new output directory
+to prepare frozen cases and commands without model calls.
+
+## Checks and current limits
+
+Install development dependencies to run checks and create a source archive:
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
 bun run check
-bun examples/deterministic.ts
+bun run check:distribution
+bun run pack
 ```
 
-The deterministic example returns `{"status":"completed","result":25}`.
-Repeating it reopens the same committed result.
+Start interface changes with focused contract tests and model behavior changes
+with small standalone roles, using the CLI `role` command and frozen inputs.
+Inspect their actual submissions before running a complete campaign smoke.
+Use the golden problems after those checks pass.
 
-The [example settings](examples/solver-settings.json) use the public OpenAI API
-with `gpt-6-astra` at max reasoning. Supply `OPENAI_API_KEY` through your shell
-or secret manager. Source checking and independent review use the separately
-installed Codex CLI, authenticated with `codex login` or its native provider
-configuration. [Claude settings](examples/claude-settings.json) use Pi's native
-Anthropic provider with an operator-supplied subscription OAuth token in
-`ANTHROPIC_OAUTH_TOKEN`. The [provider guide](docs/solver.md#configuration-and-functions)
-also covers mixed providers and Anthropic API credentials. Provider credentials
-stay outside task and settings files.
+`check` runs TypeScript, formatting, dependency integrity, and scripted tests.
+`check:distribution` checks an unpacked source archive with production dependencies,
+including the model-free workflow, CLI, local observation, browser assets, and licenses.
+`pack` runs the same distribution check and writes the source archive under
+`dist/`. The source-package smoke passed on Bun 1.4.2 for macOS ARM64 and Linux
+ARM64 with only Bun on `PATH` and no provider credentials.
 
-The optional [Codex worker](docs/solver.md#codex-worker) implements assignments
-with native shell and file tools in a retained workspace. Enable it through
-`settings.codex`. Its findings enter the ordinary note verification process.
+At revision `0e74fc7`, all six sequential golden campaigns reached internal
+acceptance and independent PASS review, then reopened without credentials.
+Standalone verification also reconstructed a dependency chain and rejected a
+false claim. These runs used `gpt-6-astra` with `max` reasoning through codex-lb's
+OpenAI `/v1` route and SSE. They qualify that gateway configuration, not public
+OpenAI or Pi's subscription `openai-codex` transport. Source checking recorded
+web activity without a directly observed source-open operation. Receipts and the
+golden report are in `runs/golden-sequential-20261006-r04/`.
 
-ChatGPT Web uses a separately managed browser service. Supply its endpoint and
-optional service credential through the [solver settings](docs/solver.md#configuration-and-functions).
-Xean owns the Pi adapter and research workflow. The service operator owns browser
-login, installation, patches, and process management.
+An earlier ChatGPT Web smoke passed standalone submission and credential-free
+reopening. Its adapter is unchanged, but live interruption and cancellation
+remain untested. ChatGPT Web has no end-to-end qualification on the current build.
+Anthropic, Google, literature, and the implementation worker also
+lack live qualification on the current implementation. The provider assessment is
+`runs/replacement-readiness-20261007/providers.result.txt`, and the ChatGPT receipt
+is `runs/chatgpt-live-20261005T043613Z/execution/qualification.json`. These local
+run artifacts are outside the source package.
 
-```sh
-bun run xean doctor examples/solver-settings.json
-bun run xean init examples/tree-task.json tree examples/solver-settings.json
-bun run xean run tree
-bun run xean status tree
-bun run xean export tree
-```
-
-`doctor` checks the local installation, settings, credential availability, and Codex
-executables without making model calls. It returns `{ok,message}` as JSON and
-stops at the first setup problem. It does not validate credentials with a provider
-or check browser sessions and Codex login.
-
-For your own problem, copy [the task file](examples/tree-task.json) and replace
-its `problem` and `completionCriteria`. State the exact hypotheses, desired
-conclusion, and permitted background. Copy the settings file to choose your
-provider, model, and credential environment-variable names, then pass those
-files to `init`. Initialization freezes both files without making model calls.
-Editing them afterward does not change that campaign. `run` performs the model
-work, `status` inspects it, and `export` prints an accepted argument with its
-supporting proofs.
-
-Campaigns live under `.xean/` by default. A solver campaign accepts an argument
-only when its status is `completed`. `export` requires that accepted result.
-See the [solver guide](docs/solver.md#running) for live guidance, pause/resume,
-cancellation, explicit database paths, and other model providers.
-
-To view this example in the optional observer, save `observe.json` beside the
-repository's README with:
-
-```json
-[{ "id": "tree", "directory": ".xean/tree" }]
-```
-
-Run `bun packages/observe/src/server.ts observe.json` and open
-<http://127.0.0.1:8797>. The dashboard reads the campaign without running models
-or acquiring solver ownership. See [Observe's guide](packages/observe/README.md)
-for remote runs and snapshot publishing.
-
-For a status request, use the campaign's matching source checkout and runtime:
-
-```sh
-bun run xean status /absolute/run-directory/campaign.sqlite
-```
-
-This reads committed state without model calls or recovery. The compact report
-omits proofs and transcripts. See [checking status](docs/solver.md#checking-status)
-for frozen and remote runs, verification progress, and observation freshness.
-Agents should start with `status`. Branch on its committed campaign state,
-verification fields, and bounded work summaries; treat `nextAction` as advisory
-text rather than a scheduler instruction. Use `pause`, `resume`, or `cancel` as
-explicit lifecycle controls, then read `status` again to confirm the committed
-state. Call and usage totals are observational and cannot block a new campaign or
-continue one. Use `inspect` for notes, `inspect --records` for execution records,
-and `export` for the accepted proof only when those details are needed. Commands emit JSON
-except `export`, which emits Markdown, and help/version output. Xean Lab handles
-discovery and submission across supervised experiments in its separate repository.
-
-For supervised deployment, run `bun run xean run /data/campaign.sqlite` with a
-persistent writable data directory and the provider's credentials. Use one
-owner process per campaign. `SIGINT` and `SIGTERM` close the owner and retain
-committed work for recovery. A normal return prints the campaign state, including
-paused, blocked, or waiting states, as a compact receipt with `status`, `error`,
-`providerCalls`, and `pendingSignals`. An interrupted command prints no final JSON.
-Use `status` afterward to inspect committed state before deciding whether a
-supervisor should restart it.
-
-The [MIT license](LICENSE) covers Xean. Bundled dependencies retain their own
-licenses.
-
-## Distribution
-
-The prepared 3.0.0 candidate uses aligned package versions. Its
-[verification record](docs/kernel-smoke.md) identifies the tested platforms,
-provider paths, and limitations. Retain the exact source commit, dependency
-lockfile, and Bun version. Run ongoing campaigns with their original source
-revision and frozen settings. Existing releases and tags remain historical archives.
-
-Before distributing a source revision:
-
-1. Describe changes and compatibility in [CHANGELOG.md](CHANGELOG.md). Keep root
-   and workspace package versions aligned and install the frozen lockfile cleanly.
-2. Run the development check below. It checks types, formatting, tests, matching
-   versions, bundled dependency hashes, and local documentation links.
-3. Verify a clean source archive on Linux and macOS: run setup, check, CLI help
-   and version, the deterministic example twice, and the README's initialization
-   and status commands. Check the observer in a browser. Exercise affected model
-   providers using the [smoke procedure](docs/kernel-smoke.md#live-provider-checks).
-4. Record the exact source commit, tested Bun version, platforms, smoke results,
-   and any provider limitations. When sharing a source archive, include its
-   SHA-256 checksum.
-
-The [historical comparison](docs/xean-comparison.md) describes the implementation
-replaced by 2.0.0. Earlier tags and campaign artifacts retain their original names
-and formats.
-
-## Development on Fleet
-
-Run from the adjacent Fleet Infra checkout. Its `flake.lock` is the Bun runtime
-authority, while Xean's `bun.lock` locks JavaScript dependencies.
-
-```sh
-cd ~/playground/fleet-infra
-bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts install
-bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts check
-bin/fleet-nix run .#fleet-run -- ../xean/scripts/dev.ts test tests/observe.test.ts tests/report.test.ts
-```
-
-`install` requires the existing lockfile, performs a clean frozen installation,
-and skips lifecycle scripts. After an intentional dependency edit, use
-`install --update-lockfile`. An installation receipt rejects changed dependency
-inputs until a clean reinstall. `check` runs typechecking, formatting, distribution checks, and tests
-inside a socket-free Nix build. `format` formats project sources and documentation.
-`test` runs only the named test files in that same sandbox. Pass existing files
-under `tests/`. Set `XEAN_FLEET_INFRA` when Fleet Infra is elsewhere.
-
-Use the same locked runtime for local CLI work:
-
-```sh
-bin/fleet-nix run .#fleet-run -- ../xean/packages/cli/src/index.ts --help
-```
-
-Closed-book experiments use the
-[bounded runner](docs/solver.md#closed-book-experiments).
-Correctness-prompt changes can use the
-[screen on frozen cases](docs/solver.md#current-verification), which prepares
-inputs and commands for the existing Verifier CLI without making model calls.
-
-The [deterministic kernel example](examples/deterministic.ts) makes no model calls:
-
-```sh
-bin/fleet-nix run .#fleet-run -- ../xean/examples/deterministic.ts
-```
-
-It runs two workers concurrently and accepts their sum of squares, writing
-`runs/deterministic.sqlite`. Repeating it reopens the committed result.
-Pass another database path to start fresh. `run()` can return while waiting for
-input, so only `status: "completed"` establishes accepted completion.
+Pi packages are built together from upstream commit
+`f10993bc7f28145df1375f3ff39c7f5c4cfc05f0` using Pi's `pack:packages` command.
+This commit follows the 1.0.4 release. The packages include frozen model data.
+Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
+[Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
+the Pi Durable request hook used to select a profile's stream.
+This is an [MIT-licensed](LICENSE) source package. Historical Yean and
+Xean campaigns retain their original runtimes and readers.

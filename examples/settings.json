@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "reasoning": "max"
+    }
+  },
+  "literature": false,
+  "research": false
+}

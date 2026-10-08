@@ -1,0 +1,419 @@
+import type { Context, JsonValue } from "@earendil-works/chord";
+import {
+  defineDoc,
+  defineEntry,
+  defineExtension,
+  defineTask,
+  type ConversationId,
+  type Cursor,
+  type EntryId,
+  type TaskId,
+  type TaskRecord,
+  type TaskOutcome,
+  type Tx,
+} from "@earendil-works/pi-durable";
+import { workPlan, type Plan, type planSchema } from "./math/contracts.ts";
+import {
+  noteInfo,
+  sourceEvidence,
+  validatePlan,
+  validateResult,
+} from "./math/notes.ts";
+import { closure } from "./math/argument.ts";
+import { Events, readView } from "./math/state.ts";
+import { readCommand, validateCommand } from "./math/commands.ts";
+import { readDefinition } from "./definition.ts";
+import { isDeepStrictEqual } from "node:util";
+import { resolveResult } from "./math/results.ts";
+import {
+  RoleFailure,
+  type NoteReference,
+  type RoleRuntime,
+} from "./roles/types.ts";
+
+// These are application admission choices. Pi retains all execution state.
+export const Control = defineDoc({
+  kind: "research.control",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "current",
+  initial: (): {
+    paused: boolean;
+    cancelled: boolean;
+    accepted: string | null;
+  } => ({ paused: false, cancelled: false, accepted: null }),
+});
+const DecisionView = defineEntry("research.decision-view");
+
+type Role = (
+  input: any,
+  runtime: RoleRuntime,
+  context: Context,
+  source?: NoteReference,
+) => Promise<any>;
+export const roleNames = [
+  "coordinator",
+  ...workPlan.anyOf.map((plan) => plan.properties.kind.const),
+  "reconstruct",
+  "review",
+] as const;
+export type RoleName = (typeof roleNames)[number];
+export type Roles = Record<RoleName, Role> & {
+  capabilities: (input: any) => Parameters<typeof planSchema>[0] & {
+    sourceRetrieval?: boolean;
+  };
+};
+type Request = NonNullable<Plan["work"]>;
+export type WorkerInput = { retryOf?: TaskId } & (
+  { at: EntryId; request: Request } | { standalone: true }
+);
+type DecisionInput = {
+  retryOf?: TaskId;
+  order?: TaskId;
+};
+type NativeRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
+const failedTask = (task: NativeRecord) =>
+  task.state.outcome !== undefined &&
+  ["failed", "faulted", "orphaned"].includes(task.state.outcome.status);
+/** Pending and failed decisions remain native task records. */
+export function pendingDecisions(
+  tasks: readonly NativeRecord[],
+): NativeRecord[] {
+  const decisions = tasks.filter(
+    (task) => task.kind === "research.coordinator",
+  );
+  const replaced = new Set(
+    decisions.map((task) => (task.input as DecisionInput).retryOf),
+  );
+  return decisions.filter(
+    (task) =>
+      !replaced.has(task.id) &&
+      (task.state.status !== "terminal" || failedTask(task)),
+  );
+}
+
+/** A successor can clear a failed decision only by explicitly referring to it. */
+export function blockedDecision(
+  tasks: readonly NativeRecord[],
+): NativeRecord | undefined {
+  return pendingDecisions(tasks).find(failedTask);
+}
+
+const decisionOrder = (task: NativeRecord) =>
+  (task.input as DecisionInput).order ?? task.id;
+
+export async function scanTasks(tx: Tx, root: ConversationId, kind?: string) {
+  const tasks: TaskRecord<JsonValue, JsonValue, JsonValue>[] = [];
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanTasks(
+      { conversationId: root, ...(kind ? { kind } : {}) },
+      128,
+      cursor,
+    );
+    tasks.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return tasks;
+}
+
+async function abort(_task: unknown, runtime: RoleRuntime, context: Context) {
+  await runtime.commit(
+    () => ({ status: "terminal", outcome: { status: "aborted" } }),
+    context,
+  );
+}
+
+export function createResearch(roles: Roles) {
+  const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
+    name: "research.worker",
+    version: 1,
+    initial: () => ({ phase: "run" }),
+    phases: {
+      async run(task, runtime, context) {
+        let value: unknown;
+        let name: RoleName;
+        let source: NoteReference | undefined;
+        let predecessor: TaskId | undefined;
+        let stopped = false;
+        await runtime.commit(async (tx) => {
+          const control = await tx.doc(Control, task.conversationId);
+          if (control.accepted !== null || control.cancelled) {
+            stopped = true;
+            return { status: "terminal", outcome: { status: "aborted" } };
+          }
+          const definition = await readDefinition(tx, task.conversationId);
+          if ("standalone" in task.input) {
+            const mode = definition.mode;
+            if (!mode)
+              throw new Error(
+                "Standalone work requires a frozen procedure definition",
+              );
+            name = mode.role as RoleName;
+            value = {
+              ...(mode.input as object),
+              task: definition.task,
+            };
+            return;
+          }
+          const { request } = task.input;
+          const at = task.input.at;
+          predecessor = (await tx.entry(DecisionView, at))?.byTaskId;
+          if (predecessor === undefined)
+            throw new Error("Worker admission requires a Coordinator decision");
+          source = { root: task.conversationId, cutoff: at };
+          const view = await readView(tx, task.conversationId, at);
+          const { kind, ...assignment } = request;
+          name = kind;
+          value = {
+            ...assignment,
+            task: definition.task,
+            notes:
+              "notes" in request
+                ? closure(request.notes, view.notes)
+                : kind === "literature"
+                  ? view.notes.map(noteInfo)
+                  : view.notes,
+            ...(kind === "verifier"
+              ? {
+                  targets: request.notes,
+                  evidence: sourceEvidence(view.notes),
+                }
+              : {}),
+          };
+        }, context);
+        if (stopped) return;
+        if (predecessor !== undefined)
+          await runtime.waitForTask(predecessor, context);
+        let outcome: TaskOutcome<JsonValue>;
+        try {
+          const result = await roles[name!](value, runtime, context, source);
+          outcome = { status: "completed", result };
+        } catch (error) {
+          if (!(error instanceof RoleFailure)) throw error;
+          outcome = {
+            status: "failed",
+            error: { message: error.message },
+            ...(error.result ? { result: error.result } : {}),
+          };
+        }
+        await runtime.commit(async (tx) => {
+          const control = await tx.doc(Control, task.conversationId);
+          if (control.accepted !== null || control.cancelled)
+            return { status: "terminal", outcome: { status: "aborted" } };
+          if (!("standalone" in task.input) && outcome.result !== undefined)
+            validateResult(
+              await resolveResult(tx, outcome.result),
+              (await readView(tx, task.conversationId)).notes,
+              outcome.status === "failed",
+            );
+          await tx.appendEntry(Events, task.conversationId, {
+            data: { type: "result", task: task.id },
+          });
+          return {
+            status: "terminal",
+            outcome,
+          };
+        }, context);
+      },
+    },
+    abort,
+  });
+
+  async function worker(tx: Tx, root: ConversationId, input: WorkerInput) {
+    await tx.createTask(Worker, input, {
+      conversationId: root,
+      ownership: { kind: "conversation" },
+    });
+    if (!("standalone" in input)) await enqueue(tx, root);
+  }
+
+  const Coordinator = defineTask<
+    DecisionInput,
+    { phase: "freeze" } | { phase: "decide"; at: EntryId },
+    null
+  >({
+    name: "research.coordinator",
+    version: 1,
+    initial: () => ({ phase: "freeze" }),
+    phases: {
+      async freeze(task, runtime, context) {
+        await runtime.commit(async (tx) => {
+          const tasks = await scanTasks(tx, task.conversationId);
+          const on = tasks
+            .filter(
+              (other) =>
+                other.state.status !== "terminal" &&
+                (other.kind === Worker.definition.name ||
+                  (other.kind === Coordinator.definition.name &&
+                    (decisionOrder(other) < decisionOrder(task) ||
+                      (decisionOrder(other) === decisionOrder(task) &&
+                        other.id < task.id)))),
+            )
+            .map(({ id }) => id);
+          // A manual resume preserves the failed decision's original order.
+          if (on.length)
+            return {
+              status: "waiting",
+              on,
+              policy: "allSettled",
+              checkpoint: { phase: "freeze" },
+            };
+          const state = await tx.doc(Control, task.conversationId);
+          if (
+            blockedDecision(tasks) ||
+            state.cancelled ||
+            state.paused ||
+            state.accepted !== null
+          )
+            return {
+              status: "terminal",
+              outcome: { status: "completed", result: null },
+            };
+          const at = (
+            await tx.appendEntry(DecisionView, task.conversationId, {})
+          ).id;
+          return { status: "running", checkpoint: { phase: "decide", at } };
+        }, context);
+      },
+      async decide(task, runtime, context) {
+        const at = task.state.checkpoint.at;
+        let frozen!: Awaited<ReturnType<typeof readView>>;
+        let definition!: Awaited<ReturnType<typeof readDefinition>>;
+        let workers!: Awaited<ReturnType<typeof scanTasks>>;
+        await runtime.commit(async (tx) => {
+          frozen = await readView(tx, task.conversationId, at);
+          definition = await readDefinition(tx, task.conversationId);
+          workers = (
+            await scanTasks(tx, task.conversationId, Worker.definition.name)
+          ).filter((worker) => worker.id < at);
+        }, context);
+        let next: WorkerInput | undefined;
+        const acceptedNote =
+          !definition.mode && frozen.notes.find((note) => note.accepted);
+        if (definition.mode) {
+          const prior = workers.at(-1);
+          if (!prior || prior.state.outcome?.status !== "completed")
+            next = {
+              standalone: true,
+              ...(prior ? { retryOf: prior.id } : {}),
+            };
+        } else if (!acceptedNote) {
+          // Freeze waits for prior workers to settle. Their outcomes are immutable.
+          const kind = (work: (typeof workers)[number]) =>
+            (work.input as WorkerInput & { request?: Request }).request?.kind;
+          const explorerUsed = workers.some(
+            (worker) => kind(worker) === "explorer",
+          );
+          const coordination = {
+            task: definition.task,
+            notes: frozen.notes,
+            guidance: frozen.guidance,
+            literatureUsed: workers.some(
+              (worker) =>
+                kind(worker) === "literature" &&
+                worker.state.outcome?.status === "completed",
+            ),
+            explorerUsed,
+            failures: workers.filter(failedTask).map((worker) => ({
+              id: String(worker.id),
+              role: kind(worker) ?? "standalone",
+              error:
+                worker.state.outcome?.error?.message ??
+                worker.state.outcome?.reason ??
+                null,
+            })),
+          };
+          const capabilities = roles.capabilities(coordination);
+          const plan = await roles.coordinator(
+            { ...coordination, capabilities },
+            runtime,
+            context,
+            { root: task.conversationId, cutoff: at },
+          );
+          const { work } = validatePlan(plan, frozen.notes, capabilities);
+          if (work) next = { at, request: work };
+        }
+        await runtime.commit(async (tx) => {
+          const control = await tx.doc(Control, task.conversationId);
+          if (
+            !control.paused &&
+            !control.cancelled &&
+            control.accepted === null
+          ) {
+            if (acceptedNote) control.accepted = acceptedNote.id;
+            else if (next) await worker(tx, task.conversationId, next);
+          }
+          return {
+            status: "terminal",
+            outcome: {
+              status: "completed",
+              result: null,
+            },
+          };
+        }, context);
+      },
+    },
+    abort,
+  });
+
+  const enqueue = (tx: Tx, root: ConversationId, input: DecisionInput = {}) =>
+    tx.createTask(Coordinator, input, {
+      conversationId: root,
+      ownership: { kind: "conversation" },
+    });
+  return {
+    extension: defineExtension({
+      name: "research",
+      tasks: [Coordinator, Worker],
+    }),
+    initialize: (tx: Tx, root: ConversationId) => enqueue(tx, root),
+    async resume(tx: Tx, root: ConversationId) {
+      const tasks = await scanTasks(tx, root);
+      const pending = pendingDecisions(tasks).filter(failedTask);
+      const control = await tx.doc(Control, root);
+      if (control.cancelled || control.accepted !== null)
+        throw new Error("Campaign is terminal");
+      control.paused = false;
+      if (!pending.length) return [await enqueue(tx, root)];
+      const resumed: TaskId[] = [];
+      for (const previous of pending) {
+        const input = previous.input as DecisionInput;
+        resumed.push(
+          await enqueue(tx, root, {
+            ...input,
+            retryOf: previous.id,
+            order: input.order ?? previous.id,
+          }),
+        );
+      }
+      return resumed;
+    },
+    async input(tx: Tx, root: ConversationId, value: unknown) {
+      if ((await readDefinition(tx, root)).mode)
+        throw new Error("Standalone procedures do not accept solver inputs");
+      const view = await readView(tx, root);
+      const command = readCommand(value);
+      const existing = view.inputs.find(
+        (input) => input.command.id === command.id,
+      );
+      if (existing) {
+        if (!isDeepStrictEqual(existing.command, command))
+          throw new Error("Input ID already has another value");
+        return existing.id;
+      }
+      validateCommand(command, view);
+      if (blockedDecision(await scanTasks(tx, root)))
+        throw new Error("Campaign is blocked; resume it before adding input");
+      const state = await tx.doc(Control, root);
+      if (state.cancelled || state.accepted !== null)
+        throw new Error("Campaign is terminal");
+      const event = await tx.appendEntry(Events, root, {
+        data: { type: "input", command },
+      });
+      await enqueue(tx, root);
+      return event.id;
+    },
+  };
+}

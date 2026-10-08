@@ -1,64 +1,118 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "cd32f7725fdbddbaecdff5b1e68491563394e0ca",
-  "build": {
-    "node": "26.5.0",
-    "npm": "11.17.0",
-    "dependencyInstall": "npm ci --ignore-scripts --no-audit --no-fund",
-    "order": ["chord", "telemetry", "ai", "durable"],
-    "aiScript": "build:offline",
-    "otherScript": "build",
-    "pack": "npm pack --ignore-scripts"
+  "commit": "f10993bc7f28145df1375f3ff39c7f5c4cfc05f0",
+  "distribution": {
+    "source": "upstream-build",
+    "version": "1.0.4",
+    "released": false,
+    "artifactManifestSha256": "e43fed83f8ffd2a9c918dc3401e12f960341d60a512338a2528991357593329d",
+    "command": "npm run pack:packages -- --out ARTIFACT_DIRECTORY --offline-model-data"
   },
-  "upstreamPackageLockSha256": "aad6e878fa237f4b92645408c8de1b596ef9246a1f2fcabd47a0ac8563c0102b",
   "modelData": {
-    "generatedAt": "2026-09-30T21:02:52.413Z",
-    "manifestSha256": "2e80e00cd2851db0eda7cc8bffe14396f9b32d033e37b4fe2211568e5d6f128d",
+    "generatedAt": "1970-01-01T00:00:00.000Z",
+    "manifestSha256": "fd9adc63f2c599a4d610604222a3aa767e32bb2d35fd8cbb05a51e8f98c67bba",
+    "catalogRevision": "sha256-439c53478c84ed27a58f8b54e1c3bd45810e5a969515b4e3666a3898d51ee22f",
     "frozenIn": "@earendil-works/pi-ai:package/dist/providers/data"
   },
   "artifacts": [
     {
       "name": "@earendil-works/chord",
-      "version": "1.0.2",
-      "bytes": 208923,
-      "sha256": "323dd79bb7eb27febea94aed4da5f7f7351923ee025fee002567d2d78661c92f",
-      "path": "vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-chord-1.0.2.tgz"
+      "version": "1.0.4",
+      "bytes": 208924,
+      "sha256": "b6b8240ea624f2cd912560b51d3159de3780d207a355818717a37884ac6d0c3e",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-chord-1.0.4-da467d81abea.tgz",
+      "integrity": "sha512-2kZ9gavq4lmsvBjwLpa9VkpRRga7sSuu22bWajnFb7FcAsHFhT/+qjP7RtNbWD6qUgJPlplJS+45JPnywYdGUg=="
     },
     {
       "name": "@earendil-works/pi-telemetry",
-      "version": "1.0.2",
+      "version": "1.0.4",
       "bytes": 27276,
-      "sha256": "420e43d633f1d3e097ef95bc79f3571fd248ff3225968c6c66aca704ad63f9d7",
-      "path": "vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-telemetry-1.0.2.tgz"
+      "sha256": "b14e82b96c34cc54178d7663e7aeb2f7fc1b95f298643e8adefa631345219947",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-telemetry-1.0.4-4add682a86c0.tgz",
+      "integrity": "sha512-St1oKobA1cQ1yoY7OrZ2tqUrJBopNccmj3EnEQfnmZsZcJDRQbyOKMIkwxq+ZekOyBrLtaGQlxmSsn6ZvsgjbA=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "version": "1.0.2",
-      "bytes": 769517,
-      "sha256": "376a094d44526f2aa0adc36034afae1436adc968c6ad9d785ce8d4bc04e38f1e",
-      "path": "vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-ai-1.0.2.tgz"
+      "version": "1.0.4",
+      "bytes": 787437,
+      "sha256": "cc113d2a7fbd12307f87f9fc49fe0dc81da0712ec790d677c184aeafb9f76398",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-ai-1.0.4-ff0fc8dd0e17.tgz",
+      "integrity": "sha512-/w/I3Q4XHVn78HMLgf6FTVBYveQj6xq0I36Zd9M5WJ0D62weXN6VqzPRQfCEhCgln5Uibwg7zjOqTgs9eG32Wg=="
     },
     {
       "name": "@earendil-works/pi-durable",
-      "version": "1.0.2",
-      "bytes": 475271,
-      "sha256": "34d1cca64b935062d39b648474da51ff2276ef06fa33307d0a9cd237016c058f",
-      "path": "vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-durable-1.0.2.tgz"
+      "version": "1.0.4",
+      "bytes": 559570,
+      "sha256": "5a83d454a53490d4aff475d47e7d4b9647c80805c91aa9ee8bef518897d1bed5",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-durable-1.0.4-a371b2974737.tgz",
+      "integrity": "sha512-o3Gyl0c3LO0cxClLx9QLgJDj3X1ZbW9/X/qzxiSxlZV/AMUVL+SMn462DxTvZdM7quYTQfQZPbH30q24euAwDw=="
+    },
+    {
+      "name": "@earendil-works/pi-coding-agent",
+      "version": "1.0.4",
+      "bytes": 7480775,
+      "sha256": "af31f820851dae24e80e2fc4c82cd390a7432673497b84a75e43a2aaed10b694",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-coding-agent-1.0.4-d310763c266f.tgz",
+      "integrity": "sha512-0xB2PCZvcuvww+Nj8VPclBGfXQ6qLDy+MxkmPZ/6TXx4TdrQh7Yyykkxvng38rezfhJVAYTUWXIX4ZjMBFdbWQ=="
+    },
+    {
+      "name": "@earendil-works/pi-mcp",
+      "version": "1.0.4",
+      "bytes": 91876,
+      "sha256": "71e26340407a00f8f598c94bcebabe3237b907b417ed79d70309130c2ac5ddc7",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-mcp-1.0.4-80c742256420.tgz",
+      "integrity": "sha512-gMdCJWQgV8TTUAbItIggPoDKTs9+3XXuovfEsSR1WDdxAmXNnE8CKD38C6Ht6ky0MnNCyxE1HmijQuHaAymA0g=="
+    },
+    {
+      "name": "@earendil-works/pi-tui",
+      "version": "1.0.4",
+      "bytes": 511743,
+      "sha256": "63f78e5909e3e17b9709a35c46770960b6e52e4c1bbabed4cfc01f34a0df95f3",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-tui-1.0.4-0f527a78e5b7.tgz",
+      "integrity": "sha512-D1J6eOW3TxImzvsoOnlBuS3P0hNgr3YmbtwDNLgEdteGNdiDHHRhjxMEDEsao8vKxOeXoXmg3sAU3lRnYT6AXg=="
+    },
+    {
+      "name": "@earendil-works/pi-codemode",
+      "version": "1.0.4",
+      "bytes": 58807,
+      "sha256": "49d168bd411c24bf47c3dbf2ace9e216ebb4c677890a726a82279b69f562814f",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-codemode-1.0.4-7ee7bada7e35.tgz",
+      "integrity": "sha512-fue62n41V+ICzmy07TFBOujuHs3ZXSXdFkbz59y5m4l01KPDDLkZ6jEYi8ghPyKHMxGzW2ZcM8ZGpb9PPjtVRw=="
+    },
+    {
+      "name": "@earendil-works/pi-agent-core",
+      "version": "1.0.4",
+      "bytes": 61315,
+      "sha256": "4f828e7f29732556f7c9427a21170306c4ec4e1641333a741dcdb0e848b389fb",
+      "path": "vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-agent-core-1.0.4-e5ab5615bf54.tgz",
+      "integrity": "sha512-5atWFb9UBzxiH8fDJRjDN9uZM/lkTf+UDTL5saLh1WHiilJMxohwImhr1bbbUu8h4TPBVDeAITpivSfVH3A1fw=="
     }
   ],
   "patches": [
     {
-      "path": "patches/@earendil-works%2Fpi-ai@1.0.2.patch",
-      "sha256": "727223a8203cb7c438336e3107177e84c4f19a2476aca8b1d52020d33cda2972",
-      "appliedBy": "Bun patchedDependencies at installation"
+      "package": "@earendil-works/pi-ai",
+      "path": "patches/@earendil-works%2Fpi-ai@1.0.4.patch",
+      "sha256": "965766d767684dce449ecb288e859c6bf77484af0c89ba169c3466b0e27b1beb",
+      "files": {
+        "dist/api/anthropic-messages.js": "4682481a75fe91796031dce050e2bfd11734c0a62400e895cfd583fbf9f73e22",
+        "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
+        "dist/api/openai-codex-responses.js": "1e7da42398af7a5d8345f1cd32fff9298724ec2e9d3b53037998eb17a9be56e9",
+        "dist/api/openai-responses-shared.js": "64f2882dee09b86379f033c265d088ef5d5ac77b8730713d3189ec73b9052f6b",
+        "dist/api/openai-responses.js": "cef4401f72b89878ec3b91be1135960c8976336a1ad23473722a9f6b97152791",
+        "dist/types.d.ts": "238286de7715493d3147b3e85fe6ee0aa2886a415df42b9d7f7344d9a07559b8",
+        "dist/utils/retry.js": "9451d9701061958044fc36e2b90fb36c9149e7779885940dfda42d36b7b2a129"
+      },
+      "reason": "Preserve provider error classification and usage, and correct direct Codex failure and SSE handling."
     },
     {
-      "path": "patches/@earendil-works%2Fpi-durable@1.0.2.patch",
-      "sha256": "868db509348b35f462ed4bdaabb6e0c87a6c06afd5a85707982964d04bc1d1df",
-      "appliedBy": "Bun patchedDependencies at installation"
+      "package": "@earendil-works/pi-durable",
+      "path": "patches/@earendil-works%2Fpi-durable@1.0.4.patch",
+      "sha256": "82f9849625b29a2ba789f1423b6df122b304c3215e5423f19f09e4e572f5e30e",
+      "files": {
+        "dist/harness/generation.js": "8f1a91f20ff943d0940547410d7dbe8621f50f315ded77a3bdb633a38b3e72f1",
+        "dist/harness/types.d.ts": "f09294fd3c54b6142f4a499532033f5576be5fe882e2fe993478eb7318781c82"
+      },
+      "reason": "Expose frozen request entries and stream selection for role guards and completed-reasoning recovery."
     }
-  ],
-  "verification": {
-    "frozenModelDataRebuild": "All retained tarball SHA-256 values matched across two clean-output builds from the preserved frozen model data using the recorded toolchain."
-  }
+  ]
 }

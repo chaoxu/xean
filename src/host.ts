@@ -1,0 +1,295 @@
+import { lstatSync } from "node:fs";
+import { mkdir, mkdtempDisposable, realpath, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { backup, DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { pathToFileURL } from "node:url";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { Models } from "@earendil-works/pi-ai";
+import {
+  createRegistry,
+  createSession,
+  Harness,
+  ROOT_CONVERSATION_ID,
+  type ConversationId,
+  type Registry,
+  type Storage,
+  type Tx,
+} from "@earendil-works/pi-durable";
+import {
+  CURRENT_SQLITE_SCHEMA_VERSION,
+  SqliteStorage,
+} from "@earendil-works/pi-durable/storage/sqlite";
+import {
+  openNodeSqliteDatabase,
+  openNodeSqliteStorage,
+} from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createRuntime } from "./config.ts";
+import {
+  DefinitionDoc,
+  readDefinition,
+  UninitializedResearchError,
+  validateDefinition,
+  type Definition,
+} from "./definition.ts";
+import { createRoles } from "./roles/index.ts";
+import type { Research } from "./roles/research.ts";
+import {
+  Control,
+  createResearch,
+  roleNames,
+  type RoleName,
+  type Roles,
+} from "./workflow.ts";
+
+export class ResearchOwnedError extends Error {
+  constructor() {
+    super("Research database already has an owner");
+    this.name = "ResearchOwnedError";
+  }
+}
+export type OpenOptions = {
+  create?: Definition;
+  models?: Models;
+  research?: Research;
+  roles?: (builtins: Roles) => Partial<Roles>;
+  key?: string;
+  usagePrefix?: string;
+  registry?: Registry;
+  initialize?: (tx: Tx, root: ConversationId) => unknown | Promise<unknown>;
+};
+
+async function canonicalPath(path: string, create: boolean) {
+  const absolute = resolve(path);
+  if (create) await mkdir(dirname(absolute), { recursive: true });
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    if (!create || (error as NodeJS.ErrnoException).code !== "ENOENT")
+      throw error;
+    if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink())
+      throw new Error("Research database symlink must have an existing target");
+    return join(await realpath(dirname(absolute)), basename(absolute));
+  }
+}
+
+function acquire(path: string) {
+  const lock = new DatabaseSync(`${path}.owner.sqlite`);
+  try {
+    lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
+  } catch {
+    lock.close();
+    throw new ResearchOwnedError();
+  }
+  // Retain the lock file: unlinking it would permit locks on different inodes.
+  return () => lock.close();
+}
+
+function assertSingleLink(nlink: number) {
+  if (nlink > 1)
+    throw new Error("Hard-linked research database paths are unsupported");
+}
+
+/** Reject SQL writes and missing files while allowing SQLite to maintain WAL sidecars. */
+export function openReadDatabase(path: string) {
+  const database = new DatabaseSync(`${pathToFileURL(path).href}?mode=rw`);
+  try {
+    database.exec("PRAGMA query_only = ON");
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+function recognize(path: string, live = false) {
+  using database = openReadDatabase(path);
+  const tables = database
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .all() as { name: string }[];
+  const native = tables.some(({ name }) => name === "durable_schema");
+  if (!native && tables.length)
+    throw new Error("Not a Pi Durable research database");
+  if (
+    native &&
+    live &&
+    database
+      .prepare("SELECT version FROM durable_schema WHERE singleton = 1")
+      .get()?.version !== CURRENT_SQLITE_SCHEMA_VERSION
+  )
+    throw new Error("Live inspection requires the current Pi SQLite schema");
+  return native;
+}
+
+async function openOwnedStorage(path: string) {
+  const database = await openNodeSqliteDatabase(path);
+  const nativeClose = database.close.bind(database);
+  let closing: Promise<void> | undefined;
+  database.close = () =>
+    (closing ??= database.exec("PRAGMA busy_timeout = 0").finally(nativeClose));
+  try {
+    await database.exec("PRAGMA synchronous = FULL");
+    return await SqliteStorage.open(database);
+  } catch (error) {
+    await database.close().catch(() => {});
+    throw error;
+  }
+}
+
+/** Own one native Harness. Close it to suspend; reopen it to recover. */
+export async function open(path: string, options: OpenOptions = {}) {
+  const requested = options.create && validateDefinition(options.create);
+  const canonical = await canonicalPath(path, requested !== undefined);
+  const release = acquire(canonical);
+  let storage: Storage | undefined;
+  let harness: Harness | undefined;
+  let failure: unknown;
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
+      try {
+        if (harness) await harness.close(context);
+        else await storage?.close(context);
+      } finally {
+        release();
+      }
+    })().then(
+      () => {
+        if (failure !== undefined) throw failure;
+      },
+      (error) => {
+        throw failure ?? error;
+      },
+    ));
+  const report = (error: unknown) => {
+    console.error("Pi report:", error);
+    if (!harness || closing) return;
+    // Reports are nonfatal. A rejected native health commit identifies an
+    // unusable Session; native close releases its outstanding waiters.
+    void harness
+      .commit(() => {}, context)
+      .catch((unhealthy: unknown) => {
+        if (closing) return;
+        failure =
+          unhealthy instanceof Error
+            ? (unhealthy.cause ?? unhealthy)
+            : unhealthy;
+        void close().catch(() => {});
+      });
+  };
+  try {
+    const existing = await stat(canonical).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return undefined;
+      },
+    );
+    if (existing) assertSingleLink(existing.nlink);
+    if (existing?.size) recognize(canonical);
+    storage = await openOwnedStorage(canonical);
+    const value = await createSession(storage).snapshot(
+      DefinitionDoc,
+      ROOT_CONVERSATION_ID,
+      context,
+    );
+    const stored = value === undefined ? undefined : validateDefinition(value);
+    if (stored && requested && !isDeepStrictEqual(stored, requested))
+      throw new Error("Research task and settings are frozen");
+    const definition = stored ?? requested;
+    if (!definition) throw new UninitializedResearchError();
+    if (!stored && (await storage.conversation(ROOT_CONVERSATION_ID, context)))
+      throw new UninitializedResearchError();
+    const settings =
+      options.usagePrefix === undefined
+        ? definition.settings
+        : {
+            ...definition.settings,
+            usagePrefix: options.usagePrefix,
+          };
+    const runtime = createRuntime(settings, {
+      models: options.models,
+      key: options.key,
+    });
+    const builtins = createRoles(
+      { ...settings, profiles: runtime.profiles },
+      options.research,
+    );
+    const roles = Object.assign(builtins, options.roles?.(builtins));
+    const workflow = createResearch(roles);
+    const registry = options.registry ?? createRegistry();
+    registry.install(builtins.extension);
+    registry.install(workflow.extension);
+    if (
+      definition.mode &&
+      !roleNames.includes(definition.mode.role as RoleName)
+    )
+      throw new Error("Unknown standalone role");
+    harness = await Harness.open(
+      storage,
+      {
+        registry,
+        models: runtime.models,
+        settings: { compaction: { enabled: false } },
+        onReport: report,
+      },
+      context,
+    );
+    const root = await harness.root(context, {
+      init: async (tx, root) => {
+        Object.assign(await tx.doc(DefinitionDoc, root), definition);
+        await tx.doc(Control, root);
+        if (options.initialize) await options.initialize(tx, root);
+        else await workflow.initialize(tx, root);
+      },
+    });
+    // The scheduler opens paused; reconcile cancellation before recovery.
+    if ((await harness.snapshot(Control, root.id, context))?.cancelled)
+      await root.abort(context);
+    return {
+      harness,
+      root,
+      workflow,
+      close,
+    };
+  } catch (error) {
+    await close().catch(() => {});
+    throw failure ?? error;
+  }
+}
+
+/** Inspect through a fresh Session. Live reads may span commits. Default to a backup. */
+export async function inspect<T>(
+  path: string,
+  read: (tx: Tx, root: ConversationId) => T | Promise<T>,
+  { live = false }: { live?: boolean } = {},
+): Promise<T> {
+  assertSingleLink((await stat(path)).nlink);
+  await using directory = live
+    ? undefined
+    : await mkdtempDisposable(join(tmpdir(), "research-snapshot-"));
+  const database = directory ? join(directory.path, "snapshot.sqlite") : path;
+  if (directory) {
+    using source = openReadDatabase(path);
+    await backup(source, database);
+  }
+  if (!recognize(database, live)) throw new UninitializedResearchError();
+  const storage = await openNodeSqliteStorage(database);
+  if (live)
+    storage.commit = async () => {
+      throw new Error("Live inspection cannot change campaign state");
+    };
+  const session = createSession(storage);
+  try {
+    return await session.commit(async (tx) => {
+      if (!(await tx.conversation(ROOT_CONVERSATION_ID)))
+        throw new UninitializedResearchError();
+      await readDefinition(tx, ROOT_CONVERSATION_ID);
+      return read(tx, ROOT_CONVERSATION_ID);
+    }, context);
+  } finally {
+    await session.close(context);
+  }
+}

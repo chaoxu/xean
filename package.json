@@ -1,36 +1,65 @@
 {
-  "name": "xean-workspace",
-  "version": "3.0.0",
+  "name": "xean",
+  "version": "3.0.0-rc.1",
+  "description": "A mathematical research workflow built on Pi Durable",
   "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
     "bun": ">=1.4.2"
   },
-  "scripts": {
-    "setup": "\"$npm_execpath\" scripts/dev.ts install",
-    "xean": "\"$npm_execpath\" packages/cli/src/index.ts",
-    "check": "\"$npm_execpath\" scripts/check.ts"
+  "bin": {
+    "xean": "./apps/cli/index.ts",
+    "xean-observe": "./apps/observe/server.ts"
   },
-  "workspaces": [
-    "packages/*"
+  "files": [
+    "src/",
+    "apps/",
+    "scripts/",
+    "examples/",
+    "vendor/",
+    "tests/",
+    "docs/",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE",
+    "bun.lock",
+    "tsconfig.json",
+    "patches/"
   ],
-  "catalog": {
-    "@earendil-works/chord": "file:vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-chord-1.0.2.tgz",
-    "@earendil-works/pi-telemetry": "file:vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-telemetry-1.0.2.tgz",
-    "@earendil-works/pi-ai": "file:vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-ai-1.0.2.tgz",
-    "@earendil-works/pi-durable": "file:vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-durable-1.0.2.tgz",
-    "execa": "10.0.1",
-    "typebox": "1.3.27"
+  "exports": {
+    ".": "./src/index.ts",
+    "./report": "./src/report.ts"
+  },
+  "scripts": {
+    "check": "bun scripts/dev.ts check",
+    "check:distribution": "bun scripts/dev.ts distribution",
+    "pack": "bun scripts/dev.ts pack",
+    "xean": "bun apps/cli/index.ts",
+    "pi": "bun node_modules/.bin/pi",
+    "observe": "bun apps/observe/server.ts"
   },
   "dependencies": {
-    "@earendil-works/chord": "catalog:",
-    "@earendil-works/pi-durable": "catalog:",
-    "@earendil-works/pi-ai": "catalog:",
-    "@earendil-works/pi-telemetry": "catalog:",
-    "xean": "workspace:*",
-    "xean-cli": "workspace:*",
-    "xean-observe": "workspace:*"
+    "commander": "15.0.0",
+    "execa": "10.0.1",
+    "lit-html": "3.3.3",
+    "katex": "0.18.9",
+    "@earendil-works/chord": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-chord-1.0.4-da467d81abea.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-ai-1.0.4-ff0fc8dd0e17.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-durable-1.0.4-a371b2974737.tgz",
+    "typebox": "1.3.27",
+    "@earendil-works/pi-coding-agent": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-coding-agent-1.0.4-d310763c266f.tgz"
+  },
+  "overrides": {
+    "@earendil-works/chord": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-chord-1.0.4-da467d81abea.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-ai-1.0.4-ff0fc8dd0e17.tgz",
+    "@earendil-works/pi-durable": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-durable-1.0.4-a371b2974737.tgz",
+    "@earendil-works/pi-telemetry": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-telemetry-1.0.4-4add682a86c0.tgz",
+    "@earendil-works/pi-coding-agent": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-coding-agent-1.0.4-d310763c266f.tgz",
+    "@earendil-works/pi-mcp": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-mcp-1.0.4-80c742256420.tgz",
+    "@earendil-works/pi-tui": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-tui-1.0.4-0f527a78e5b7.tgz",
+    "@earendil-works/pi-codemode": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-codemode-1.0.4-7ee7bada7e35.tgz",
+    "@earendil-works/pi-agent-core": "file:vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-agent-core-1.0.4-e5ab5615bf54.tgz"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
@@ -38,13 +67,7 @@
     "typescript": "7.0.2"
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-ai-1.0.2.tgz": "patches/@earendil-works%2Fpi-ai@1.0.2.patch",
-    "@earendil-works/pi-durable@vendor/pi/cd32f7725fdbddbaecdff5b1e68491563394e0ca/earendil-works-pi-durable-1.0.2.tgz": "patches/@earendil-works%2Fpi-durable@1.0.2.patch"
-  },
-  "overrides": {
-    "@earendil-works/chord": "catalog:",
-    "@earendil-works/pi-telemetry": "catalog:",
-    "@earendil-works/pi-ai": "catalog:",
-    "@earendil-works/pi-durable": "catalog:"
+    "@earendil-works/pi-ai@vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-ai-1.0.4-ff0fc8dd0e17.tgz": "patches/@earendil-works%2Fpi-ai@1.0.4.patch",
+    "@earendil-works/pi-durable@vendor/pi/f10993bc7f28145df1375f3ff39c7f5c4cfc05f0/earendil-works-pi-durable-1.0.4-a371b2974737.tgz": "patches/@earendil-works%2Fpi-durable@1.0.4.patch"
   }
 }

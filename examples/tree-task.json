@@ -1,4 +1,0 @@
-{
-  "problem": "Prove that every finite nonempty simple undirected tree with n vertices has exactly n - 1 edges. A tree means a connected acyclic graph.",
-  "completionCriteria": "Give a self-contained proof valid for every integer n >= 1, including n = 1. Justify every structural graph fact used rather than citing a theorem."
-}

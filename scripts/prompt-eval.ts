@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { readSettings, type Note } from "xean/solve";
-import cases from "../examples/prompt-cases.json";
+import { readSettings } from "../src/config.ts";
+import type { Note } from "../src/math/contracts.ts";
+import type Cases from "../apps/cli/prompt-cases.json";
 import { verifyInstall } from "./dependencies.ts";
 
 const root = resolve(import.meta.dir, "..");
@@ -16,17 +17,18 @@ assert.equal(
   4,
   "Usage: scripts/prompt-eval.ts SETTINGS.json NEW_OUTPUT_DIRECTORY",
 );
-await verifyInstall(root);
+await verifyInstall();
 const settingsBytes = await readFile(resolve(process.argv[2]!));
 readSettings(JSON.parse(settingsBytes.toString()));
-const casesBytes = await readFile(resolve(root, "examples/prompt-cases.json"));
+const casesBytes = await readFile(resolve(root, "apps/cli/prompt-cases.json"));
+const cases: typeof Cases = JSON.parse(casesBytes.toString());
 // Source hashes also identify clean source archives without Git metadata.
 const source: Record<string, string> = {};
 const sourceFiles = [
-  "packages/core/**/*.ts",
-  "packages/cli/**/*.ts",
-  "packages/*/package.json",
+  "src/**/*.ts",
+  "apps/cli/**/*.ts",
   "scripts/prompt-eval.ts",
+  "scripts/dependencies.ts",
   "package.json",
   "bun.lock",
   "vendor/pi/provenance.json",
@@ -49,7 +51,7 @@ for (const example of cases) {
     id: "n1",
     summary: example.summary,
     detailedSummary: example.summary,
-    text: example.text,
+    text: `${example.statement}\n\n${example.argument}`,
     support: [],
     revision: 0,
     imported: false,
@@ -66,7 +68,8 @@ for (const example of cases) {
         "Give a self-contained proof using elementary real arithmetic.",
     },
     notes: [note],
-    targets: [{ id: note.id, through: "correctness" }],
+    targets: [note.id],
+    through: "correctness",
   });
   const inputPath = resolve(directory, "input.json");
   const database = resolve(directory, "campaign.sqlite");
@@ -75,7 +78,7 @@ for (const example of cases) {
     process.execPath,
     "--no-install",
     "--no-env-file",
-    resolve(root, "packages/cli/src/index.ts"),
+    resolve(root, "apps/cli/index.ts"),
   ];
   commands.push({
     id: example.id,
