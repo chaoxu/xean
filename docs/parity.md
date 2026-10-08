@@ -82,6 +82,7 @@ whose pending stream was cancelled. These use native provider behavior.
 
 The CLI reuses coding-agent's public `ModelRuntime` for Pi's persistent
 credentials and refresh locking. Login and logout use the bundled Pi CLI.
+Reasoning levels use Pi's native configuration schema.
 Xean supplies its own frozen settings and model catalog, with no Pi model-file
 loading or startup catalog refresh. The core library still accepts caller-owned
 `Models` and does not load a user's credentials by default.

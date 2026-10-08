@@ -27,6 +27,8 @@ Read README.md and the pinned Pi implementation before changing the design.
   workflow failures. Report runtime and test line counts.
 - Reproduce interface failures with local contract tests. Screen model behavior
   with small standalone-role inputs before a full campaign smoke or golden run.
+- Use `xean status` for routine monitoring and read transcripts on demand.
+  Keep monitoring storage bounded instead of archiving cumulative snapshots.
 - Preserve historical runs and their pinned runtimes. No compatibility,
   migrations, remote publication, or production cutover is implied.
 - Apply the prose-writing skill to documentation and obtain separate verifier

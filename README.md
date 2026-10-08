@@ -261,8 +261,9 @@ Use the golden problems after those checks pass.
 `check:distribution` checks an unpacked source archive with production dependencies,
 including the model-free workflow, CLI, local observation, browser assets, and licenses.
 `pack` runs the same distribution check and writes the source archive under
-`dist/`. The source-package smoke passed on Bun 1.4.2 for macOS ARM64 and Linux
-ARM64 and x86-64 with only Bun on `PATH` and no provider credentials.
+`dist/`. The current Pi pin passed the source-package smoke on macOS ARM64.
+The 3.0 release checks also covered Linux ARM64 and x86-64. These checks used
+Bun 1.4.2 with only Bun on `PATH` and no provider credentials.
 
 At revision `0e74fc7`, all six sequential golden campaigns reached internal
 acceptance and independent PASS review, then reopened without credentials.
@@ -295,8 +296,8 @@ Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the sou
 package.
 
 Pi packages are built together from upstream commit
-`f10993bc7f28145df1375f3ff39c7f5c4cfc05f0` using Pi's `pack:packages` command.
-This commit follows the 1.0.4 release. The packages include frozen model data.
+`ce950d78f424dcaf9f5d6a03ce80ab141130eb1d` using Pi's `pack:packages` command.
+This commit follows the 1.1.0 release. The packages include frozen model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.

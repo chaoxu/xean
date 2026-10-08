@@ -1,12 +1,12 @@
 --- a/dist/api/anthropic-messages.js
 +++ b/dist/api/anthropic-messages.js
-@@ -3,4 +3,5 @@
+@@ -3,4 +3,5 @@ import { ANTHROPIC_FEDERATION_RULE_ID_ENV, ANTHROPIC_IDENTITY_TOKEN_FILE_ENV, AN
  import { calculateCost } from "../models.js";
  import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 +import { normalizeProviderError } from "../utils/error-body.js";
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { headersToRecord } from "../utils/headers.js";
-@@ -459,4 +460,11 @@
+@@ -459,4 +460,11 @@ export const stream = (model, context, options) => {
                      usageModel = fallbackCost ? { ...model, id: responseModel, cost: fallbackCost } : model;
                      // Capture initial token usage from message_start event
 +                    output.usageReported ||= [
@@ -18,7 +18,7 @@
 +                    ].some(Number.isFinite);
                      // This ensures we have input token counts even if the stream is aborted early
                      output.usage.input = event.message.usage.input_tokens || 0;
-@@ -622,4 +630,11 @@
+@@ -622,4 +630,11 @@ export const stream = (model, context, options) => {
                      // Preserves input_tokens from message_start when proxies omit it in message_delta.
                      if (event.usage) {
 +                        output.usageReported ||= [
@@ -30,7 +30,7 @@
 +                        ].some(Number.isFinite);
                          if (event.usage.input_tokens != null) {
                              output.usage.input = event.usage.input_tokens;
-@@ -683,4 +698,5 @@
+@@ -683,4 +698,5 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 +            output.providerError = { status: normalizeProviderError(error).status };
@@ -38,7 +38,7 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
 --- a/dist/api/google-generative-ai.js
 +++ b/dist/api/google-generative-ai.js
-@@ -227,5 +227,7 @@
+@@ -227,5 +227,7 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 -            output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -49,13 +49,13 @@
              stream.end();
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -11,4 +11,5 @@
+@@ -11,4 +11,5 @@ import { getSystemMessageText } from "../utils/text.js";
  import { getDeclaredTools, getInitialSystemMessage, normalizeContext, resolveTranscript, resolveTranscriptTools, } from "../utils/transcript.js";
  import { uuidv7 } from "../utils/uuid.js";
 +import { isRetryableAssistantError } from "../utils/retry.js";
  import { createGrammarToolInputProperties } from "./constrained-sampling.js";
  import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
-@@ -50,15 +51,11 @@
+@@ -50,15 +51,11 @@ function assertSuccessfulOutput(output) {
  // Retry Helpers
  // ============================================================================
 -function isTerminalRateLimitError(errorText) {
@@ -77,7 +77,7 @@
 +    });
  }
  function getRetryAfterDelayMs(headers) {
-@@ -300,5 +297,7 @@
+@@ -300,5 +297,7 @@ export const stream = (model, context, options) => {
                      });
                      const info = await parseErrorResponse(fakeResponse);
 -                    throw new Error(info.friendlyMessage || info.message);
@@ -86,7 +86,7 @@
 +                    });
                  }
                  catch (error) {
-@@ -309,8 +308,10 @@
+@@ -309,8 +308,10 @@ export const stream = (model, context, options) => {
                      }
                      lastError = error instanceof Error ? error : new Error(String(error));
 -                    // Network errors are retryable
@@ -99,26 +99,26 @@
 +                        })) {
                          const delayMs = BASE_DELAY_MS * 2 ** attempt;
                          await sleep(delayMs, options?.signal);
-@@ -346,4 +347,5 @@
+@@ -346,4 +347,5 @@ export const stream = (model, context, options) => {
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
 +            if (error instanceof CodexApiError) output.providerError = error.providerError;
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
-@@ -487,4 +489,5 @@
+@@ -487,4 +489,5 @@ class CodexApiError extends Error {
      code;
      payload;
 +    providerError;
      constructor(message, options) {
          super(message);
-@@ -492,4 +495,6 @@
+@@ -492,4 +495,6 @@ class CodexApiError extends Error {
          this.code = options?.code;
          this.payload = options?.payload;
 +        const detail = this.payload?.error ?? this.payload?.response?.error;
 +        this.providerError = { status: this.payload?.status, type: detail?.type, code: this.code };
          this.cause = options?.cause;
      }
-@@ -512,5 +517,7 @@
+@@ -512,5 +517,7 @@ class ProviderStreamEventCallbackError extends Error {
  }
  function isCodexNonTransportError(error) {
 -    return (error instanceof CodexApiError ||
@@ -127,7 +127,7 @@
 +    })) ||
          error instanceof CodexProtocolError ||
          error instanceof ProviderStreamEventCallbackError);
-@@ -556,4 +563,8 @@
+@@ -556,4 +563,8 @@ async function* mapCodexEvents(events, output, model, onProviderStreamEvent) {
              const code = response?.error?.code;
              const message = response?.error?.message;
 +            if (response) {
@@ -136,13 +136,13 @@
 +            }
              throw new CodexApiError(message || "Codex response failed", { code, payload: event });
          }
-@@ -600,4 +611,5 @@
+@@ -600,4 +611,5 @@ async function* parseSSE(response, signal) {
              }
              buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 +            buffer = buffer.replaceAll("\r\n", "\n");
              // Treat EOF as terminating the residual SSE frame.
              if (done && buffer.trim())
-@@ -1241,11 +1253,12 @@
+@@ -1241,11 +1253,12 @@ async function parseErrorResponse(response) {
      const raw = await response.text();
      let message = raw || response.statusText || "Request failed";
 -    let friendlyMessage;
@@ -158,7 +158,7 @@
 +            if (/^(usage_limit_reached|usage_not_included)$/i.test(code || type || "")) {
                  const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
                  const mins = err.resets_at
-@@ -1259,5 +1272,5 @@
+@@ -1259,5 +1272,5 @@ async function parseErrorResponse(response) {
      }
      catch { }
 -    return { message, friendlyMessage };
@@ -167,7 +167,7 @@
  // ============================================================================
 --- a/dist/api/openai-responses-shared.js
 +++ b/dist/api/openai-responses-shared.js
-@@ -434,9 +434,18 @@
+@@ -434,9 +434,18 @@ export async function processResponsesStream(openaiStream, output, stream, model
      const finalizeResponse = (response) => {
          sawTerminalResponseEvent = true;
 -        backfillReasoningSignatures(response.output ?? []);
@@ -187,7 +187,7 @@
 +            ].some(Number.isFinite);
              const inputDetails = response.usage.input_tokens_details;
              const cachedTokens = inputDetails?.cached_tokens || 0;
-@@ -644,6 +653,5 @@
+@@ -644,6 +653,5 @@ export async function processResponsesStream(openaiStream, output, stream, model
          }
          else if (event.type === "response.failed") {
 -            sawTerminalResponseEvent = true;
@@ -197,7 +197,7 @@
              const details = event.response?.incomplete_details;
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
-@@ -164,5 +164,7 @@
+@@ -164,5 +164,7 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 -            const errorMessage = formatProviderError(normalizeProviderError(error), `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
@@ -208,14 +208,14 @@
              output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -373,4 +373,6 @@
+@@ -356,4 +356,6 @@ export interface UserMessage {
  }
  export interface AssistantMessage {
 +    /** Finite token count supplied; false means none, undefined means the adapter does not mark usage. */
 +    usageReported?: boolean;
      role: "assistant";
      content: (TextContent | ThinkingContent | ToolCall)[];
-@@ -389,4 +391,6 @@
+@@ -372,4 +374,6 @@ export interface AssistantMessage {
      deferred?: DeferredHandle;
      errorMessage?: string;
 +    /** Structured provider failure metadata, when the adapter can preserve it. */
@@ -224,7 +224,7 @@
      /**
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -20,4 +20,18 @@
+@@ -20,4 +20,18 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
      // after hours rather than seconds.
      "subscription_sharing_usage_limit_exceeded",
 +    "usage_limit_reached",
@@ -243,14 +243,14 @@
 +    "context window exceeded",
  ]);
  const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
-@@ -62,5 +76,5 @@
+@@ -62,5 +76,5 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      "timed? out",
      "timeout",
 -    "terminated",
 +    "\\bterminated\\b",
      // WebSocket transports can report close/error text instead of HTTP/fetch text.
      "websocket.?closed",
-@@ -70,4 +84,8 @@
+@@ -70,4 +84,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
      "ended without",
 +    "closed stream without completion",
@@ -259,7 +259,7 @@
 +    "previous response owner account is unavailable",
      "stream ended before message_stop",
      "stream ended before a terminal response event",
-@@ -187,9 +205,20 @@
+@@ -187,9 +205,20 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
   */
  export function isRetryableAssistantError(message) {
 -    if (message.stopReason !== "error" || !message.errorMessage)

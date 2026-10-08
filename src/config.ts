@@ -16,6 +16,7 @@ import {
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { ThinkingLevelSchema } from "@earendil-works/pi-ai/providers/model-schema";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
@@ -40,9 +41,7 @@ export const explorerResponseLimit = (settings: {
 export const capacityError =
   "Research input leaves insufficient context for an answer";
 const text = Type.String({ minLength: 1, pattern: "\\S" });
-const reasoning = Type.Optional(
-  StringEnum(["minimal", "low", "medium", "high", "xhigh", "max"] as const),
-);
+const reasoning = Type.Optional(ThinkingLevelSchema);
 const positive = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
 const usageTagSchema = Type.String({
   pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.:/@+-]*$",
