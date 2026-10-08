@@ -38,7 +38,7 @@ if (command === "check" || command === "test") {
     ]);
     await run(["scripts/dependencies.ts"]);
   }
-  await run(["test", ...(args.length ? args : ["tests"])]);
+  await run(["test", ...(args.length ? args : ["./tests"])]);
 } else if (command === "format") {
   assert.equal(args.length, 0, "Usage: scripts/dev.ts format");
   await run([

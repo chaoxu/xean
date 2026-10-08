@@ -1,8 +1,7 @@
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -105,10 +105,11 @@
-                 return failNoModel(runtime, ref, context);
-             const view = await runtime.context(conversationId, context, cutoff);
+@@ -106,8 +106,9 @@
+             const view = await runtime.context(conversationId, context, { at: cutoff });
              let messages = view.messages;
 +            let stream = runtime.models.streamSimple.bind(runtime.models);
              await runtime.hooks.each("beforeRequest", async (hook) => {
@@ -14,38 +13,30 @@
 +                stream = replaced?.stream ?? stream;
              });
              const options = {
-                 ...streamOptions,
-@@ -116,7 +117,7 @@
-                 sessionId: await ensureProviderSessionId(runtime, context),
+@@ -117,5 +118,5 @@
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
 -            const message = await streamResponse(runtime, model, messages, options, attempt, context);
 +            const message = await streamResponse(runtime, model, messages, options, attempt, context, stream);
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
-         },
-@@ -257,7 +258,7 @@
-  * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
+@@ -258,5 +259,5 @@
   * commit, so no stale partial lands after the outcome.
   */
 -async function streamResponse(runtime, model, messages, options, attempt, context) {
 +async function streamResponse(runtime, model, messages, options, attempt, context, stream) {
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
-     let timer;
-@@ -291,7 +292,7 @@
-         });
+@@ -292,5 +293,5 @@
      };
      try {
 -        const events = runtime.models.streamSimple(model, { messages: [...messages] }, options);
 +        const events = stream(model, { messages: [...messages] }, options);
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
-             // never gets past it, so it never leaves a partial.
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -537,11 +537,15 @@
- export type HookResult<T> = T | undefined | Promise<T | undefined>;
+@@ -554,9 +554,13 @@
  /** Hooks of the built-in generation task. */
  export interface GenerationHooks {
 -    /** Before every request attempt, including recovery; the result is used for that request only. */
@@ -61,4 +52,3 @@
 +        readonly stream?: Models["streamSimple"];
      }>;
      /** Every terminal provider message, before classification. */
-     afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;

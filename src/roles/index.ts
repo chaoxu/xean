@@ -541,7 +541,16 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
             `${stage === "correctness" ? mathematicalCheck : correctionInstructions} Check all requested notes together. Judge each note using only its declared transitive support, not unrelated notes in the batch. ${instructions}`,
             {
               task: input.task,
-              support: support.map(packet),
+              support: support.map((note) =>
+                stage === "requirements"
+                  ? {
+                      id: note.id,
+                      imported: note.imported,
+                      statement: verdict(note, "correctness")?.statement,
+                      support: note.support,
+                    }
+                  : packet(note),
+              ),
               notes: selected.map(packet),
               ...(stage === "requirements"
                 ? {

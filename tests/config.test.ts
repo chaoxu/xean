@@ -572,7 +572,7 @@ test("native custom-provider routes guard implicit limits and clamp explicit cei
     fauxAssistantMessage("ok"),
   ]);
   const constrained: Context = {
-    messages: [{ role: "user", content: "x".repeat(14336), timestamp: 0 }],
+    messages: [{ role: "user", content: "x".repeat(12544), timestamp: 0 }],
   };
   const first = await complete(runtime, "proof", constrained, {
     maxTokens: 512,
@@ -589,7 +589,7 @@ test("native custom-provider routes guard implicit limits and clamp explicit cei
             first,
             {
               role: "user",
-              content: "x".repeat(100),
+              content: "x".repeat(1700),
               timestamp: first.timestamp + 1,
             },
           ],

@@ -3,8 +3,7 @@
     "default": {
       "provider": "openai",
       "model": "gpt-6-astra",
-      "reasoning": "max",
-      "apiKeyEnv": "OPENAI_API_KEY"
+      "reasoning": "max"
     }
   },
   "literature": false,

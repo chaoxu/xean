@@ -105,6 +105,11 @@ The note reader includes the existing checked statement. Explorer and Verifier
 use it to distinguish granted support from additional facts that need a proof
 or a separate supporting lemma.
 
+Explorer continues its Pi conversation after partial submissions. A claimed
+complete solution, an empty submission, or reaching the response allowance ends
+the invocation. Pi retains earlier private submissions and publishes the
+accumulated notes when the worker returns.
+
 Blind reconstruction assigns batches in dependency order. Code greedily packs
 notes using original text lengths, Pi's token estimator, and the configured
 model's context and output capacities. It reserves space for complete writing,
@@ -251,8 +256,9 @@ lack prototype live qualification. The provider assessment is
 is `runs/chatgpt-live-20261005T043613Z/execution/qualification.json`. These local
 run artifacts are outside the source package.
 
-Pi 1.0.4 uses the official compiled release packages, pinned together to
-`7c10bd4337495ee613f2224843ecdf349b80d1df`. The packages include frozen model data.
+Pi packages are built together from upstream commit
+`f10993bc7f28145df1375f3ff39c7f5c4cfc05f0` using Pi's `pack:packages` command.
+This commit follows the 1.0.4 release. The packages include frozen model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.

@@ -44,14 +44,13 @@ export async function readView(
   let cursor: Cursor | undefined;
   do {
     const page = await tx.scanEntries(
-      { conversationId: root, maxEntryId: cutoff },
+      { conversationId: root, maxEntryId: cutoff, order: "ascending" },
       128,
       cursor,
     );
     for (const entry of page.items) if (Events.is(entry)) entries.push(entry);
     cursor = page.next;
   } while (cursor);
-  entries.reverse();
   const view: MathView = { notes: [], guidance: [], inputs: [] };
   const inputIds = new Set<string>();
   const resultIds = new Set<TaskId>();

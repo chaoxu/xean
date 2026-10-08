@@ -518,6 +518,25 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
       "properties.results.maxItems",
       input.notes.length,
     );
+    if (name === "requirements") {
+      expect(input.support).toEqual(
+        ["n1", "n2", "n3"].map((id, index) => ({
+          id,
+          imported: false,
+          statement: `${id} exact claim`,
+          support: index ? [`n${index}`] : [],
+        })),
+      );
+      expect(input.notes[0]).toMatchObject({
+        statement: "n4 exact claim",
+        text: draft("n4").text,
+        summary: "Harmless clarification",
+        detailedSummary: draft("n4").detailedSummary,
+      });
+      expect(
+        input.sources.map((source: { noteId: string }) => source.noteId),
+      ).toEqual(["n1", "n2", "n3", "n4"]);
+    }
     if (name === "proof") {
       expect(JSON.stringify(input)).not.toContain("secret original proof");
       expect(JSON.stringify(input)).not.toContain("detailed claim");
@@ -708,7 +727,7 @@ test.each(["oversized writing", "limited context", "native reserve"] as const)(
         const support = preparedNote(`${note.id}-support`);
         support.imported = true;
         support.checks[0]!.correctness!.statement += "Condition. ".repeat(
-          limit === "native reserve" ? 650 : 4000,
+          limit === "native reserve" ? 500 : 4000,
         );
         note.support = [support.id];
         notes.push(support);
@@ -2450,7 +2469,7 @@ test.each([
   },
 );
 
-test("native mixed-round controls preserve read-only, partial, and invalid-submission continuation", async () => {
+test("Explorer continues private work until an empty submission", async () => {
   const directory = await temporaryDirectory("pi-role-mixed-continue-");
   let calls = 0;
   const provider = fixture(
@@ -2478,17 +2497,22 @@ test("native mixed-round controls preserve read-only, partial, and invalid-submi
             [
               read,
               fauxToolCall("submit_explorer", {
-                notes: [draft("bad", ["missing"])],
+                notes: [draft("n2", ["missing"])],
                 candidate: true,
               }),
             ],
             { stopReason: "toolUse" },
           );
+        case 4:
+          return {
+            notes: [draft("n2", ["n1"])],
+            candidate: false,
+          };
         default:
-          return { notes: [draft("n2", ["n1"])], candidate: true };
+          return { notes: [], candidate: false };
       }
     },
-    { research: false, maxExplorerReads: 4, maxExplorerResponses: 5 },
+    { research: false, maxExplorerReads: 4, maxExplorerResponses: 6 },
   );
   const current = await provider.open(directory);
   try {
@@ -2496,15 +2520,16 @@ test("native mixed-round controls preserve read-only, partial, and invalid-submi
       role: "explorer",
       input: { task, notes: [note("prior")], guidance: "Continue" },
     });
-    expect(await resultOf(current.harness, id)).toEqual({
+    const completed = await resultOf(current.harness, id);
+    expect(completed).toEqual({
       status: "completed",
       result: {
         kind: "notes",
         notes: [draft("n1", ["prior"]), draft("n2", ["n1"])],
-        candidate: true,
+        candidate: false,
       },
     });
-    expect(calls).toBe(4);
+    expect(calls).toBe(5);
     expect(
       provider.calls[3]!.transcript.messages.some(
         (message) =>
@@ -2513,6 +2538,14 @@ test("native mixed-round controls preserve read-only, partial, and invalid-submi
           message.isError,
       ),
     ).toBe(true);
+    await current.harness.close(context);
+    const reopened = await provider.open(directory);
+    try {
+      expect(await resultOf(reopened.harness, id)).toEqual(completed);
+      expect(calls).toBe(5);
+    } finally {
+      await reopened.harness.close(context);
+    }
   } finally {
     await current.harness.close(context);
   }

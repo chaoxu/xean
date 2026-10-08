@@ -77,12 +77,15 @@ async function transcript(
   const messages: Message[] = [];
   let cursor: Cursor | undefined;
   do {
-    const page = await tx.scanEntries({ conversationId }, 128, cursor);
-    for (const entry of page.items)
-      messages.push(...[...(entry.model ?? [])].reverse());
+    const page = await tx.scanEntries(
+      { conversationId, order: "ascending" },
+      128,
+      cursor,
+    );
+    for (const entry of page.items) messages.push(...(entry.model ?? []));
     cursor = page.next;
   } while (cursor);
-  return messages.reverse();
+  return messages;
 }
 const responses = (messages: readonly Message[]) =>
   messages.filter(
@@ -501,7 +504,11 @@ export function conversations(profiles: Profiles) {
       await runtime.commit(async (tx) => {
         let cursor: Cursor | undefined;
         do {
-          const page = await tx.scanEntries({ conversationId }, 128, cursor);
+          const page = await tx.scanEntries(
+            { conversationId, order: "ascending" },
+            128,
+            cursor,
+          );
           for (const entry of page.items) {
             if (!ToolResultEntry.is(entry)) continue;
             const message = entry.model?.[0];
@@ -530,7 +537,7 @@ export function conversations(profiles: Profiles) {
         );
       if (!results.length)
         throw new RoleFailure(`${name} did not submit a structured result`);
-      return results.reverse();
+      return results;
     } catch (error) {
       try {
         await conversation?.abort(BACKGROUND_CONTEXT, { background: true });

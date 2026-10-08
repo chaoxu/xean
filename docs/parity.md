@@ -97,6 +97,9 @@ the static tools, and submission validation enforces exact assigned IDs.
 The raw entries retain failed responses that Pi omits from its model context.
 Private role conversations use these entries without edits or compaction.
 The projection excludes truncated tool calls before any missing-result synthesis.
+It retains raw message order, so Pi's leading-system-message adjustment does not
+apply to these calls. Pi supplies context-range caching and native response,
+tool, and task timing. History reads use Pi's ascending scans directly.
 Remove the hook patch when Pi exposes these inputs and stream selection natively. Fallible
 setup runs inside the stream so a failure prevents dispatch. Pi continues to own
 request retries, checkpoints, and scheduling.
