@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import { copyJson, type JsonValue } from "@earendil-works/chord";
 import {
   defineDoc,
   type ConversationId,
@@ -21,7 +21,7 @@ export class UninitializedResearchError extends Error {
 }
 export const DefinitionDoc = defineDoc<Partial<Definition>>({
   kind: "research.definition",
-  version: 1,
+  version: 2,
   scope: "conversation",
   history: "latest",
   fork: "current",
@@ -47,6 +47,6 @@ export async function readDefinition(
   root: ConversationId,
 ): Promise<Definition> {
   return validateDefinition(
-    JSON.parse(JSON.stringify(await tx.doc(DefinitionDoc, root))),
+    copyJson(await tx.doc(DefinitionDoc, root)) as Partial<Definition>,
   );
 }

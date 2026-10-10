@@ -7,13 +7,11 @@ import { Assert } from "typebox/value";
 import {
   batchResults,
   submissionSchemas,
-  noteContentSchema,
   verdictSchema,
   verificationStageSchema,
   type Check,
   type ExplorerInput,
   type Note,
-  type NoteContent,
   type Plan,
   type SolverResult,
   type Source,
@@ -30,11 +28,11 @@ import {
   refresh,
   pendingChecks,
   sourceEvidence,
-  stagePassed,
+  stagePending,
   validateNotes,
   validateResult,
 } from "../math/notes.ts";
-import { closure, verdict } from "../math/argument.ts";
+import { closure, keepsPrior } from "../math/argument.ts";
 import { conversations, type Submission } from "./conversation.ts";
 import {
   explorerResponseLimit,
@@ -71,15 +69,15 @@ const packet = (note: Note) => ({
   id: note.id,
   imported: note.imported,
   text: note.text,
-  statement: verdict(note, "correctness")?.statement,
+  statement: note.checks.correctness?.statement,
   summary: note.summary,
   detailedSummary: note.detailedSummary,
   support: note.support,
 });
 /** Source reports and quotations stay out of later mathematical prompts. */
 const sourceRecord = (note: Note) => {
-  const premises = verdict(note, "correctness")?.premises ?? [];
-  const source = verdict(note, "source");
+  const premises = note.checks.correctness?.premises ?? [];
+  const source = note.checks.source;
   if (
     source &&
     "premises" in source &&
@@ -155,14 +153,11 @@ async function collectChecks(
     if (result.correction !== undefined)
       Assert(verdictSchema.properties.correction, result.correction);
     check[stage] = recorded;
-    if (!checks.has(note.id)) {
-      checks.set(note.id, check);
-      note.checks.push(check);
-    }
+    checks.set(note.id, check);
+    if (!keepsPrior(note.checks[stage], recorded))
+      note.checks[stage] = recorded;
     if (recorded.verdict !== "PASS" || result.correction === undefined) return;
-    for (const field of Object.keys(
-      noteContentSchema.properties,
-    ) as (keyof NoteContent)[]) {
+    for (const field of ["summary", "detailedSummary"] as const) {
       const value = result.correction[field];
       if (value == null || value === note[field]) continue;
       note[field] = value;
@@ -192,6 +187,14 @@ export type CoordinationInput = {
   literatureUsed: boolean;
   /** Any prior work for the current built-in Explorer, including failures. */
   explorerUsed: boolean;
+  recent?: {
+    id: string;
+    role: string;
+    completed: boolean;
+    failed: boolean;
+    error: string | null;
+    request?: unknown;
+  }[];
 };
 export type RoleOptions = Omit<Settings, "profiles" | "research" | "codex"> & {
   profiles: Profiles;
@@ -258,7 +261,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
     let pending = notes.filter(
       (note) =>
         (!note.imported || input.targets.includes(note.id)) &&
-        !stagePassed(note, "reconstruction"),
+        stagePending(note, "reconstruction"),
     );
     return async (record: RecordCheck) => {
       const unblocked = (pending: Note[]) => {
@@ -277,7 +280,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       };
       const statement = (note: Note) => ({
         id: note.id,
-        statement: verdict(note, "correctness")?.statement,
+        statement: note.checks.correctness?.statement,
         premises: sourceRecord(note).premises,
         support: note.support,
       });
@@ -302,6 +305,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           // Reserve complete writing, JSON framing, and three times as much
           // reasoning. These estimates are scheduling hints, never output caps.
           output += Math.max(512, writtenTokens(group.at(-1)!)) + 128;
+          if (output * (model.reasoning ? 4 : 1) > model.maxTokens * 0.8) break;
           const content = JSON.stringify([
             instructions,
             inputFor(group),
@@ -315,11 +319,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
             }),
             model.maxTokens,
           );
-          if (
-            output * (model.reasoning ? 4 : 1) > model.maxTokens * 0.8 ||
-            room < model.maxTokens
-          )
-            break;
+          if (room < model.maxTokens) break;
           count = size;
         }
         // An oversized estimate gets one note, subject to Pi's input guard.
@@ -411,7 +411,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
             (note) =>
               !note.imported &&
               group.includes(note) &&
-              verdict(note, "reconstruction")?.verdict === "INCONCLUSIVE",
+              note.checks.reconstruction?.verdict === "INCONCLUSIVE",
           )
         )
           break;
@@ -452,10 +452,13 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         : maxReads === 0
           ? "The published note index is empty. No notes are available to read in this invocation. Private submissions stay in this conversation."
           : "Use read_notes to choose detailed summaries or full arguments from the supplied published index, batching independent IDs. Private submissions stay in this conversation, outside that index. Reading is disabled when its allowance is exhausted and on your final response; then work from available context and submit.";
-      const instructions = `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The input contains the task, the complete index of note IDs and summaries, note states, feedback, guidance, and your read and response allowances. Guidance is fallible. ${explorerInstructions} Follow support IDs when needed. Every response counts, including reads, rejected submissions, and responses without a submission. Do mathematics without external search. Record mathematical results and failed approaches that help continue work on the exact task. Provide an index summary, detailed summary, and complete free-form text. Notes may contain proved results, conjectures, observations, questions, failed approaches, or unresolved gaps. Distinguish them explicitly; never present an unproved claim as established. State substantial reusable lemmas as separate notes with complete arguments and refer to them through support; keep routine steps together. Reuse established results when the task permits, stating their hypotheses and flagging uncertain claims or sources for checking. Develop background arguments when they help advance the task. Identify unresolved assumptions and pivotal claims so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it, including factual claims in scope remarks or comparisons. Reading, mentioning, or questioning a note without relying on its result is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. read_notes supplies its checked statement when available. Use that statement as the granted result. If you need an additional fact from its proof, prove the fact in your note or establish it as a separate lemma and declare it as support. Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. Empty notes end this invocation without a solution.`;
+      const editingInstructions = singleShot
+        ? "Create new notes only. Existing full texts are not supplied, so do not edit existing notes. Omit edits or return an empty edits array. Record proposed repairs as new findings with their limitations; they do not change existing notes."
+        : "Repair existing notes with edits, keeping their stable IDs. Read the affected full text before changing it. Each edit supplies the public revision from the frozen index and only the fields you change. Mark presentation-only text edits cosmetic=true to preserve checks. This trusted classification must preserve all mathematical content. Support changes always invalidate affected checks. Repeated private edits to the same existing ID merge field by field and keep that same expected public revision. New notes and edits remain private until this worker returns and publish atomically. When repairing a proof or dependency gap, first look for an existing note supplying the missing result, then repair the consuming argument and its support declarations. A new lemma alone does not repair a consumer that still lacks the dependency. Unchanged consumers need no copied replacement notes. Retired notes remain readable for diagnosis; retiring a note does not redirect its consumers. Changing an imported note's mathematical content or support revokes its caller grant. The edited argument must pass generated-note checks. Cosmetic text changes preserve that grant. Do not copy an unchanged failed argument under a new ID or submit no-op edits as progress. read_notes supplies its checked statement when available. Use that statement as the granted result. If you need an additional fact from its proof, prove the fact in your note or establish it as a separate lemma and declare it as support. To mark an existing note as a candidate, set candidate=true in its edit.";
+      const instructions = `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The input contains the task, the complete index of note IDs and summaries, note states, feedback, guidance, and your read and response allowances. Guidance is fallible. ${explorerInstructions} Follow support IDs when needed. Every response counts, including reads, rejected submissions, and responses without a submission. Do mathematics without external search. Record mathematical results and failed approaches that help continue work on the exact task. Provide an index summary, detailed summary, and complete free-form text. Notes may contain proved results, conjectures, observations, questions, failed approaches, or unresolved gaps. Distinguish them explicitly; never present an unproved claim as established. State substantial reusable lemmas as separate notes with complete arguments and refer to them through support; keep routine steps together. Reuse established results when the task permits, stating their hypotheses and flagging uncertain claims or sources for checking. Develop background arguments when they help advance the task. Identify unresolved assumptions and pivotal claims so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it, including factual claims in scope remarks or comparisons. Reading, mentioning, or questioning a note without relying on its result is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. ${editingInstructions} Use local IDs n1, n2, ... without reusing one. A note may refer to an earlier note in this invocation or an existing note ID. New notes are private until this worker returns. Set candidate=true only when the last new note claims a complete solution of the exact task. An empty notes-and-edits submission hands off.`;
       const prompt = {
         task: input.task,
-        notes: input.notes.map(noteInfo),
+        notes: input.notes.filter((note) => !note.retired).map(noteInfo),
         guidance: input.guidance,
         allowance: { reads: maxReads, responses: maxResponses },
       };
@@ -467,10 +470,11 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
           runtime,
           context,
         );
-        validateNotes(result.notes, input.notes);
-        if (result.candidate && result.notes.length === 0)
-          throw new Error("A solution claim needs a new note");
-        return { kind: "notes", ...result };
+        if (result.edits?.length)
+          throw new Error(
+            "ChatGPT Web Explorer cannot edit notes without their full text",
+          );
+        return validateResult({ kind: "notes", ...result }, input.notes);
       }
       const result = await ask(
         "explorer",
@@ -481,7 +485,6 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
         {
           maxResponses,
           maxReads,
-          read: maxReads > 0,
           ...(source ? { noteSource: source } : { notes: input.notes }),
         },
       );
@@ -500,17 +503,25 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       const prompt = {
         ...state,
         task,
-        notes: notes.map(noteInfo),
+        notes: notes.filter((note) => !note.retired).map(noteInfo),
         capabilities,
       };
       return ask(
         "coordinator",
-        "Choose one worker for this mathematical task. The outer loop is Coordinator, worker, Coordinator. You run only after the previous worker has committed its complete result or failure. Return one work request; workers return results. Explorer owns the mathematical strategy and is the default for mathematical reasoning. For Explorer, supply only guidance. The library supplies the exact task, every note summary, verification feedback, and a bounded reader. Explorer chooses which notes to read. Continue exploration without prescribing proof steps. Use only work kinds offered by the submission tool. Explorer has no external retrieval tools. When sourceRetrieval is false, verification cannot look up external premises. Use Codex rarely, for a concrete implementation needed by the task. Its assignment must state the deliverable, input/domain, expected output, binding constraints, and checks/evidence that complete the assignment, referring to selected notes where appropriate. Codex chooses its implementation and tools. Pi mathematical checks remain available. A correctness-only target still requires source checks for its dependencies. If Codex source execution is failing, choose checks whose dependency closure needs no retrieval, or continue independent work. Prioritize checking pivotal claims and unverified claims repeatedly used by exploration. Inspect conditional claims and their assumptions before treating them as established support. Do not verify every speculative note or impose a fixed verification quota. Select the available claims needed by the next Verifier together. That worker can check many notes; your next decision sees its committed result. Verification runs an ordered prefix: correctness, source, requirements, reconstruction. Use correctness to check a note's mathematics and source to establish it as support. Requirements judges the original task's completion criteria, and reconstruction first requires that judgment to pass. Do not request requirements or reconstruction for a supporting lemma merely to check it more thoroughly. For final acceptance, target the claimed complete solution through reconstruction. The verifier checks dependencies through source and reconstructs every generated claim in the solution's transitive support in manageable blinded batches, without requiring supporting lemmas to solve the original task. Imported supporting theorems remain assumptions, with their declared dependencies still checked. Imported results are trusted for truth and sources; verification first identifies their exact statements, and their declared support must be verified. The passed list includes established import stages and completed PASS checks. Reuse both. Every committed source verdict is final for its note ID, including INCONCLUSIVE. Source FAIL prevents the note and its dependents from becoming verified or accepted. It does not itself refute the original argument, because the extracted premise may be wrong. Corrected checked statements, premises, or new evidence require a new note. Only executions without a committed result may retry source checking. Requirements FAIL is final for its note ID but leaves useful mathematics available as support and for dependency reconstruction. Requirements INCONCLUSIVE may be retried. A substantive improvement requires a new note. Imported candidates still require requirements and reconstruction. After operational failure, use the reported cause: repeating an unchanged request does not repair a configuration error. Choose a logical retry when there is a reason it can succeed, or continue useful independent work. For reconstruction INCONCLUSIVE, distinguish an unfinished independent proof from a defect in the original. When a retry is justified, request the existing candidate through reconstruction to retry its unresolved dependency checks while reusing completed PASS checks. Request new notes for changed mathematics, statements, or premises, not merely to restate an unchanged claim. Explorer may read dead notes for diagnosis, never as mathematical dependencies or verification targets. Avoid requests whose stages and required dependency checks have all passed. A candidate with its own reconstruction PASS may still need reconstruction of unresolved dependencies. Literature permits at most one completed search; a failed search may be retried when enabled. Availability does not require a search. Request one only for a specific external theorem or source gap relevant to the task, and state that question in query. Task-granted assumptions and self-contained elementary arguments need no survey. Use the supplied summaries and feedback to decide which exact texts affect scheduling. Use read_notes for detailed summaries or full notes when the index and feedback do not suffice for a scheduling decision. Batch independent IDs in one read, then submit the plan. Mathematical notes are the shared memory. Return one useful work request. Return work=null only when Explorer is unavailable and no available worker can advance the task. Never declare a solution yourself: code accepts only complete verification evidence.",
+        `Choose one worker for this mathematical task, or return work=null to leave the campaign idle. The outer loop is Coordinator, one worker, Coordinator. You run after the prior worker commits its complete result or failure. You choose mathematical strategy from the supplied index, feedback, and recent outcomes. For Explorer, supply guidance; Explorer chooses which notes to read and how to develop or edit their arguments. Use only offered work kinds. Explorer has no external retrieval tools. Use Codex for a concrete implementation deliverable with its domain, constraints, and evidence of completion. Literature is available for at most one completed search and only when enabled. When sourceRetrieval is false, verification cannot retrieve external evidence.
+
+Verification runs correctness, source, requirements, then reconstruction. Correctness judges each note's exact mathematics conditionally on its declared support and listed premises. Source checks those exact external premises. All declared dependencies must pass before a note is verified. Requirements judges the original task's full completion criteria. A supporting lemma need not solve the task. For final acceptance, target the complete-solution candidate through reconstruction; code also requires reconstruction throughout its generated dependency chain. Imported results retain only the caller's exact grant, with declared dependencies checked, and an imported candidate still requires requirements and reconstruction. Reuse applicable PASS checks. A missing proof, changed statement, or changed dependency is repaired in the authoritative note, not by adding an argument to a check report. Verifier may clarify summaries but cannot edit proof text or dependencies. Source approval does not grant a stronger claim or different premises. A source or requirements failure does not by itself refute the mathematical argument. Never declare acceptance yourself.
+
+Stable note IDs are editable. Ask Explorer to repair the affected argument and any consuming dependency declarations, reusing existing lemmas when appropriate. Do not require copied consumer chains or new IDs merely to repair an existing note. Retirement affects discovery, not mathematical truth or dependency redirects. Dead and retired notes can be read for diagnosis. Mathematical edits invalidate affected evidence; unchanged summaries and repeated assessments do not establish new mathematics. Use the actual unresolved stage in feedback, not just the requested final stage. Recent outcomes report completed work and operational failures. Submitted edit counts do not establish that the mathematics changed; inspect the current note feedback before requesting another check.
+
+A completed non-PASS assessment of unchanged inputs is not automatically pending again. Repeated verification cannot supply a missing proof or supporting statement. Direct Explorer toward a material argument or dependency repair, or obtain relevant new source evidence, before another check. Preserve diagnostic distinctions between a concrete defect and incomplete checking. Provider execution failures can recover through Pi; repeating an unchanged request does not repair a configuration error.
+
+Prioritize pivotal claims and useful dependencies rather than checking every speculative note. Use read_notes for detailed summaries or full arguments when scheduling requires them, batching independent IDs. Return one work request or work=null. An idle decision does not claim a solution.`,
         prompt,
         runtime,
         context,
         {
-          read: notes.length > 0,
+          maxReads: notes.length > 0 ? defaultMaxExplorerReads : 0,
           ...(source ? { noteSource: source } : { notes }),
           capabilities: prompt.capabilities,
         },
@@ -546,7 +557,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
                   ? {
                       id: note.id,
                       imported: note.imported,
-                      statement: verdict(note, "correctness")?.statement,
+                      statement: note.checks.correctness?.statement,
                       support: note.support,
                     }
                   : packet(note),
@@ -580,7 +591,7 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
             task: input.task,
             notes: sources.map((note) => ({
               id: note.id,
-              premises: verdict(note, "correctness")!.premises,
+              premises: note.checks.correctness!.premises,
             })),
             evidence: sourceEvidence(notes, input.evidence),
           };
@@ -623,7 +634,11 @@ export function createRoles(options: RoleOptions, researchOverride?: Research) {
       context: Context,
     ): Promise<SolverResult> {
       if (!literature) throw new Error("Literature is disabled");
-      const result = await research.literature(input, runtime, context);
+      const result = await research.literature(
+        { ...input, notes: input.notes.filter((note) => !note.retired) },
+        runtime,
+        context,
+      );
       validateNotes(result.notes, input.notes);
       return { kind: "notes", notes: result.notes, candidate: false };
     },

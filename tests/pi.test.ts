@@ -1,7 +1,6 @@
 import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
-import { cp } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   cleanupSessionResources,
   createModels,
@@ -12,11 +11,147 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 import { streamSimple as responses } from "@earendil-works/pi-ai/api/openai-responses";
-import { streamSimple as codex } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import {
+  streamSimple as codex,
+  getOpenAICodexWebSocketDebugStats,
+} from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
-import { verifyInstall } from "../scripts/dependencies.ts";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+  createSession,
+  defineDoc,
+  SessionFailed,
+  type ConversationId,
+  type Tx,
+} from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+
+test("native document caching releases old values while preserving committed state", async () => {
+  const directory = await temporaryDirectory("pi-document-cache-");
+  const session = createSession(
+    await openNodeSqliteStorage(join(directory, "cache.sqlite")),
+  );
+  const Doc = defineDoc({
+    kind: "fixture.payload",
+    version: 1,
+    scope: "conversation",
+    history: "latest",
+    fork: "current",
+    initial: () => ({ text: "" }),
+  });
+  const ids: ConversationId[] = [];
+  const refs: WeakRef<object>[] = [];
+  const changed = Promise.withResolvers<string | undefined>();
+  try {
+    for (let i = 0; i < 256; i++) {
+      const id = await session.commit(async (tx) => {
+        const conversation = await tx.createConversation({
+          ownership: { kind: "ownerless" },
+        });
+        (await tx.doc(Doc, conversation.id)).text = `${i}:` + "x".repeat(8192);
+        return conversation.id;
+      }, context);
+      ids.push(id);
+      refs.push(new WeakRef((await session.snapshot(Doc, id, context))!));
+      if (i === 0) {
+        const watch = (await session.watchDoc(Doc, id, context))!;
+        watch.start(async (value) => {
+          changed.resolve(value?.text);
+        });
+      }
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Bun.gc(true);
+    expect(refs.slice(1, 64).every((ref) => ref.deref() === undefined)).toBe(
+      true,
+    );
+    expect((await session.snapshot(Doc, ids[0]!, context))?.text).toBe(
+      "0:" + "x".repeat(8192),
+    );
+    await session.commit(async (tx) => {
+      (await tx.doc(Doc, ids[0]!)).text = "Updated after eviction";
+    }, context);
+    expect((await session.snapshot(Doc, ids[0]!, context))?.text).toBe(
+      "Updated after eviction",
+    );
+    expect(await changed.promise).toBe("Updated after eviction");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Bun.gc(true);
+    expect(refs[0]!.deref()).toBeUndefined();
+  } finally {
+    await session.close(context);
+  }
+});
+
+test("native cache eviction preserves multi-document commits and rollback after reopening", async () => {
+  const directory = await temporaryDirectory("pi-cache-transactions-");
+  const path = join(directory, "cache.sqlite");
+  const storage = await openNodeSqliteStorage(path);
+  const session = createSession(storage);
+  const Doc = defineDoc({
+    kind: "fixture.transaction",
+    version: 1,
+    scope: "conversation",
+    history: "latest",
+    fork: "current",
+    initial: () => ({ value: 0 }),
+  });
+  const ids: ConversationId[] = [];
+  try {
+    await session.commit(async (tx) => {
+      for (let i = 0; i < 260; i++) {
+        const conversation = await tx.createConversation({
+          ownership: { kind: "ownerless" },
+        });
+        ids.push(conversation.id);
+        (await tx.doc(Doc, conversation.id)).value = i;
+      }
+    }, context);
+    const edit = async (tx: Tx) => {
+      const first = await tx.doc(Doc, ids[0]!);
+      for (let i = 1; i < ids.length; i++)
+        (await tx.doc(Doc, ids[i]!)).value += 1000;
+      // The first draft remains valid after later loads evict its tracker.
+      first.value += 1000;
+    };
+    await session.commit(edit, context);
+    await expect(
+      session.commit(async (tx) => {
+        await edit(tx);
+        throw new Error("Fixture callback rollback");
+      }, context),
+    ).rejects.toThrow("Fixture callback rollback");
+    const failure = new Error("Fixture storage rollback");
+    storage.commit = async () => {
+      throw failure;
+    };
+    await expect(session.commit(edit, context)).rejects.toBe(failure);
+    await expect(session.closed).resolves.toEqual({
+      reason: "failed",
+      error: failure,
+    });
+    expect(() => session.snapshot(Doc, ids[0]!, context)).toThrow(
+      SessionFailed,
+    );
+  } finally {
+    await session.close(context);
+  }
+  const reopened = createSession(await openNodeSqliteStorage(path));
+  try {
+    for (let i = 0; i < ids.length; i++)
+      expect((await reopened.snapshot(Doc, ids[i]!, context))?.value).toBe(
+        i + 1000,
+      );
+    await reopened.commit(async (tx) => {
+      (await tx.doc(Doc, ids[0]!)).value++;
+    }, context);
+    expect((await reopened.snapshot(Doc, ids[0]!, context))?.value).toBe(1001);
+  } finally {
+    await reopened.close(context);
+  }
+});
 
 const transcript = normalizeContext({
   messages: [{ role: "user", content: "Fixture", timestamp: 0 }],
@@ -232,7 +367,7 @@ test("terminal usage distinguishes zero from absence without backfilling failed 
   }
 });
 
-test("Codex preserves account limits and switches transient WebSocket failures to HTTP", async () => {
+test("Codex preserves account limits and classifies transient failures", async () => {
   for (const [status, code, retry] of [
     [429, "usage_limit_reached", false],
     [429, "usage_not_included", false],
@@ -286,6 +421,10 @@ test("Codex preserves account limits and switches transient WebSocket failures t
         fauxAssistantMessage([], { stopReason: "error", errorMessage }),
       ),
     ).toBe(retry);
+});
+
+test("Xean registers native cleanup for Codex session diagnostics and fallback state", async () => {
+  await import("../src/roles/conversation.ts");
   const original = globalThis.WebSocket;
   let sockets = 0,
     requests = 0;
@@ -326,27 +465,36 @@ test("Codex preserves account limits and switches transient WebSocket failures t
   globalThis.WebSocket = OfflineWebSocket as unknown as typeof WebSocket;
   const sessionId = crypto.randomUUID();
   try {
-    const result = await retryAssistantCall(
-      () =>
-        codex(codexModel, transcript, {
-          ...options,
-          sessionId,
-          transport: "websocket-cached",
-          env: {
-            HTTP_PROXY: "",
-            HTTPS_PROXY: "",
-            ALL_PROXY: "",
-            NO_PROXY: "*",
-          },
-          fetch: mockFetch(async () => {
-            requests++;
-            return sse([terminal()]);
-          }),
-        }).result(),
-      { enabled: true, maxRetries: 1, baseDelayMs: 1 },
-      undefined,
-    );
+    const request = () =>
+      retryAssistantCall(
+        () =>
+          codex(codexModel, transcript, {
+            ...options,
+            sessionId,
+            transport: "websocket-cached",
+            env: {
+              HTTP_PROXY: "",
+              HTTPS_PROXY: "",
+              ALL_PROXY: "",
+              NO_PROXY: "*",
+            },
+            fetch: mockFetch(async () => {
+              requests++;
+              return sse([terminal()]);
+            }),
+          }).result(),
+        { enabled: true, maxRetries: 1, baseDelayMs: 1 },
+        undefined,
+      );
+    const result = await request();
     expect([result.stopReason, sockets, requests]).toEqual(["stop", 1, 1]);
+    expect(
+      getOpenAICodexWebSocketDebugStats(sessionId)?.websocketFallbackActive,
+    ).toBe(true);
+    cleanupSessionResources(sessionId);
+    expect(getOpenAICodexWebSocketDebugStats(sessionId)).toBeUndefined();
+    const repeated = await request();
+    expect([repeated.stopReason, sockets, requests]).toEqual(["stop", 2, 2]);
   } finally {
     cleanupSessionResources(sessionId);
     globalThis.WebSocket = original;
@@ -364,43 +512,4 @@ test("Codex SSE accepts CRLF frames even when every byte arrives separately", as
       );
       expect(result.stopReason).toBe("stop");
     }
-});
-
-test("installation verification binds patches to the exact changed and untouched bytes", async () => {
-  const root = await temporaryDirectory("pi-integrity-");
-  const source = resolve(import.meta.dir, "..");
-  const manifest = await Bun.file(
-    join(source, "vendor/pi/provenance.json"),
-  ).json();
-  const patch = manifest.patches[0];
-
-  for (const path of [
-    "package.json",
-    "vendor/pi/provenance.json",
-    ...manifest.patches.map((entry: { path: string }) => entry.path),
-  ])
-    await Bun.write(join(root, path), Bun.file(join(source, path)));
-  for (const artifact of manifest.artifacts) {
-    await Bun.write(
-      join(root, artifact.path),
-      Bun.file(join(source, artifact.path)),
-    );
-    const path = join("node_modules", artifact.name);
-    await cp(join(source, path), join(root, path), {
-      recursive: true,
-      dereference: true,
-    });
-  }
-  await verifyInstall(root);
-  for (const path of [
-    patch.path,
-    join("node_modules", patch.package, Object.keys(patch.files)[0]!),
-    join("node_modules", patch.package, "package.json"),
-  ]) {
-    const file = Bun.file(join(root, path));
-    const original = await file.text();
-    await Bun.write(file, original + "\n");
-    await expect(verifyInstall(root)).rejects.toThrow();
-    await Bun.write(file, original);
-  }
 });

@@ -6,6 +6,7 @@ import {
   Type,
   StringEnum,
   cleanupSessionResources,
+  registerSessionResourceCleanup,
   lazyStream,
   type Api,
   type Message,
@@ -13,6 +14,7 @@ import {
   type Static,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
+import { resetOpenAICodexWebSocketDebugStats } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import {
   configure,
   defineDoc,
@@ -27,18 +29,19 @@ import {
   type ConversationId,
   type Cursor,
   type EntryId,
+  type ToolExecutionApi,
   type Tx,
 } from "@earendil-works/pi-durable";
 import {
   batchResults,
-  planSchema,
+  type planSchema,
   submissionSchemas,
   type Exploration,
   type Note,
 } from "../math/contracts.ts";
-import { validateNotes, validatePlan } from "../math/notes.ts";
-import { verdict } from "../math/argument.ts";
-import { readView } from "../math/state.ts";
+import { validateExploration, validatePlan } from "../math/notes.ts";
+import { mergeExploration } from "../math/results.ts";
+import { readSnapshot, type SnapshotReader } from "../math/state.ts";
 import {
   RoleFailure,
   type NoteReference,
@@ -47,8 +50,10 @@ import {
 } from "./types.ts";
 import { profileNames, capacityError, type ProfileName } from "../config.ts";
 
+registerSessionResourceCleanup(resetOpenAICodexWebSocketDebugStats);
+
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-const responseLimitError = "Explorer exhausted its responses";
+const responseLimitError = "Role exhausted its responses";
 const maxLengthContinuations = 8;
 type Call = {
   profile?: ProfileName;
@@ -64,17 +69,22 @@ const Call = defineDoc({
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  version: 1,
+  version: 2,
   initial: (): Call => ({}),
 });
 export type Submission<P extends ProfileName> = Static<
   (typeof submissionSchemas)[P]
 >;
-async function transcript(
+async function progress<P extends ProfileName>(
   tx: Tx,
   conversationId: ConversationId,
-): Promise<Message[]> {
-  const messages: Message[] = [];
+  profile?: P,
+) {
+  const result = {
+    responses: 0,
+    reads: 0,
+    submissions: [] as { id: EntryId; value: Submission<P> }[],
+  };
   let cursor: Cursor | undefined;
   do {
     const page = await tx.scanEntries(
@@ -82,10 +92,22 @@ async function transcript(
       128,
       cursor,
     );
-    for (const entry of page.items) messages.push(...(entry.model ?? []));
+    for (const entry of page.items) {
+      const messages = entry.model ?? [];
+      result.responses += responses(messages);
+      result.reads += readCount(messages);
+      if (profile && ToolResultEntry.is(entry)) {
+        const message = messages[0];
+        if (isSubmission(message, profile))
+          result.submissions.push({
+            id: entry.id,
+            value: message.details as Submission<P>,
+          });
+      }
+    }
     cursor = page.next;
   } while (cursor);
-  return messages;
+  return result;
 }
 const responses = (messages: readonly Message[]) =>
   messages.filter(
@@ -160,10 +182,29 @@ function isSubmission(
     message.details !== undefined
   );
 }
-async function notes(tx: Tx, call: Call): Promise<Note[]> {
-  if (!call.noteSource) return call.notes ?? [];
-  return (await readView(tx, call.noteSource.root, call.noteSource.cutoff))
-    .notes;
+async function notes(
+  reader: ToolExecutionApi,
+  call: Call,
+  context: Context,
+  ids?: readonly string[],
+): Promise<Note[]> {
+  if (!call.noteSource)
+    return ids
+      ? (call.notes ?? []).filter((note) => ids.includes(note.id))
+      : (call.notes ?? []);
+  const { root, cutoff } = call.noteSource;
+  const snapshotReader: SnapshotReader = {
+    snapshotAsOf: reader.snapshotAsOf,
+    getTask: reader.getTask,
+    entry: (id, context) => reader.commit((tx) => tx.entry(id), context),
+  };
+  return (
+    await readSnapshot(snapshotReader, root, cutoff, context, {
+      ids,
+      bodies: ids !== undefined,
+      inputs: false,
+    })
+  ).notes;
 }
 
 /** Static tools survive recovery without a host-side invocation registry. */
@@ -174,52 +215,61 @@ export function conversations(profiles: Profiles) {
       defineTool({
         name: `submit_${name}`,
         description:
-          "Submit complete structured results for this assignment. For Explorer, submit only new notes.",
+          "Submit complete structured results for this assignment. Explorer may create notes and edit existing notes at their frozen public revisions.",
         parameters: submissionSchemas[name],
+        callers: ["model"],
         constrainedSampling: { type: "json_schema", strict: "prefer" },
         replay: "safe",
         executionMode: "sequential",
         async execute(value, api, context) {
-          const { call, history, available } = await api.commit(async (tx) => {
-            const call = await tx.doc(Call, api.conversationId);
+          const call = (await api.snapshot(Call, api.conversationId, context))!;
+          const available =
+            name === "explorer" || name === "coordinator"
+              ? await notes(api, call, context)
+              : [];
+          const { done, ...allowance } = await api.commit(async (tx) => {
             if (
               (await tx.doc(LiveDoc, api.conversationId)).tools?.filter(
                 (part) => part.name.startsWith("submit_"),
               ).length !== 1
             )
               throw new Error("Submit exactly once in each response");
-            return {
-              call: json(call),
-              history: await transcript(tx, api.conversationId),
-              available: json(await notes(tx, call)),
-            };
+            if (name === "explorer") {
+              const draft = value as Exploration;
+              const history = await progress(
+                tx,
+                api.conversationId,
+                "explorer",
+              );
+              validateExploration(
+                mergeExploration([
+                  ...history.submissions.map(({ value }) => value),
+                  draft,
+                ]),
+                available,
+              );
+              if (draft.candidate && draft.notes.length === 0)
+                throw new Error("A solution claim needs a new note");
+              return {
+                done:
+                  draft.candidate ||
+                  draft.edits?.some((edit) => edit.candidate) ||
+                  (draft.notes.length === 0 && !draft.edits?.length) ||
+                  history.responses >= call.maxResponses!,
+                responsesRemaining: call.maxResponses! - history.responses,
+                readsRemaining: Math.max(0, call.maxReads! - history.reads),
+              };
+            } else if (name === "coordinator") {
+              validatePlan(value, available, call.capabilities!);
+            } else {
+              const results = (value as { results: { noteId: string }[] })
+                .results;
+              batchResults(call.ids!, results);
+            }
+            return { done: true };
           }, context);
-          let done = true;
-          if (name === "explorer") {
-            const draft = value as Exploration;
-            const previous = history
-              .filter((message) => isSubmission(message, name))
-              .flatMap((message) => (message.details as Exploration).notes);
-            validateNotes([...previous, ...draft.notes], available);
-            if (draft.candidate && draft.notes.length === 0)
-              throw new Error("A solution claim needs a new note");
-            done = draft.candidate || draft.notes.length === 0;
-          } else if (name === "coordinator") {
-            validatePlan(
-              value,
-              available,
-              call.capabilities!,
-              !call.capabilities!.explorer,
-            );
-          } else {
-            const results = (value as { results: { noteId: string }[] })
-              .results;
-            batchResults(call.ids!, results);
-          }
-          const count = responses(history);
-          done ||= count >= (call.maxResponses ?? Infinity);
           return {
-            content: [
+            output: [
               {
                 type: "text",
                 text: JSON.stringify({
@@ -229,12 +279,8 @@ export function conversations(profiles: Profiles) {
                     ? {}
                     : {
                         continuation:
-                          "Continue toward the exact task using your current findings. Address relevant gaps or change approach. Submit only new notes; an empty submission hands off.",
-                        responsesRemaining: call.maxResponses! - count,
-                        readsRemaining: Math.max(
-                          0,
-                          call.maxReads! - readCount(history),
-                        ),
+                          "Continue toward the exact task using your current findings. Address relevant gaps or change approach. Submit new notes or edits using the original public revisions; an empty notes-and-edits submission hands off.",
+                        ...allowance,
                       }),
                 }),
               },
@@ -249,6 +295,7 @@ export function conversations(profiles: Profiles) {
   ) as unknown as Record<ProfileName, ReturnType<typeof defineTool>>;
   const reader = defineTool({
     name: "read_notes",
+    callers: ["model"],
     description:
       "Read frozen detailed summaries or authoritative full notes. Batch independent IDs. Dead notes are diagnostic only.",
     parameters: Type.Object(
@@ -269,64 +316,59 @@ export function conversations(profiles: Profiles) {
       maxLines: Number.MAX_SAFE_INTEGER,
     },
     async execute({ ids, level }, api, context) {
-      const result = await api.commit(async (tx) => {
-        const call = await tx.doc(Call, api.conversationId);
-        const history = await transcript(tx, api.conversationId);
-        const reads = readCount(history);
+      const admitted = await api.commit(async (tx) => {
+        const call = json(await tx.doc(Call, api.conversationId));
+        const history = await progress(tx, api.conversationId);
         const remaining = (used: number) =>
-          [
-            ...(call.maxReads === undefined
-              ? []
-              : [`${Math.max(0, call.maxReads - used)} reads`]),
-            ...(call.maxResponses === undefined
-              ? []
-              : [
-                  `${Math.max(0, call.maxResponses - responses(history))} responses`,
-                ]),
-          ].join(" and ");
-        if (
-          reads >= (call.maxReads ?? Infinity) ||
-          responses(history) >= (call.maxResponses ?? Infinity)
-        )
-          return {
-            admitted: false,
-            error: `Reading is disabled. Submit results from the available context. ${remaining(reads)} remain.`,
-          };
+          `${Math.max(0, call.maxReads! - used)} reads and ${Math.max(0, call.maxResponses! - history.responses)} responses`;
+        const allowed =
+          history.reads < call.maxReads! &&
+          history.responses < call.maxResponses!;
+        return {
+          call,
+          allowed,
+          allowance: remaining(history.reads + (allowed ? 1 : 0)),
+        };
+      }, context);
+      let error: string | undefined;
+      let values: unknown[] | undefined;
+      if (!admitted.allowed) {
+        error = `Reading is disabled. Submit results from the available context. ${admitted.allowance} remain.`;
+      } else {
+        // Pi's historical reads queue on Session and must stay outside commits.
         const available = new Map(
-          (await notes(tx, call)).map((note) => [note.id, note]),
+          (await notes(api, admitted.call, context, ids)).map((note) => [
+            note.id,
+            note,
+          ]),
         );
-        const allowance = remaining(reads + 1);
         const missing = ids.find((id) => !available.has(id));
         if (missing)
-          return {
-            admitted: true,
-            error: `Unknown note: ${missing}. ${allowance} remain.`,
-          };
-        return {
-          admitted: true,
-          allowance,
-          values: ids.map((id) => {
+          error = `Unknown note: ${missing}. ${admitted.allowance} remain.`;
+        else
+          values = ids.map((id) => {
             const note = available.get(id)!;
             return {
               id,
+              revision: note.revision,
               detailedSummary: note.detailedSummary,
-              statement: verdict(note, "correctness")?.statement,
+              statement: note.checks.correctness?.statement,
+              ...(note.retired ? { retired: true } : {}),
               ...(level === "full" ? { text: note.text } : {}),
             };
-          }),
-        };
-      }, context);
+          });
+      }
       return {
-        content: [
+        output: [
           {
             type: "text",
             text:
-              result.error ??
-              `${JSON.stringify(result.values)}${result.allowance ? `\n\n${result.allowance} remain.` : ""}`,
+              error ??
+              `${JSON.stringify(values)}\n\n${admitted.allowance} remain.`,
           },
         ],
-        details: { read: result.admitted },
-        ...(result.error ? { isError: true } : {}),
+        details: { read: admitted.allowed },
+        ...(error ? { isError: true } : {}),
       };
     },
   });
@@ -356,62 +398,9 @@ export function conversations(profiles: Profiles) {
                 // Pi's frozen entries before it omits errors or synthesizes tools.
                 const history = entries.flatMap((entry) => entry.model ?? []);
                 const count = responses(history);
-                if (count >= (call.maxResponses ?? Infinity))
+                if (count >= call.maxResponses!)
                   throw new Error(responseLimitError);
-                const canContinue = count + 1 < (call.maxResponses ?? Infinity);
-                const messages = modelMessages(history, model).map((message) =>
-                  message.role === "system"
-                    ? {
-                        ...message,
-                        toolsAdded: message.toolsAdded?.map((tool) => {
-                          if (tool.name !== `submit_${call.profile}`)
-                            return tool;
-                          const parameters = call.capabilities
-                            ? planSchema(call.capabilities)
-                            : structuredClone(submissionSchemas[call.profile!]);
-                          if (call.ids && "results" in parameters.properties) {
-                            Object.assign(parameters.properties.results, {
-                              minItems: call.ids.length,
-                              maxItems: call.ids.length,
-                            });
-                            const fields =
-                              parameters.properties.results.items.properties;
-                            fields.noteId = Type.String({
-                              ...fields.noteId,
-                              enum: call.ids,
-                            });
-                          }
-                          return { ...tool, parameters };
-                        }),
-                      }
-                    : message,
-                );
-                await api.memo(
-                  "research.response",
-                  {
-                    length:
-                      canContinue &&
-                      history.filter(
-                        (message) =>
-                          message.role === "assistant" &&
-                          message.stopReason === "length",
-                      ).length < maxLengthContinuations,
-                    reminder:
-                      canContinue &&
-                      !history.some(
-                        (message) =>
-                          (message.role === "assistant" &&
-                            message.stopReason === "stop" &&
-                            !message.content.some(
-                              (part) => part.type === "toolCall",
-                            )) ||
-                          (message.role === "toolResult" &&
-                            message.toolName.startsWith("submit_") &&
-                            !message.isError),
-                      ),
-                  },
-                  context,
-                );
+                const messages = modelMessages(history, model);
                 return (profiles[call.profile].stream ?? stream)(
                   model,
                   { ...transcript, messages },
@@ -421,13 +410,29 @@ export function conversations(profiles: Profiles) {
           };
         },
         async onYield(answer, api, context) {
-          const followUp = await api.memo<{
-            length: boolean;
-            reminder: boolean;
-          }>("research.response", context);
-          if (
-            followUp?.[answer.stopReason === "length" ? "length" : "reminder"]
-          )
+          const call = await api.snapshot(Call, api.conversationId, context);
+          if (!call?.profile) return;
+          // Pi calls onYield before committing this answer or applying a reset.
+          const { entries } = await api.context(api.conversationId, context);
+          const history = entries.flatMap((entry) => entry.model ?? []);
+          if (responses(history) + 1 >= call.maxResponses!) return;
+          const continueAssignment =
+            answer.stopReason === "length"
+              ? history.filter(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.stopReason === "length",
+                ).length < maxLengthContinuations
+              : !history.some(
+                  (message) =>
+                    (message.role === "assistant" &&
+                      message.stopReason === "stop" &&
+                      !message.content.some(
+                        (part) => part.type === "toolCall",
+                      )) ||
+                    isSubmission(message, call.profile!),
+                );
+          if (continueAssignment)
             return {
               continue:
                 "Continue the same assignment from the preserved work. Use the supplied submission tool for a complete result. Tools from incomplete responses were not executed. Prose or JSON text alone is not a submission.",
@@ -443,13 +448,17 @@ export function conversations(profiles: Profiles) {
     input: unknown,
     runtime: RoleRuntime,
     context: Context,
-    options: Omit<Call, "profile"> & {
-      read?: boolean;
-    } = {},
+    options: Omit<Call, "profile"> = {},
   ): Promise<{ id: EntryId; value: Submission<P> }[]> {
     const profile = profiles[name];
-    const { read = false, ...assignment } = options;
-    const tools = [submitters[name], ...(read ? [reader] : [])];
+    const assignment = { ...options };
+    // Allow eight length continuations plus room for reads and corrected submissions.
+    assignment.maxResponses ??= 16;
+    assignment.maxReads ??= 0;
+    const tools = [
+      submitters[name],
+      ...(assignment.maxReads > 0 ? [reader] : []),
+    ];
     const content = JSON.stringify(input);
     let conversationId!: ConversationId;
     let sessionId: string | undefined;
@@ -500,27 +509,9 @@ export function conversations(profiles: Profiles) {
       );
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
-      const results: { id: EntryId; value: Submission<P> }[] = [];
+      let results!: { id: EntryId; value: Submission<P> }[];
       await runtime.commit(async (tx) => {
-        let cursor: Cursor | undefined;
-        do {
-          const page = await tx.scanEntries(
-            { conversationId, order: "ascending" },
-            128,
-            cursor,
-          );
-          for (const entry of page.items) {
-            if (!ToolResultEntry.is(entry)) continue;
-            const message = entry.model?.[0];
-            if (isSubmission(message, name)) {
-              results.push({
-                id: entry.id,
-                value: message.details as Submission<P>,
-              });
-            }
-          }
-          cursor = page.next;
-        } while (cursor);
+        results = (await progress(tx, conversationId, name)).submissions;
       }, context);
       if (
         settled.status === "unanswered" &&
@@ -531,10 +522,21 @@ export function conversations(profiles: Profiles) {
           name === "explorer" &&
           results.length > 0
         )
-      )
-        throw new (settled.reason === "model_error" ? RoleFailure : Error)(
-          typeof settled.detail === "string" ? settled.detail : settled.reason,
-        );
+      ) {
+        const error = new (
+          settled.reason === "model_error" ? RoleFailure : Error
+        )(typeof settled.detail === "string" ? settled.detail : settled.reason);
+        if (
+          error instanceof RoleFailure &&
+          name === "explorer" &&
+          results.length
+        )
+          error.result = {
+            kind: "submissions",
+            entries: results.map(({ id }) => id),
+          };
+        throw error;
+      }
       if (!results.length)
         throw new RoleFailure(`${name} did not submit a structured result`);
       return results;

@@ -9,9 +9,12 @@ import {
 } from "@earendil-works/chord/context";
 import {
   createRegistry,
+  defineDoc,
   defineEntry,
   defineExtension,
   defineTask,
+  Harness,
+  SessionFailed,
   type TaskId,
 } from "@earendil-works/pi-durable";
 import {
@@ -32,6 +35,7 @@ import {
   ResearchOwnedError,
 } from "../src/host.ts";
 import {
+  DefinitionDoc,
   readDefinition,
   UninitializedResearchError,
 } from "../src/definition.ts";
@@ -45,6 +49,35 @@ const definition = {
   settings: defaultSettings,
 };
 const Event = defineEntry<string>("fixture.event");
+
+test("older standalone note formats require their matching runtime", async () => {
+  const directory = await temporaryDirectory("host-old-definition-");
+  const path = join(directory, "campaign.sqlite");
+  const legacy = defineDoc({
+    ...DefinitionDoc.definition,
+    version: 1,
+    history: "latest",
+    fork: "current",
+  });
+  const harness = await Harness.open(
+    await openNodeSqliteStorage(path),
+    { registry: createRegistry(), models: createModels() },
+    context,
+  );
+  await harness.root(context, {
+    init: async (tx, root) => {
+      Object.assign(await tx.doc(legacy, root), {
+        ...definition,
+        mode: { role: "verifier", input: { notes: [{ checks: [] }] } },
+      });
+    },
+  });
+  await harness.close(context);
+  await expect(open(path)).rejects.toThrow("requires migration from version 1");
+  await expect(inspect(path, readDefinition)).rejects.toThrow(
+    "requires migration from version 1",
+  );
+});
 
 test("definition and initialization commit atomically once and freeze on reopen", async () => {
   const directory = await temporaryDirectory("host-atomic-");
@@ -110,98 +143,83 @@ test("dangling database symlinks cannot create storage under a different owner p
   expect(await Bun.file(`${alias}.owner.sqlite`).exists()).toBe(false);
 });
 
-test.each([false, true])(
-  "one owner excludes aliases while inspection uses live=%s",
-  async (live) => {
-    const directory = await temporaryDirectory("host-reader-");
-    const path = join(directory, "campaign.sqlite");
-    const owner = await open(path, {
-      create: definition,
-      initialize: async (tx, root) => {
-        (await tx.doc(Control, root)).paused = false;
-        await tx.appendEntry(Event, root, { data: "first" });
-      },
+test("one owner excludes aliases while inspection uses a consistent snapshot", async () => {
+  const directory = await temporaryDirectory("host-reader-");
+  const path = join(directory, "campaign.sqlite");
+  const owner = await open(path, {
+    create: definition,
+    initialize: async (tx, root) => {
+      (await tx.doc(Control, root)).paused = false;
+      await tx.appendEntry(Event, root, { data: "first" });
+    },
+  });
+  try {
+    const alias = join(directory, "alias.sqlite");
+    await symlink(path, alias);
+    await expect(open(alias)).rejects.toBeInstanceOf(ResearchOwnedError);
+    const started = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const snapshot = inspect(path, async (tx, root) => {
+      const first = await tx.scanEntries({ conversationId: root }, 10);
+      expect((await tx.doc(Control, root)).paused).toBe(false);
+      started.resolve();
+      await resume.promise;
+      const second = await tx.scanEntries({ conversationId: root }, 10);
+      expect((await tx.doc(Control, root)).paused).toBe(false);
+      return [first.items, second.items];
     });
-    try {
-      const alias = join(directory, "alias.sqlite");
-      await symlink(path, alias);
-      await expect(open(alias)).rejects.toBeInstanceOf(ResearchOwnedError);
-      const started = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
-      const snapshot = inspect(
+    await started.promise;
+    await owner.root.commit(async (tx) => {
+      (await tx.doc(Control, owner.root.id)).paused = true;
+      await tx.appendEntry(Event, owner.root.id, { data: "later" });
+    }, context);
+    resume.resolve();
+    const [before, after] = await snapshot;
+    expect(after).toEqual(before);
+    expect(
+      await inspect(
         path,
-        async (tx, root) => {
-          const first = await tx.scanEntries({ conversationId: root }, 10);
-          expect((await tx.doc(Control, root)).paused).toBe(false);
-          started.resolve();
-          await resume.promise;
-          const second = await tx.scanEntries({ conversationId: root }, 10);
-          return [first.items, second.items];
-        },
-        { live },
+        async (tx, root) => (await tx.doc(Control, root)).paused,
+      ),
+    ).toBe(true);
+    await inspect(path, (tx, root) =>
+      tx.appendEntry(Event, root, { data: "snapshot only" }),
+    );
+    expect(
+      before!
+        .filter((entry) => entry.kind === Event.kind)
+        .map((entry) => entry.data),
+    ).toEqual(["first"]);
+    expect(
+      (
+        await inspect(path, (tx, root) =>
+          tx.scanEntries({ conversationId: root }, 10),
+        )
+      ).items.filter((entry) => entry.kind === Event.kind),
+    ).toHaveLength(2);
+    const original = await readFile(path);
+    await inspect(path, readDefinition);
+    expect(await readFile(path)).toEqual(original);
+  } finally {
+    await owner.close();
+  }
+  const hardlink = join(directory, "hardlink.sqlite");
+  await link(path, hardlink);
+  try {
+    for (const linked of [path, hardlink]) {
+      await expect(open(linked)).rejects.toThrow(
+        "Hard-linked research database paths are unsupported",
       );
-      await started.promise;
-      await owner.root.commit(async (tx) => {
-        (await tx.doc(Control, owner.root.id)).paused = true;
-        await tx.appendEntry(Event, owner.root.id, { data: "later" });
-      }, context);
-      resume.resolve();
-      const [before, after] = await snapshot;
-      if (!live) expect(after).toEqual(before);
-      expect(after!.filter(Event.is).map((entry) => entry.data)).toEqual(
-        live ? ["later", "first"] : ["first"],
+      await expect(inspect(linked, readDefinition)).rejects.toThrow(
+        "Hard-linked research database paths are unsupported",
       );
-      expect(
-        await inspect(
-          path,
-          async (tx, root) => (await tx.doc(Control, root)).paused,
-          { live },
-        ),
-      ).toBe(true);
-      if (live)
-        await expect(
-          inspect(
-            path,
-            (tx, root) => tx.appendEntry(Event, root, { data: "forbidden" }),
-            { live },
-          ),
-        ).rejects.toThrow("cannot change campaign state");
-      expect(
-        before!
-          .filter((entry) => entry.kind === Event.kind)
-          .map((entry) => entry.data),
-      ).toEqual(["first"]);
-      expect(
-        (
-          await inspect(path, (tx, root) =>
-            tx.scanEntries({ conversationId: root }, 10),
-          )
-        ).items.filter((entry) => entry.kind === Event.kind),
-      ).toHaveLength(2);
-      const original = await readFile(path);
-      await inspect(path, readDefinition);
-      expect(await readFile(path)).toEqual(original);
-    } finally {
-      await owner.close();
     }
-    const hardlink = join(directory, "hardlink.sqlite");
-    await link(path, hardlink);
-    try {
-      for (const linked of [path, hardlink]) {
-        await expect(open(linked)).rejects.toThrow(
-          "Hard-linked research database paths are unsupported",
-        );
-        await expect(inspect(linked, readDefinition)).rejects.toThrow(
-          "Hard-linked research database paths are unsupported",
-        );
-      }
-    } finally {
-      await unlink(hardlink);
-    }
-    const reopened = await open(path);
-    await reopened.close();
-  },
-);
+  } finally {
+    await unlink(hardlink);
+  }
+  const reopened = await open(path);
+  await reopened.close();
+});
 
 test("reopening recorded cancellation aborts an interrupted decision and nested work before recovery", async () => {
   const directory = await temporaryDirectory("host-cancelled-");
@@ -531,47 +549,78 @@ test("custom role extensions compose with built-in mathematical conversations", 
   }
 });
 
-test("nonfatal Pi reports remain diagnostic while a poisoned Session releases waiters", async () => {
-  const directory = await temporaryDirectory("host-failure-");
-  const path = join(directory, "campaign.sqlite");
-  const started = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const diagnostic = new Error("fixture diagnostic");
-  const failure = new Error("fixture storage outcome unknown");
-  const reports = spyOn(console, "error").mockImplementation(() => {});
-  const commits = spyOn(SqliteStorage.prototype, "commit");
-  let owner: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    owner = await open(path, {
-      create: definition,
-      roles: () => ({
-        coordinator: async (_input, runtime) => {
-          runtime.report(diagnostic);
-          started.resolve();
-          await release.promise;
-          return { work: null };
-        },
-      }),
-    });
-    const idle = owner.root.waitForIdle(context);
-    await started.promise;
-    await owner.root.commit(() => {}, context);
-    expect(reports.mock.calls.some((call) => call.includes(diagnostic))).toBe(
-      true,
-    );
-    commits.mockImplementationOnce(async () => {
-      throw failure;
-    });
-    release.resolve();
-    await expect(idle).rejects.toThrow("closed");
-    await expect(owner.close()).rejects.toBe(failure);
-  } finally {
-    release.resolve();
-    commits.mockRestore();
-    await owner?.close().catch(() => {});
-    reports.mockRestore();
-  }
-});
+test.each([false, true])(
+  "native Session failure releases waiters and preserves the first cause (close also fails=%s)",
+  async (closeFails) => {
+    const directory = await temporaryDirectory("host-failure-");
+    const path = join(directory, "campaign.sqlite");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const diagnostic = new Error("fixture diagnostic");
+    const failure = new Error("fixture storage outcome unknown");
+    const reports = spyOn(console, "error").mockImplementation(() => {});
+    const commits = spyOn(SqliteStorage.prototype, "commit");
+    const nativeClose = SqliteStorage.prototype.close;
+    const closes = spyOn(SqliteStorage.prototype, "close");
+    let owner: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      owner = await open(path, {
+        create: definition,
+        roles: () => ({
+          coordinator: async (_input, runtime) => {
+            runtime.report(diagnostic);
+            started.resolve();
+            await release.promise;
+            return { work: null };
+          },
+        }),
+      });
+      const idle = owner.root.waitForIdle(context);
+      await started.promise;
+      await owner.root.commit(() => {}, context);
+      expect(reports.mock.calls.some((call) => call.includes(diagnostic))).toBe(
+        true,
+      );
+      commits.mockImplementationOnce(async () => {
+        throw failure;
+      });
+      if (closeFails)
+        closes.mockImplementationOnce(async function (
+          this: SqliteStorage,
+          context,
+        ) {
+          await nativeClose.call(this, context);
+          throw new Error("fixture secondary close failure");
+        });
+      release.resolve();
+      await expect(idle).rejects.toBeInstanceOf(SessionFailed);
+      await expect(idle).rejects.toMatchObject({
+        name: "SessionFailed",
+        cause: failure,
+      });
+      await expect(owner.harness.closed).resolves.toEqual({
+        reason: "failed",
+        error: failure,
+      });
+      // Native closure releases ownership without an explicit owner.close().
+      const recovered = await open(path, {
+        roles: () => ({ coordinator: async () => ({ work: null }) }),
+      });
+      try {
+        await recovered.root.waitForIdle(context);
+      } finally {
+        await recovered.close();
+      }
+      await expect(owner.close()).rejects.toBe(failure);
+    } finally {
+      release.resolve();
+      commits.mockRestore();
+      await owner?.close().catch(() => {});
+      closes.mockRestore();
+      reports.mockRestore();
+    }
+  },
+);
 
 test("replacement roles preserve the browser quota and expose custom Codex", async () => {
   const directory = await temporaryDirectory("host-replacements-");
@@ -646,80 +695,72 @@ test("replacement roles preserve the browser quota and expose custom Codex", asy
   }
 });
 
-test.each([false, true])(
-  "inspection with live=%s does not recover work or alter unsupported databases",
-  async (live) => {
-    const directory = await temporaryDirectory("host-inspection-");
-    const path = join(directory, "campaign.sqlite");
+test("inspection does not recover work or alter unsupported databases", async () => {
+  const directory = await temporaryDirectory("host-inspection-");
+  const path = join(directory, "campaign.sqlite");
 
-    const started = Promise.withResolvers<void>();
-    const owner = await open(path, {
-      create: definition,
-      roles: () => ({
-        coordinator: async (_input, _runtime, invocation) => {
-          started.resolve();
-          await awaitWithContext(new Promise(() => {}), invocation);
-          return { work: null };
-        },
-      }),
-    });
-    owner.harness.resume();
-    await started.promise;
-    const tasks = () =>
-      inspect(path, async (tx) => (await tx.scanTasks({}, 20)).items, {
-        live,
-      });
-    const pending = await tasks();
-    expect(pending.some((task) => task.state.status === "running")).toBe(true);
-    expect(await tasks()).toEqual(pending);
-    await owner.close();
-    expect(await tasks()).toEqual(pending);
-    // A checkpointed copy has no WAL sidecars, regardless of statement GC timing.
-    const stopped = join(directory, "stopped.sqlite");
-    await copyFile(path, stopped);
-    expect(
-      await inspect(stopped, async (tx) => (await tx.scanTasks({}, 20)).items, {
-        live,
-      }),
-    ).toEqual(pending);
-    const reader = openReadDatabase(stopped);
-    try {
-      expect(() => reader.exec("DELETE FROM tasks")).toThrow("readonly");
-    } finally {
-      reader.close();
-    }
-    const missing = join(directory, "missing.sqlite");
-    expect(() => openReadDatabase(missing)).toThrow();
-    expect(await Bun.file(missing).exists()).toBe(false);
-    const uninitialized = join(directory, "empty.sqlite");
-    await (await openNodeSqliteStorage(uninitialized)).close(context);
-    await expect(
-      inspect(uninitialized, readDefinition, { live }),
-    ).rejects.toBeInstanceOf(UninitializedResearchError);
-    const future = new DatabaseSync(uninitialized);
-    future.exec("UPDATE durable_schema SET version = 999");
-    future.close();
-    await expect(
-      inspect(uninitialized, readDefinition, { live }),
-    ).rejects.toThrow(
-      live ? "current Pi SQLite schema" : "newer than supported",
-    );
-    const corrupt = join(directory, "corrupt.sqlite");
-    await Bun.write(corrupt, "not a database");
-    await expect(
-      inspect(corrupt, readDefinition, { live }),
-    ).rejects.not.toBeInstanceOf(UninitializedResearchError);
-    const unrelated = join(directory, "unrelated.sqlite");
-    const other = new DatabaseSync(unrelated);
-    other.exec("CREATE TABLE unrelated (value TEXT)");
-    other.close();
-    const original = await readFile(unrelated);
-    await expect(inspect(unrelated, readDefinition, { live })).rejects.toThrow(
-      "Not a Pi Durable",
-    );
-    await expect(open(unrelated, { create: definition })).rejects.toThrow(
-      "Not a Pi Durable",
-    );
-    expect(await readFile(unrelated)).toEqual(original);
-  },
-);
+  const started = Promise.withResolvers<void>();
+  const owner = await open(path, {
+    create: definition,
+    roles: () => ({
+      coordinator: async (_input, _runtime, invocation) => {
+        started.resolve();
+        await awaitWithContext(new Promise(() => {}), invocation);
+        return { work: null };
+      },
+    }),
+  });
+  owner.harness.resume();
+  await started.promise;
+  const tasks = () =>
+    inspect(path, async (tx) => (await tx.scanTasks({}, 20)).items);
+  const pending = await tasks();
+  expect(pending.some((task) => task.state.status === "running")).toBe(true);
+  expect(await tasks()).toEqual(pending);
+  await owner.close();
+  expect(await tasks()).toEqual(pending);
+  // A checkpointed copy has no WAL sidecars, regardless of statement GC timing.
+  const stopped = join(directory, "stopped.sqlite");
+  await copyFile(path, stopped);
+  expect(
+    await inspect(stopped, async (tx) => (await tx.scanTasks({}, 20)).items),
+  ).toEqual(pending);
+  const reader = openReadDatabase(stopped);
+  try {
+    expect(() => reader.exec("DELETE FROM tasks")).toThrow("readonly");
+  } finally {
+    reader.close();
+  }
+  const missing = join(directory, "missing.sqlite");
+  expect(() => openReadDatabase(missing)).toThrow();
+  await expect(inspect(missing, readDefinition)).rejects.toThrow();
+  expect(await Bun.file(missing).exists()).toBe(false);
+  const uninitialized = join(directory, "empty.sqlite");
+  await (await openNodeSqliteStorage(uninitialized)).close(context);
+  await expect(inspect(uninitialized, readDefinition)).rejects.toBeInstanceOf(
+    UninitializedResearchError,
+  );
+  const future = new DatabaseSync(uninitialized);
+  future.exec("UPDATE durable_schema SET version = 999");
+  future.close();
+  await expect(inspect(uninitialized, readDefinition)).rejects.toThrow(
+    "newer than supported",
+  );
+  const corrupt = join(directory, "corrupt.sqlite");
+  await Bun.write(corrupt, "not a database");
+  await expect(inspect(corrupt, readDefinition)).rejects.not.toBeInstanceOf(
+    UninitializedResearchError,
+  );
+  const unrelated = join(directory, "unrelated.sqlite");
+  const other = new DatabaseSync(unrelated);
+  other.exec("CREATE TABLE unrelated (value TEXT)");
+  other.close();
+  const original = await readFile(unrelated);
+  await expect(inspect(unrelated, readDefinition)).rejects.toThrow(
+    "Not a Pi Durable",
+  );
+  await expect(open(unrelated, { create: definition })).rejects.toThrow(
+    "Not a Pi Durable",
+  );
+  expect(await readFile(unrelated)).toEqual(original);
+});

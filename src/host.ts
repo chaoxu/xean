@@ -15,12 +15,10 @@ import {
   type ConversationId,
   type Registry,
   type Storage,
+  type Session,
   type Tx,
 } from "@earendil-works/pi-durable";
-import {
-  CURRENT_SQLITE_SCHEMA_VERSION,
-  SqliteStorage,
-} from "@earendil-works/pi-durable/storage/sqlite";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
   openNodeSqliteDatabase,
   openNodeSqliteStorage,
@@ -42,6 +40,8 @@ import {
   type RoleName,
   type Roles,
 } from "./workflow.ts";
+import { readSnapshot, type SnapshotReader } from "./math/state.ts";
+import { acceptedArgument } from "./math/argument.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -103,7 +103,7 @@ export function openReadDatabase(path: string) {
   }
 }
 
-function recognize(path: string, live = false) {
+function recognize(path: string) {
   using database = openReadDatabase(path);
   const tables = database
     .prepare(
@@ -113,23 +113,11 @@ function recognize(path: string, live = false) {
   const native = tables.some(({ name }) => name === "durable_schema");
   if (!native && tables.length)
     throw new Error("Not a Pi Durable research database");
-  if (
-    native &&
-    live &&
-    database
-      .prepare("SELECT version FROM durable_schema WHERE singleton = 1")
-      .get()?.version !== CURRENT_SQLITE_SCHEMA_VERSION
-  )
-    throw new Error("Live inspection requires the current Pi SQLite schema");
   return native;
 }
 
 async function openOwnedStorage(path: string) {
-  const database = await openNodeSqliteDatabase(path);
-  const nativeClose = database.close.bind(database);
-  let closing: Promise<void> | undefined;
-  database.close = () =>
-    (closing ??= database.exec("PRAGMA busy_timeout = 0").finally(nativeClose));
+  const database = await openNodeSqliteDatabase(path, { busyTimeoutMs: 0 });
   try {
     await database.exec("PRAGMA synchronous = FULL");
     return await SqliteStorage.open(database);
@@ -146,40 +134,22 @@ export async function open(path: string, options: OpenOptions = {}) {
   const release = acquire(canonical);
   let storage: Storage | undefined;
   let harness: Harness | undefined;
-  let failure: unknown;
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
       try {
-        if (harness) await harness.close(context);
-        else await storage?.close(context);
+        if (harness) {
+          try {
+            await harness.close(context);
+          } finally {
+            const end = await harness.closed;
+            if (end.reason === "failed") throw end.error;
+          }
+        } else await storage?.close(context);
       } finally {
         release();
       }
-    })().then(
-      () => {
-        if (failure !== undefined) throw failure;
-      },
-      (error) => {
-        throw failure ?? error;
-      },
-    ));
-  const report = (error: unknown) => {
-    console.error("Pi report:", error);
-    if (!harness || closing) return;
-    // Reports are nonfatal. A rejected native health commit identifies an
-    // unusable Session; native close releases its outstanding waiters.
-    void harness
-      .commit(() => {}, context)
-      .catch((unhealthy: unknown) => {
-        if (closing) return;
-        failure =
-          unhealthy instanceof Error
-            ? (unhealthy.cause ?? unhealthy)
-            : unhealthy;
-        void close().catch(() => {});
-      });
-  };
+    })());
   try {
     const existing = await stat(canonical).catch(
       (error: NodeJS.ErrnoException) => {
@@ -233,10 +203,12 @@ export async function open(path: string, options: OpenOptions = {}) {
         registry,
         models: runtime.models,
         settings: { compaction: { enabled: false }, contextRetentionMs: 0 },
-        onReport: report,
+        onReport: (error) => console.error("Pi report:", error),
       },
       context,
     );
+    // Native failure closes storage before releasing this host's owner lock.
+    void harness.closed.then(close).catch(() => {});
     const root = await harness.root(context, {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
@@ -256,40 +228,71 @@ export async function open(path: string, options: OpenOptions = {}) {
     };
   } catch (error) {
     await close().catch(() => {});
-    throw failure ?? error;
+    throw error;
   }
 }
 
-/** Inspect through a fresh Session. Live reads may span commits. Default to a backup. */
-export async function inspect<T>(
+/** Inspect a consistent backup through a fresh Session without recovering work. */
+async function inspectSession<T>(
   path: string,
-  read: (tx: Tx, root: ConversationId) => T | Promise<T>,
-  { live = false }: { live?: boolean } = {},
+  read: (session: Session, root: ConversationId) => T | Promise<T>,
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  await using directory = live
-    ? undefined
-    : await mkdtempDisposable(join(tmpdir(), "research-snapshot-"));
-  const database = directory ? join(directory.path, "snapshot.sqlite") : path;
-  if (directory) {
+  await using directory = await mkdtempDisposable(
+    join(tmpdir(), "research-snapshot-"),
+  );
+  const database = join(directory.path, "snapshot.sqlite");
+  {
     using source = openReadDatabase(path);
     await backup(source, database);
   }
-  if (!recognize(database, live)) throw new UninitializedResearchError();
+  if (!recognize(database)) throw new UninitializedResearchError();
   const storage = await openNodeSqliteStorage(database);
-  if (live)
-    storage.commit = async () => {
-      throw new Error("Live inspection cannot change campaign state");
-    };
   const session = createSession(storage);
   try {
-    return await session.commit(async (tx) => {
+    await session.commit(async (tx) => {
       if (!(await tx.conversation(ROOT_CONVERSATION_ID)))
         throw new UninitializedResearchError();
       await readDefinition(tx, ROOT_CONVERSATION_ID);
-      return read(tx, ROOT_CONVERSATION_ID);
+      await tx.doc(Control, ROOT_CONVERSATION_ID);
     }, context);
+    return await read(session, ROOT_CONVERSATION_ID);
   } finally {
     await session.close(context);
   }
+}
+
+export function inspect<T>(
+  path: string,
+  read: (tx: Tx, root: ConversationId) => T | Promise<T>,
+): Promise<T> {
+  return inspectSession(path, (session, root) =>
+    session.commit((tx) => read(tx, root), context),
+  );
+}
+
+/** Export the immutable notebook snapshot sealed by acceptance. */
+export function exportAccepted(path: string): Promise<string> {
+  return inspectSession(path, async (session, root) => {
+    const accepted = await session.commit(async (tx) => {
+      if ((await readDefinition(tx, root)).mode)
+        throw new Error("No accepted argument");
+      const accepted = (await tx.doc(Control, root)).accepted;
+      return accepted && { ...accepted };
+    }, context);
+    if (!accepted) throw new Error("No accepted argument");
+    const reader: SnapshotReader = {
+      snapshotAsOf: session.snapshotAsOf.bind(session),
+      getTask: (id, context) => session.commit((tx) => tx.task(id), context),
+      entry: (id, context) => session.commit((tx) => tx.entry(id), context),
+    };
+    const view = await readSnapshot(
+      reader,
+      root,
+      accepted.snapshotEntry,
+      context,
+      { inputs: false },
+    );
+    return acceptedArgument(view.notes, accepted.candidateId);
+  });
 }

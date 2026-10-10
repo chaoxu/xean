@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId, EntryId, Tx } from "@earendil-works/pi-durable";
-import { open, readReport, readSettings, type Roles } from "../src/index.ts";
+import { open, readSettings, type Roles } from "../src/index.ts";
 import { scanTasks, type WorkerInput } from "../src/workflow.ts";
-import { verifyInstall } from "./dependencies.ts";
-import { serveControl } from "../apps/cli/control.ts";
-import { controlCommand } from "../apps/cli/lifecycle.ts";
+import {
+  controlCommand,
+  observeOwner,
+  runOwner,
+} from "../apps/cli/lifecycle.ts";
 
 export async function readRounds(tx: Tx, root: ConversationId) {
   const rounds: EntryId[] = [];
@@ -35,7 +36,6 @@ export function limitRounds(plan: Roles["coordinator"], limit = 20) {
 }
 
 if (import.meta.main) {
-  await verifyInstall();
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
@@ -81,62 +81,41 @@ if (import.meta.main) {
       coordinator: limitRounds(coordinator, roundLimit),
     }),
   });
-  const observe = () =>
-    owner.root.commit(
-      async (tx) => ({
-        report: await readReport(tx, owner.root.id),
-        rounds: (await readRounds(tx, owner.root.id)).length,
-      }),
-      BACKGROUND_CONTEXT,
-    );
-  let control: Awaited<ReturnType<typeof serveControl>> | undefined;
-  let shutdown: Promise<unknown> | undefined;
-  const interrupt = () => {
-    shutdown ??= Promise.all([control?.close(true), owner.close()]);
-    void shutdown.catch(() => {});
-  };
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
   try {
-    control = await serveControl(await realpath(database), (command) =>
-      controlCommand(owner, command),
+    await runOwner(
+      owner,
+      await realpath(database),
+      async () => {
+        let status = await observeOwner(owner);
+        const rounds = Object.values(status.work).reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        const hitRoundLimit = rounds === roundLimit && status.status === "idle";
+        if (hitRoundLimit) {
+          await controlCommand(owner, { kind: "pause" });
+          status = await observeOwner(owner);
+        }
+        const result = {
+          ...status,
+          outcome:
+            status.status === "completed"
+              ? "accepted"
+              : hitRoundLimit
+                ? "round_limit"
+                : status.status,
+          roundLimit,
+          rounds,
+        };
+        await Bun.write(
+          resolve(directory, "result.json"),
+          JSON.stringify(result, null, 2) + "\n",
+        );
+        console.log(JSON.stringify(result));
+      },
+      { resume: values.resume },
     );
-    if (values.resume) await controlCommand(owner, { kind: "resume" });
-    else await owner.root.waitForIdle(BACKGROUND_CONTEXT);
-    await control.close();
-    if (!shutdown) {
-      let { report, rounds } = await observe();
-      const hitRoundLimit =
-        rounds === roundLimit && report.status.status === "running";
-      if (hitRoundLimit) {
-        await controlCommand(owner, { kind: "pause" });
-        ({ report, rounds } = await observe());
-      }
-      const result = {
-        ...report.status,
-        outcome:
-          report.status.status === "completed"
-            ? "accepted"
-            : hitRoundLimit
-              ? "round_limit"
-              : report.status.status,
-        roundLimit,
-        rounds,
-      };
-      await Bun.write(
-        resolve(directory, "result.json"),
-        JSON.stringify(result, null, 2) + "\n",
-      );
-      console.log(JSON.stringify(result));
-    } else process.exitCode = 130;
-  } catch (error) {
-    if (!shutdown) throw error;
-    process.exitCode = 130;
   } finally {
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-    await control?.close(true);
-    await shutdown;
     await owner.close();
   }
 }

@@ -1,18 +1,12 @@
-import type { Note, VerificationStage } from "./contracts.ts";
+import type { Note } from "./contracts.ts";
 
-export function verdict<Stage extends VerificationStage>(
-  note: Note,
-  name: Stage,
-): Note["checks"][number][Stage] {
-  let result: Note["checks"][number][Stage] = undefined;
-  for (const check of note.checks) {
-    const value = check[name];
-    if (!value) continue;
-    if (value.verdict === "FAIL") return value;
-    if (value.verdict === "PASS" || result?.verdict !== "PASS") result = value;
-  }
-  return result;
-}
+export const keepsPrior = (
+  prior: { verdict: string } | undefined,
+  incoming: { verdict: string } | undefined,
+) =>
+  !incoming ||
+  prior?.verdict === "FAIL" ||
+  (prior?.verdict === "PASS" && incoming.verdict !== "FAIL");
 
 /** Support is a mathematical dependency, not a record of everything read. */
 export function closure<T extends Pick<Note, "id" | "support">>(
@@ -48,7 +42,7 @@ export function acceptedArgument(
       (note) =>
         `## ${note.id}\n\n${note.text}` +
         (note.imported && note.id === noteId
-          ? `\n\n### Independent proof\n\n${verdict(note, "reconstruction")!.proof}`
+          ? `\n\n### Independent proof\n\n${note.checks.reconstruction!.proof}`
           : ""),
     )
     .join("\n\n");

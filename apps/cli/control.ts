@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { access, chmod, lstat, mkdir, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { SolverCommand } from "../../src/math/commands.ts";
 
@@ -33,20 +32,6 @@ export async function requestOwner(
   const path = socketPath(database);
   let response: Response;
   try {
-    const uid = process.getuid?.();
-    const directory = await lstat(dirname(path));
-    if (
-      !directory.isDirectory() ||
-      directory.uid !== uid ||
-      (directory.mode & 0o077) !== 0
-    )
-      throw new Error(
-        "Control socket directory must be private and belong to the current user",
-      );
-    const socket = await lstat(path);
-    if (!socket.isSocket()) throw new Error("Control path is not a socket");
-    if (socket.uid !== uid)
-      throw new Error("Control socket must belong to the current user");
     response = await fetch("http://xean/command", {
       unix: path,
       timeout: false,
@@ -66,11 +51,10 @@ export async function requestOwner(
       ].includes(code ?? "")
     )
       throw error;
-    // Bun collapses path and permission errors into FailedToOpenSocket.
+    // A failed connection must not hide an unrelated file at the socket path.
     try {
       if (!(await lstat(path)).isSocket())
         throw new Error("Control path is not a socket");
-      await access(path, constants.W_OK);
     } catch (failure) {
       if ((failure as NodeJS.ErrnoException).code !== "ENOENT") throw failure;
     }
@@ -99,9 +83,6 @@ export async function serveControl(
   const path = socketPath(database);
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const permissions = await lstat(directory);
-  if (!permissions.isDirectory() || permissions.uid !== process.getuid?.())
-    throw new Error("Control socket directory must belong to the current user");
   await chmod(directory, 0o700);
   const stale = await lstat(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;

@@ -1,6 +1,7 @@
 import type {
   ConversationId,
   Cursor,
+  EntryId,
   EntryRecord,
   TaskRecord,
   Tx,
@@ -16,12 +17,12 @@ import {
 } from "./workflow.ts";
 import { readView } from "./math/state.ts";
 import { resolveResult } from "./math/results.ts";
-import { closure, verdict } from "./math/argument.ts";
+import { closure } from "./math/argument.ts";
 import { stagePassed } from "./math/notes.ts";
 import { verificationStages, type SolverResult } from "./math/contracts.ts";
 import { CodexLog, CodexRequest } from "./roles/codex.ts";
 
-export const statusText = (value: string | null | undefined): string | null =>
+const statusText = (value: string | null | undefined): string | null =>
   value == null ? null : value.length > 500 ? `${value.slice(0, 499)}…` : value;
 const preview = <T, R>(items: readonly T[], select: (item: T) => R) => ({
   items: items.slice(0, 10).map(select),
@@ -83,7 +84,12 @@ export async function readUsage(tx: Tx, includeRecords = false) {
       let entriesCursor: Cursor | undefined;
       do {
         const page = await tx.scanEntries(
-          { conversationId: conversation.id },
+          {
+            conversationId: conversation.id,
+            minEntryId: conversation.parent
+              ? ((conversation.parent.at + 1) as EntryId)
+              : undefined,
+          },
           128,
           entriesCursor,
         );
@@ -141,25 +147,32 @@ export async function readUsage(tx: Tx, includeRecords = false) {
   };
 }
 
-/** Project the mathematical view, operations, and usage from the supplied transaction. */
-export async function readReport(
+async function readOverview(
   tx: Tx,
   root: ConversationId,
-  options: { records?: boolean } = {},
+  options: { records?: boolean; bodies?: boolean } = {},
+  details = true,
 ) {
   const definition = await readDefinition(tx, root);
-  const view = await readView(tx, root);
+  const view = await readView(tx, root, {
+    bodies: options.bodies,
+    inputs: details,
+  });
   const control = await tx.doc(Control, root);
   const tasks = await scanTasks(tx, root);
   const workers = tasks.filter((task) => task.kind === "research.worker");
-  const work = workers.map((task) => {
+  const summarizeWorker = async (task: (typeof workers)[number]) => {
     const input = task.input as unknown as WorkerInput;
     const request = "request" in input ? input.request : undefined;
     const result =
+      details &&
       task.state.status === "terminal" &&
+      task.state.outcome.result !== undefined &&
       (task.state.outcome.status === "completed" ||
         task.state.outcome.status === "failed")
-        ? (task.state.outcome.result as unknown as SolverResult)
+        ? ((request
+            ? await resolveResult(tx, task.state.outcome.result, task.id)
+            : task.state.outcome.result) as unknown as SolverResult)
         : undefined;
     return {
       id: String(task.id),
@@ -176,8 +189,9 @@ export async function readReport(
             : "active",
       retryOf: input.retryOf === undefined ? null : String(input.retryOf),
       error: errorOf(task),
-      guidance:
-        request?.kind === "explorer"
+      guidance: !details
+        ? null
+        : request?.kind === "explorer"
           ? request.guidance
           : request?.kind === "literature"
             ? request.query
@@ -188,18 +202,27 @@ export async function readReport(
         ? []
         : result?.kind === "verification"
           ? result.checks.map((check) => check.noteId)
-          : view.notes
-              .filter((note) => note.id.startsWith(`${task.id}/`))
-              .map((note) => note.id),
+          : result?.kind === "notes"
+            ? [
+                ...new Set([
+                  ...result.notes.map((note) => `${task.id}/${note.id}`),
+                  ...(result.edits ?? []).map((edit) => edit.id),
+                ]),
+              ]
+            : [],
       checkCount: result?.kind === "verification" ? result.checks.length : 0,
     };
-  });
+  };
+  const work: Awaited<ReturnType<typeof summarizeWorker>>[] = [];
+  for (const task of workers) work.push(await summarizeWorker(task));
   const metadata = ({ id, role, status }: (typeof work)[number]) => ({
     id,
     role,
     status,
   });
-  const acceptedNoteId = definition.mode ? null : control.accepted;
+  const acceptedNoteId = definition.mode
+    ? null
+    : (control.accepted?.candidateId ?? null);
   if (
     acceptedNoteId !== null &&
     !view.notes.find((note) => note.id === acceptedNoteId)?.accepted
@@ -224,7 +247,9 @@ export async function readReport(
             : "paused"
           : failure
             ? "blocked"
-            : "running";
+            : tasks.some((task) => task.state.status !== "terminal")
+              ? "running"
+              : "idle";
   const workCounts: Record<string, number> = {
     queued: 0,
     active: 0,
@@ -236,7 +261,7 @@ export async function readReport(
     workCounts[item.status] = (workCounts[item.status] ?? 0) + 1;
   const candidates = new Set(
     view.notes
-      .filter((note) => note.candidate && !note.accepted)
+      .filter((note) => note.candidate && !note.accepted && !note.retired)
       .map((note) => note.id),
   );
   const issues = closure([...candidates], view.notes).flatMap((note) =>
@@ -248,7 +273,7 @@ export async function readReport(
         stagePassed(note, stage)
       )
         return [];
-      const checked = verdict(note, stage);
+      const checked = note.checks[stage];
       return [
         {
           noteId: note.id,
@@ -259,7 +284,6 @@ export async function readReport(
       ];
     }),
   );
-  const usage = await readUsage(tx, options.records);
   const nextAction = {
     blocked: "Resolve the recorded failure, then resume with a fresh decision.",
     paused: "Resume when ready.",
@@ -269,6 +293,7 @@ export async function readReport(
       : "Export the accepted argument. Independent review is separate.",
     cancelled: "Start a new campaign to continue.",
     running: undefined,
+    idle: "No further work was selected. Add guidance or resume to request another decision.",
   }[status];
   const summary = {
     status,
@@ -297,14 +322,33 @@ export async function readReport(
     ...(issues.length
       ? { verificationIssues: preview(issues, (item) => item) }
       : {}),
-    calls: usage.calls,
-    usageNote:
-      "Counts describe native assistant responses, not outbound retries or Codex internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted. Direct ChatGPT Web usage is unmeasured and excluded.",
   };
+  return { definition, view, tasks, work, standalone, summary };
+}
+
+/** Current progress without notebook bodies, inputs, Explorer receipts, or usage scans. */
+export async function readStatus(tx: Tx, root: ConversationId) {
+  return (await readOverview(tx, root, { bodies: false }, false)).summary;
+}
+
+/** Project the mathematical view, operations, and usage from the supplied transaction. */
+export async function readReport(
+  tx: Tx,
+  root: ConversationId,
+  options: { records?: boolean; bodies?: boolean } = {},
+) {
+  const { definition, view, tasks, work, standalone, summary } =
+    await readOverview(tx, root, options);
+  const usage = await readUsage(tx, options.records);
   return {
     kind: definition.mode?.role ?? "solve",
     task: definition.task,
-    status: summary,
+    status: {
+      ...summary,
+      calls: usage.calls,
+      usageNote:
+        "Counts describe native assistant responses, not outbound retries or Codex internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted. Direct ChatGPT Web usage is unmeasured and excluded.",
+    },
     notes: view.notes,
     work,
     inputs: view.inputs,
@@ -312,11 +356,16 @@ export async function readReport(
     (standalone.state.outcome.status === "completed" ||
       standalone.state.outcome.status === "failed") &&
     standalone.state.outcome.result !== undefined
-      ? { result: await resolveResult(tx, standalone.state.outcome.result) }
+      ? {
+          result: await resolveResult(
+            tx,
+            standalone.state.outcome.result,
+            standalone.id,
+          ),
+        }
       : {}),
     ...(options.records ? { records: usage.records, tasks } : {}),
   };
 }
 export type Report = Awaited<ReturnType<typeof readReport>>;
-export type Status = Report["status"];
-export type Work = Report["work"][number];
+export type Status = Awaited<ReturnType<typeof readStatus>>;

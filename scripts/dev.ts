@@ -36,7 +36,6 @@ if (command === "check" || command === "test") {
       "--check",
       ...formatPaths,
     ]);
-    await run(["scripts/dependencies.ts"]);
   }
   await run(["test", ...(args.length ? args : ["./tests"])]);
 } else if (command === "format") {
@@ -83,7 +82,12 @@ if (command === "check" || command === "test") {
     source,
     env,
   );
-  await run(["scripts/check-distribution.ts"], source, env);
+  await run(
+    ["test", "./tests/pi.test.ts", "./tests/roles.test.ts"],
+    source,
+    env,
+  );
+  await run(["tests/distribution.ts"], source, env);
   const output =
     command === "pack"
       ? resolve(args[0] ?? `dist/${manifest.name}-${manifest.version}.tgz`)

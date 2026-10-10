@@ -1,8 +1,7 @@
 import { temporaryDirectory } from "./directory.ts";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { $ } from "bun";
-import { createHash } from "node:crypto";
-import { readFile, realpath, rm } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   awaitWithContext,
@@ -13,8 +12,10 @@ import {
   createRegistry,
   defineExtension,
   defineTask,
+  ToolResultEntry,
   type EntryId,
   type TaskId,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
@@ -22,12 +23,11 @@ import { defaultSettings } from "../src/config.ts";
 import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/definition.ts";
 import { Control, type Roles } from "../src/workflow.ts";
-import { readReport, readUsage } from "../src/report.ts";
+import { readReport, readStatus, readUsage } from "../src/report.ts";
+import { Bodies } from "../src/math/state.ts";
 import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
-import { api, readSources } from "../apps/observe/server.ts";
-import { noteStatus } from "../apps/observe/web/notes.ts";
 import { limitRounds, readRounds } from "../scripts/bounded-solve.ts";
 
 const task = {
@@ -62,6 +62,95 @@ async function command(file: string, ...args: string[]) {
   };
 }
 const cli = (...args: string[]) => command("apps/cli/index.ts", ...args);
+const reportOf = (owner: Awaited<ReturnType<typeof open>>) =>
+  owner.root.commit(
+    (tx) => readReport(tx, owner.root.id, { bodies: false }),
+    context,
+  );
+
+function withoutHistory(tx: Tx) {
+  return new Proxy(tx, {
+    get(target, key) {
+      if (["entry", "scanEntries", "scanConversations"].includes(String(key)))
+        throw new Error(`Unexpected history read: ${String(key)}`);
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => {
+            if (key === "doc" && args[0] === Bodies)
+              throw new Error("Unexpected notebook body read");
+            return Reflect.apply(value, target, args);
+          }
+        : value;
+    },
+  });
+}
+
+test("CLI controls use compact status without reading transcripts or notebook bodies", async () => {
+  const directory = await temporaryDirectory("xean-compact-control-");
+  const owner = await open(join(directory, "campaign.sqlite"), {
+    create: definition,
+    roles: () => ({ coordinator: async () => ({ work: null }) }),
+  });
+  const commit = owner.root.commit.bind(owner.root);
+  const guarded = spyOn(owner.root, "commit").mockImplementation((read, ctx) =>
+    commit((tx) => read(withoutHistory(tx)), ctx),
+  );
+  try {
+    await owner.root.waitForIdle(context);
+    for (const [kind, status] of [
+      ["pause", "paused"],
+      ["pause", "paused"],
+      ["resume", "idle"],
+      ["cancel", "cancelled"],
+      ["cancel", "cancelled"],
+    ] as const) {
+      const receipt = await controlCommand(owner, { kind });
+      expect(receipt).toMatchObject({ status });
+      expect(receipt).not.toHaveProperty("calls");
+      expect(receipt).not.toHaveProperty("usageNote");
+    }
+    await expect(controlCommand(owner, { kind: "resume" })).rejects.toThrow(
+      "terminal",
+    );
+  } finally {
+    guarded.mockRestore();
+    await owner.close();
+  }
+});
+
+test.each(["SIGINT", "SIGTERM"] as const)(
+  "runner closes ownership and skips work when %s arrives during socket startup",
+  async (signal) => {
+    const directory = await temporaryDirectory("xean-runner-signal-");
+    const database = join(directory, "campaign.sqlite");
+    const source = `
+import { runOwner } from ${JSON.stringify(join(root, "apps/cli/lifecycle.ts"))};
+let closed = 0, worked = 0, finished = 0;
+const owner = {
+  close: async () => { closed++; },
+  root: { waitForIdle: async () => { worked++; } },
+};
+const running = runOwner(owner, ${JSON.stringify(database)}, async () => { finished++; });
+process.emit(${JSON.stringify(signal)});
+await running;
+console.log(JSON.stringify({ closed, worked, finished,
+  listeners: ["SIGINT", "SIGTERM"].map(signal => process.listenerCount(signal)) }));
+`;
+    const result =
+      await $`${process.execPath} --no-install --no-env-file -e ${source}`
+        .quiet()
+        .nothrow();
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr.toString()).toBe("");
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      closed: 1,
+      worked: 0,
+      finished: 0,
+      listeners: [0, 0],
+    });
+    expect(await Bun.file(socketPath(database)).exists()).toBe(false);
+  },
+);
 
 test("CLI doctor reuses saved Pi ChatGPT and Claude logins without refreshing or exposing them", async () => {
   const directory = await temporaryDirectory("xean-pi-auth-");
@@ -169,7 +258,15 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   expect(full.work).toEqual([]);
   expect(full.status.calls.recordedResponses).toBe(0);
   const compact = JSON.parse((await cli(...prefix, "status", "named")).stdout);
-  expect(compact.pendingDecisions).toBe(2);
+  const { observedAt: _observedAt, ...status } = compact;
+  const { calls: _calls, usageNote: _usageNote, ...expected } = full.status;
+  expect(status).toEqual(expected);
+  expect(
+    await inspect(join(directory, "named/campaign.sqlite"), (tx, root) =>
+      readStatus(withoutHistory(tx), root),
+    ),
+  ).toEqual(expected);
+  expect(compact.pendingDecisions).toBe(1);
   expect(JSON.stringify(compact)).not.toContain(draft.text);
   expect((await cli(...prefix, "export", "named")).code).not.toBe(0);
   expect((await cli(...prefix, "cancel", "named")).code).toBe(0);
@@ -185,7 +282,7 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
   const noRecords = JSON.parse(
     (await cli(...prefix, "inspect", "named")).stdout,
   );
-  expect(noRecords.status.calls).toEqual(compact.calls);
+  expect(noRecords.status.calls).toEqual(full.status.calls);
   expect(noRecords).not.toHaveProperty("records");
 }, 30_000);
 
@@ -208,13 +305,30 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
             : { kind: "explorer", guidance: "Prove equality." },
         };
       },
-      explorer: async () => {
+      explorer: async (_input, runtime, ctx) => {
         trace.push("explorer");
-        return {
-          kind: "notes",
-          notes: [draft],
-          candidate: true,
-        };
+        let id!: EntryId;
+        await runtime.commit(async (tx) => {
+          const conversation = await tx.createConversation({
+            ownership: { kind: "task", taskId: runtime.taskId },
+          });
+          const entry = await tx.appendEntry(ToolResultEntry, conversation.id, {
+            data: { diagnostics: [] },
+            model: [
+              {
+                role: "toolResult",
+                toolCallId: "fixture",
+                toolName: "submit_explorer",
+                content: [],
+                details: { notes: [draft], candidate: true },
+                isError: false,
+                timestamp: Date.now(),
+              },
+            ],
+          });
+          id = entry.id;
+        }, ctx);
+        return { kind: "submissions", entries: [id] };
       },
       verifier: async (input) => {
         trace.push("verifier");
@@ -238,11 +352,23 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   });
   try {
     await owner.root.waitForIdle(context);
-    const report = await observeOwner(owner);
-    expect(report.status.status).toBe("completed");
-    expect(await controlCommand(owner, { kind: "pause" })).toEqual(
-      report.status,
+    const report = await reportOf(owner);
+    const full = await owner.root.commit(
+      (tx) => readReport(tx, owner.root.id),
+      context,
     );
+    expect(report.status).toEqual(full.status);
+    const { calls: _calls, usageNote: _usageNote, ...expected } = full.status;
+    expect(
+      await owner.root.commit(
+        (tx) => readStatus(withoutHistory(tx), owner.root.id),
+        context,
+      ),
+    ).toEqual(expected);
+    expect(report.notes[0]!.text).toBe("");
+    expect(full.notes[0]!.text).toBe(draft.text);
+    expect(report.status.status).toBe("completed");
+    expect(await controlCommand(owner, { kind: "pause" })).toEqual(expected);
     expect(report.status.acceptedNoteId).toMatch(/^\d+\/n1$/);
     expect(report.work[0]!.noteIds).toEqual([report.status.acceptedNoteId!]);
     expect(trace).toEqual([
@@ -268,22 +394,31 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
         context,
       ),
     ).rejects.toThrow("terminal");
+    const accepted = await owner.harness.snapshot(
+      Control,
+      owner.root.id,
+      context,
+    );
     const unsealed = await owner.root.commit(async (tx) => {
       (await tx.doc(Control, owner.root.id)).accepted = null;
       return readReport(tx, owner.root.id);
     }, context);
     expect(unsealed.notes[0]!.accepted).toBe(true);
-    expect(unsealed.status.status).toBe("running");
+    expect(unsealed.status.status).toBe("idle");
     expect(unsealed.status.acceptedNoteId).toBeNull();
-    expect(noteStatus(unsealed.notes[0]!, unsealed.status.acceptedNoteId)).toBe(
-      "Candidate",
-    );
-    expect(noteStatus(report.notes[0]!, report.status.acceptedNoteId)).toBe(
-      "Accepted",
+    expect((await cli("export", path)).stderr).toContain(
+      "No accepted argument",
     );
     await owner.root.commit(async (tx) => {
-      (await tx.doc(Control, owner.root.id)).accepted =
-        report.status.acceptedNoteId;
+      (await tx.doc(Control, owner.root.id)).accepted = accepted!.accepted;
+      // A later native document write must not rewrite the sealed export.
+      const body = await tx.doc(
+        Bodies,
+        owner.root.id,
+        report.status.acceptedNoteId!,
+        { detailedSummary: "", text: "" },
+      );
+      body.text = "Later text outside the accepted snapshot.";
     }, context);
   } finally {
     await owner.close();
@@ -292,6 +427,7 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   expect(exported.stderr).toBe("");
   expect(exported.code).toBe(0);
   expect(exported.stdout).toContain(draft.text);
+  expect(exported.stdout).not.toContain("Later text outside");
   const standalonePath = join(directory, "standalone.sqlite");
   let attempts = 0;
   const standalone = await open(standalonePath, {
@@ -312,13 +448,26 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
   });
   try {
     await standalone.root.waitForIdle(context);
-    expect((await observeOwner(standalone)).status.status).toBe("blocked");
+    expect((await reportOf(standalone)).status.status).toBe("blocked");
+    expect(
+      await standalone.root.commit(
+        (tx) => readStatus(withoutHistory(tx), standalone.root.id),
+        context,
+      ),
+    ).toMatchObject({ status: "blocked", work: { failed: 1 } });
     const receipt = await controlCommand(standalone, { kind: "resume" });
-    const report = await observeOwner(standalone);
-    expect(receipt).toEqual(report.status);
+    const report = await reportOf(standalone);
+    expect(receipt).toEqual(await observeOwner(standalone));
     expect(report.status.status).toBe("completed");
     expect(report.kind).toBe("review");
     expect(report.result).toEqual(pass);
+    const { calls: _calls, usageNote: _usageNote, ...expected } = report.status;
+    expect(
+      await standalone.root.commit(
+        (tx) => readStatus(withoutHistory(tx), standalone.root.id),
+        context,
+      ),
+    ).toEqual(expected);
     expect(
       await standalone.root.commit(
         (tx) => readRounds(tx, standalone.root.id),
@@ -333,6 +482,9 @@ test("sealed acceptance, native note IDs, and latest standalone results reach re
     await standalone.close();
   }
   expect((await cli("run", standalonePath)).code).toBe(0);
+  expect((await cli("export", standalonePath)).stderr).toContain(
+    "No accepted argument",
+  );
   expect(attempts).toBe(2);
 }, 30_000);
 
@@ -389,7 +541,7 @@ test("standalone completion waits for owned children and still permits cancellat
   try {
     owner.harness.resume();
     await completing.promise;
-    const pending = await observeOwner(owner);
+    const pending = await reportOf(owner);
     expect(pending.status.status).toBe("running");
     expect(pending.status.work.active).toBe(1);
     expect(pending.result).toBeUndefined();
@@ -401,7 +553,7 @@ test("standalone completion waits for owned children and still permits cancellat
         context,
       ),
     ).toBe(true);
-    expect((await observeOwner(owner)).result).toEqual(pass);
+    expect((await reportOf(owner)).result).toEqual(pass);
   } finally {
     await owner.close();
   }
@@ -430,7 +582,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         const entry = await tx.appendEntry(AssistantEntry, owner.root.id, {
           model: [message],
         });
-        if (index === 0) forkAt = entry.id;
+        if (index === 3) forkAt = entry.id;
       }
       for (const [operationId, usage] of [
         ["unknown", null],
@@ -461,16 +613,18 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
       }
       return forkAt!;
     }, context);
-    await owner.root.commit(
-      (tx) =>
-        tx.forkConversation(owner.root.id, forkAt, {
-          ownership: { kind: "ownerless" },
-        }),
-      context,
-    );
+    const forkEntry = await owner.root.commit(async (tx) => {
+      const fork = await tx.forkConversation(owner.root.id, forkAt, {
+        ownership: { kind: "ownerless" },
+      });
+      const message = structuredClone(fauxAssistantMessage("fork answer"));
+      message.model = "model-3";
+      message.usage.input = 11;
+      return tx.appendEntry(AssistantEntry, fork.id, { model: [message] });
+    }, context);
     const usage = await owner.root.commit((tx) => readUsage(tx, true), context);
     expect(usage.calls).toMatchObject({
-      recordedResponses: 4,
+      recordedResponses: 5,
       codexInvocations: 3,
       unknownUsage: 4,
       byModel: { omitted: 0 },
@@ -481,10 +635,17 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     expect(groups.get("model-0")!.reportedUsage.input).toBe(0);
     expect(groups.get("model-1")!.reportedUsage).toEqual({});
     expect(groups.get("model-2")!.reportedUsage).toEqual({});
-    expect(groups.get("model-3")!.reportedUsage.input).toBe(7);
+    expect(groups.get("model-3")!.responses).toBe(2);
+    expect(groups.get("model-3")!.reportedUsage.input).toBe(18);
     expect(groups.get("codex")!.reportedUsage.input_tokens).toBe(0);
     expect(new Set(usage.records!.map((entry) => entry.id)).size).toBe(
       usage.records!.length,
+    );
+    expect(usage.records!.filter((entry) => entry.id === forkAt)).toHaveLength(
+      1,
+    );
+    expect(usage.records!.find((entry) => entry.id === forkEntry.id)).toEqual(
+      forkEntry,
     );
     await owner.root.commit(async (tx) => {
       for (let index = 4; index < 12; index++)
@@ -497,7 +658,7 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
     const bounded = await owner.root.commit((tx) => readUsage(tx), context);
     expect(bounded.calls.byModel.items).toHaveLength(10);
     expect(bounded.calls).toMatchObject({
-      recordedResponses: 12,
+      recordedResponses: 13,
       codexInvocations: 3,
       unknownUsage: 12,
       byModel: { omitted: 3 },
@@ -545,9 +706,9 @@ test("live owner controls reject foreign identity and execution overrides withou
         (await cli("--expected-owner-id", "previous", flag, "", "resume", path))
           .stderr,
       ).toContain("Execution overrides require local ownership");
-    expect((await observeOwner(owner)).status.status).toBe("running");
+    expect((await reportOf(owner)).status.status).toBe("running");
     await requestOwner(canonical, { kind: "cancel" }, "active");
-    expect((await observeOwner(owner)).status.status).toBe("cancelled");
+    expect((await reportOf(owner)).status.status).toBe("cancelled");
     for (const body of [
       "{",
       JSON.stringify({ kind: "resume", expectedOwnerId: "active" }),
@@ -567,102 +728,6 @@ test("live owner controls reject foreign identity and execution overrides withou
     await owner.close();
   }
 }, 30_000);
-
-test("observer reads arbitrary native databases without ownership and retains only matching stale evidence", async () => {
-  const directory = await temporaryDirectory("xean-apps-");
-  const idle = join(directory, "idle.sqlite");
-  await (await open(idle, { create: definition })).close();
-  const dormant = await (
-    await api([{ id: "idle", database: idle }])(
-      new Request("http://localhost/api/runs/idle?view=status"),
-    )
-  ).json();
-  expect(dormant.error).toBeUndefined();
-  expect(dormant.snapshot?.status.status).toBe("running");
-  const database = join(directory, "review.sqlite");
-  const owner = await open(database, {
-    create: {
-      ...definition,
-      mode: { role: "review", input: { argument: "Exact proof." } },
-    },
-    roles: () => ({ review: async () => pass }),
-  });
-  let sources = readSources(
-    [{ id: "review", database: "review.sqlite" }],
-    directory,
-  );
-  expect(sources).toEqual([{ id: "review", database }]);
-  expect(() => readSources([{ id: "review", directory }], directory)).toThrow();
-  const handle = api(async () => sources);
-  const request = (path: string) =>
-    handle(new Request(`http://localhost${path}`));
-  try {
-    await owner.root.waitForIdle(context);
-    const report = await observeOwner(owner);
-    const full = await (await request("/api/runs/review")).json();
-    expect(full.snapshot).toMatchObject({
-      kind: "review",
-      task,
-      result: pass,
-    });
-    for (const key of ["inputs", "records", "tasks"])
-      expect(full.snapshot).not.toHaveProperty(key);
-    expect(full.error).toBeUndefined();
-    expect(await observeOwner(owner)).toEqual(report);
-    const initial = await (
-      await request("/api/runs/review?view=status")
-    ).json();
-    expect(initial.snapshot.status.status).toBe("completed");
-    expect(initial.snapshot).not.toHaveProperty("notes");
-    expect(initial.snapshot).not.toHaveProperty("result");
-    await owner.close();
-    await rm(database);
-    const stale = await (await request("/api/runs/review?view=status")).json();
-    expect(stale).toMatchObject({
-      stale: true,
-      observedAt: initial.observedAt,
-    });
-    expect(stale.snapshot).toEqual(initial.snapshot);
-    expect(stale.error).toBeTruthy();
-    const detail = await (await request("/api/runs/review")).json();
-    expect(detail.snapshot).toBeUndefined();
-    expect(detail.error).toBeTruthy();
-    sources = readSources(
-      [{ id: "review", database: "other.sqlite" }],
-      directory,
-    );
-    const changed = await (
-      await request("/api/runs/review?view=status")
-    ).json();
-    expect(changed.snapshot).toBeUndefined();
-    expect(changed.stale).toBe(false);
-    sources = [];
-    expect((await request("/api/runs/review")).status).toBe(404);
-    expect((await handle(new Request("http://foreign/api/runs"))).status).toBe(
-      403,
-    );
-    expect(
-      (
-        await handle(
-          new Request("http://localhost/api/runs", {
-            headers: { origin: "http://foreign" },
-          }),
-        )
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await handle(
-          new Request("http://localhost/api/runs", {
-            method: "POST",
-          }),
-        )
-      ).status,
-    ).toBe(405);
-  } finally {
-    await owner.close();
-  }
-});
 
 test("closed-book executable rejects retrieval and reopens without calls", async () => {
   const directory = await temporaryDirectory("xean-apps-");
@@ -706,7 +771,11 @@ test("closed-book executable rejects retrieval and reopens without calls", async
       outcome,
       status: "paused",
       rounds: 0,
-      calls: { recordedResponses: 0, codexInvocations: 0, unknownUsage: 0 },
+    });
+    expect((await inspect(database, readReport)).status.calls).toMatchObject({
+      recordedResponses: 0,
+      codexInvocations: 0,
+      unknownUsage: 0,
     });
     expect((await inspect(database, readDefinition)).settings.research).toBe(
       false,
@@ -743,7 +812,7 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
     expect(
       await owner.root.commit((tx) => readRounds(tx, owner.root.id), context),
     ).toHaveLength(1);
-    expect((await observeOwner(owner)).work).toHaveLength(1);
+    expect((await reportOf(owner)).work).toHaveLength(1);
     expect(calls).toBe(2);
     await controlCommand(owner, { kind: "pause" });
     await owner.close();
@@ -755,7 +824,7 @@ test("round allowance counts workers, excludes empty waits, and resumes only ext
       context,
     );
     expect(admitted).toHaveLength(3);
-    expect((await observeOwner(owner)).work).toHaveLength(3);
+    expect((await reportOf(owner)).work).toHaveLength(3);
     expect(calls).toBe(4);
     await owner.close();
     const reduced = { coordinator: limitRounds(role, 2) };
@@ -809,14 +878,14 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
           context,
         ),
       ).toEqual([]);
-      expect(await observeOwner(stopped)).toMatchObject({
+      expect(await reportOf(stopped)).toMatchObject({
         status: { status: outcome === "rejected" ? "blocked" : outcome },
         work: [],
       });
       if (outcome === "paused") {
-        expect((await observeOwner(stopped)).status.pendingDecisions).toBe(0);
+        expect((await reportOf(stopped)).status.pendingDecisions).toBe(0);
         await controlCommand(stopped, { kind: "resume" });
-        expect((await observeOwner(stopped)).work).toHaveLength(1);
+        expect((await reportOf(stopped)).work).toHaveLength(1);
       }
     } finally {
       await stopped.close();
@@ -859,7 +928,7 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
       context,
     );
     expect(admitted).toEqual([original.cutoff]);
-    expect((await observeOwner(owner)).work).toHaveLength(1);
+    expect((await reportOf(owner)).work).toHaveLength(1);
     await controlCommand(owner, { kind: "resume" });
     expect(recovered).toEqual([original.taskId]);
     expect(
@@ -870,45 +939,3 @@ test("rounds exclude discarded plans and count an interrupted decision only afte
     await owner.close();
   }
 });
-
-test("prompt preparation freezes inputs and source identity without leaking expected answers", async () => {
-  const directory = await temporaryDirectory("xean-apps-");
-  const file = join(directory, "settings.json"),
-    output = join(directory, "output");
-  const settingsText = JSON.stringify(settings);
-  await Bun.write(file, settingsText);
-  const prepared = await command("scripts/prompt-eval.ts", file, output);
-  expect(prepared.code).toBe(0);
-  expect(JSON.parse(prepared.stdout)).toMatchObject({
-    executed: false,
-    cases: 3,
-  });
-  const manifest = await Bun.file(join(output, "manifest.json")).json();
-  expect(manifest.settingsSha256).toBe(
-    createHash("sha256").update(settingsText).digest("hex"),
-  );
-  expect(manifest.source["src/roles/index.ts"]).toMatch(/^[a-f0-9]{64}$/);
-  expect(manifest.source["scripts/dependencies.ts"]).toMatch(/^[a-f0-9]{64}$/);
-  const cases = await Bun.file(join(output, "cases.json")).json();
-  for (const example of cases) {
-    const input = await Bun.file(join(output, example.id, "input.json")).json();
-    expect(input.notes[0]).toMatchObject({
-      text: `${example.statement}\n\n${example.argument}`,
-    });
-    expect(JSON.stringify(input)).not.toContain(example.expected.reason);
-    expect(input).not.toHaveProperty("expected");
-    expect(
-      await Bun.file(join(output, example.id, "campaign.sqlite")).exists(),
-    ).toBe(false);
-    expect(
-      manifest.commands
-        .find((row: { id: string }) => row.id === example.id)
-        .argv.slice(4, 6),
-    ).toEqual(["role", "verifier"]);
-  }
-  const frozen = await readFile(join(output, "manifest.json"));
-  expect((await command("scripts/prompt-eval.ts", file, output)).code).not.toBe(
-    0,
-  );
-  expect(await readFile(join(output, "manifest.json"))).toEqual(frozen);
-}, 30_000);

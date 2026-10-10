@@ -106,7 +106,7 @@ test("role input preserves only valid same-model reasoning and complete tool cal
   expect(history).toEqual(original);
 });
 
-test("failed assignment reads and reminder writes stop requests before provider dispatch", async () => {
+test("failed assignment reads stop requests before provider dispatch", async () => {
   const runtime = createRuntime(defaultSettings, { key: "fixture" });
   const before = conversations(runtime.profiles).extension.hooks![0]!
     .handlers as GenerationHooks;
@@ -116,31 +116,81 @@ test("failed assignment reads and reminder writes stop requests before provider 
     calls++;
     throw new Error("Unexpected provider call");
   };
-  for (const failure of ["snapshot", "memo"]) {
-    const api = {
-      snapshot: async () => {
-        if (failure === "snapshot") throw new Error("Assignment unavailable");
-        return { profile: "explorer" };
-      },
-      memo: async () => {
-        throw new Error("Reminder write failed");
-      },
-    } as unknown as HookApi;
-    const selected = await before.beforeRequest(
-      { messages, stream, entries: [] },
-      api,
-      context,
-    );
-    const result = await selected!.stream!(model, { messages }).result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      failure === "snapshot"
-        ? "Assignment unavailable"
-        : "Reminder write failed",
-    );
-  }
+  const api = {
+    snapshot: async () => {
+      throw new Error("Assignment unavailable");
+    },
+  } as unknown as HookApi;
+  const selected = await before.beforeRequest(
+    { messages, stream, entries: [] },
+    api,
+    context,
+  );
+  const result = await selected!.stream!(model, { messages }).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toContain("Assignment unavailable");
   expect(calls).toBe(0);
 });
+
+test.each([false, true])(
+  "response allowance counts accepted and rejected submissions after recovery: %s",
+  async (recoveredSuccess) => {
+    const runtime = createRuntime(defaultSettings, { key: "fixture" });
+    const before = conversations(runtime.profiles).extension.hooks![0]!
+      .handlers as GenerationHooks;
+    const model = runtime.models.getModel("openai", "gpt-6-astra")!;
+    let calls = 0;
+    const stream = () => {
+      calls++;
+      throw new Error("Provider dispatch sentinel");
+    };
+    runtime.profiles.explorer.stream = stream;
+    const history: Message[] = [];
+    for (let index = 0; index < (recoveredSuccess ? 3 : 2); index++) {
+      const accepted = index === 2;
+      const call = fauxToolCall("submit_explorer", {
+        notes: [],
+        candidate: !accepted,
+      });
+      history.push(fauxAssistantMessage([call], { stopReason: "toolUse" }), {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        content: [
+          {
+            type: "text",
+            text: accepted ? "Recorded" : "A solution claim needs a new note",
+          },
+        ],
+        isError: !accepted,
+        timestamp: index,
+      });
+    }
+    const selected = await before.beforeRequest(
+      {
+        messages: history,
+        stream,
+        entries: history.map((message) => ({
+          kind: "fixture",
+          model: [message],
+        })) as any,
+      },
+      {
+        snapshot: async () => ({ profile: "explorer", maxResponses: 3 }),
+      } as unknown as HookApi,
+      context,
+    );
+    const result = await selected!.stream!(model, {
+      messages: history,
+    }).result();
+    expect(result.errorMessage).toContain(
+      recoveredSuccess
+        ? "Role exhausted its responses"
+        : "Provider dispatch sentinel",
+    );
+    expect(calls).toBe(recoveredSuccess ? 0 : 1);
+  },
+);
 
 const settings = readSettings({
   ...defaultSettings,
@@ -207,8 +257,9 @@ test("direct ChatGPT Explorer sends the index once and accepts only its final an
     verified: true,
     dead: false,
     accepted: false,
+    retired: false,
     candidate: false,
-    checks: [],
+    checks: {},
   };
   const claimed: string[] = [];
   const invocation = {
@@ -383,15 +434,15 @@ test("custom gateways use native OpenAI Responses and API-key authentication", a
   );
   const ref = runtime.profiles.coordinator.model;
   const model = runtime.models.getModel(ref.provider, ref.modelId)!;
-  const tool = conversations(runtime.profiles).extension.tools!.find(
-    (tool) => tool.name === "submit_correctness",
-  )!;
+  const tools = conversations(runtime.profiles).extension.tools!.filter(
+    (tool) => ["submit_correctness", "submit_explorer"].includes(tool.name),
+  );
   let headers: Headers | undefined;
   const answer = await runtime.profiles.coordinator.stream!(
     model,
     {
       messages: [
-        createInitialSystemMessage("Submit", [tool])!,
+        createInitialSystemMessage("Submit", tools)!,
         { role: "user", content: "x", timestamp: 0 },
       ],
     },
@@ -403,10 +454,21 @@ test("custom gateways use native OpenAI Responses and API-key authentication", a
           parallel_tool_calls: false,
           tool_choice: "required",
         });
-        expect(body.tools[0].strict).toBe(true);
+        const correctness = body.tools.find(
+          (tool: { name: string }) => tool.name === "submit_correctness",
+        );
+        const explorer = body.tools.find(
+          (tool: { name: string }) => tool.name === "submit_explorer",
+        );
+        expect(correctness.strict).toBe(true);
         expect(
-          body.tools[0].parameters.properties.results.items.required,
+          correctness.parameters.properties.results.items.required,
         ).toContain("noteId");
+        expect(explorer.parameters.properties.edits).toBeDefined();
+        // Responses rejects uniqueItems, including inside optional-field anyOf.
+        expect(JSON.stringify(explorer.parameters)).not.toContain(
+          '"uniqueItems"',
+        );
         return new Response(
           `data: ${JSON.stringify({
             type: "response.completed",

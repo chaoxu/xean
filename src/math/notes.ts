@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { closure, verdict } from "./argument.ts";
+import { createHash } from "node:crypto";
+import { closure, keepsPrior } from "./argument.ts";
 import {
   decode,
   planSchema,
@@ -16,51 +17,92 @@ import {
 
 /** Shared correction policy for mathematical checks and source checks. */
 export const correctionInstructions =
-  "On PASS, you may supply correction for harmless typos, formatting, or unambiguous notation. Supply the complete replacement for each changed field, and null for each unchanged field; code retains unchanged bytes. Keep text, summary, and detailedSummary consistent. When a mismatch is confined to the summaries, correct them to match the authoritative full text instead of failing only for that mismatch. Leave text null for summary-only corrections. Restore only hypotheses, conclusions, bounds, conditionality, and limitations already explicit in the text, and explain the correction in report. Preserve dependencies, the checked claim, and external premises. Never add assumptions, repair a proof gap, or use a summary correction to satisfy an unmet task criterion; substantive changes require a new note.";
+  "On PASS, you may correct only summary and detailedSummary to match the authoritative text. Return complete replacement summary fields or null when unchanged. Never edit proof text, hypotheses, claims, premises, or dependencies. Substantive changes require an Explorer edit.";
 
 const fatalStages = ["correctness", "reconstruction"] as const;
+type GraphNote = Pick<Note, "id" | "support"> &
+  Partial<Pick<Note, "retired" | "dead">>;
+function validateSupport(
+  note: GraphNote,
+  all: readonly GraphNote[],
+  previous?: GraphNote,
+) {
+  if (new Set(note.support).size !== note.support.length)
+    throw new Error(`Duplicate support for note: ${note.id}`);
+  for (const id of note.support) {
+    const support = all.find((other) => other.id === id);
+    if (!support || (support.retired && !previous?.support.includes(id)))
+      throw new Error(`Unknown or retired support: ${id}`);
+  }
+}
 export function validateNotes(
   drafts: Exploration["notes"],
-  known: readonly Pick<Note, "id" | "dead">[],
+  known: readonly GraphNote[],
 ): void {
-  const available = new Set(
-    known.filter((note) => !note.dead).map((note) => note.id),
-  );
-  const local = new Set<string>();
+  const ids = new Set(known.map((note) => note.id));
   for (const note of drafts) {
-    if (local.has(note.id)) throw new Error(`Duplicate new note: ${note.id}`);
-    if (new Set(note.support).size !== note.support.length)
-      throw new Error(`Duplicate support for note: ${note.id}`);
-    for (const id of note.support)
-      if (!available.has(id))
-        throw new Error(`Unknown, dead, or forward support: ${id}`);
-    local.add(note.id);
-    available.add(note.id);
+    if (ids.has(note.id)) throw new Error(`Duplicate new note: ${note.id}`);
+    ids.add(note.id);
+  }
+  const all = [...known, ...drafts];
+  for (const note of drafts) validateSupport(note, all);
+  closure(
+    all.map((note) => note.id),
+    all,
+  );
+}
+
+/** Validate the final batch graph; repairs may remove an existing defective edge. */
+export function validateExploration(
+  value: Exploration,
+  known: readonly Note[],
+): void {
+  if (value.candidate && value.notes.length === 0)
+    throw new Error(
+      "Batch candidate=true needs a new note; mark an existing candidate in its edit",
+    );
+  const edited = known.map((note) => ({ ...note }));
+  const ids = new Set<string>();
+  for (const edit of value.edits ?? []) {
+    if (ids.has(edit.id)) throw new Error(`Duplicate edit: ${edit.id}`);
+    ids.add(edit.id);
+    const note = edited.find((other) => other.id === edit.id);
+    if (!note) throw new Error(`Unknown edit target: ${edit.id}`);
+    if (note.revision !== edit.revision)
+      throw new Error(`Stale note revision: ${edit.id}`);
+    if (edit.support !== undefined) note.support = edit.support;
+    if (edit.retired !== undefined) note.retired = edit.retired;
+  }
+  validateNotes(value.notes, edited);
+  const all = [...edited, ...value.notes];
+  for (const edit of value.edits ?? []) {
+    const note = edited.find((other) => other.id === edit.id)!;
+    validateSupport(
+      note,
+      all,
+      known.find((other) => other.id === note.id),
+    );
   }
 }
 
 /** Caller trust establishes an import's correctness and sources. */
 export function stagePassed(note: Note, stage: VerificationStage): boolean {
-  if (!verdict(note, "correctness")?.statement) return false;
-  const result = verdict(note, stage);
+  if (!note.checks.correctness?.statement) return false;
+  const result = note.checks[stage];
   return (
     result?.verdict === "PASS" ||
     (note.imported && stage === "source" && result?.verdict !== "FAIL")
   );
 }
 
-/** Source verdicts and FAIL outcomes are final per note ID. */
+/** A completed assessment closes its unchanged inputs. */
 export function stagePending(note: Note, stage: VerificationStage): boolean {
-  if (verdict(note, "correctness")?.statement === null) return false;
-  if (
-    note.dead ||
-    verdict(note, stage)?.verdict === "FAIL" ||
-    stagePassed(note, stage)
-  )
-    return false;
+  if (note.dead || note.checks.correctness?.statement === null) return false;
+  const result = note.checks[stage];
+  if (stagePassed(note, stage) || result?.verdict === "FAIL") return false;
+  if (result && !(stage === "source" && note.sourceChanged)) return false;
   if (stage === "correctness") return true;
-  if (stage === "source")
-    return stagePassed(note, "correctness") && !verdict(note, "source");
+  if (stage === "source") return stagePassed(note, "correctness");
   return note.verified;
 }
 
@@ -79,7 +121,7 @@ export function sourceEvidence(
   };
   prior.forEach(add);
   for (const note of notes) {
-    const source = verdict(note, "source");
+    const source = note.checks.source;
     if (
       !note.verified ||
       note.dead ||
@@ -90,6 +132,23 @@ export function sourceEvidence(
     source.passages.forEach(add);
   }
   return [...evidence.values()];
+}
+
+/** Receipt IDs are not new evidence. Only exact relevant quotations reopen a source check. */
+export function sourceInputKeys(
+  note: Note,
+  evidence: readonly SourceEvidence[],
+): string[] {
+  const premises = note.checks.correctness?.premises ?? [];
+  const keys = new Set<string>();
+  for (const { statement, url, quote } of evidence)
+    if (premises.includes(statement))
+      keys.add(
+        createHash("sha256")
+          .update(JSON.stringify([statement, url, quote]))
+          .digest("hex"),
+      );
+  return [...keys].sort();
 }
 
 /** All status flags are derived from immutable evidence and declared support. */
@@ -103,7 +162,7 @@ export function refresh(notes: Note[]): Note[] {
     const support = note.support.map((id) => byId.get(id)!);
     note.dead =
       support.some((other) => other.dead) ||
-      fatalStages.some((stage) => verdict(note, stage)?.verdict === "FAIL");
+      fatalStages.some((stage) => note.checks[stage]?.verdict === "FAIL");
     note.verified =
       !note.dead &&
       support.every((other) => other.verified) &&
@@ -119,10 +178,11 @@ export function refresh(notes: Note[]): Note[] {
     )
       reconstructed.add(note.id);
     note.accepted =
+      !note.retired &&
       note.verified &&
       supportReconstructed &&
-      verdict(note, "requirements")?.verdict === "PASS" &&
-      verdict(note, "reconstruction")?.verdict === "PASS";
+      note.checks.requirements?.verdict === "PASS" &&
+      note.checks.reconstruction?.verdict === "PASS";
   }
   return notes;
 }
@@ -136,11 +196,13 @@ export function noteInfo(note: Note): NoteInfo {
     verified: note.verified,
     dead: note.dead,
     candidate: note.candidate,
+    revision: note.revision,
+    retired: note.retired,
     passed: verificationStages.filter((stage) => stagePassed(note, stage)),
     feedback: verificationStages.flatMap((stage) => {
-      const result = verdict(note, stage);
+      const result = note.checks[stage];
       return result && result.verdict !== "PASS"
-        ? [`${stage}: ${result.report}`]
+        ? [`${stage} ${result.verdict}: ${result.report}`]
         : [];
     }),
   };
@@ -176,7 +238,19 @@ export function pendingChecks(
         ordered,
       ).filter((note) => !note.imported || roots.includes(note));
     }
-    return selected.filter((note) => stagePending(note, stage));
+    const eligible = new Map<string, boolean>();
+    if (stage === "correctness" || stage === "reconstruction")
+      for (const note of ordered)
+        eligible.set(
+          note.id,
+          note.support.every((id) => eligible.get(id)) &&
+            (stagePassed(note, stage) ||
+              (stage === "reconstruction" && note.imported) ||
+              stagePending(note, stage)),
+        );
+    return selected.filter(
+      (note) => stagePending(note, stage) && eligible.get(note.id) !== false,
+    );
   };
 }
 
@@ -184,16 +258,14 @@ export function validatePlan(
   value: unknown,
   notes: readonly Note[],
   capabilities: Parameters<typeof planSchema>[0],
-  allowEmptyPlan = true,
 ): Plan {
   const plan = decode(planSchema(capabilities), value);
-  if (!allowEmptyPlan && plan.work === null)
-    throw new Error("Return useful work while Explorer is available");
   if (plan.work?.kind === "codex") closure(plan.work.notes, notes);
   if (plan.work?.kind === "verifier") {
     for (const id of plan.work.notes) {
       const note = notes.find((note) => note.id === id);
       if (!note || note.dead) throw new Error(`Unknown or dead note: ${id}`);
+      if (note.retired) throw new Error(`Retired note: ${id}`);
     }
     const pending = pendingChecks(plan.work.notes, plan.work.through, notes);
     if (!verificationStages.some((stage) => pending(stage).length))
@@ -202,7 +274,7 @@ export function validatePlan(
   return plan;
 }
 
-/** Validate on the publication commit line; a committed source verdict is final. */
+/** Validate structured evidence against its exact supplied claim and premises. */
 export function validateResult(
   value: unknown,
   notes: readonly Note[],
@@ -213,7 +285,7 @@ export function validateResult(
     throw new Error(
       "Failed work can publish only completed verification checks",
     );
-  if (result.kind === "notes") validateNotes(result.notes, notes);
+  if (result.kind === "notes") validateExploration(result, notes);
   else {
     const checked = new Set<string>();
     for (const check of result.checks) {
@@ -223,8 +295,8 @@ export function validateResult(
       const note = notes.find((note) => note.id === check.noteId);
       if (!note)
         throw new Error(`Verification refers to unknown note: ${check.noteId}`);
-      const correctness = verdict(note, "correctness");
-      const source = verdict(note, "source");
+      const correctness = note.checks.correctness;
+      const source = note.checks.source;
       if (
         check.correctness &&
         (correctness?.statement === null ||
@@ -242,10 +314,12 @@ export function validateResult(
         )
       )
         throw new Error(`Correctness premises are final: ${check.noteId}`);
-      if (check.source && source)
-        throw new Error(`Source verdict already committed: ${check.noteId}`);
       if (check.source && "premises" in check.source) {
-        const premises = (check.correctness ?? correctness)?.premises ?? [];
+        const premises =
+          (keepsPrior(correctness, check.correctness)
+            ? correctness
+            : check.correctness
+          )?.premises ?? [];
         if (!isDeepStrictEqual(premises, check.source.premises))
           throw new Error(
             `Source-checked premises do not match correctness for ${note.id}`,

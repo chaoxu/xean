@@ -1,6 +1,9 @@
+diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+index 31bb1c7..0ee3242 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -106,8 +106,9 @@ export const GenerationTask = defineTask({
+@@ -105,10 +105,11 @@ export const GenerationTask = defineTask({
+                 return failNoModel(runtime, ref, context);
              const view = await runtime.context(conversationId, context, { at: cutoff });
              let messages = view.messages;
 +            let stream = runtime.models.streamSimple.bind(runtime.models);
@@ -13,30 +16,50 @@
 +                stream = replaced?.stream ?? stream;
              });
              const options = {
-@@ -117,5 +118,5 @@ export const GenerationTask = defineTask({
+                 ...streamOptions,
+@@ -116,7 +117,7 @@ export const GenerationTask = defineTask({
+                 sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
 -            const message = await streamResponse(runtime, model, messages, options, attempt, context);
 +            const message = await streamResponse(runtime, model, messages, options, attempt, context, stream);
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
-@@ -258,5 +259,5 @@ export async function convertPartial(tx, live, conversationId) {
+         },
+@@ -257,7 +258,7 @@ export async function convertPartial(tx, live, conversationId) {
+  * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
   * commit, so no stale partial lands after the outcome.
   */
 -async function streamResponse(runtime, model, messages, options, attempt, context) {
 +async function streamResponse(runtime, model, messages, options, attempt, context, stream) {
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
-@@ -292,5 +293,5 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+     let timer;
+@@ -291,7 +292,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+         });
      };
      try {
 -        const events = runtime.models.streamSimple(model, { messages: [...messages] }, options);
 +        const events = stream(model, { messages: [...messages] }, options);
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
+             // never gets past it, so it never leaves a partial.
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index 9ce3bb7..f1ec171 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -554,9 +554,13 @@ export type HookResult<T> = T | undefined | Promise<T | undefined>;
+@@ -646,17 +646,25 @@ export interface HookApi extends DocumentReader {
+     readonly conversationId: ConversationId;
+     /** `HarnessOptions.models`. */
+     readonly models: Models;
++    /** Committed raw active transcript and model context, optionally cut off at a visible entry. */
++    context(conversationId: ConversationId, context: Context, options?: {
++        readonly at?: EntryId;
++    }): Promise<ContextView>;
+     memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
+     memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+ }
+ export type HookResult<T> = T | undefined | Promise<T | undefined>;
  /** Hooks of the built-in generation task. */
  export interface GenerationHooks {
 -    /** Before every request attempt, including recovery; the result is used for that request only. */
@@ -52,3 +75,47 @@
 +        readonly stream?: Models["streamSimple"];
      }>;
      /** Every terminal provider message, before classification. */
+     afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
+diff --git a/dist/session/session.js b/dist/session/session.js
+index c388076..396adfa 100644
+--- a/dist/session/session.js
++++ b/dist/session/session.js
+@@ -60,7 +60,7 @@ export class SessionImpl {
+             cached: (id) => this.#documents.get(id),
+             load: (definition, addressId, address, context) => this.#loadDocument(definition, addressId, address, context),
+             install: (document) => {
+-                this.#documents.set(document.addressId, document);
++                this.#cacheDocument(document);
+             },
+             evict: (id, recordId) => {
+                 if (this.#documents.get(id)?.record.id === recordId)
+@@ -406,9 +406,10 @@ export class SessionImpl {
+         };
+         const observer = create(loaded.tracker.value, detach);
+         const observed = { version: loaded.valueVersion };
++        const recordId = loaded.record.id;
+         unsubscribeCommit = this.observeCommits((publication, context) => {
+             for (const change of publication.changes) {
+-                if (change.type !== "document" || change.record.id !== loaded.record.id)
++                if (change.type !== "document" || change.record.id !== recordId)
+                     continue;
+                 // A document state's frames carry no caller cancellation; a watch observes its own cancellation.
+                 const frameContext = observer instanceof CommittedStateSource ? withoutAbortSignal(context) : context;
+@@ -444,9 +445,16 @@ export class SessionImpl {
+             deltasSinceBase: stored.deltasSinceBase,
+             tracker: track(value),
+         };
+-        this.#documents.set(addressId, loaded);
++        this.#cacheDocument(loaded);
+         return loaded;
+     }
++    /** Trackers are a cache; committed documents cold-load after eviction. */
++    #cacheDocument(document) {
++        this.#documents.delete(document.addressId);
++        this.#documents.set(document.addressId, document);
++        while (this.#documents.size > 128)
++            this.#documents.delete(this.#documents.keys().next().value);
++    }
+     #enqueue(job) {
+         const run = this.#tail.then(job);
+         this.#tail = run.then(() => undefined, () => undefined);

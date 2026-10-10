@@ -25,6 +25,7 @@ export const CodexLog = defineEntry<{
   stderr: string;
   exitCode: number | null;
   usage: Record<string, number> | null;
+  outputTruncated?: boolean;
 }>("research.codex-call");
 export const CodexRequest = defineEntry<{
   operationId: string;
@@ -43,12 +44,13 @@ export function codexTranscript(stdout: string) {
   const result: {
     value?: JsonValue;
     error?: Error;
+    failureReason?: string;
     usage: Record<string, number> | null;
     searches: number;
   } = { usage: null, searches: 0 };
   let completed = false;
   let message: string | undefined;
-  for (const line of stdout.split("\n")) {
+  for (const [line] of stdout.matchAll(/[^\n]+/g)) {
     if (!line.trim()) continue;
     let event: Record<string, unknown> | undefined;
     try {
@@ -58,8 +60,14 @@ export function codexTranscript(stdout: string) {
       result.error = new Error("Codex emitted malformed JSONL");
       continue;
     }
-    if (event.type === "turn.failed")
-      result.error ??= new RoleFailure("Codex reported a failed turn");
+    if (event.type === "turn.failed") {
+      const reason = record(event.error)?.message;
+      if (typeof reason === "string" && reason.trim())
+        result.failureReason = reason;
+      result.error ??= new RoleFailure(
+        result.failureReason ?? "Codex reported a failed turn",
+      );
+    }
     if (event.type === "turn.completed") {
       completed = true;
       const usage = Object.fromEntries(
@@ -86,7 +94,7 @@ export function codexTranscript(stdout: string) {
     try {
       result.value = JSON.parse(message) as JsonValue;
     } catch {
-      result.error = new Error("Codex final answer was not JSON");
+      result.error ??= new Error("Codex final answer was not JSON");
     }
   return result;
 }
@@ -151,7 +159,7 @@ export function codexCalls(options: {
       }, context);
       const executable = settings.command ?? "codex";
       context.abortSignal?.throwIfAborted();
-      const run = await execa(
+      const child = execa(
         executable.includes("/") ? resolve(executable) : executable,
         [
           "exec",
@@ -187,10 +195,17 @@ export function codexCalls(options: {
           killSignal: "SIGKILL",
           killDescendants: true,
           reject: false,
-          maxBuffer: Infinity,
+          // Execa measures decoded output in characters, separately per stream.
+          maxBuffer: { stdout: 16 * 1024 * 1024, stderr: 1024 * 1024 },
           stripFinalNewline: false,
         },
       );
+      // Execa 10 destroys an overflowing pipe but still waits for process exit.
+      for (const stream of [child.stdout, child.stderr])
+        stream?.once("close", () => {
+          if (!stream.readableEnded) child.kill();
+        });
+      const run = await child;
       context.abortSignal?.throwIfAborted();
       const transcript = codexTranscript(run.stdout);
       await runtime.commit(async (tx) => {
@@ -201,11 +216,29 @@ export function codexCalls(options: {
             stderr: run.stderr,
             exitCode: run.exitCode ?? null,
             usage: transcript.usage,
+            ...(run.isMaxBuffer ? { outputTruncated: true } : {}),
           },
         });
       }, context);
-      if (run.failed)
-        throw new RoleFailure(run.stderr.trim() || run.shortMessage);
+      if (run.isMaxBuffer)
+        throw new RoleFailure(
+          "Codex exceeded its output capture limit (16 Mi characters stdout, 1 Mi stderr); recorded output is truncated",
+        );
+      if (run.failed || transcript.error instanceof RoleFailure) {
+        const message =
+          (transcript.error instanceof RoleFailure &&
+            transcript.failureReason) ||
+          run.stderr.trim() ||
+          (transcript.error instanceof RoleFailure
+            ? transcript.error.message
+            : run.shortMessage) ||
+          "Codex process failed";
+        throw new RoleFailure(
+          message.length > 4096
+            ? `${message.slice(0, 4096)}… [see Codex log]`
+            : message,
+        );
+      }
       if (transcript.error) throw transcript.error;
       const value = decode(schema, transcript.value);
       if (shell)
@@ -218,7 +251,10 @@ export function codexCalls(options: {
         reportedAt: new Date().toISOString(),
       };
     } finally {
-      if (!shell) await rm(workspace, { recursive: true, force: true });
+      if (!shell)
+        await rm(workspace, { recursive: true, force: true }).catch((error) =>
+          runtime.report(error),
+        );
     }
   };
 }

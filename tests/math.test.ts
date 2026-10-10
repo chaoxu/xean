@@ -7,7 +7,9 @@ import {
   defineExtension,
   defineTask,
   Harness,
+  MemoryStorage,
   type EntryId,
+  type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
@@ -19,11 +21,19 @@ import {
   type SourceEvidence,
   type SolverResult,
 } from "../src/math/contracts.ts";
-import { readCommand, validateCommand } from "../src/math/commands.ts";
+import { readCommand } from "../src/math/commands.ts";
 import { bindCodex } from "../src/math/evidence.ts";
-import { Events, readView } from "../src/math/state.ts";
+import {
+  publishCommand,
+  publishResult,
+  readSnapshot,
+  readView,
+  type MathView,
+  type SnapshotReader,
+} from "../src/math/state.ts";
 import {
   refresh,
+  noteInfo,
   pendingChecks,
   stagePassed,
   sourceEvidence,
@@ -33,6 +43,42 @@ import {
   validateResult,
 } from "../src/math/notes.ts";
 import { acceptedArgument, closure } from "../src/math/argument.ts";
+import { mergeExploration } from "../src/math/results.ts";
+import type { NoteEdit } from "../src/math/contracts.ts";
+
+test.each([
+  [[{ text: "formatted", cosmetic: true }, { text: "new proof" }], false],
+  [[{ text: "new proof" }, { text: "formatted", cosmetic: true }], false],
+  [[{ text: "formatted", cosmetic: true }, { summary: "shorter" }], true],
+  [
+    [
+      { text: "formatted", cosmetic: true },
+      { text: "formatted again", cosmetic: true },
+    ],
+    true,
+  ],
+  [[{ text: "new proof" }, { cosmetic: true }], false],
+  [[{ summary: "shorter" }, { text: "formatted", cosmetic: true }], true],
+] as [Partial<NoteEdit>[], boolean][])(
+  "private edit merging preserves mathematical changes: %j",
+  (edits, cosmetic) => {
+    const result = mergeExploration(
+      edits.map((edit) => ({
+        notes: [],
+        candidate: false,
+        edits: [{ id: "n1", revision: 1, ...edit }],
+      })),
+    );
+    expect(result.edits).toEqual([
+      {
+        id: "n1",
+        revision: 1,
+        ...Object.assign({}, ...edits),
+        cosmetic,
+      },
+    ]);
+  },
+);
 
 const pass = { verdict: "PASS" as const, report: "Checked exact statement." };
 const content = (claim: string) => ({
@@ -46,18 +92,62 @@ const note = (id: string, support: string[] = [], imported = false): Note => ({
   support,
   imported,
   revision: 0,
+  retired: false,
   candidate: false,
-  checks: [
-    {
-      correctness: { ...pass, statement: id, premises: [] },
-      ...(imported ? {} : { source: pass }),
-    },
-  ],
+  checks: {
+    correctness: { ...pass, statement: id, premises: [] },
+    ...(imported ? {} : { source: pass }),
+  },
   verified: false,
   accepted: false,
   dead: false,
 });
 const capabilities = { explorer: true, literature: false, codex: false };
+
+test("completed uncertain checks stay closed on unchanged inputs", () => {
+  const candidate = refresh([note("candidate")])[0]!;
+  const report = "The completion criterion is not established.";
+  candidate.checks.requirements = { verdict: "INCONCLUSIVE", report };
+  expect(stagePending(candidate, "requirements")).toBe(false);
+  expect(noteInfo(candidate).feedback).toEqual([
+    `requirements INCONCLUSIVE: ${report}`,
+  ]);
+  candidate.checks.requirements = { verdict: "FAIL", report };
+  expect(stagePending(candidate, "requirements")).toBe(false);
+  expect(noteInfo(candidate).feedback).toEqual([
+    `requirements FAIL: ${report}`,
+  ]);
+});
+
+test.each(["correctness", "source", "reconstruction"] as const)(
+  "%s uncertainty blocks unchanged verification requests",
+  (stage) => {
+    const target = note("target");
+    const uncertain = {
+      verdict: "INCONCLUSIVE" as const,
+      report: "Unresolved.",
+    };
+    if (stage === "correctness")
+      target.checks = {
+        correctness: { ...uncertain, statement: target.id, premises: [] },
+      };
+    else if (stage === "source") target.checks.source = uncertain;
+    else
+      Object.assign(target.checks, {
+        requirements: pass,
+        reconstruction: { ...uncertain, proof: "Partial proof." },
+      });
+    const notes = refresh([target]);
+    const plan: Plan = {
+      work: { kind: "verifier", notes: [target.id], through: stage },
+    };
+    expect(() => validatePlan(plan, notes, capabilities)).toThrow(
+      "no pending checks",
+    );
+    expect(target.dead).toBe(false);
+    expect(target.accepted).toBe(false);
+  },
+);
 
 test("Coordinator plans contain one worker or an intentional wait", () => {
   const plan: Plan = {
@@ -70,14 +160,11 @@ test("Coordinator plans contain one worker or an intentional wait", () => {
   expect(validatePlan({ work: null }, [], capabilities)).toEqual({
     work: null,
   });
-  expect(() => validatePlan({ work: null }, [], capabilities, false)).toThrow(
-    "Return useful work",
-  );
 });
 
 test("correctness targets still establish sources when they support another target", () => {
   const base = note("base");
-  delete base.checks[0]!.source;
+  delete base.checks.source;
   const target = note("target", [base.id]);
   const notes = refresh([base, target]);
   expect(notes.map((note) => note.verified)).toEqual([false, false]);
@@ -97,7 +184,7 @@ test("correctness targets still establish sources when they support another targ
     },
   };
   expect(validatePlan(plan, notes, capabilities).work).not.toBeNull();
-  base.checks.push({ source: pass });
+  base.checks.source = pass;
   refresh(notes);
   expect(notes.map((note) => note.verified)).toEqual([true, true]);
   expect(() => validatePlan(plan, notes, capabilities)).toThrow(
@@ -109,10 +196,11 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
   const base = note("base");
   const imported = note("import", ["base"], true);
   const target = note("solution", ["import"]);
-  base.checks.push({
-    requirements: { verdict: "FAIL", report: "Supporting lemma only." },
-  });
-  target.checks.push({
+  base.checks.requirements = {
+    verdict: "FAIL",
+    report: "Supporting lemma only.",
+  };
+  Object.assign(target.checks, {
     requirements: pass,
     reconstruction: {
       ...pass,
@@ -138,12 +226,10 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
       capabilities,
     ).work,
   ).toMatchObject({ kind: "verifier", notes: [target.id] });
-  base.checks.push({
-    reconstruction: {
-      ...pass,
-      proof: "Independent lemma proof",
-    },
-  });
+  base.checks.reconstruction = {
+    ...pass,
+    proof: "Independent lemma proof",
+  };
   refresh(notes);
   expect(target.accepted).toBe(true);
   expect(acceptedArgument(notes, target.id)).toBe(
@@ -164,38 +250,24 @@ test("acceptance reconstructs generated dependencies beneath trusted imports and
       capabilities,
     ),
   ).toThrow("no pending checks");
-  base.checks.push({
-    correctness: {
-      verdict: "FAIL",
-      report: "Concrete defect",
-      statement: base.id,
-      premises: [],
-    },
-  });
+  base.checks.correctness = {
+    verdict: "FAIL",
+    report: "Concrete defect",
+    statement: base.id,
+    premises: [],
+  };
   refresh(notes);
   expect(notes.every((entry) => entry.dead)).toBe(true);
   expect(notes.some((note) => note.accepted)).toBe(false);
-  expect(() =>
-    validateResult(
-      {
-        kind: "notes",
-        candidate: false,
-        notes: [
-          { id: "n1", ...content("Frozen worker finding"), support: [base.id] },
-        ],
-      },
-      notes,
-    ),
-  ).toThrow("Unknown, dead, or forward support: base");
 });
 
 test.each([false, true])(
-  "correctness PASS fixes statement and premises without suppressing FAIL, source committed=%s",
+  "unchanged-note PASS fixes its statement and premises without suppressing FAIL, source committed=%s",
   (sourceCommitted) => {
     const established = note("established");
-    if (!sourceCommitted) delete established.checks[0]!.source;
+    if (!sourceCommitted) delete established.checks.source;
     const dependent = note("dependent", [established.id]);
-    const binding = established.checks[0]!.correctness!;
+    const binding = established.checks.correctness!;
     const late: SolverResult = {
       kind: "verification",
       checks: [
@@ -218,7 +290,7 @@ test.each([false, true])(
     expect(() => validateResult(late, [established])).toThrow(
       "Correctness statement is final",
     );
-    established.checks[0]!.correctness = {
+    established.checks.correctness = {
       ...binding,
       verdict: "INCONCLUSIVE",
       statement: null,
@@ -230,13 +302,13 @@ test.each([false, true])(
     expect(() => validateResult(late, [established])).toThrow(
       "Correctness statement is final",
     );
-    established.checks[0]!.correctness = binding;
+    established.checks.correctness = binding;
     check.statement = binding.statement;
     check.verdict = "FAIL";
     check.report = "The argument has an unsupported step.";
     check.premises = ["Different unresolved premise"];
     expect(validateResult(late, [established])).toEqual(late);
-    established.checks.push(...late.checks);
+    established.checks.correctness = check;
     expect(refresh([established, dependent]).every((note) => note.dead)).toBe(
       true,
     );
@@ -246,10 +318,10 @@ test.each([false, true])(
 test("a null checked statement cannot establish support or acceptance even with PASS records", () => {
   const question = note("question", [], true);
   question.text = "Could an exchange argument settle the conjecture?";
-  question.checks[0]!.correctness!.statement = null;
+  question.checks.correctness!.statement = null;
   const candidate = note("candidate", [question.id]);
   for (const entry of [question, candidate])
-    entry.checks.push({
+    Object.assign(entry.checks, {
       requirements: pass,
       reconstruction: { ...pass, proof: "Depends on the unresolved question." },
     });
@@ -263,22 +335,20 @@ test("a null checked statement cannot establish support or acceptance even with 
   expect(stagePending(question, "correctness")).toBe(false);
 });
 
-test("committed source verdicts are final and reused evidence retains immutable original bindings", () => {
+test("source retries follow policy and reused evidence retains its exact original bindings", () => {
   for (const verdict of ["PASS", "FAIL", "INCONCLUSIVE"] as const) {
     const frozen = note("frozen");
-    frozen.checks = [
-      {
-        correctness: {
-          ...pass,
-          statement: frozen.id,
-          premises: ["Exact frozen premise"],
-        },
-        source: { verdict, report: "Judged the frozen external claim" },
-        reconstruction: { ...pass, proof: "Independent supporting proof" },
+    frozen.checks = {
+      correctness: {
+        ...pass,
+        statement: frozen.id,
+        premises: ["Exact frozen premise"],
       },
-    ];
+      source: { verdict, report: "Judged the frozen external claim" },
+      reconstruction: { ...pass, proof: "Independent supporting proof" },
+    };
     const dependent = note("dependent", [frozen.id]);
-    dependent.checks.push({
+    Object.assign(dependent.checks, {
       requirements: pass,
       reconstruction: { ...pass, proof: "Independent proof" },
     });
@@ -296,12 +366,6 @@ test("committed source verdicts are final and reused evidence retains immutable 
         capabilities,
       ),
     ).toThrow("no pending checks");
-    expect(() =>
-      validateResult(
-        { kind: "verification", checks: [{ noteId: frozen.id, source: pass }] },
-        [frozen],
-      ),
-    ).toThrow("Source verdict already committed");
     expect(() =>
       validateResult(
         {
@@ -374,23 +438,21 @@ test("committed source verdicts are final and reused evidence retains immutable 
     ).verdict,
   ).toBe("PASS");
   const established = note("established");
-  established.checks = [
-    {
-      correctness: {
-        ...pass,
-        statement: established.id,
-        premises: [evidence.statement],
-      },
-      source: {
-        ...pass,
-        kind: "codex-report",
-        operationId: "source",
-        reportedAt: "2026-10-04T00:00:00Z",
-        premises: [evidence.statement],
-        passages: [{ ...evidence, premise: 0 }],
-      },
+  established.checks = {
+    correctness: {
+      ...pass,
+      statement: established.id,
+      premises: [evidence.statement],
     },
-  ];
+    source: {
+      ...pass,
+      kind: "codex-report",
+      operationId: "source",
+      reportedAt: "2026-10-04T00:00:00Z",
+      premises: [evidence.statement],
+      passages: [{ ...evidence, premise: 0 }],
+    },
+  };
   refresh([established]);
   expect(sourceEvidence([established], [evidence])).toEqual([evidence]);
   const priorApplications = [
@@ -405,29 +467,25 @@ test("committed source verdicts are final and reused evidence retains immutable 
     ),
   ).toThrow("Conflicting source evidence");
   const unchecked = note("unchecked");
-  unchecked.checks = [
-    {
-      correctness: {
-        ...pass,
-        statement: unchecked.id,
-        premises: ["Different exact premise"],
-      },
+  unchecked.checks = {
+    correctness: {
+      ...pass,
+      statement: unchecked.id,
+      premises: ["Different exact premise"],
     },
-  ];
+  };
   expect(() =>
     validateResult(
       {
         kind: "verification",
-        checks: [
-          { noteId: unchecked.id, source: established.checks[0]!.source },
-        ],
+        checks: [{ noteId: unchecked.id, source: established.checks.source }],
       },
       [unchecked],
     ),
   ).toThrow("Source-checked premises do not match");
 });
 
-test("batch responses and note support reject missing, duplicate, extra, dead and cyclic identities", () => {
+test("batch responses and note graphs reject missing, duplicate, extra, retired and cyclic identities", () => {
   expect(
     batchResults(
       ["a", "b"],
@@ -475,10 +533,13 @@ test("batch responses and note support reject missing, duplicate, extra, dead an
   });
   expect(() =>
     validateNotes([draft("n1", ["n2"]), draft("n2", [])], []),
-  ).toThrow("forward support");
+  ).not.toThrow();
   expect(() =>
-    validateNotes([draft("n1", ["dead"])], [{ id: "dead", dead: true }]),
-  ).toThrow("dead");
+    validateNotes(
+      [draft("n1", ["retired"])],
+      [{ id: "retired", support: [], dead: false, retired: true }],
+    ),
+  ).toThrow("retired");
   expect(() =>
     closure(
       ["a"],
@@ -490,43 +551,28 @@ test("batch responses and note support reject missing, duplicate, extra, dead an
   ).toThrow("Cyclic support");
 });
 
-test("native result references preserve frozen views and late corrections across reopen", async () => {
-  const context = BACKGROUND_CONTEXT;
-  const directory = await temporaryDirectory("pi-math-");
+async function notebook(storage: Storage = new MemoryStorage()) {
   const Worker = defineTask<
-    { standalone?: true },
-    { phase: "result" },
+    { result: SolverResult; frozen: MathView },
+    { phase: "publish" },
     SolverResult
   >({
     name: "math.fixture",
     version: 1,
-    initial: () => ({ phase: "result" }),
+    initial: () => ({ phase: "publish" }),
     phases: {
-      async result(task, runtime, context) {
-        const result: SolverResult = {
-          kind: "verification",
-          checks: [
-            {
-              noteId: task.input.standalone
-                ? "standalone-only"
-                : "input/seed/n2",
-              correction: { revision: 0, summary: "STALE VERIFIER SUMMARY" },
-              requirements: pass,
-            },
-          ],
-        };
+      async publish(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          if (!task.input.standalone)
-            validateResult(
-              result,
-              (await readView(tx, task.conversationId)).notes,
-            );
-          await tx.appendEntry(Events, task.conversationId, {
-            data: { type: "result", task: task.id },
-          });
+          await publishResult(
+            tx,
+            task.conversationId,
+            task.input.result,
+            task.id,
+            task.input.frozen,
+          );
           return {
             status: "terminal",
-            outcome: { status: "completed", result },
+            outcome: { status: "completed", result: task.input.result },
           };
         }, context);
       },
@@ -540,138 +586,312 @@ test("native result references preserve frozen views and late corrections across
   });
   const registry = createRegistry();
   registry.install(defineExtension({ name: "math.fixture", tasks: [Worker] }));
-  const open = async () =>
-    Harness.open(
-      await openNodeJsonlStorage(directory, context, { fsync: true }),
-      { registry, models: createModels() },
-      context,
+  const harness = await Harness.open(
+    storage,
+    { registry, models: createModels() },
+    BACKGROUND_CONTEXT,
+  );
+  const root = await harness.root(BACKGROUND_CONTEXT);
+  const view = () =>
+    root.commit((tx) => readView(tx, root.id), BACKGROUND_CONTEXT);
+  const run = async (result: SolverResult, prior?: MathView) => {
+    const frozen = prior ?? (await view());
+    const id = await root.commit(
+      (tx) =>
+        tx.createTask(
+          Worker,
+          { result, frozen },
+          { ownership: { kind: "conversation" } },
+        ),
+      BACKGROUND_CONTEXT,
     );
-  let harness = await open();
+    const record = await harness.waitForTask(id, BACKGROUND_CONTEXT);
+    return { id, outcome: record.state.outcome };
+  };
+  const publish = async (result: SolverResult, frozen?: MathView) => {
+    const completed = await run(result, frozen);
+    if (completed.outcome.status !== "completed")
+      throw new Error(JSON.stringify(completed.outcome));
+    return completed.id;
+  };
+  const checkpoint = async () =>
+    (
+      await root.commit(
+        (tx) =>
+          tx.appendEntry(root.id, { kind: "math.checkpoint", data: null }),
+        BACKGROUND_CONTEXT,
+      )
+    ).id;
+  return {
+    harness,
+    root,
+    view,
+    run,
+    publish,
+    checkpoint,
+    snapshot: (at: EntryId) =>
+      readSnapshot(
+        {
+          snapshotAsOf: harness.snapshotAsOf.bind(harness),
+          getTask: harness.getTask.bind(harness),
+          entry: (id: EntryId) =>
+            harness.commit((tx) => tx.entry(id), BACKGROUND_CONTEXT),
+        } satisfies SnapshotReader,
+        root.id,
+        at,
+        BACKGROUND_CONTEXT,
+      ),
+    command: (value: unknown) =>
+      root.commit(
+        (tx) => publishCommand(tx, root.id, readCommand(value)),
+        BACKGROUND_CONTEXT,
+      ),
+  };
+}
+
+test("stable edits preserve summaries and independent evidence while repairing a dependency chain", async () => {
+  const owner = await notebook();
   try {
-    const root = await harness.root(context);
-    const append = async (value: unknown) =>
-      root.commit(async (tx) => {
-        const command = validateCommand(
-          readCommand(value),
-          await readView(tx, root.id),
-        );
-        return (
-          await tx.appendEntry(Events, root.id, {
-            data: { type: "input", command },
-          })
-        ).id;
-      }, context);
-    const frozenAt = await append({
+    const initial = await owner.publish({
+      kind: "notes",
+      candidate: true,
+      notes: [
+        { id: "n1", ...content("Original lemma"), support: [] },
+        { id: "n2", ...content("Independent lemma"), support: [] },
+        { id: "n3", ...content("Candidate"), support: ["n1"] },
+      ],
+    });
+    const ids = [1, 2, 3].map((index) => `${initial}/n${index}`);
+    await owner.publish({
+      kind: "verification",
+      checks: ids.map((noteId) => ({
+        noteId,
+        correctness: { ...pass, statement: noteId, premises: [] },
+        source: pass,
+        requirements: pass,
+        reconstruction: { ...pass, proof: "Independent proof." },
+      })),
+    });
+    const checkedAt = await owner.checkpoint();
+    const checked = await owner.snapshot(checkedAt);
+    expect(checked.notes.at(-1)!.accepted).toBe(true);
+    await owner.publish({
+      kind: "notes",
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: ids[0]!,
+          revision: checked.notes[0]!.revision,
+          summary: "A clearer index description",
+        },
+      ],
+    });
+    const summarized = await owner.view();
+    expect(summarized.notes[0]!.revision).toBeGreaterThan(
+      checked.notes[0]!.revision,
+    );
+    expect(summarized.notes[0]!.checks).toEqual(checked.notes[0]!.checks);
+    expect(summarized.notes[2]!.accepted).toBe(true);
+
+    await owner.publish({
+      kind: "notes",
+      candidate: false,
+      notes: [],
+      edits: [
+        {
+          id: ids[0]!,
+          revision: summarized.notes[0]!.revision,
+          ...content("Changed lemma"),
+        },
+      ],
+    });
+    const edited = await owner.view();
+    expect(edited.notes.map((note) => note.id)).toEqual(ids);
+    expect(edited.notes[0]!.checks).toEqual({});
+    expect(edited.notes[1]!.checks).toEqual(checked.notes[1]!.checks);
+    expect(edited.notes[2]!.text).toBe(checked.notes[2]!.text);
+    expect(edited.notes[2]!.accepted).toBe(false);
+    expect(edited.notes[2]!.support).toEqual([ids[0]!]);
+    await owner.publish({
+      kind: "verification",
+      checks: [
+        {
+          noteId: ids[0]!,
+          correctness: {
+            ...pass,
+            statement: "Changed exported claim",
+            premises: [],
+          },
+          source: pass,
+        },
+      ],
+    });
+    expect((await owner.view()).notes[2]!.checks).toEqual({});
+
+    await owner.publish({
+      kind: "notes",
+      candidate: false,
+      notes: [
+        { id: "n1", ...content("Missing replacement lemma"), support: [] },
+      ],
+      edits: [
+        { id: ids[2]!, revision: checked.notes[2]!.revision, support: ["n1"] },
+      ],
+    });
+    const repaired = await owner.view();
+    expect(repaired.notes[2]!.id).toBe(ids[2]!);
+    expect(repaired.notes[2]!.support).toEqual([repaired.notes[3]!.id]);
+    expect(repaired.notes[2]!.checks).toEqual({});
+    expect(await owner.snapshot(checkedAt)).toEqual(checked);
+  } finally {
+    await owner.harness.close(BACKGROUND_CONTEXT);
+  }
+});
+
+test("conflicting and cyclic edit batches publish nothing, while retirement keeps historical mathematics", async () => {
+  const owner = await notebook();
+  try {
+    await owner.command({
       kind: "submit",
       id: "seed",
       candidate: true,
       notes: [
-        { id: "n1", ...content("IMPORTED SUPPORT"), support: [] },
-        { id: "n2", ...content("ORIGINAL TEXT"), support: ["n1"] },
+        { id: "n1", ...content("Lemma"), support: [] },
+        { id: "n2", ...content("Candidate"), support: ["n1"] },
       ],
     });
-    const worker = await root.commit(
-      (tx) =>
-        tx.createTask(
-          Worker,
-          {},
-          { conversationId: root.id, ownership: { kind: "conversation" } },
-        ),
-      context,
+    const before = await owner.view();
+    for (const edits of [
+      [{ id: "input/seed/n1", revision: 99, summary: "Stale" }],
+      [
+        {
+          id: "input/seed/n1",
+          revision: before.notes[0]!.revision,
+          support: ["input/seed/n2"],
+        },
+      ],
+    ]) {
+      const failed = await owner.run({
+        kind: "notes",
+        candidate: false,
+        notes: [{ id: "n1", ...content("Must not leak"), support: [] }],
+        edits,
+      });
+      expect(failed.outcome.status).toBe("faulted");
+      expect(await owner.view()).toEqual(before);
+    }
+    await owner.publish({
+      kind: "notes",
+      notes: [],
+      candidate: false,
+      edits: [
+        {
+          id: "input/seed/n2",
+          revision: before.notes[1]!.revision,
+          retired: true,
+        },
+      ],
+    });
+    const retired = (await owner.view()).notes[1]!;
+    expect(retired).toMatchObject({
+      id: "input/seed/n2",
+      retired: true,
+      dead: false,
+      text: before.notes[1]!.text,
+    });
+    expect(() =>
+      validatePlan(
+        {
+          work: {
+            kind: "verifier",
+            notes: [retired.id],
+            through: "correctness",
+          },
+        },
+        [retired],
+        capabilities,
+      ),
+    ).toThrow("Retired note");
+    expect(stagePending(retired, "correctness")).toBe(true);
+  } finally {
+    await owner.harness.close(BACKGROUND_CONTEXT);
+  }
+});
+
+test("Pi snapshots survive reopen and stale verification cannot restore current checks or summaries", async () => {
+  const directory = await temporaryDirectory("pi-notebook-");
+  const start = async () =>
+    notebook(
+      await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, {
+        fsync: true,
+      }),
     );
-    await append({
+  let owner = await start();
+  try {
+    await owner.command({
+      kind: "submit",
+      id: "seed",
+      candidate: true,
+      notes: [{ id: "n1", ...content("Original"), support: [] }],
+    });
+    const frozenAt = await owner.checkpoint();
+    const frozen = await owner.snapshot(frozenAt);
+    await owner.command({
       kind: "correct",
       id: "edit",
-      note: "input/seed/n2",
-      revision: 0,
-      ...content("NEWER TEXT"),
+      note: "input/seed/n1",
+      revision: frozen.notes[0]!.revision,
+      ...content("Revised"),
     });
-    await expect(
-      append({
-        kind: "correct",
-        id: "stale",
-        note: "input/seed/n2",
-        revision: 0,
-        ...content("STALE INPUT"),
-      }),
-    ).rejects.toThrow("Stale note revision");
-    // A page boundary must not lose the original imports or later result references.
-    await root.commit(async (tx) => {
-      for (let index = 0; index < 129; index++)
-        await tx.appendEntry(Events, root.id, {
-          data: {
-            type: "input",
-            command: {
-              kind: "guide",
-              id: `guide-${index}`,
-              text: `Guidance ${index}`,
+    const worker = await owner.run(
+      {
+        kind: "verification",
+        checks: [
+          {
+            noteId: "input/seed/n1",
+            correction: {
+              revision: frozen.notes[0]!.revision,
+              summary: "Stale summary",
             },
+            correctness: { ...pass, statement: "Original", premises: [] },
+            requirements: pass,
           },
-        });
-    }, context);
-    harness.resume();
-    expect(
-      (await harness.waitForTask(worker, context)).state.outcome.status,
-    ).toBe("completed");
-    const standalone = await root.commit(
-      (tx) =>
-        tx.createTask(
-          Worker,
-          { standalone: true },
-          { conversationId: root.id, ownership: { kind: "conversation" } },
-        ),
-      context,
+        ],
+      },
+      frozen,
     );
-    await harness.waitForTask(standalone, context);
-    const read = (at?: EntryId) =>
-      harness.commit((tx) => readView(tx, root.id, at), context);
-    const frozen = await read(frozenAt);
-    expect(
-      frozen.notes.map(({ text, revision, candidate, support }) => ({
-        text,
-        revision,
-        candidate,
-        support,
-      })),
-    ).toEqual([
-      {
-        text: content("IMPORTED SUPPORT").text,
-        revision: 0,
-        candidate: false,
-        support: [],
-      },
-      {
-        text: content("ORIGINAL TEXT").text,
-        revision: 0,
-        candidate: true,
-        support: ["input/seed/n1"],
-      },
-    ]);
-    const latest = await read();
-    expect(latest.notes[1]).toMatchObject({
-      text: content("NEWER TEXT").text,
-      summary: "NEWER TEXT",
-      revision: 1,
-      imported: true,
+    expect(worker.outcome).toMatchObject({
+      status: "faulted",
+      error: { message: expect.stringContaining("Stale mathematical input") },
+    });
+    for (let index = 0; index < 129; index++)
+      await owner.command({
+        kind: "guide",
+        id: `g-${index}`,
+        text: `Guidance ${index}`,
+      });
+    const current = await owner.view();
+    expect(current.notes[0]).toMatchObject({
+      ...content("Revised"),
+      checks: {},
       verified: false,
       accepted: false,
     });
-    expect(stagePending(latest.notes[1]!, "correctness")).toBe(true);
-    expect(latest.notes[1]!.checks).toEqual([{ requirements: pass }]);
-    expect(latest.guidance).toHaveLength(129);
-    const stored = await harness.commit((tx) => tx.task(worker), context);
-    expect(stored!.state.outcome).toMatchObject({
-      result: {
-        checks: [
-          { correction: { revision: 0, summary: "STALE VERIFIER SUMMARY" } },
-        ],
-      },
+    expect(current.notes[0]!.revision).toBeGreaterThan(
+      frozen.notes[0]!.revision,
+    );
+    expect(current.guidance).toHaveLength(129);
+    const record = await owner.harness.getTask(worker.id, BACKGROUND_CONTEXT);
+    expect(record!.state.outcome).toMatchObject({
+      status: "faulted",
+      error: { message: expect.stringContaining("Stale mathematical input") },
     });
-    await harness.close(context);
-    harness = await open();
-    expect(await read(frozenAt)).toEqual(frozen);
-    expect(await read()).toEqual(latest);
+    await owner.harness.close(BACKGROUND_CONTEXT);
+    owner = await start();
+    expect(await owner.snapshot(frozenAt)).toEqual(frozen);
+    expect(await owner.view()).toEqual(current);
   } finally {
-    await harness.close(context);
+    await owner.harness.close(BACKGROUND_CONTEXT);
   }
 });

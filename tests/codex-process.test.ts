@@ -3,8 +3,169 @@ import { expect, test } from "bun:test";
 import { access, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { inspect, open, readReport } from "../src/index.ts";
-import { CodexLog, CodexRequest } from "../src/roles/codex.ts";
+import { CodexLog, CodexRequest, codexTranscript } from "../src/roles/codex.ts";
 import { context, settings, task } from "./fixture.ts";
+
+test.each(["\n", "\r\n"])(
+  "Codex JSONL accepts blank lines and %j separators while retaining results and usage",
+  (separator) => {
+    const value = { verdict: "PASS", report: "Checked" };
+    const output = [
+      "",
+      JSON.stringify({ type: "item.completed", item: { type: "web_search" } }),
+      JSON.stringify({ type: "error", message: "Reconnecting... 1/5" }),
+      " \t",
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: JSON.stringify(value) },
+      }),
+      "",
+      JSON.stringify({ type: "turn.completed", usage: { output_tokens: 7 } }),
+    ].join(separator);
+    expect(codexTranscript(output)).toEqual({
+      value,
+      usage: { output_tokens: 7 },
+      searches: 1,
+    });
+  },
+);
+
+test.each([1, 0, "bare", "blank"] as const)(
+  "Codex terminal provider errors survive process exit %s with bounded status and raw evidence",
+  async (failure) => {
+    const directory = await temporaryDirectory("codex-provider-failure-");
+    const command = join(directory, "codex-fixture");
+    const exitCode = typeof failure === "number" ? failure : 1;
+    const fallback = typeof failure === "string";
+    const stderr =
+      fallback || exitCode === 0 ? "fixture provider detail on stderr" : "";
+    const reason =
+      "Selected model is at capacity. Please try a different model." +
+      (exitCode === 0 ? " Detail".repeat(700) : "");
+    const output =
+      [
+        { type: "error", message: "Reconnecting... 1/5" },
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: "I will check the source." },
+        },
+        { type: "error", message: reason },
+        {
+          type: "turn.failed",
+          ...(failure === "bare"
+            ? {}
+            : { error: { message: failure === "blank" ? "  " : reason } }),
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n";
+    expect(codexTranscript(output).error?.message).toBe(
+      fallback ? "Codex reported a failed turn" : reason,
+    );
+    await writeFile(
+      command,
+      `#!${process.execPath}\nimport { writeSync } from "node:fs";\nwriteSync(1, ${JSON.stringify(output)});\nwriteSync(2, ${JSON.stringify(stderr)});\nprocess.exitCode = ${exitCode};\n`,
+    );
+    await chmod(command, 0o700);
+    const path = join(directory, "campaign.sqlite");
+    const owner = await open(path, {
+      create: {
+        task,
+        settings: { ...settings, research: { model: "fixture", command } },
+        mode: { role: "review", input: { argument: "Fixture only" } },
+      },
+    });
+    try {
+      await owner.root.waitForIdle(context);
+      const report = await owner.root.commit(
+        (tx) => readReport(tx, owner.root.id, { records: true }),
+        context,
+      );
+      expect(report.status.status).toBe("blocked");
+      expect(report.status.error).toStartWith(
+        fallback ? stderr : "Selected model is at capacity.",
+      );
+      const log = report.records!.find(CodexLog.is)!;
+      expect(log.data).toMatchObject({ stdout: output, stderr, exitCode });
+      expect(log.data.outputTruncated).toBeUndefined();
+      expect(
+        report.tasks!.find(({ id }) => id === log.byTaskId)!.state,
+      ).toMatchObject({
+        status: "terminal",
+        outcome: {
+          status: "failed",
+          error: {
+            message: fallback
+              ? stderr
+              : reason.length > 4096
+                ? `${reason.slice(0, 4096)}… [see Codex log]`
+                : reason,
+          },
+        },
+      });
+      expect(report.result).toBeUndefined();
+    } finally {
+      await owner.close();
+    }
+  },
+);
+
+test.each(["stdout", "stderr"] as const)(
+  "Codex %s overflow kills a lingering process and rejects an early answer",
+  async (stream) => {
+    const directory = await temporaryDirectory("codex-output-limit-");
+    const command = join(directory, "codex-fixture");
+    const output =
+      [
+        {
+          type: "item.completed",
+          item: {
+            type: "agent_message",
+            text: JSON.stringify({
+              verdict: "PASS",
+              report: "Checked",
+              premises: [],
+              passages: [],
+            }),
+          },
+        },
+        { type: "turn.completed", usage: { output_tokens: 7 } },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n";
+    await writeFile(
+      command,
+      `#!${process.execPath}\nimport {writeSync} from "node:fs";\nprocess.on("SIGTERM",()=>{});\nwriteSync(1,${JSON.stringify(output)});\nsetInterval(()=>{},1000);\nconst chunk="x".repeat(65536);\ntry { for(let i=0;i<300;i++)writeSync(${stream === "stdout" ? 1 : 2},chunk); } catch(error) { if(error.code!=="EPIPE") throw error; }\n`,
+    );
+    await chmod(command, 0o700);
+    const path = join(directory, "campaign.sqlite");
+    const owner = await open(path, {
+      create: {
+        task,
+        settings: { ...settings, research: { model: "fixture", command } },
+        mode: { role: "review", input: { argument: "Fixture only" } },
+      },
+    });
+    try {
+      await owner.root.waitForIdle(context);
+      const report = await owner.root.commit(
+        (tx) => readReport(tx, owner.root.id, { records: true }),
+        context,
+      );
+      expect(report.status.status).toBe("blocked");
+      expect(report.status.error).toContain("output capture limit");
+      const log = report.records!.find(CodexLog.is)!.data;
+      expect(log.outputTruncated).toBe(true);
+      expect(log.exitCode).toBeNull();
+      expect(log.usage).toEqual({ output_tokens: 7 });
+      expect(log.stdout.length).toBeLessThanOrEqual(16 * 1024 * 1024);
+      expect(log.stderr.length).toBeLessThanOrEqual(1024 * 1024);
+      expect(report.result).toBeUndefined();
+    } finally {
+      await owner.close();
+    }
+  },
+);
 
 test.each([
   ["JSONL", "research"],
@@ -80,6 +241,8 @@ test.each([
         readReport(tx, root, { records: true }),
       );
       expect(report.status.status).toBe("blocked");
+      if (failure === "signal")
+        expect(report.status.error).toBe("fixture diagnostic");
       const logs = report.records!.filter(CodexLog.is);
       expect(logs).toHaveLength(1);
       expect(logs[0]!.data).toMatchObject({
@@ -230,3 +393,63 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
+
+test.each([false, true])(
+  "Codex cleanup failure preserves result and primary error: %s",
+  async (failed) => {
+    const directory = await temporaryDirectory("codex-cleanup-");
+    const command = join(directory, "codex-fixture");
+    const output = [
+      {
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: JSON.stringify({
+            verdict: "PASS",
+            report: "Checked",
+            premises: [],
+            passages: [],
+          }),
+        },
+      },
+      { type: "turn.completed", usage: { output_tokens: 7 } },
+      ...(failed ? [{ type: "turn.failed" }] : []),
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    await writeFile(
+      command,
+      `#!${process.execPath}\nimport { chmodSync } from "node:fs";\nchmodSync(process.cwd(), 0o500);\nconsole.log(${JSON.stringify(output)});\n`,
+    );
+    await chmod(command, 0o700);
+    const owner = await open(join(directory, "campaign.sqlite"), {
+      create: {
+        task,
+        settings: { ...settings, research: { model: "fixture", command } },
+        mode: { role: "review", input: { argument: "Fixture only" } },
+      },
+    });
+    let workspace: string | undefined;
+    try {
+      await owner.root.waitForIdle(context);
+      const report = await owner.root.commit(
+        (tx) => readReport(tx, owner.root.id, { records: true }),
+        context,
+      );
+      workspace = report.records!.find(CodexRequest.is)!.data.workspace;
+      expect(report.records!.find(CodexLog.is)!.data.usage).toEqual({
+        output_tokens: 7,
+      });
+      await access(workspace);
+      if (failed)
+        expect(report.status.error).toContain("Codex reported a failed turn");
+      else expect(report.result).toMatchObject({ verdict: "PASS" });
+    } finally {
+      await owner.close();
+      if (workspace) {
+        await chmod(workspace, 0o700);
+        await rm(workspace, { recursive: true, force: true });
+      }
+    }
+  },
+);

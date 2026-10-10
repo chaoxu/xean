@@ -1,12 +1,10 @@
 import { resolve } from "node:path";
 import { createRuntime, readSettings } from "../../src/config.ts";
-import { verifyInstall } from "../../scripts/dependencies.ts";
 import { cliModels } from "./models.ts";
 
 /** Local setup only: never creates a campaign or invokes a provider or Codex. */
 export async function doctor(settingsPath: string, key?: string) {
   try {
-    await verifyInstall();
     let value: unknown;
     try {
       value = await Bun.file(resolve(settingsPath)).json();

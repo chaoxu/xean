@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "./directory.ts";
+import { cliModels } from "../apps/cli/models.ts";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import {
@@ -44,7 +44,8 @@ const complete = (
 };
 
 test("Pi login credentials persist and refresh across Xean model runtimes", async () => {
-  const authPath = join(await temporaryDirectory("xean-login-"), "auth.json");
+  const directory = await temporaryDirectory("xean-login-");
+  const authPath = join(directory, "auth.json");
   const faux = fauxProvider({
     provider: "anthropic",
     models: [{ id: "fixture" }],
@@ -78,13 +79,16 @@ test("Pi login credentials persist and refresh across Xean model runtimes", asyn
     },
   };
   const reopen = async () => {
-    const models = await ModelRuntime.create({
-      authPath,
-      modelsPath: null,
-      refreshOnCreate: false,
-    });
-    models.registerNativeProvider(provider);
-    return models;
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    try {
+      const models = await cliModels();
+      models.setProvider(provider);
+      return models;
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
   };
   const first = await reopen();
   await first.login("anthropic", "oauth", {
@@ -124,10 +128,14 @@ test("Pi login credentials persist and refresh across Xean model runtimes", asyn
   expect(await (await reopen()).checkAuth("anthropic")).toBeUndefined();
 });
 
-test("settings reject credential literals, unsafe endpoints, and non-ChatGPT browser routes", () => {
-  expect(() =>
-    readSettings({ ...defaultSettings, apiKey: "not-a-setting" }),
-  ).toThrow("Invalid research settings");
+test("settings reject unsupported fields, unsafe endpoints, and non-ChatGPT browser routes", () => {
+  for (const unsupported of [
+    { apiKey: "not-a-setting" },
+    { researchPolicy: "model-led" },
+  ])
+    expect(() => readSettings({ ...defaultSettings, ...unsupported })).toThrow(
+      "Invalid research settings",
+    );
   for (const baseUrl of [
     "file:///tmp/endpoint",
     "https://user:pass@example.test",

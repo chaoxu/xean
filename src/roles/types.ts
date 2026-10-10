@@ -5,10 +5,11 @@ import type {
 } from "@earendil-works/pi-durable";
 import type { ProfileName, Profile } from "../config.ts";
 import type { SolverResult } from "../math/contracts.ts";
+import type { SubmissionResult } from "../math/results.ts";
 
-/** Expected execution failure; Pi can publish completed checks with the error. */
+/** Expected execution failure; completed checks or submissions can accompany it. */
 export class RoleFailure extends Error {
-  result?: Extract<SolverResult, { kind: "verification" }>;
+  result?: Extract<SolverResult, { kind: "verification" }> | SubmissionResult;
 }
 
 export type Profiles = Record<ProfileName, Profile>;

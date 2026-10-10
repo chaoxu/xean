@@ -67,7 +67,24 @@ export const noteDraftSchema = object({
   ...noteContentSchema.properties,
   support: Type.Array(text),
 });
+const revision = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+export const noteEditSchema = object({
+  id: text,
+  revision,
+  cosmetic: Type.Optional(
+    Type.Boolean({
+      description:
+        "Trusted presentation-only text change preserving mathematical content. Omit or use false for mathematical edits. Support changes always require verification.",
+    }),
+  ),
+  ...Type.Partial(noteContentSchema).properties,
+  support: Type.Optional(Type.Array(text)),
+  candidate: Type.Optional(Type.Boolean()),
+  retired: Type.Optional(Type.Boolean()),
+});
+export type NoteEdit = Static<typeof noteEditSchema>;
 export const explorationSchema = object({
+  edits: Type.Optional(Type.Array(noteEditSchema)),
   notes: Type.Array(noteDraftSchema),
   candidate: Type.Boolean(),
 });
@@ -78,7 +95,6 @@ const correctionSchema = object({
     noteContentSchema.properties.detailedSummary,
     Type.Null(),
   ]),
-  text: Type.Union([noteContentSchema.properties.text, Type.Null()]),
 });
 export const verdictSchema = object({
   verdict: StringEnum(["PASS", "FAIL", "INCONCLUSIVE"] as const),
@@ -150,11 +166,13 @@ export type ReviewInput = { task: Task; argument: string };
 const recordedVerdict = Type.Omit(verdictSchema, ["correction"], {
   additionalProperties: false,
 });
-const revision = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 export const checkSchema = object({
   noteId: text,
   correction: Type.Optional(
-    object({ ...Type.Partial(noteContentSchema).properties, revision }),
+    object({
+      ...Type.Partial(Type.Omit(noteContentSchema, ["text"])).properties,
+      revision,
+    }),
   ),
   correctness: Type.Optional(
     Type.Omit(correctnessSchema, ["correction"], {
@@ -182,11 +200,16 @@ export type Check = Static<typeof checkSchema>;
 export type Note = Exploration["notes"][number] & {
   revision: number;
   imported: boolean;
-  checks: Omit<Check, "noteId" | "correction">[];
+  checks: Omit<Check, "noteId" | "correction">;
   verified: boolean;
   dead: boolean;
   accepted: boolean;
   candidate: boolean;
+  retired: boolean;
+  /** Native publication marker for relevant mathematical changes. */
+  mathRevision?: number;
+  /** New quotations for the exact premises since the last source assessment. */
+  sourceChanged?: boolean;
 };
 export const explorePlan = object({
   kind: Type.Literal("explorer"),
@@ -261,7 +284,15 @@ export const submissionSchemas = {
 export type SolverInput = { task: Task; notes: Note[] };
 export type NoteInfo = Pick<
   Note,
-  "id" | "summary" | "support" | "imported" | "verified" | "dead" | "candidate"
+  | "id"
+  | "summary"
+  | "support"
+  | "imported"
+  | "verified"
+  | "dead"
+  | "candidate"
+  | "revision"
+  | "retired"
 > & { passed: VerificationStage[]; feedback: string[] };
 export type ExplorerInput = SolverInput & {
   guidance: string;

@@ -1,18 +1,20 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { open, inspect } from "../../src/host.ts";
-import type { Definition } from "../../src/definition.ts";
+import { open, inspect, exportAccepted } from "../../src/host.ts";
+import { type Definition } from "../../src/definition.ts";
 import { readCommand } from "../../src/math/commands.ts";
-import { acceptedArgument } from "../../src/math/argument.ts";
-import { readReport } from "../../src/report.ts";
+import { readReport, readStatus } from "../../src/report.ts";
 import { version } from "../../package.json";
-import { requestOwner, serveControl, type OwnerCommand } from "./control.ts";
-import { controlCommand, observeOwner, type Owner } from "./lifecycle.ts";
+import { requestOwner, type OwnerCommand } from "./control.ts";
+import {
+  controlCommand,
+  observeOwner,
+  runOwner,
+  type Owner,
+} from "./lifecycle.ts";
 import { doctor } from "./doctor.ts";
 import { cliModels } from "./models.ts";
-import { verifyInstall } from "../../scripts/dependencies.ts";
 
 const print = (value: unknown) =>
   Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
@@ -26,8 +28,7 @@ const program = new Command("xean")
   .option("--usage-prefix <prefix>", "Execution-specific usage attribution")
   .option("--key-stdin", "Read this owner's provider credential from stdin")
   .configureHelp({ showGlobalOptions: true })
-  .hook("preAction", async (_program, action) => {
-    if (action.name() !== "doctor") await verifyInstall();
+  .hook("preAction", (_program, action) => {
     if (
       program.opts<Flags>().expectedOwnerId !== undefined &&
       !["resume", "pause", "cancel", "submit", "guide", "correct"].includes(
@@ -87,35 +88,12 @@ async function runCampaign(
   create?: Definition,
   resume = false,
 ) {
-  const flags = program.opts<Flags>();
-  return withOwner(target, create, async (owner, path) => {
-    const control = await serveControl(
-      path,
-      (command) => controlCommand(owner, command),
-      flags.ownerId,
-    );
-    let shutdown: Promise<unknown> | undefined;
-    const interrupt = () => {
-      shutdown ??= Promise.all([control.close(true), owner.close()]);
-      void shutdown.catch(() => {});
-    };
-    process.once("SIGINT", interrupt);
-    process.once("SIGTERM", interrupt);
-    try {
-      if (resume) await controlCommand(owner, { kind: "resume" });
-      else await owner.root.waitForIdle(BACKGROUND_CONTEXT);
-      await control.close();
-      if (!shutdown) await print((await observeOwner(owner)).status);
-    } catch (error) {
-      if (!shutdown) throw error;
-      process.exitCode = 130;
-    } finally {
-      process.off("SIGINT", interrupt);
-      process.off("SIGTERM", interrupt);
-      await control.close(true);
-      await shutdown;
-    }
-  });
+  return withOwner(target, create, (owner, path) =>
+    runOwner(owner, path, async () => print(await observeOwner(owner)), {
+      resume,
+      ownerId: program.opts<Flags>().ownerId,
+    }),
+  );
 }
 
 async function send(target: string, command: OwnerCommand) {
@@ -151,7 +129,7 @@ program
       settings: await read(settings),
     };
     await withOwner(campaign, definition, async (owner) =>
-      print((await observeOwner(owner)).status),
+      print(await observeOwner(owner)),
     );
   });
 program.command("run <campaign>").action(async (campaign: string) => {
@@ -165,8 +143,8 @@ for (const kind of ["pause", "cancel"] as const)
     await send(campaign, { kind });
   });
 program.command("status <campaign>").action(async (campaign: string) => {
-  const report = await inspect(campaignPath(campaign), readReport);
-  await print({ observedAt: new Date().toISOString(), ...report.status });
+  const status = await inspect(campaignPath(campaign), readStatus);
+  await print({ observedAt: new Date().toISOString(), ...status });
 });
 program
   .command("inspect <campaign>")
@@ -179,13 +157,8 @@ program
     );
   });
 program.command("export <campaign>").action(async (campaign: string) => {
-  const report = await inspect(campaignPath(campaign), readReport);
-  if (report.status.acceptedNoteId === null)
-    throw new Error("No accepted argument");
-  await Bun.write(
-    Bun.stdout,
-    acceptedArgument(report.notes, report.status.acceptedNoteId) + "\n",
-  );
+  const argument = await exportAccepted(campaignPath(campaign));
+  await Bun.write(Bun.stdout, argument + "\n");
 });
 program
   .command("role <name> <input> <campaign> <settings>")

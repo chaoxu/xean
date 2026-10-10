@@ -17,7 +17,7 @@ in pkgs.runCommand "xean-check" {
   cp -R ${source} source
   chmod -R u+w source
   cd source
-  ${if mode == "distribution" then "bun --no-install --no-env-file scripts/check-distribution.ts"
+  ${if mode == "distribution" then "bun --no-install --no-env-file tests/distribution.ts"
     else "bun --no-install --no-env-file scripts/dev.ts ${mode} ${tests}"}
   touch "$out"
 ''

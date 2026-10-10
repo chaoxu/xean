@@ -6,12 +6,17 @@ further work. Each campaign runs Coordinator, one worker, then Coordinator again
 A worker may parallelize its own internal work. Pi owns tasks, conversations,
 checkpoints, cancellation, and storage.
 
+Use fresh campaigns with this release. Keep existing campaigns with their frozen
+runtimes. Pi document versioning rejects 3.0.0 databases. The qualification results
+below identify the revisions and provider configurations tested.
+
 The implementation includes staged verification, blind reconstruction, imported
-notes, harmless corrections, optional literature and Codex implementation work,
-independent review, a CLI, and Observe. Exact-task acceptance requires the
+notes, stable-ID edits, optional literature and Codex implementation work,
+independent review, and a CLI. Exact-task acceptance requires the
 candidate and its generated support to pass the required checks. Independent
 review remains a separate result. The [capability inventory](docs/parity.md)
 maps this behavior to implementation and tests.
+See the [changelog](docs/changelog.md) for changes since 3.0.0.
 Unimplemented proposals live in [design ideas](docs/design-ideas.md).
 
 ## Principles
@@ -22,27 +27,50 @@ through an index, detailed summaries, and full text, including failed approaches
 Pi supplies durable execution and storage. Xean keeps research policy in a small
 layer over Pi's native APIs.
 
+Xean assumes a trusted operator and trusted application, dependency, replacement,
+and generated code. Isolation from malicious code or users is outside Xean's scope.
+Validation addresses model mistakes, invalid outputs, stale revisions,
+interrupted operations, and accidental concurrent ownership. Mathematical
+claims still require verification.
+
+The native Pi Explorer continues within the same conversation so later responses can develop
+and revise earlier reasoning. Private partial notes preserve intermediate work
+while exploration continues. A later worker starts a fresh conversation from the
+published notebook, without automatically inheriting the earlier worker's private
+conversation. Prompt caching can reduce the cost of reusing prior
+context, but new reasoning and output still cost tokens, so continuation is
+bounded. Worker simplifications should preserve this opportunity for further
+exploration. A valid partial submission alone does not establish that the worker
+has explored enough.
+
 Acceptance requires checks across the complete generated dependency chain.
 Blind reconstruction receives exact statements and approved premises without
 the original proofs. INCONCLUSIVE remains unresolved. Model judgments can be
 wrong, and independent review is recorded separately from internal acceptance.
 
-Xean 3.0 replaces the previous implementation and uses new APIs, settings, and
-campaign formats. Start new campaigns with this release. Preserve earlier
-campaigns together with their original runtimes.
+Explorer repairs notes through `edits`, retaining their IDs. Each edit supplies
+the expected `revision` and only changed fields. A worker publishes its creations
+and edits atomically. Retiring a note hides it from routine discovery and preserves
+historical reads. Existing consumers can still verify their retired dependencies.
+Caller corrections preserve an existing import grant. Explorer edits to its
+mathematical text or support revoke that grant. Mathematical edits clear affected
+checks. Explorer and caller edits may mark presentation-only text changes with
+`cosmetic: true`. Xean trusts that classification and preserves checks and import
+trust. Support changes always invalidate affected checks. Unclassified text
+changes are mathematical edits.
+Verifier may correct summaries on PASS, while proof text and dependencies change
+through edits.
+
+Completed assessments of unchanged inputs stay closed. Coordinator chooses
+mathematical repairs, relevant source retrieval, another approach, or idle.
+New quotations matching a note's exact premises can reopen an eligible
+INCONCLUSIVE source check. Changing receipt IDs, making cosmetic text edits, or
+adding unrelated quotations does not reopen it.
 
 ## Run a campaign
 
 Install [Bun](https://bun.sh/docs/installation) 1.4.2 or later on macOS or Linux.
-Download the source archive from [Releases](https://github.com/chaoxu/xean/releases)
-and extract it, or clone the repository:
-
-```sh
-git clone https://github.com/chaoxu/xean.git
-cd xean
-```
-
-From the source root, install dependencies:
+Run these commands from the source root:
 
 ```sh
 bun install --production --frozen-lockfile --ignore-scripts
@@ -62,10 +90,10 @@ bun run xean run .xean/demo/campaign.sqlite
 bun run xean status .xean/demo/campaign.sqlite
 ```
 
-`init` freezes the task and settings without model calls. `doctor` checks local
-setup without testing a live provider or Codex login. `run` performs research.
-Read the returned JSON status: a successful CLI exit can report a blocked
-campaign, including when a provider is not configured.
+`init` freezes the task and settings without model calls. `doctor` checks local setup without testing a live provider or Codex login. `run` performs research.
+Read the returned JSON status: a successful CLI exit can report `blocked` or
+`idle`. Returning `work: null` leaves a campaign idle without claiming completion.
+Add guidance or use `resume` to request another decision.
 Pausing retains inputs and worker outcomes. Resume makes a fresh decision over
 that accumulated state and explicitly replaces any failed decision.
 Campaign arguments accept explicit paths or names under `--campaign-dir`, which
@@ -107,20 +135,29 @@ implementation work in a retained workspace.
 
 For a one-response ChatGPT Web Explorer, set
 `chatgpt: {"baseUrl":"http://127.0.0.1:17841/v1","model":"chatgpt-web/gpt-6-pro"}`
-in settings. Xean calls the external `codex-chatgpt-web` service's non-streaming
-Responses API and validates its JSON answer. Run that service separately in
-`browser-only` mode. This Explorer receives the
-note index and has no note reader or further browser attempt.
+in settings. Xean calls the external
+[`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) service's
+non-streaming Responses API and validates its JSON answer. Run that service
+separately in `browser-only` mode with its authenticated browser available.
+The bridge must preserve the original JSON answer text and support ChatGPT's
+current model picker. A `model_version_unavailable` error means the bridge
+could not confirm the requested model and left the prompt unsent. Repair the
+bridge before starting a fresh campaign. This Explorer receives the note index
+and has no note reader or further browser attempt. It can create new notes. Edits
+to existing notes require the native Pi Explorer or a caller correction.
 
 ## Library
 
 [The public entry point](src/index.ts) exports `open`, `inspect`, `createResearch`,
 mathematical types, note projections, and reports. Construct the built-in solver
 through `open`, which returns the native Harness, root Conversation, workflow,
-and `close`. Coordinator returns one `work` request, or `work: null` to wait.
+and `close`. Coordinator returns one `work` request, or `work: null` to become idle.
 Replacement roles follow the same sequential outer loop. `open` accepts native Pi `models`, a `roles` callback that
 receives the built-in functions, and a custom `Research` implementation through
 `research`. Register custom tools and tasks through Pi's native `registry` option.
+Call `open` for separate databases to run several campaigns in one process.
+Pass the same Pi `models` instance to share its provider registry. Each campaign
+keeps its own Harness and sequential workflow. The CLI runs one campaign per invocation.
 
 Notes store `summary`, `detailedSummary`, and authoritative free-form `text`.
 The text can record proofs, conjectures, observations, questions, or failed
@@ -132,9 +169,25 @@ use it to distinguish granted support from additional facts that need a proof
 or a separate supporting lemma.
 
 Explorer continues its Pi conversation after partial submissions. A claimed
-complete solution, an empty submission, or reaching the response allowance ends
-the invocation. Pi retains earlier private submissions and publishes the
-accumulated notes when the worker returns.
+complete solution, an empty notes-and-edits submission, or reaching the response
+allowance ends the invocation. Repeated private edits merge changed fields against
+the same expected public revision. Pi retains this private progress until the
+worker publishes its complete result.
+If a provider failure ends the invocation and the submissions still validate
+against the current notebook, the worker publishes those submissions atomically
+with its failed status and error.
+
+The native Pi Explorer defaults to eight model responses and up to four note-read
+calls. An empty notebook disables reading. ChatGPT Web uses one response without
+reads. Each read can request several notes. Reads and rejected submissions consume responses,
+and reading is disabled on the final response. These are ceilings, not a minimum
+amount of exploration. A model can still end early by claiming a complete solution
+or submitting an empty batch.
+
+Other native Pi role conversations allow up to sixteen responses. Coordinator
+allows up to four note-read calls. Completed and token-truncated responses count
+toward the limit, including responses with rejected submissions. Admitted reads
+also count across recovery. Native Pi handles provider-error retries separately.
 
 Blind reconstruction assigns batches in dependency order. Code greedily packs
 notes using original text lengths, Pi's token estimator, and the configured
@@ -150,9 +203,9 @@ Tools from truncated responses never execute.
 Pi reuses committed proofs and comparisons after reopening, and an ordinary
 failure retains earlier completed checks.
 If an unresolved generated claim supports a later proof group, Verifier finishes
-the current group's comparisons and returns its checks. Coordinator then decides
-whether to retry, repair the mathematics, or continue other work. Further worker
-admissions use the existing outer round allowance.
+the current group's comparisons and returns its checks. Coordinator then chooses
+a mathematical repair or other work. Further worker admissions use the existing
+outer round allowance.
 
 The [model-free example](examples/model-free.ts) supplies scripted roles and
 prints the resulting campaign status without provider credentials. Its fixed
@@ -186,42 +239,58 @@ console.log((await inspect(path, readReport)).status);
 ```
 
 The host uses Pi's native SQLite adapter with FULL synchronization and excludes
-a second owner. Notes resolve from Pi's committed submissions and task outcomes.
-Imports and corrections are Pi entries. By default, `inspect` reads a consistent backup
-through a Pi Session without recovering live work.
+a second owner. A rewindable Pi catalog and per-note body Documents hold the
+current notebook. Native submissions and outcomes retain execution receipts.
+Workers read the notebook at their frozen Entry cutoff.
+`inspect` reads a consistent backup without recovering live work. Acceptance
+atomically checks the current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat, except
 that an ambiguously sent ChatGPT Web request is rejected on recovery.
 Completed source checks are memoized before later verification stages. Codex
 executes inside its worker and may repeat if interrupted before that boundary
-or worker completion. The built-in Verifier preserves structurally validated
-completed checks when a stage fails. It publishes those checks with the error
-in a failed native task outcome. Cancellation, invalid final publications, and
-faults in opaque custom roles publish no partial checks. A new Verifier reuses
-completed PASS checks and final source verdicts. Cleanup errors use Pi's nonfatal
+or worker completion. The built-in Explorer preserves validated native submissions
+when a provider failure ends its invocation. Its failed outcome references the
+existing Pi Entries. The built-in Verifier preserves structurally validated
+completed checks when a stage fails. Both publish retained results with the error
+in a failed native task outcome only if publication validation succeeds.
+Cancellation, invalid final publications,
+and faults in opaque custom roles publish no partial results. A new Verifier reuses
+applicable completed checks. Cleanup errors use Pi's nonfatal
 reporting, preserving submitted results and the primary failure when a call fails.
-Cancellation stops the Codex
-process tree and may leave usage unknown. Implementation artifacts remain in
-their workspace.
+Cancellation stops the Codex process group and may leave usage unknown.
+Detached descendants require external process containment. Implementation
+artifacts remain in their workspace.
 
-## Observation and experiments
+Codex output capture allows 16 Mi decoded characters on stdout and 1 Mi on stderr.
+Exceeding either limit stops the process group and records a failed call with
+truncated output. Usage received before the limit remains in the receipt.
+Failed calls retain their raw logs and report the provider's error message when available.
+Each Pi Session caches up to 128 document trackers and reloads evicted documents from storage.
+This limits the number of cached documents, not their total size.
+Completed roles release their provider session resources.
 
-Observe runs separately. Save a configuration file such as `observe.json` containing
-`[{"id":"demo","database":".xean/demo/campaign.sqlite"}]`, with database paths
-relative to that file, then run:
+## Inspection and experiments
+
+Agents inspect campaigns through the CLI on the campaign host:
 
 ```sh
-bun run observe observe.json
+bun run xean status .xean/demo/campaign.sqlite
+bun run xean inspect .xean/demo/campaign.sqlite
+bun run xean inspect .xean/demo/campaign.sqlite --records
+bun run xean export .xean/demo/campaign.sqlite
 ```
 
-It listens on `127.0.0.1:8797` and serves `/api/runs` and `/api/runs/ID`, with `?view=status`
-for compact reports. Run it on the campaign host and arrange remote access
-yourself, for example with an SSH tunnel. Independent-review databases can be
-listed as separate sources. The viewer shows note indexes, detailed summaries,
-full notes, checks, dependencies, and usage.
-Each refresh uses a fresh Pi Session on the live database, with no database copy.
-Concurrent campaign updates can produce a temporarily inconsistent display.
-CLI inspection and export retain consistent snapshots.
+Use `status` for compact JSON with progress, failures, and verification issues.
+The `init`, `run`, `role`, `review`, `pause`, `resume`, and `cancel` commands also
+return compact status. These responses skip transcript accounting and full
+work-history details. Use `inspect` for usage, full notes, checks, dependencies,
+and standalone results.
+Request `--records` only when native tasks and transcripts are needed. `export`
+returns the accepted argument and its dependency chain from the pinned snapshot
+as Markdown. These reads
+use consistent snapshots without recovering work or calling models. Inspect
+historical campaigns with their matching frozen runtime.
 
 Usage reports count committed assistant responses and recorded Codex invocations.
 They cannot establish every outbound request or provider retry. Direct ChatGPT
@@ -238,8 +307,15 @@ from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
 including a Verifier. Empty waits and internal proof or comparison calls add
 no rounds. The count derives from Pi's worker records and remains outside model
 inputs. Response and usage counters remain observational.
-[prompt-eval.ts](scripts/prompt-eval.ts) takes settings and a new output directory
-to prepare frozen cases and commands without model calls.
+
+For prompt checks, prepare a role input and run the ordinary standalone command:
+
+```sh
+bun run xean role verifier input.json campaign.sqlite settings.json
+```
+
+Use a fresh campaign path for each case and keep expected answers outside the input.
+Pi stores the task, role input, and settings in the campaign.
 
 ## Checks and current limits
 
@@ -257,13 +333,37 @@ with small standalone roles, using the CLI `role` command and frozen inputs.
 Inspect their actual submissions before running a complete campaign smoke.
 Use the golden problems after those checks pass.
 
-`check` runs TypeScript, formatting, dependency integrity, and scripted tests.
+During development, run a selected test file with
+`bun scripts/dev.ts test ./tests/apps.test.ts`. Use
+`bun run check ./tests/apps.test.ts` to include types and formatting. Keep the `./` prefix so Bun treats the argument as a file path.
+Run the full check and distribution checks when the change is ready for review.
+
+`check` runs TypeScript, formatting, and scripted tests.
 `check:distribution` checks an unpacked source archive with production dependencies,
-including the model-free workflow, CLI, local observation, browser assets, and licenses.
+including the Pi and role contract tests, model-free workflow, CLI inspection
+and export, and licenses.
 `pack` runs the same distribution check and writes the source archive under
-`dist/`. The current Pi pin passed the source-package smoke on macOS ARM64.
-The 3.0 release checks also covered Linux ARM64 and x86-64. These checks used
-Bun 1.4.2 with only Bun on `PATH` and no provider credentials.
+`dist/`. The 3.1 qualification passed 203 scripted tests on fresh production
+installs on macOS ARM64, Linux ARM64, and Linux x86-64 with Bun 1.4.2 and no
+provider credentials. The x86-64 suite used tmpfs. On Btrfs, 26 tests exceeded
+the default five-second timeout. With longer allowances, all cases passed
+across a full run and an isolated rerun.
+Sixteen additional SQLite cases passed crash recovery, writer exclusion,
+dependency invalidation, and unchanged-INCONCLUSIVE checks.
+
+The 3.1 native-provider smoke passed note reading, an elementary campaign,
+and credential-free reopening with a saved Pi OpenAI Codex login and
+`openai-codex/gpt-5.6-luna` at `max` reasoning. At the release qualification
+snapshot, two of six fresh `gpt-6-astra`/`max` golden campaigns through
+codex-lb's OpenAI `/v1` route and SSE had passed internal acceptance,
+independent review, and credential-free reopening.
+The other four remained in progress. These are model-based assessments.
+Qualification receipts remain under `runs/release-3.1.0-qualification-20261010/`
+and `runs/release-3.1.0-golden-20261010-r01/`, outside the source package.
+
+Explorer publication after provider failures and Codex error reporting have
+contract-test coverage.
+The live qualifications below used earlier revisions.
 
 At revision `0e74fc7`, all six sequential golden campaigns reached internal
 acceptance and independent PASS review, then reopened without credentials.
@@ -283,11 +383,15 @@ completed-result recovery, and dependency-complete export.
 
 Public OpenAI, the new direct OpenAI subscription login, fresh login, OAuth
 refresh, Anthropic, and Google remain unqualified live. Available credentials
-covered only the gateway and existing OpenAI Codex login. The latest ChatGPT Web
-test failed with `model_version_unavailable` before the service sent the message.
-Xean made no second browser request and reopened the failed campaign unchanged.
-Successful current-build ChatGPT Web generation and live cancellation remain
-unqualified. Literature retrieval passed with independently checked quotations.
+covered only the gateway and existing OpenAI Codex login for those native-provider
+checks. A later ChatGPT Web check at `7e6e5fd` passed after repairing the external
+bridge's model selectors. One standalone Explorer response produced a proof
+note, which passed the native Verifier through reconstruction. The saved ChatGPT
+conversation matched the complete prompt and answer and reported `gpt-6-pro`.
+Both completed roles reopened without credentials or further HTTP requests.
+This check covered standalone roles. Live browser cancellation remains
+unqualified. Receipts are in `runs/chatgpt-web-fix-20261008/`.
+Literature retrieval passed with independently checked quotations.
 At `e40b85e`, the implementation worker passed on native macOS, including
 independent artifact checks and credential-free reopening. The tested Linux
 container could not create Codex's sandbox namespace, so implementation work
@@ -296,8 +400,9 @@ Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the sou
 package.
 
 Pi packages are built together from upstream commit
-`ce950d78f424dcaf9f5d6a03ce80ab141130eb1d` using Pi's `pack:packages` command.
-This commit follows the 1.1.0 release. The packages include frozen model data.
+`eba849739511223c51a62bbd7e3f1c00f99fb1d0` using Pi's `pack:packages` command.
+This is an unreleased snapshot after the 1.1.0 release. The packages include frozen
+model data.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records the adapter fixes and
 the Pi Durable request hook used to select a profile's stream.

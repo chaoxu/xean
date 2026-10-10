@@ -8,7 +8,7 @@ import {
   type CodexInput,
   type SolverResult,
 } from "../math/contracts.ts";
-import { validateNotes } from "../math/notes.ts";
+import { validateResult } from "../math/notes.ts";
 
 /** Codex owns implementation and tool use; Xean publishes its notes as one result. */
 export function codexWorker(askCodex: AskCodex) {
@@ -28,9 +28,6 @@ export function codexWorker(askCodex: AskCodex) {
       runtime,
       context,
     );
-    validateNotes(value.notes, input.notes);
-    if (value.candidate && value.notes.length === 0)
-      throw new Error("A solution claim needs a new note");
-    return { kind: "notes", ...value };
+    return validateResult({ kind: "notes", ...value }, input.notes);
   };
 }
