@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Context, JsonValue } from "@earendil-works/chord";
-import type { Static, TSchema } from "@earendil-works/pi-ai";
+import {
+  validateToolArguments,
+  type Static,
+  type TSchema,
+} from "@earendil-works/pi-ai";
+import { getJsonSchemaToolParameters } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { defineEntry } from "@earendil-works/pi-durable";
 import { decode, type Exploration } from "../math/contracts.ts";
 import { RoleFailure, type RoleRuntime } from "./types.ts";
@@ -116,6 +121,11 @@ export function codexCalls(options: {
     const settings = mode === "worker" ? options.codex : options.research;
     if (!settings) throw new Error(`Codex ${mode} is disabled`);
     const shell = mode === "worker";
+    const tool = {
+      name: "codex_output",
+      description: "Codex result",
+      parameters: schema,
+    };
     const parent = shell ? settings.workspace : tmpdir();
     if (!parent || !isAbsolute(parent))
       throw new Error("codex.workspace must be an absolute directory");
@@ -131,7 +141,12 @@ export function codexCalls(options: {
         );
       const operationId = crypto.randomUUID();
       const schemaPath = join(workspace, `.codex-${operationId}.schema.json`);
-      await writeFile(schemaPath, JSON.stringify(schema), { mode: 0o600 });
+      // Research schemas are already strict and may contain unions Pi cannot convert.
+      await writeFile(
+        schemaPath,
+        JSON.stringify(getJsonSchemaToolParameters(tool, shell)),
+        { mode: 0o600 },
+      );
       const reasoning = settings.reasoning ?? "max";
       const overrides = {
         web_search: shell ? "disabled" : "live",
@@ -240,7 +255,14 @@ export function codexCalls(options: {
         );
       }
       if (transcript.error) throw transcript.error;
-      const value = decode(schema, transcript.value);
+      const value: Static<S> = shell
+        ? validateToolArguments(tool, {
+            type: "toolCall",
+            id: operationId,
+            name: tool.name,
+            arguments: transcript.value as Record<string, JsonValue>,
+          })
+        : decode(schema, transcript.value);
       if (shell)
         for (const note of (value as Exploration).notes)
           note.text += `\n\nArtifacts: ${workspace}`;
