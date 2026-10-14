@@ -6,17 +6,18 @@ the latest release. Proposed changes are in the [milestones](milestones.md).
 
 ## Can Xean write and run code?
 
-The native Pi Explorer and Verifier reason without shell tools. Register a Codex
-or Claude implementation or verification backend to let Coordinator delegate
+The native Pi Explorer and Verifier reason without shell tools. Register an acpx
+implementation or verification backend to let Coordinator delegate
 programming and computational checks. Implementation workers return ordinary
 unverified notes. External Verifiers issue PASS, FAIL, or INCONCLUSIVE under the
 same mathematical rules. Programs and outputs remain in retained workspaces.
 
 Use an explicit role module as shown in the
 [backend setup instructions](../README.md#optional-role-backends), then pass
-`--roles ./roles.ts` when running work. Install and authenticate the chosen CLI
-separately. Native Pi providers such as `openai-codex` select models, while
-external role factories select tool-using CLIs.
+`--roles ./roles.ts` when running work. Install acpx and authenticate the chosen
+agent separately. The caller configures its tools, permissions, and sandbox.
+Native Pi providers such as `openai-codex` select models. The acpx plugin delegates
+external roles to configured ACP agents.
 
 The default core uses native Pi roles and closed-book source checking. The
 [bounded runner](../scripts/bounded-solve.ts) keeps that default and rejects
@@ -67,7 +68,8 @@ does not prove its claim. The external Verifier must check that the program cove
 the required cases and establishes the exact claim, retaining the checker, inputs,
 commands, outputs, and environment. Missing proof steps require repairs to the
 authoritative note. Dependency checks and the remaining acceptance stages still
-apply. The separate independent reviewer uses an explicitly registered research backend. The Codex research adapter has no shell tool.
+apply. The separate independent reviewer uses an explicitly registered research
+backend, with tools supplied by the caller's agent configuration.
 
 ## What happens when verification is inconclusive?
 
@@ -117,8 +119,8 @@ literature leaves an existing research backend available for checking and review
 
 State any permitted background results and their exact scope in the task.
 External claims that require source checking remain unresolved when retrieval
-is unavailable. The [setup instructions](../README.md#run-a-campaign) describe
-provider authentication and the separate Codex CLI setup.
+is unavailable. The [setup instructions](../README.md#optional-role-backends)
+describe acpx registration and caller-owned agent configuration.
 
 ## Can I steer Coordinator and Explorer during a campaign?
 

@@ -12,7 +12,7 @@ import { inspect, open, readReport, type Note } from "../src/index.ts";
 import type { VerifierInput } from "../src/core/math/contracts.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
 import { temporaryDirectory } from "./directory.ts";
-import { codex } from "../src/plugins/role-backends/codex.ts";
+import { acpx } from "../src/plugins/acpx.ts";
 
 async function run(scenario: "retry" | "repair" | "idle") {
   const directory = await temporaryDirectory(`xean-verification-${scenario}-`);
@@ -25,7 +25,7 @@ async function run(scenario: "retry" | "repair" | "idle") {
     },
     models: createModels(),
     roles: (builtins) => ({
-      ...codex({ verifier: { model: "fixture", workspace: directory } })(
+      ...acpx({ verifier: { agent: "fixture", workspace: directory } })(
         builtins,
       ),
       coordinator: async ({ notes }: { notes: Note[] }) => {
@@ -159,7 +159,7 @@ test("a missing-lemma repair accepts the same stable candidate and survives reop
   ).toBe(candidate.revision);
 });
 
-test("Coordinator can leave an inconclusive check idle even with Codex configured", async () => {
+test("Coordinator can leave an inconclusive check idle even with acpx configured", async () => {
   const result = await run("idle");
   expect(result.status.status).toBe("idle");
   expect(result.work.map(({ role }) => role)).toEqual(["explorer", "verifier"]);
@@ -182,7 +182,7 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
     },
     models: createModels(),
     roles: (builtins) => ({
-      ...codex({ verifier: { model: "fixture", workspace: directory } })(
+      ...acpx({ verifier: { agent: "fixture", workspace: directory } })(
         builtins,
       ),
       coordinator: async ({ notes }: { notes: Note[] }) => {
@@ -253,7 +253,7 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
   }
 }
 
-test("Coordinator selects Codex for an unchanged inconclusive claim without bypassing later stages", async () => {
+test("Coordinator selects acpx for an unchanged inconclusive claim without bypassing later stages", async () => {
   const result = await runComputationalVerification("PASS");
   expect(result.status.status).toBe("completed");
   expect(result.work.map(({ role }) => role)).toEqual([
@@ -298,7 +298,7 @@ test("Coordinator selects Codex for an unchanged inconclusive claim without bypa
   ).toEqual(workers);
 });
 
-test("Coordinator can select repeated Codex checks of an unchanged inconclusive claim", async () => {
+test("Coordinator can select repeated acpx checks of an unchanged inconclusive claim", async () => {
   const result = await runComputationalVerification("INCONCLUSIVE");
   expect(result.status.status).toBe("idle");
   expect(result.work.map(({ role }) => role)).toEqual([

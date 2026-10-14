@@ -31,9 +31,7 @@
     "./core": "./src/core/index.ts",
     "./roles": "./src/roles/index.ts",
     "./report": "./src/report.ts",
-    "./plugins/codex": "./src/plugins/role-backends/codex.ts",
-    "./plugins/claude": "./src/plugins/role-backends/claude.ts",
-    "./plugins/chatgpt": "./src/plugins/role-backends/chatgpt.ts"
+    "./plugins/acpx": "./src/plugins/acpx.ts"
   },
   "scripts": {
     "check": "bun scripts/dev.ts check",

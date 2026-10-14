@@ -172,59 +172,59 @@ Register external tools with a module exporting an `open({ roles })` callback.
 For example, save this as `roles.ts` in a project that depends on Xean:
 
 ```ts
-import { codex } from "xean/plugins/codex";
+import { acpx } from "xean/plugins/acpx";
 
 const worker = {
+  agent: "codex",
   model: "gpt-6-astra",
-  reasoning: "max" as const,
+  config: { reasoning_effort: "max" },
   workspace: "/absolute/path/to/workspaces",
 };
-export default codex({
+export default acpx({
   implementation: worker,
   verifier: worker,
-  research: { model: "gpt-6-astra", reasoning: "max" },
+  research: { agent: "codex", model: "gpt-6-astra" },
 });
 ```
 
-Install and authenticate the selected CLI separately, then pass the module when
-opening or resuming work:
+Install [acpx](https://github.com/openclaw/acpx), then install, authenticate, and
+configure the selected agents separately. Pass the role module when opening or
+resuming work:
 
 ```sh
 bun run xean --roles ./roles.ts run .xean/demo/campaign.sqlite
 ```
 
 Only explicitly supplied roles are enabled. Core installation and ordinary Pi
-roles need no external CLI. Codex provides implementation, verification,
-Explorer, and research adapters. The `claude` factory from `xean/plugins/claude`
-provides implementation, verification, and Explorer adapters through the same
-registration pattern. External Explorers receive the note index and return a single batch of
-new notes per invocation. They cannot edit existing full texts through that interface.
-The native Pi Explorer retains its reading, editing, and continued-submission behavior.
-Claude uses its native restricted mode and requires its native shell sandbox.
-Codex retains workspace-write mode for workers and read-only mode for research.
+roles need no external CLI. The `acpx` factory accepts `implementation`, `verifier`,
+`explorer`, and `research` options. Each selects an acpx `agent` and optional
+`model`. `config` passes agent-specific values through `--config-option`. Worker roles require
+an absolute `workspace` directory for retained artifacts. `command` selects the
+acpx executable. `agentCommand` selects a custom ACP command, including a separately
+installed ChatGPT Pro bridge. Agent installation and browser access remain outside
+Xean.
+The text-only ChatGPT bridge requires an empty MCP server list. Configure acpx
+with no MCP servers, or set `command` to an acpx wrapper adding
+`--mcp-config /path/to/empty.json`, where that file contains `{"mcpServers":[]}`.
 
-The caller's role module can instead export `chatgpt({baseUrl, model})` from
-`xean/plugins/chatgpt` to use ChatGPT Pro through the external browser service.
-Run [`codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web) separately
-in `browser-only` mode with an authenticated browser. Codex, Claude, and ChatGPT
-all register through `external.explorer`. Other services can implement the same
-[`ExternalCall`](src/roles/backend.ts) contract. Xean validates their returned notes.
-The browser adapter reuses completed Pi memos and refuses ambiguous replay of
-an interrupted request. Each new Explorer invocation can make a new request.
-Browser usage is unmeasured and excluded from usage reports.
+The caller owns native tool, permission, and sandbox configuration. Xean invokes
+`acpx exec` with `--approve-all` under its trusted-operator assumption. Select an
+agent whose configured tools satisfy the role. Research must retrieve primary
+sources and return quotations when needed. Literature additionally requires
+`literature: true` in settings and observed ACP search or fetch activity. Independent review
+uses the same research backend.
 
-Source retrieval and independent review require `research`. Literature additionally
-requires `literature: true` in settings. The Codex research adapter uses native
-web search with shell execution disabled. To disable Codex plugins for these
-calls, use [xean-research.config.toml](examples/xean-research.config.toml) in
-`CODEX_HOME` and set `research.profile: "xean-research"` in the factory options.
-Codex worker profiles are configured independently on `implementation`, `verifier`,
-and `explorer`.
+Xean sends the role instructions, input, and result schema in the prompt. It accepts
+one final `<xean-result>` JSON block from a completed `end_turn`, then validates the
+result through Pi. The schema is a prompt contract, without provider-enforced
+constrained output. External Explorers receive the note index and return a single
+batch of new notes per invocation. The native Pi Explorer retains its reading,
+editing, and continued-submission behavior.
 
-Keep the module and configuration stable across recovery. A native Pi memo rejects
-changes to enabled backend registrations while recovering an interrupted worker.
-Packaged adapters separately pin the provider and configuration of admitted calls.
-Custom replacement code remains responsible for its own replay behavior.
+Keep the module and configuration stable across recovery. Native Pi memos pin
+enabled backends and the acpx request configuration, and reuse completed results.
+Interrupted calls may repeat in fresh workspaces. `acpxCall` exposes the same
+[`ExternalCall`](src/roles/backend.ts) contract for custom role composition.
 
 ## Shared campaign host
 
@@ -316,9 +316,9 @@ With a verifier backend registered, Coordinator can request
 `{kind: "verifier", backend: "external", notes: [noteId], through: "correctness"}`.
 The same selection supports source, requirements, and reconstruction stages.
 Omitting `backend` selects the native Verifier. External Verifiers judge PASS, FAIL, or
-INCONCLUSIVE under the same dependency, stage, and acceptance rules. The packaged
-Codex and Claude backends run checks and independent proofs in fresh retained
-workspaces and record execution receipts and artifact paths. Source checks still use the research backend.
+INCONCLUSIVE under the same dependency, stage, and acceptance rules. The acpx
+backend runs checks and independent proofs in fresh retained
+workspaces and records execution receipts and artifact paths. Source checks still use the research backend.
 External blind reconstruction receives only the task, exact statements, and approved
 support and premises. Instructions forbid reading original proofs, campaign transcripts,
 or other workspaces. This boundary relies on instruction compliance, not hostile
@@ -447,10 +447,9 @@ Pi rejects writes from inspection callbacks. Acceptance atomically checks the
 current dependency closure and pins its snapshot for export.
 Closing suspends unfinished execution. Reopening reuses Pi's committed private
 progress. A request interrupted before its answer commits may repeat.
-Codex and Claude adapters share Execa process handling and Pi request receipts. Pi memoizes each completed request within its worker. Interrupted calls
+The acpx plugin uses Execa process handling and Pi request receipts. Pi memoizes each completed request within its worker. Interrupted calls
 restart in a fresh workspace. Source checks also retain results from custom
-research implementations before later stages. The browser adapter refuses to
-resend an ambiguously admitted request. The built-in Verifier preserves
+research implementations before later stages. The built-in Verifier preserves
 structurally validated completed checks when a stage fails. Invalid submissions and faults in
 opaque custom roles publish no partial results. A new Verifier reuses
 applicable completed checks. Cleanup errors use Pi's nonfatal
@@ -504,8 +503,9 @@ usage remains unknown.
 Process health, internal acceptance, and independent review are
 separate observations.
 
-The Codex factory's `usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to Codex. A custom provider's native
-configuration can forward it as an HTTP header for usage attribution.
+The acpx factory's `usagePrefix` supplies `XEAN_CODEX_USAGE_TAG` to its child
+process. Attribution requires the selected agent's configuration to forward that
+value. Usage reports retain the counts and USD costs reported through ACP.
 
 [bounded-solve.ts](scripts/bounded-solve.ts) reads `task.json` and `settings.json`
 from a run directory, with `--round-limit TOTAL`, `--resume`, and closed-book
