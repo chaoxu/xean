@@ -26,38 +26,19 @@ export function batchResults<T extends { noteId: string }>(
   ids: readonly string[],
   results: T[],
 ): Omit<T, "noteId">[] {
-  const requested = new Set(ids);
   const resultIds = results.map(({ noteId }) => noteId);
-  const duplicates = [
-    ...new Set(
-      resultIds.filter((id, index) => resultIds.indexOf(id) !== index),
-    ),
-  ];
   const byId = new Map(
     results.map(({ noteId, ...result }) => [noteId, result]),
   );
-  const duplicateRequests = [
-    ...new Set(ids.filter((id, index) => ids.indexOf(id) !== index)),
-  ];
-  const missing = [...requested].filter((id) => !byId.has(id));
-  const unexpected = [...byId.keys()].filter((id) => !requested.has(id));
   if (
-    duplicateRequests.length ||
+    new Set(ids).size !== ids.length ||
+    byId.size !== results.length ||
     results.length !== ids.length ||
-    missing.length ||
-    unexpected.length ||
-    duplicates.length
+    !ids.every((id) => byId.has(id))
   ) {
     throw new Error(
       `Batch results must contain exactly one result per requested note. ${JSON.stringify(
-        {
-          requested: ids,
-          received: resultIds,
-          missing,
-          unexpected,
-          duplicates,
-          duplicateRequests,
-        },
+        { requested: ids, received: resultIds },
       )}`,
     );
   }

@@ -207,14 +207,9 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (!definition) throw new UninitializedResearchError();
     if (!stored && (await storage.conversation(ROOT_CONVERSATION_ID, context)))
       throw new UninitializedResearchError();
-    const configured = readSettings(definition.settings);
-    const settings =
-      options.usagePrefix === undefined
-        ? configured
-        : {
-            ...configured,
-            usagePrefix: options.usagePrefix,
-          };
+    const settings = readSettings(definition.settings);
+    if (options.usagePrefix !== undefined)
+      settings.usagePrefix = options.usagePrefix;
     const runtime = createRuntime(settings, {
       models: options.models,
       key: options.key,

@@ -34,18 +34,16 @@ export function validateDefinition(value: Partial<Definition>): Definition {
   const mode = value.mode;
   if (mode && (typeof mode.role !== "string" || mode.input === undefined))
     throw new Error("Invalid research mode");
-  return {
-    task: structuredClone(value.task),
-    settings: copyJson(value.settings),
-    ...(mode ? { mode: structuredClone(mode) } : {}),
-  };
+  return copyJson({
+    task: value.task,
+    settings: value.settings,
+    ...(mode ? { mode } : {}),
+  }) as Definition;
 }
 
 export async function readDefinition(
   tx: Tx,
   root: ConversationId,
 ): Promise<Definition> {
-  return validateDefinition(
-    copyJson(await tx.doc(DefinitionDoc, root)) as Partial<Definition>,
-  );
+  return validateDefinition(await tx.doc(DefinitionDoc, root));
 }

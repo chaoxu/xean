@@ -855,10 +855,10 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
     expect(
       new Set(comparisons.slice(2).map(({ session }) => session)).size,
     ).toBe(1);
-    for (const [call, requested, received, missing, unexpected, duplicates] of [
-      [proofs[4]!, ["n1", "n2"], ["n1", "n1"], ["n2"], [], ["n1"]],
-      [proofs.at(-1)!, ["n3", "n4"], ["n2", "n3", "n4"], [], ["n2"], []],
-      [comparisons.at(-1)!, ["n3", "n4"], ["n3", "n3"], ["n4"], [], ["n3"]],
+    for (const [call, requested, received] of [
+      [proofs[4]!, ["n1", "n2"], ["n1", "n1"]],
+      [proofs.at(-1)!, ["n3", "n4"], ["n2", "n3", "n4"]],
+      [comparisons.at(-1)!, ["n3", "n4"], ["n3", "n3"]],
     ] as const) {
       const error = call.transcript.messages
         .filter((message) => message.role === "toolResult")
@@ -869,10 +869,6 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
           JSON.stringify({
             requested,
             received,
-            missing,
-            unexpected,
-            duplicates,
-            duplicateRequests: [],
           }),
         ),
       });
@@ -1709,10 +1705,6 @@ test.each([
                     {
                       requested: input.notes.map((note) => note.id),
                       received: input.notes.map(() => "unrequested"),
-                      missing: input.notes.map((note) => note.id),
-                      unexpected: ["unrequested"],
-                      duplicates: ["unrequested"],
-                      duplicateRequests: [],
                     },
                   )}`
                 : failure === "source premises"
