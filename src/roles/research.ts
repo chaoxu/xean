@@ -9,7 +9,11 @@ import {
   type ResearchReport,
   type Source,
 } from "../core/math/contracts.ts";
-import type { ExternalCall, Research } from "./backend.ts";
+import {
+  computationInstructions,
+  type ExternalCall,
+  type Research,
+} from "./backend.ts";
 import { bindExternal, taskSource } from "./evidence.ts";
 import { noteIdPrefix } from "../core/math/state.ts";
 
@@ -24,7 +28,9 @@ const sourceInstructions =
 const literatureInstructions =
   "Complete the supplied literature assignment for the exact mathematical task. Search for the specific missing theorem, hypothesis, or source the assignment identifies. Stay within that question; do not expand into a general survey or collect adjacent results merely because they share terminology. Use the supplied task and note index to avoid rediscovering established material. This role has no note reader. An index summary is not the authoritative full statement. Task-granted assumptions need no literature search. Stop when the assignment is answered with primary-source evidence, or report that necessary evidence could not be established. Open sources, report exact hypotheses and conclusions, cite their URLs and relevant passages, and keep uncertain matches explicit. Return useful new ordinary unverified research notes. Give each new note a permanent ID starting with the supplied noteIdPrefix followed by a fresh short name. Use that exact full ID in prose and support, including references between new notes; IDs are never rewritten. Include a source mismatch or bounded unsuccessful search when that finding helps future work: state what was checked and what remains unknown. An unsuccessful search does not establish that a theorem does not exist. Each note has an index summary, a detailedSummary preserving actual claims, conditions, bounds, and unresolved gaps, complete free-form text containing the findings, supporting evidence, and analysis. Return notes=[] only when there is no new information worth retaining. Put citation URLs and quotations in text. The support array contains only the exact full IDs of existing or newly created notes whose mathematical results are used, never URLs. Use support=[] for an independent finding. Search snippets and memory do not count as inspected sources.";
 const reviewInstructions =
-  "Independently audit every supplied statement and argument for the exact problem and completion criteria. Judge completion from the original task. A correct special case or conditional result gives FAIL when the task requires a stronger or unconditional conclusion. Check every supporting proof and essential source assumption independently of solver verdicts. Verify all load-bearing inferences, hypotheses, cases, bounds, and theorem applications. An explicit hypothetical antecedent in a supporting implication is part of its claim, not an external premise; check the derivation under that assumption and every application that needs the antecedent established. An implication alone does not establish the unconditional conclusion. An unstated assumption in an unconditional claim remains a gap. List all nonroutine external premises as exact standalone claims in premises, keeping proof ideas, application explanations, and validation commentary in report, and open matching primary sources for every one, with quotations indexed by their zero-based position in premises (0 for the first). A self-contained argument has premises=[]. PASS requires the full argument and every essential external premise to be established. FAIL requires a concrete mathematical defect or an unmet completion criterion. Unsettled checks give INCONCLUSIVE. Report harmless wording corrections explicitly; substantial repairs require a new argument. This role has no execution tool. Justify essential finite checks analytically or with supplied execution receipts matching the claim. Prose asserting execution is insufficient. If the check remains unsupported, return INCONCLUSIVE. " +
+  "Independently audit every supplied statement and argument for the exact problem and completion criteria. Judge completion from the original task. A correct special case or conditional result gives FAIL when the task requires a stronger or unconditional conclusion. Check every supporting proof and essential source assumption independently of solver verdicts. Verify all load-bearing inferences, hypotheses, cases, bounds, and theorem applications. An explicit hypothetical antecedent in a supporting implication is part of its claim, not an external premise; check the derivation under that assumption and every application that needs the antecedent established. An implication alone does not establish the unconditional conclusion. An unstated assumption in an unconditional claim remains a gap. List all nonroutine external premises as exact standalone claims in premises, keeping proof ideas, application explanations, and validation commentary in report, and open matching primary sources for every one, with quotations indexed by their zero-based position in premises (0 for the first). A self-contained argument has premises=[]. PASS requires the full argument and every essential external premise to be established. FAIL requires a concrete mathematical defect or an unmet completion criterion. Unsettled checks give INCONCLUSIVE. Report harmless wording corrections explicitly; substantial repairs require a new argument. Justify essential finite checks analytically or with supplied execution receipts matching the claim. For any new computation, include its program, input, command, output, and relevant environment in report. Temporary research files are discarded. Prose asserting execution is insufficient. If the check remains unsupported, return INCONCLUSIVE. " +
+  computationInstructions +
+  " " +
   taskEvidence;
 
 /** The external backend owns research and its internal tools; the solver only calls functions. */
@@ -103,7 +109,7 @@ export function externalResearch(askExternal: ExternalCall): Research {
       Assert(schema, result.value);
       if (result.value.notes.length && result.searches === 0)
         throw new Error(
-          "Research backend returned literature without observed web activity",
+          "Research backend returned literature without completed web retrieval",
         );
       return result.value;
     },

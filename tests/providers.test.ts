@@ -1,5 +1,5 @@
 import { temporaryDirectory } from "./directory.ts";
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -18,12 +18,8 @@ import {
 } from "../src/roles/config.ts";
 import { open } from "../src/host.ts";
 import { scanTasks } from "../src/core/workflow.ts";
-import { explorationSchema, type Note } from "../src/core/math/contracts.ts";
 import { readView } from "../src/core/math/state.ts";
 import { conversations } from "../src/roles/conversation.ts";
-import { createRoles } from "../src/roles/index.ts";
-import { chatgpt, chatgptCall } from "../src/plugins/role-backends/chatgpt.ts";
-import type { RoleRuntime } from "../src/core/roles.ts";
 
 const fixtureFetch = (
   callback: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
@@ -257,11 +253,6 @@ test.each([false, true])(
   },
 );
 
-const settings = readSettings(defaultSettings);
-const browser = {
-  baseUrl: "http://browser.invalid/v1",
-  model: "chatgpt-web/gpt-6-pro" as const,
-};
 const task = {
   problem: "Prove 1 = 1.",
   completionCriteria: "An elementary proof.",
@@ -280,7 +271,7 @@ const selection = {
 function response(answers: string[], status = "completed") {
   return Response.json({
     id: "fixture-response",
-    model: browser.model,
+    model: "gpt-6-astra",
     status,
     output: [
       {
@@ -301,221 +292,6 @@ function response(answers: string[], status = "completed") {
     usage: { input_tokens: 99, output_tokens: 99, total_tokens: 198 },
   });
 }
-const runtime = (memos = new Map<string, unknown>()) =>
-  ({
-    taskId: 99,
-    memo: async (name: string, ...args: unknown[]) => {
-      if (args.length === 2 && !memos.has(name))
-        memos.set(name, structuredClone(args[0]));
-      return structuredClone(memos.get(name));
-    },
-  }) as unknown as RoleRuntime;
-
-test.each(["new notes", "blind edit"])(
-  "direct ChatGPT Explorer sends only the index and validates %s without retrying",
-  async (mode) => {
-    const note: Note = {
-      ...selection.notes[0]!,
-      id: "prior/n1",
-      summary: "Index description",
-      detailedSummary: "UNREAD DETAIL",
-      text: "UNREAD CLAIM\n\nUNREAD FULL PROOF",
-      revision: 0,
-      verified: true,
-      dead: false,
-      accepted: false,
-      retired: false,
-      candidate: false,
-      checks: { external: { entry: 1 } },
-    };
-    const answer = {
-      notes: selection.notes.map((value) => ({
-        ...value,
-        id: "99/reflexivity",
-        support: [note.id],
-      })),
-      edits:
-        mode === "blind edit"
-          ? [
-              {
-                id: note.id,
-                revision: note.revision,
-                text: "Blind replacement",
-              },
-            ]
-          : [],
-    };
-    const claimed = new Map<string, unknown>();
-    const invocation = runtime(claimed);
-    const request = spyOn(globalThis, "fetch").mockImplementation(
-      fixtureFetch(async (url, options) => {
-        expect(claimed.has("research.chatgpt")).toBe(true);
-        expect(String(url)).toBe("http://browser.invalid/v1/responses");
-        const payload = await new Response(options?.body).json();
-        expect(payload.stream).toBe(false);
-        expect(payload.tools).toBeUndefined();
-        expect(payload.text.format).toMatchObject({
-          type: "json_schema",
-          strict: true,
-          schema: {
-            properties: {
-              notes: {
-                items: {
-                  properties: { id: { pattern: "^99/[A-Za-z0-9_-]+$" } },
-                },
-              },
-            },
-          },
-        });
-        const identity = payload.client_metadata["x-codex-turn-metadata"];
-        expect(identity).toEqual({
-          thread_id: claimed.get("research.chatgpt"),
-          turn_id: claimed.get("research.chatgpt"),
-        });
-        expect(
-          payload.input[0].internal_chat_message_metadata_passthrough.turn_id,
-        ).toBe(claimed.get("research.chatgpt"));
-        const input = payload.input[0].content;
-        expect(input).toContain("Index description");
-        expect(input).not.toContain("UNREAD");
-        expect(JSON.parse(input).allowance).toEqual({ reads: 0, responses: 1 });
-        return response([JSON.stringify(answer)]);
-      }),
-    );
-    try {
-      const roles = createRoles({
-        ...settings,
-        profiles: createRuntime(settings).profiles,
-      });
-      Object.assign(roles, chatgpt(browser)(roles));
-      const result = roles.explorer(
-        { task, notes: [note], assignment: "Continue" },
-        invocation,
-        context,
-      );
-      if (mode === "blind edit")
-        await expect(result).rejects.toThrow(
-          "External Explorer cannot edit notes without their full text",
-        );
-      else await expect(result).resolves.toEqual({ kind: "notes", ...answer });
-      expect(request).toHaveBeenCalledTimes(1);
-    } finally {
-      request.mockRestore();
-    }
-  },
-);
-
-test("direct ChatGPT rejects incomplete, ambiguous, and invalid results without retrying", async () => {
-  const valid = JSON.stringify(selection);
-  const unavailable = Response.json({
-    status: "failed",
-    error: {
-      code: "model_version_unavailable",
-      message: "Could not select ChatGPT model 6.",
-    },
-  });
-  for (const [returned, error] of [
-    [response([]), "no unique final answer"],
-    [response([valid, valid]), "no unique final answer"],
-    [response(["malformed"]), SyntaxError],
-    [response(["null"]), "Invalid value"],
-    [response(["[]"]), "Invalid value"],
-    [response(['{"notes":[],"candidate":"yes"}']), "Invalid value"],
-    [response([valid], "incomplete"), "ChatGPT incomplete"],
-    [response([valid], "failed"), "ChatGPT failed"],
-    [
-      unavailable,
-      "model_version_unavailable: Could not select ChatGPT model 6.",
-    ],
-    [new Response("Service unavailable", { status: 503 }), "ChatGPT HTTP 503"],
-  ] as const) {
-    const request = spyOn(globalThis, "fetch").mockResolvedValue(returned);
-    try {
-      await expect(
-        chatgptCall(browser)(
-          "worker",
-          explorationSchema,
-          "Solve",
-          [],
-          runtime(),
-          context,
-        ),
-      ).rejects.toThrow(error);
-      expect(request).toHaveBeenCalledTimes(1);
-    } finally {
-      request.mockRestore();
-    }
-  }
-});
-
-test("native worker recovery refuses to resend an interrupted ChatGPT request", async () => {
-  const directory = await temporaryDirectory("chatgpt-recovery-");
-  const path = join(directory, "campaign.sqlite");
-  const started = Promise.withResolvers<void>();
-  let calls = 0;
-  let aborted = false;
-  const request = spyOn(globalThis, "fetch").mockImplementation(
-    fixtureFetch(async (_url, options) => {
-      calls++;
-      started.resolve();
-      return new Promise<Response>((_resolve, reject) => {
-        const abort = () => {
-          aborted = true;
-          reject(new DOMException("Interrupted", "AbortError"));
-        };
-        if (options?.signal?.aborted) abort();
-        else options?.signal?.addEventListener("abort", abort, { once: true });
-      });
-    }),
-  );
-  let owner: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    owner = await open(path, {
-      roles: chatgpt(browser),
-      create: {
-        task,
-        settings,
-        mode: { role: "explorer", input: { notes: [], assignment: "Solve" } },
-      },
-    });
-    await Promise.race([
-      started.promise,
-      owner.root.waitForIdle(context).then(async () => {
-        const root = owner!.root;
-        const tasks = await root.commit(
-          (tx) => scanTasks(tx, root.id),
-          context,
-        );
-        throw new Error(
-          `Worker settled before dispatch: ${JSON.stringify(tasks)}`,
-        );
-      }),
-    ]);
-    await owner.close();
-    owner = undefined;
-    expect(aborted).toBe(true);
-    owner = await open(path, { roles: chatgpt(browser) });
-    await owner.root.waitForIdle(context);
-    const root = owner.root;
-    const workers = await root.commit(
-      (tx) => scanTasks(tx, root.id, "research.worker"),
-      context,
-    );
-    expect(workers).toHaveLength(1);
-    expect(workers[0]!.state).toMatchObject({
-      status: "terminal",
-      outcome: { status: "faulted" },
-    });
-    expect(JSON.stringify(workers[0]!.state)).toContain(
-      "refusing an ambiguous replay",
-    );
-    expect(calls).toBe(1);
-  } finally {
-    await owner?.close();
-    request.mockRestore();
-  }
-});
-
 test("custom gateways use native OpenAI Responses and API-key authentication", async () => {
   const runtime = createRuntime(
     readSettings({

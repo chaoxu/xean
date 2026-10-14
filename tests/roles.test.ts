@@ -42,7 +42,7 @@ import { closedBookResearch, externalResearch } from "../src/roles/research.ts";
 import type { ExternalCall, Research } from "../src/roles/backend.ts";
 import { capacityError, createRuntime } from "../src/roles/config.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
-import { codex } from "../src/plugins/role-backends/codex.ts";
+import { acpx } from "../src/plugins/acpx.ts";
 import {
   explorationSchema,
   literatureResultSchema,
@@ -855,10 +855,10 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
     expect(
       new Set(comparisons.slice(2).map(({ session }) => session)).size,
     ).toBe(1);
-    for (const [call, requested, received, missing, unexpected, duplicates] of [
-      [proofs[4]!, ["n1", "n2"], ["n1", "n1"], ["n2"], [], ["n1"]],
-      [proofs.at(-1)!, ["n3", "n4"], ["n2", "n3", "n4"], [], ["n2"], []],
-      [comparisons.at(-1)!, ["n3", "n4"], ["n3", "n3"], ["n4"], [], ["n3"]],
+    for (const [call, requested, received] of [
+      [proofs[4]!, ["n1", "n2"], ["n1", "n1"]],
+      [proofs.at(-1)!, ["n3", "n4"], ["n2", "n3", "n4"]],
+      [comparisons.at(-1)!, ["n3", "n4"], ["n3", "n3"]],
     ] as const) {
       const error = call.transcript.messages
         .filter((message) => message.role === "toolResult")
@@ -869,10 +869,6 @@ test("assigned proof and comparison groups preserve blindness, exact IDs, and pr
           JSON.stringify({
             requested,
             received,
-            missing,
-            unexpected,
-            duplicates,
-            duplicateRequests: [],
           }),
         ),
       });
@@ -1709,10 +1705,6 @@ test.each([
                     {
                       requested: input.notes.map((note) => note.id),
                       received: input.notes.map(() => "unrequested"),
-                      missing: input.notes.map((note) => note.id),
-                      unexpected: ["unrequested"],
-                      duplicates: ["unrequested"],
-                      duplicateRequests: [],
                     },
                   )}`
                 : failure === "source premises"
@@ -2346,31 +2338,25 @@ test.each(["request", "incomplete.max_messages", "length"] as const)(
   },
 );
 
-async function fakeCodex(directory: string, candidate = false) {
-  const executable = join(directory, "codex-fixture");
+async function fakeAcpx(directory: string, candidate = false) {
+  const executable = join(directory, "acpx-fixture");
   await writeFile(
     executable,
     `#!${process.execPath}
-import assert from "node:assert/strict";
-const input = await Bun.stdin.json();
-const worker = process.argv.includes('web_search="disabled"');
-if (!worker && !process.argv.includes('web_search="live"')) throw new Error("Research disabled web search");
-if (worker && !input.assignment) throw new Error("Worker has no assignment");
-function strict(schema) {
-  if (!schema || typeof schema !== "object") return;
-  if (schema.type === "object") { assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort()); assert.equal(schema.additionalProperties, false); }
-  Object.values(schema).forEach(strict);
-}
-if (worker) strict(await Bun.file(process.argv[process.argv.indexOf("--output-schema") + 1]).json());
-if (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }
+const envelope = await Bun.stdin.json();
+const input = envelope.input;
+if (!input || typeof input !== "object") throw new Error("Missing ACP input");
+const worker = input.assignment && !String(envelope.instructions).includes("literature assignment");
+if (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"Partial opaque work"}}}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }
 let value;
 if (input.assignment) value = {notes:[{id:input.noteIdPrefix + "finding",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[],...(${candidate}?{candidate:true}:{})}]};
 else if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};
 else value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};
 if (worker) { value.edits = null; for (const note of value.notes) note.candidate ??= null; }
-if (!worker) console.log(JSON.stringify({type:"item.completed",item:{type:"web_search"}}));
-console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));
-console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));
+console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"tool_call",kind:"fetch",status:"completed",toolCallId:"search-1"}}}));
+const text = "<xean-result>" + JSON.stringify(value) + "</xean-result>";
+console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text}}}}));
+console.log(JSON.stringify({result:{stopReason:"end_turn",usage:{inputTokens:17,outputTokens:5,cachedReadTokens:0}}}));
 `,
   );
   await chmod(executable, 0o700);
@@ -2381,29 +2367,17 @@ async function externalVerifierFixture({
   complete = true,
   failComparison = false,
 } = {}) {
-  const directory = await temporaryDirectory("pi-codex-verifier-");
-  const executable = join(directory, "codex-verifier-fixture");
+  const directory = await temporaryDirectory("pi-acpx-verifier-");
+  const executable = join(directory, "acpx-verifier-fixture");
   await writeFile(
     executable,
     `#!${process.execPath}
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-const input = await Bun.stdin.json();
-const argv = process.argv;
-assert.equal(argv[argv.indexOf("--sandbox") + 1], "workspace-write");
-assert(argv.includes("features.shell_tool=true"));
-assert(argv.includes('web_search="disabled"'));
+const envelope = await Bun.stdin.json();
+const { input, schema } = envelope;
+assert(input && schema);
 assert.equal(realpathSync(process.cwd()), realpathSync(input.workspace));
-const schema = await Bun.file(argv[argv.indexOf("--output-schema") + 1]).json();
-function strict(value) {
-  if (!value || typeof value !== "object") return;
-  if (value.type === "object") {
-    assert.deepEqual([...value.required].sort(), Object.keys(value.properties).sort());
-    assert.equal(value.additionalProperties, false);
-  }
-  Object.values(value).forEach(strict);
-}
-strict(schema);
 const fields = schema.properties.results.items.properties;
 const stage = fields.statement ? "correctness" : fields.complete ? "proof" : input.independent ? "reconstruction" : "requirements";
 await Bun.write("invocation.json", JSON.stringify({stage, input}));
@@ -2414,17 +2388,18 @@ const value = {results: input.notes.toReversed().map(note => ({
     ...(stage === "correctness" ? {statement:note.id + " exact claim",premises:[]} : {})
   })
 }))};
-console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:JSON.stringify(value)}}));
-console.log(JSON.stringify(${failComparison} && stage === "reconstruction"
-  ? {type:"turn.failed",error:{message:"Checker process failed"}}
-  : {type:"turn.completed",usage:{input_tokens:17,output_tokens:5,cached_input_tokens:0}}));
+ const text = "<xean-result>" + JSON.stringify(value) + "</xean-result>";
+ console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text}}}}));
+ console.log(JSON.stringify(${failComparison} && stage === "reconstruction"
+  ? {error:{message:"Checker process failed"}}
+  : {result:{stopReason:"end_turn",usage:{inputTokens:17,outputTokens:5,cachedReadTokens:0}}}));
 `,
   );
   await chmod(executable, 0o700);
   const sources: string[][] = [];
   const provider = fixture(
     () => {
-      throw new Error("Codex verification called a native model");
+      throw new Error("acpx verification called a native model");
     },
     {},
     undefined,
@@ -2442,8 +2417,9 @@ console.log(JSON.stringify(${failComparison} && stage === "reconstruction"
   );
   Object.assign(
     provider.roles,
-    codex({
+    acpx({
       verifier: {
+        agent: "fixture",
         model: "fixture",
         command: executable,
         workspace: join(directory, "artifacts"),
@@ -2470,7 +2446,7 @@ async function externalVerifierReceipts(harness: Harness) {
   return { requests, logs, calls };
 }
 
-test("Codex verification groups assessments but reconstructs each note independently", async () => {
+test("acpx verification groups assessments but reconstructs each note independently", async () => {
   const provider = await externalVerifierFixture();
   const current = await provider.open();
   try {
@@ -2519,7 +2495,7 @@ test("Codex verification groups assessments but reconstructs each note independe
 });
 
 test.each([false, true])(
-  "Codex verification preserves stage evidence and blindness (interrupted comparison failure=%s)",
+  "acpx verification preserves stage evidence and blindness (interrupted comparison failure=%s)",
   async (failComparison) => {
     const provider = await externalVerifierFixture({ failComparison });
     const storage = join(provider.directory, "storage");
@@ -2620,7 +2596,7 @@ test.each([false, true])(
         "reconstruction",
       ]);
       expect(logs.at(-1)!.data.stdout).toContain(
-        failComparison ? '"turn.failed"' : '"turn.completed"',
+        failComparison ? "Checker process failed" : '"stopReason":"end_turn"',
       );
       const proof = calls[2]!.input;
       expect(proof.notes).toEqual([
@@ -2647,7 +2623,7 @@ test.each([false, true])(
   },
 );
 
-test("Codex standalone reconstruction cannot PASS an incomplete independent proof", async () => {
+test("acpx standalone reconstruction cannot PASS an incomplete independent proof", async () => {
   const provider = await externalVerifierFixture({ complete: false });
   const current = await provider.open();
   try {
@@ -2759,13 +2735,13 @@ test.each(["explorer", "implementation", "literature"] as const)(
   },
 );
 
-test.each(["codex", "custom"] as const)(
+test.each(["acpx", "custom"] as const)(
   "Literature rejects candidate notes from %s research",
   async (backend) => {
     const directory = await temporaryDirectory("pi-literature-candidate-");
     const assignment = "Find the precise theorem";
     const command =
-      backend === "codex" ? await fakeCodex(directory, true) : undefined;
+      backend === "acpx" ? await fakeAcpx(directory, true) : undefined;
     let customCalls = 0;
     const research: Research | undefined =
       backend === "custom"
@@ -2796,7 +2772,9 @@ test.each(["codex", "custom"] as const)(
     if (command)
       Object.assign(
         provider.roles,
-        codex({ research: { model: "fixture", command } })(provider.roles),
+        acpx({ research: { agent: "fixture", model: "fixture", command } })(
+          provider.roles,
+        ),
       );
     const current = await provider.open(join(directory, "storage"));
     try {
@@ -2806,7 +2784,7 @@ test.each(["codex", "custom"] as const)(
       });
       const outcome = await resultOf(current.harness, id);
       expect(outcome.status).toBe("faulted");
-      if (backend === "codex")
+      if (backend === "acpx")
         expect(JSON.stringify(outcome)).toContain("candidate");
       expect(outcome).not.toHaveProperty("result");
       expect(provider.calls).toHaveLength(0);
@@ -3373,16 +3351,17 @@ test("Coordinator admits four reads by default and can hand off after a denied f
   }
 });
 
-test("interrupted Codex workers retain old artifacts and replay in a fresh workspace", async () => {
-  const directory = await temporaryDirectory("pi-role-codex-replay-");
-  const command = await fakeCodex(directory);
+test("interrupted acpx workers retain old artifacts and replay in a fresh workspace", async () => {
+  const directory = await temporaryDirectory("pi-role-acpx-replay-");
+  const command = await fakeAcpx(directory);
   const provider = fixture(() => {
     throw new Error("Unexpected Pi model call");
   }, {});
   Object.assign(
     provider.roles,
-    codex({
+    acpx({
       implementation: {
+        agent: "fixture",
         model: "gpt-6-astra",
         command,
         workspace: join(directory, "artifacts"),
@@ -3444,8 +3423,8 @@ test("interrupted Codex workers retain old artifacts and replay in a fresh works
   }
 });
 
-test("Codex preparation failures retain a task failure without admitting or recording an invocation", async () => {
-  const directory = await temporaryDirectory("pi-role-codex-prepare-");
+test("acpx preparation failures retain a task failure without admitting or recording an invocation", async () => {
+  const directory = await temporaryDirectory("pi-role-acpx-prepare-");
   const workspace = join(directory, "not-a-directory");
   await writeFile(workspace, "Fixture");
   const provider = fixture(() => {
@@ -3453,9 +3432,9 @@ test("Codex preparation failures retain a task failure without admitting or reco
   }, {});
   Object.assign(
     provider.roles,
-    codex({ implementation: { model: "gpt-6-astra", workspace } })(
-      provider.roles,
-    ),
+    acpx({
+      implementation: { agent: "fixture", model: "gpt-6-astra", workspace },
+    })(provider.roles),
   );
   const current = await provider.open(join(directory, "storage"));
   try {
@@ -3483,9 +3462,9 @@ test("Codex preparation failures retain a task failure without admitting or reco
   }
 });
 
-test("Codex source memos survive later Verifier recovery and other calls retain evidence", async () => {
-  const directory = await temporaryDirectory("pi-role-codex-");
-  const command = await fakeCodex(directory);
+test("acpx source memos survive later Verifier recovery and other calls retain evidence", async () => {
+  const directory = await temporaryDirectory("pi-role-acpx-");
+  const command = await fakeAcpx(directory);
   const provider = fixture(
     (name, input) => ({
       results: input.notes.map((note: { id: string }) => ({
@@ -3506,9 +3485,10 @@ test("Codex source memos survive later Verifier recovery and other calls retain 
   );
   Object.assign(
     provider.roles,
-    codex({
-      research: { model: "gpt-6-astra", command },
+    acpx({
+      research: { agent: "fixture", model: "gpt-6-astra", command },
       implementation: {
+        agent: "fixture",
         model: "gpt-6-astra",
         command,
         workspace: join(directory, "artifacts"),

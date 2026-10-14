@@ -581,7 +581,7 @@ test("batch results require each requested identity exactly once", () => {
     ),
   ).toEqual([{ value: 1 }, { value: 2 }]);
   expect(() => batchResults(["a", "b"], [{ noteId: "a", value: 1 }])).toThrow(
-    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a"],"missing":["b"],"unexpected":[],"duplicates":[],"duplicateRequests":[]}',
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a"]}',
   );
   expect(() =>
     batchResults(
@@ -592,7 +592,7 @@ test("batch results require each requested identity exactly once", () => {
       ],
     ),
   ).toThrow(
-    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","a"],"missing":["b"],"unexpected":[],"duplicates":["a"],"duplicateRequests":[]}',
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","a"]}',
   );
   expect(() =>
     batchResults(
@@ -604,7 +604,7 @@ test("batch results require each requested identity exactly once", () => {
       ],
     ),
   ).toThrow(
-    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","b","c"],"missing":[],"unexpected":["c"],"duplicates":[],"duplicateRequests":[]}',
+    'Batch results must contain exactly one result per requested note. {"requested":["a","b"],"received":["a","b","c"]}',
   );
   expect(() =>
     batchResults(
@@ -615,7 +615,7 @@ test("batch results require each requested identity exactly once", () => {
       ],
     ),
   ).toThrow(
-    'Batch results must contain exactly one result per requested note. {"requested":["a","a"],"received":["a","b"],"missing":[],"unexpected":["b"],"duplicates":[],"duplicateRequests":["a"]}',
+    'Batch results must contain exactly one result per requested note. {"requested":["a","a"],"received":["a","b"]}',
   );
 });
 

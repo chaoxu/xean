@@ -1,5 +1,5 @@
 diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
-index 80e15fe..38804b4 100644
+index c87d2f1..f7490b5 100644
 --- a/dist/harness/context.d.ts
 +++ b/dist/harness/context.d.ts
 @@ -1,8 +1,13 @@
@@ -18,10 +18,11 @@ index 80e15fe..38804b4 100644
  export type ContextBounds = {
      readonly head: (EntryRecord & {
 diff --git a/dist/harness/context.js b/dist/harness/context.js
-index 8675a14..f32c9ca 100644
+index 1e208d2..da330f4 100644
 --- a/dist/harness/context.js
 +++ b/dist/harness/context.js
-@@ -1,4 +1,8 @@
+@@ -1,5 +1,9 @@
+ import { SystemEntry } from "../entries.js";
  import { idFromNumber } from "../ids.js";
 +import { Type } from "typebox";
 +import { Check } from "typebox/value";
@@ -30,7 +31,7 @@ index 8675a14..f32c9ca 100644
  const SCAN_PAGE_SIZE = 256;
  const EXCLUDED_STOP_REASONS = new Set(["aborted", "error", "deferred"]);
  const MISSING_RESULT_TEXT = "Tool result unavailable: history ends before this call completed.";
-@@ -127,7 +131,48 @@ function contribute(entry, edit) {
+@@ -161,7 +165,48 @@ function contribute(entry, edit) {
      if (edit?.action === "omit")
          return Object.freeze([]);
      const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);

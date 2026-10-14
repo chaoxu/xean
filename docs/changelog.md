@@ -15,9 +15,11 @@ host while Pi owns each campaign's execution and recovery. This version is unrel
 - Source backend failures identify their stage and retain completed verification
   work. Coordinator instructions explain the shared source backend and recommend
   independent work after repeated operational failures.
-- Pin Pi to an unreleased snapshot after 1.2.0. It classifies
+- Pin Pi to unreleased upstream `b45e0ebcc`, after 1.2.0. It classifies
   `unable to forward upstream` as retryable and repairs invalid Unicode escapes
-  in streamed JSON. The frozen model catalog and existing Xean patches remain.
+  in streamed JSON. It also fixes system baseline ordering after compaction and
+  refreshes the model catalog, including a 500,000-token context window for
+  `openai-codex/gpt-6.1-sol`. Existing Xean patches remain necessary.
 - Import `xean/core` for the workflow, notebook rules, and role contracts without
   loading bundled role implementations, CLI, or adapters. `xean/roles` exports
   the default roles, and `xean/report` provides inspection. `open` from `xean`
@@ -28,20 +30,20 @@ host while Pi owns each campaign's execution and recovery. This version is unrel
 - Native correctness, requirements, proof generation, and proof comparison share
   `selectBatch` in `xean/roles`. Large assessments split with support and source
   records scoped to each group. Completed groups survive interruption through Pi.
-- Register Codex, Claude, or ChatGPT adapters through `open({ roles })` or an explicit CLI
-  `--roles` module. Default installation uses native Pi roles and closed-book
-  source checking without external CLI dependencies.
-- ChatGPT Pro uses the same external Explorer interface as other backends,
-  selected by the caller's role module. Remove its campaign-wide quota and
-  browser-specific state from the core.
+- Register external agents through `xean/plugins/acpx` in `open({ roles })` or a
+  CLI `--roles` module. This replaces the packaged Codex, Claude, and ChatGPT
+  adapters. Callers install and configure acpx, agents, tools, and sandbox policy.
+  ChatGPT Pro runs through a separately supplied ACP bridge. Native Pi roles and
+  closed-book source checking remain the default.
 - Implementation work uses `kind: "implementation"`. External verification uses
   `backend: "external"`. Core retains schemas, frozen inputs,
   dependency checks, and acceptance. Bundled roles perform blind reconstruction.
   External request receipts identify their provider.
-- Codex and Claude share Execa process handling and native Pi memos. Completed calls
-  are reused and interrupted CLI calls use fresh workspaces. Native Pi memos guard
-  worker backend registration and packaged adapter request configuration.
-  Standalone results receive role-specific validation.
+- The acpx plugin reads ACP events, requires a completed turn and a final JSON
+  result block, and validates that result through Pi. Schemas travel in the prompt.
+  Completed calls are reused and interrupted calls use fresh workspaces. Native
+  Pi memos guard backend registration and request configuration. Standalone
+  results receive role-specific validation.
 - `host`, `attach`, and `detach` share a Pi `Models` instance across independently
   owned campaigns. Restart discovers campaign databases under the selected directory.
   Per-campaign controls and Pi checkpoints remain authoritative.

@@ -321,20 +321,20 @@ test("CLI role review executes and reopens an independent review without the ret
   const input = join(directory, "input.json");
   const settingsFile = join(directory, "settings.json");
   const database = join(directory, "review.sqlite");
-  const executable = join(directory, "codex-fixture");
+  const executable = join(directory, "acpx-fixture");
   const requests = join(directory, "requests.jsonl");
   const argument = "1 = 1.\nBy reflexivity.\n";
   const result = { ...pass, premises: [], passages: [] };
-  const events = [
-    {
-      type: "item.completed",
-      item: { type: "agent_message", text: JSON.stringify(result) },
-    },
-    { type: "turn.completed", usage: { output_tokens: 7 } },
-  ];
   await Bun.write(
     executable,
-    `#!${process.execPath}\nimport { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(requests)}, (await Bun.stdin.text()) + "\\n");\nfor (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));\n`,
+    `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const envelope = await Bun.stdin.json();
+appendFileSync(${JSON.stringify(requests)}, JSON.stringify({ task: envelope.input.task, argument: envelope.input.argument }) + "\\n");
+const text = "<xean-result>" + JSON.stringify(${JSON.stringify(result)}) + "</xean-result>";
+console.log(JSON.stringify({ method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } }));
+console.log(JSON.stringify({ result: { stopReason: "end_turn", usage: { outputTokens: 7 } } }));
+`,
   );
   await chmod(executable, 0o700);
   await Bun.write(input, JSON.stringify({ task, argument }));
@@ -347,7 +347,7 @@ test("CLI role review executes and reopens an independent review without the ret
   const rolesFile = join(directory, "roles.ts");
   await Bun.write(
     rolesFile,
-    `import { codex } from ${JSON.stringify(join(root, "src/plugins/role-backends/codex.ts"))};\nexport default codex({research: {model: "fixture", command: ${JSON.stringify(executable)}}});\n`,
+    `import { acpx } from ${JSON.stringify(join(root, "src/plugins/acpx.ts"))};\nexport default acpx({research: {agent: "fixture", model: "fixture", command: ${JSON.stringify(executable)}}});\n`,
   );
   const obsolete = await cli("review", input, input, database, settingsFile);
   expect(obsolete.code).not.toBe(0);
@@ -725,8 +725,8 @@ test("native usage distinguishes absent placeholders and explicit zero, deduplic
         await tx.appendEntry(ExternalRequest, owner.root.id, {
           data: {
             operationId,
-            provider: "codex-cli",
-            api: "codex-exec",
+            provider: "acpx/fixture",
+            api: "acpx-exec",
             model: "codex",
             workspace: "/fixture",
             reasoning: "max",
