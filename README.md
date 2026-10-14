@@ -201,7 +201,8 @@ roles need no external CLI. The `acpx` factory accepts `implementation`, `verifi
 `model`. `config` passes agent-specific values through `--config-option`. Worker roles require
 an absolute `workspace` directory for retained artifacts. `command` selects the
 acpx executable. `agentCommand` selects a custom ACP command, including a separately
-installed ChatGPT Pro bridge. Agent installation and browser access remain outside
+installed [ChatGPT Pro ACP bridge](https://github.com/chaoxu/chatgpt-pro-acp).
+Agent installation and browser access remain outside
 Xean.
 The text-only ChatGPT bridge requires an empty MCP server list. Configure acpx
 with no MCP servers, or set `command` to an acpx wrapper adding
