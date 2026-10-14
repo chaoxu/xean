@@ -647,9 +647,10 @@ Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the sou
 package.
 
 Pi packages are built from unreleased upstream commit
-`301617df7b88951c328f8a7b6a732e590713df07`, after the 1.2.0 release.
-They retain the existing frozen model catalog, including the OpenAI/Azure
-context-capacity correction, and all existing Xean patches.
+`b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb`, after the 1.2.0 release.
+The refreshed model catalog gives `openai-codex/gpt-6.1-sol` a 500,000-token
+context window. The OpenAI/Azure context-capacity correction and existing Xean
+patches remain necessary and are retained.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records each retained patch,
 including the adapter fixes, the request hook used to select a profile's stream,

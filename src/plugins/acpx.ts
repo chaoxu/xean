@@ -39,6 +39,11 @@ export type AcpxTranscript = {
   usage: Record<string, number> | null;
   searches: number;
 };
+type AcpxCallState = {
+  kind?: string;
+  status?: string;
+  rawInput?: Record<string, unknown> | null;
+};
 /** Register explicit CLI options through the existing role hook. */
 export function acpx(options: AcpxRoleOptions) {
   return (builtins: Roles): Partial<Roles> => {
@@ -64,14 +69,7 @@ export function acpxTranscript(
   webTools: NonNullable<AcpxOptions["webTools"]> = defaultWebTools,
 ): AcpxTranscript {
   const result: AcpxTranscript = { usage: null, searches: 0 };
-  const calls = new Map<
-    string,
-    {
-      kind?: string;
-      status?: string;
-      rawInput?: Record<string, unknown> | null;
-    }
-  >();
+  const calls = new Map<string, AcpxCallState>();
   let text = "";
   let completed = 0;
   let protocolError: RoleFailure | undefined;
@@ -101,15 +99,11 @@ export function acpxTranscript(
         ["tool_call", "tool_call_update"].includes(update?.sessionUpdate) &&
         typeof update.toolCallId === "string"
       ) {
-        const previous = calls.get(update.toolCallId);
-        calls.set(update.toolCallId, {
-          kind: update.kind ?? previous?.kind,
-          status: update.status ?? previous?.status,
-          rawInput:
-            update.rawInput === undefined
-              ? previous?.rawInput
-              : update.rawInput,
-        });
+        const call = calls.get(update.toolCallId) ?? {};
+        if (update.kind != null) call.kind = update.kind;
+        if (update.status != null) call.status = update.status;
+        if (update.rawInput !== undefined) call.rawInput = update.rawInput;
+        calls.set(update.toolCallId, call);
       }
       if (
         update?.sessionUpdate === "usage_update" &&

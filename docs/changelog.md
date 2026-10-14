@@ -15,9 +15,11 @@ host while Pi owns each campaign's execution and recovery. This version is unrel
 - Source backend failures identify their stage and retain completed verification
   work. Coordinator instructions explain the shared source backend and recommend
   independent work after repeated operational failures.
-- Pin Pi to an unreleased snapshot after 1.2.0. It classifies
+- Pin Pi to unreleased upstream `b45e0ebcc`, after 1.2.0. It classifies
   `unable to forward upstream` as retryable and repairs invalid Unicode escapes
-  in streamed JSON. The frozen model catalog and existing Xean patches remain.
+  in streamed JSON. It also fixes system baseline ordering after compaction and
+  refreshes the model catalog, including a 500,000-token context window for
+  `openai-codex/gpt-6.1-sol`. Existing Xean patches remain necessary.
 - Import `xean/core` for the workflow, notebook rules, and role contracts without
   loading bundled role implementations, CLI, or adapters. `xean/roles` exports
   the default roles, and `xean/report` provides inspection. `open` from `xean`
