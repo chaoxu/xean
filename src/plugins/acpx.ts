@@ -290,7 +290,7 @@ export function acpxCall(
           },
           extendEnv: false,
           input: JSON.stringify({
-            instructions: `${instructions}\nEnd your answer with exactly one <xean-result>JSON</xean-result> block matching the supplied schema. Put only the final result in that block.`,
+            instructions: `${instructions}\nEnd your answer with exactly one <xean-result>JSON</xean-result> block. Its JSON must match the supplied schema exactly: use only declared fields, without extra status or wrapper fields.`,
             schema,
             input:
               input !== null &&
