@@ -2361,7 +2361,7 @@ if (input.assignment) value = {notes:[{id:input.noteIdPrefix + "finding",summary
 else if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};
 else value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};
 if (worker) { value.edits = null; for (const note of value.notes) note.candidate ??= null; }
-console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"tool_call",kind:"search",toolCallId:"search-1"}}}));
+console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"tool_call",kind:"fetch",status:"completed",toolCallId:"search-1"}}}));
 const text = "<xean-result>" + JSON.stringify(value) + "</xean-result>";
 console.log(JSON.stringify({method:"session/update",params:{update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text}}}}));
 console.log(JSON.stringify({result:{stopReason:"end_turn",usage:{inputTokens:17,outputTokens:5,cachedReadTokens:0}}}));

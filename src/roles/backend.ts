@@ -68,6 +68,8 @@ export const externalEvidence = (answer: {
   operationId: string;
 }) =>
   `\n\nArtifacts: ${answer.workspace}\nExecution receipt: ${answer.operationId}`;
+export const computationInstructions =
+  "Resource exhaustion leaves a check unresolved, never proves infeasibility. Independently check solver witnesses and certificates before using them as evidence. Preserve programs, inputs, commands, outputs, and relevant environment details for reproduction. A successful process exit or another agent's claim that a checker passed is insufficient.";
 export const ExternalLog = defineEntry<{
   operationId: string;
   stdout: string;

@@ -9,6 +9,7 @@ import {
 } from "../src/core/math/contracts.ts";
 import { noteIdPrefix } from "../src/core/math/state.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
+import { bindExternal } from "../src/roles/evidence.ts";
 import { acpx, acpxCall, acpxTranscript } from "../src/plugins/acpx.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
@@ -47,12 +48,54 @@ const framed = (value: unknown) =>
 const jsonl = (events: unknown[]) =>
   events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 const review = {
-  verdict: "PASS",
+  verdict: "PASS" as const,
   report: "Checked",
   premises: [],
   passages: [],
 };
 const output = (value: unknown) => jsonl([chunk(framed(value)), completed]);
+
+test.each(["failed", "pending", "in_progress"])(
+  "local search and %s retrieval cannot unlock fresh source evidence",
+  (status) => {
+    const value = {
+      ...review,
+      passages: [
+        { premise: 0, url: "https://example.org/paper", quote: "Claim" },
+      ],
+    };
+    const parsed = acpxTranscript(
+      jsonl([
+        update({
+          sessionUpdate: "tool_call",
+          toolCallId: "local",
+          kind: "search",
+          status: "completed",
+        }),
+        update({
+          sessionUpdate: "tool_call",
+          toolCallId: "web",
+          kind: "fetch",
+          status: "in_progress",
+        }),
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "web",
+          status,
+        }),
+        chunk(framed(value)),
+        completed,
+      ]),
+    );
+    expect(parsed.searches).toBe(0);
+    const evidence = bindExternal(
+      { ...parsed, value, operationId: "probe", reportedAt: "now" },
+      ["Claim"],
+    );
+    expect(evidence.verdict).toBe("INCONCLUSIVE");
+    expect(evidence.passages).toEqual([]);
+  },
+);
 
 // Actual child processes exercise capture, receipts, and cancellation together.
 async function fixture(
@@ -103,7 +146,7 @@ const reportOf = (owner: Awaited<ReturnType<typeof open>>) =>
   );
 
 test.each(["\n", "\r\n"])(
-  "acpx reads split result frames, counts unique searches, and retains usage with %j separators",
+  "acpx reads split result frames, counts completed fetches, and retains usage with %j separators",
   (separator) => {
     const result = framed(review);
     const events = [
@@ -115,19 +158,18 @@ test.each(["\n", "\r\n"])(
       update({
         sessionUpdate: "tool_call",
         toolCallId: "s1",
-        kind: "search",
+        kind: "fetch",
         title: "Search",
       }),
       update({
         sessionUpdate: "tool_call_update",
         toolCallId: "s1",
-        kind: "search",
         status: "completed",
       }),
       update({
         sessionUpdate: "tool_call",
         toolCallId: "s2",
-        kind: "search",
+        kind: "fetch",
         title: "Search",
       }),
       chunk("Working on it.\n" + result.slice(0, 7)),
@@ -141,9 +183,55 @@ test.each(["\n", "\r\n"])(
           .map((event) => JSON.stringify(event))
           .join(separator + " \t" + separator),
       ),
-    ).toEqual({ value: review, usage, searches: 2 });
+    ).toEqual({ value: review, usage, searches: 1 });
   },
 );
+
+test("caller-configured web signatures distinguish web search from local search", () => {
+  const webTools = [{ kind: "search", rawInput: { type: "webSearch" } }];
+  const events = [
+    update({
+      sessionUpdate: "tool_call",
+      toolCallId: "local",
+      kind: "search",
+      status: "completed",
+      rawInput: { query: "Claim" },
+    }),
+    update({
+      sessionUpdate: "tool_call",
+      toolCallId: "web",
+      kind: "search",
+      status: "in_progress",
+      rawInput: { type: "webSearch" },
+    }),
+    update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "web",
+      status: "completed",
+    }),
+  ];
+  const parse = (tools = webTools) =>
+    acpxTranscript(
+      jsonl([...events, chunk(framed(review)), completed]),
+      false,
+      tools,
+    );
+  expect(parse().searches).toBe(1);
+  expect(parse([]).searches).toBe(0);
+  expect(
+    acpxTranscript(jsonl([...events, chunk(framed(review)), completed]))
+      .searches,
+  ).toBe(0);
+  events.push(
+    update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "web",
+      status: "completed",
+      rawInput: null,
+    }),
+  );
+  expect(parse().searches).toBe(0);
+});
 
 test.each([
   ["no terminal event", jsonl([chunk(framed(review))])],
@@ -203,7 +291,7 @@ const workerSource = `
 const { instructions, schema, input } = await Bun.stdin.json();
 const args = process.argv.slice(2);
 const parameter = flag => args[args.indexOf(flag) + 1];
-if (parameter('--format') !== 'json' || !args.includes('--json-strict') || !args.includes('exec') || parameter('--file') !== '-' || parameter('--prompt-retries') !== '0') throw new Error('Wrong acpx protocol');
+if (parameter('--format') !== 'json' || !args.includes('--json-strict') || !args.includes('--suppress-reads') || !args.includes('exec') || parameter('--file') !== '-' || parameter('--prompt-retries') !== '0') throw new Error('Wrong acpx protocol');
 if (parameter('--model') !== 'fixture-model' || !args.includes('fixture') || !args.includes('--approve-all')) throw new Error('Requested agent/model missing');
 const config = args.flatMap((arg, index) => arg === '--config-option' ? [args[index + 1]] : []);
 if (!config.includes('reasoning_effort=low') || !config.includes('fixture=yes')) throw new Error('Requested agent configuration missing');
@@ -269,10 +357,11 @@ test("acpx distinguishes recoverable client-tool errors from prompt failure", ()
 test("acpx uses the role envelope and Pi memo; changed assignment dispatches, changed configuration does not", async () => {
   const { owner } = await fixture(workerSource, "worker", (options) => () => ({
     async implementation(input, runtime, context) {
-      const call = acpxCall({
+      const configured = {
         ...options,
         config: { reasoning_effort: "low", fixture: "yes" },
-      });
+      };
+      const call = acpxCall(configured);
       const schema = noteResultSchema(
         explorationSchema,
         noteIdPrefix(runtime.taskId),
@@ -299,9 +388,10 @@ test("acpx uses the role envelope and Pi memo; changed assignment dispatches, ch
         { agent: "different" },
         { model: "different" },
         { config: { reasoning_effort: "max" } },
+        { webTools: [] },
       ])
         await expect(
-          acpxCall({ ...options, ...changed })(...args),
+          acpxCall({ ...configured, ...changed })(...args),
         ).rejects.toThrow("configuration changed");
       const changed = await call(
         "worker",
@@ -420,6 +510,7 @@ catch (error) { if (!['EPIPE', 'ECONNRESET'].includes(error.code)) throw error; 
       await owner.close();
     }
   },
+  15_000,
 );
 
 test.each([1, 2])(
@@ -480,15 +571,22 @@ test.each([1, 2])(
   },
 );
 
-test.each(["cancel", "close"] as const)(
+test.each(["cancel", "close", "cleanup", "orphan"] as const)(
   "acpx %s kills resistant descendants and abandons private research output",
   async (action) => {
     const { owner, path, directory, options } = await fixture(`
 import { spawn } from "node:child_process";
 import { writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-process.on("SIGTERM", () => {});
-const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);']);
+const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);'], { detached: ${action === "cleanup"} });
+process.on("SIGTERM", () => {
+  if (${action === "cleanup"}) {
+    child.kill("SIGKILL");
+    writeFileSync(join(import.meta.dir, "cleaned"), "yes");
+    process.exit(0);
+  }
+  if (${action === "orphan"}) process.exit(0);
+});
 await new Promise((resolve) => child.stdout.once("data", resolve));
 writeSync(1, "unfinished acpx output\\n");
 writeSync(2, "fixture waiting\\n");
@@ -521,7 +619,7 @@ setInterval(() => {}, 1000);
       const before = await reportOf(owner);
       const request = before.records!.find(ExternalRequest.is)!;
       workspace = request.data.workspace;
-      if (action === "cancel") {
+      if (action !== "close") {
         await owner.harness.abortTask(request.byTaskId!, context);
         expect(
           (await owner.harness.waitForTask(request.byTaskId!, context)).state
@@ -530,6 +628,8 @@ setInterval(() => {}, 1000);
         await owner.root.waitForIdle(context);
       }
       await owner.close();
+      if (action === "cleanup")
+        expect(await Bun.file(join(directory, "cleaned")).text()).toBe("yes");
       for (const pid of processes)
         for (const deadline = Date.now() + 3000; alive(pid);) {
           if (Date.now() > deadline)

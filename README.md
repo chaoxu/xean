@@ -183,7 +183,11 @@ const worker = {
 export default acpx({
   implementation: worker,
   verifier: worker,
-  research: { agent: "codex", model: "gpt-6-astra" },
+  research: {
+    agent: "codex",
+    model: "gpt-6-astra",
+    webTools: [{ kind: "search", rawInput: { type: "webSearch" } }],
+  },
 });
 ```
 
@@ -202,8 +206,8 @@ roles need no external CLI. The `acpx` factory accepts `implementation`, `verifi
 an absolute `workspace` directory for retained artifacts. `command` selects the
 acpx executable. `agentCommand` selects a custom ACP command, including a separately
 installed [ChatGPT Pro ACP bridge](https://github.com/chaoxu/chatgpt-pro-acp).
-Agent installation and browser access remain outside
-Xean.
+Agent installation and browser access remain outside Xean. For that bridge, omit
+`model` and select the model through `CHATGPT_PRO_MODEL` as its README describes.
 The text-only ChatGPT bridge requires an empty MCP server list. Configure acpx
 with no MCP servers, or set `command` to an acpx wrapper adding
 `--mcp-config /path/to/empty.json`, where that file contains `{"mcpServers":[]}`.
@@ -211,9 +215,16 @@ with no MCP servers, or set `command` to an acpx wrapper adding
 The caller owns native tool, permission, and sandbox configuration. Xean invokes
 `acpx exec` with `--approve-all` under its trusted-operator assumption. Select an
 agent whose configured tools satisfy the role. Research must retrieve primary
-sources and return quotations when needed. Literature additionally requires
-`literature: true` in settings and observed ACP search or fetch activity. Independent review
-uses the same research backend.
+sources and return quotations when needed. Fresh source passages and literature
+notes require a completed web-tool call. By default, Xean counts ACP `fetch`
+calls. For agents that label web retrieval as `search`, configure `webTools` with
+the kind and exact `rawInput` fields identifying their web tool, as in the Codex
+example. Generic local searches and failed or unfinished calls do not count.
+The operator owns these tool signatures. A completed call does not authenticate
+the returned quotations. Literature also requires `literature: true` in settings.
+Independent review uses the same research backend. New computations used in a
+review must include their reproducible evidence in the report because research
+workspaces are temporary.
 
 Xean sends the role instructions, input, and result schema in the prompt. It accepts
 one final `<xean-result>` JSON block from a completed `end_turn`, then validates the

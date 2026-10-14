@@ -24,6 +24,7 @@ export type AcpxOptions = {
   command?: string;
   environment?: NodeJS.ProcessEnv;
   workspace?: string;
+  webTools?: { kind: string; rawInput?: Record<string, string> }[];
 };
 export type AcpxRoleOptions = {
   implementation?: AcpxOptions & { workspace: string };
@@ -54,10 +55,23 @@ export function acpx(options: AcpxRoleOptions) {
   };
 }
 
+const defaultWebTools = [{ kind: "fetch" }];
+
 /** ACP has no final-answer phase. The role prompt supplies one explicit result block. */
-export function acpxTranscript(stdout: string, failed = false): AcpxTranscript {
+export function acpxTranscript(
+  stdout: string,
+  failed = false,
+  webTools: NonNullable<AcpxOptions["webTools"]> = defaultWebTools,
+): AcpxTranscript {
   const result: AcpxTranscript = { usage: null, searches: 0 };
-  const searches = new Set<string>();
+  const calls = new Map<
+    string,
+    {
+      kind?: string;
+      status?: string;
+      rawInput?: Record<string, unknown> | null;
+    }
+  >();
   let text = "";
   let completed = 0;
   let protocolError: RoleFailure | undefined;
@@ -85,10 +99,18 @@ export function acpxTranscript(stdout: string, failed = false): AcpxTranscript {
         text += update.content.text;
       if (
         ["tool_call", "tool_call_update"].includes(update?.sessionUpdate) &&
-        ["search", "fetch"].includes(update.kind) &&
         typeof update.toolCallId === "string"
-      )
-        searches.add(update.toolCallId);
+      ) {
+        const previous = calls.get(update.toolCallId);
+        calls.set(update.toolCallId, {
+          kind: update.kind ?? previous?.kind,
+          status: update.status ?? previous?.status,
+          rawInput:
+            update.rawInput === undefined
+              ? previous?.rawInput
+              : update.rawInput,
+        });
+      }
       if (
         update?.sessionUpdate === "usage_update" &&
         update.cost?.currency === "USD" &&
@@ -123,7 +145,17 @@ export function acpxTranscript(stdout: string, failed = false): AcpxTranscript {
     }
   }
   result.usage = Object.keys(usage).length ? usage : null;
-  result.searches = searches.size;
+  result.searches = [...calls.values()].filter(
+    (call) =>
+      call.status === "completed" &&
+      webTools.some(
+        (tool) =>
+          call.kind === tool.kind &&
+          Object.entries(tool.rawInput ?? {}).every(
+            ([key, value]) => call.rawInput?.[key] === value,
+          ),
+      ),
+  ).length;
   if (completed !== 1 || failed)
     result.error ??=
       protocolError ?? new Error("acpx emitted no unique completed turn");
@@ -168,6 +200,7 @@ export function acpxCall(
         a.localeCompare(b),
       ),
       settings.workspace,
+      settings.webTools ?? defaultWebTools,
       settings.environment &&
         Object.entries(settings.environment).sort(([a], [b]) =>
           a.localeCompare(b),
@@ -212,6 +245,7 @@ export function acpxCall(
         "--format",
         "json",
         "--json-strict",
+        "--suppress-reads",
         "--approve-all",
         "--prompt-retries",
         "0",
@@ -272,7 +306,6 @@ export function acpxCall(
                 : input,
           }),
           cancelSignal: context.abortSignal,
-          killSignal: "SIGKILL",
           killDescendants: true,
           reject: false,
           // Execa measures decoded output in characters, separately per stream.
@@ -285,9 +318,16 @@ export function acpxCall(
         stream?.once("close", () => {
           if (!stream.readableEnded) child.kill();
         });
-      const run = await child;
+      // A cooperative parent can exit before Execa's force-kill timer fires.
+      const run = await child.finally(() => {
+        child.kill("SIGKILL");
+      });
       context.abortSignal?.throwIfAborted();
-      const transcript = acpxTranscript(run.stdout, run.failed);
+      const transcript = acpxTranscript(
+        run.stdout,
+        run.failed,
+        settings.webTools,
+      );
       let log: EntryId | undefined;
       await runtime.commit(async (tx) => {
         log = (

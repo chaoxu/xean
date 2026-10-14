@@ -49,7 +49,11 @@ import {
   type ProfileName,
   type Settings,
 } from "./config.ts";
-import { externalEvidence, type ExternalRoles } from "./backend.ts";
+import {
+  computationInstructions,
+  externalEvidence,
+  type ExternalRoles,
+} from "./backend.ts";
 import {
   RoleFailure,
   type NoteReference,
@@ -257,7 +261,7 @@ export function createRoles(options: RoleOptions) {
       const answer = await functions.external.verifier!(
         "worker",
         submissionSchemas[profile],
-        `${system}\nPerform the mathematical check or independent proof required by this assignment, using its stated criteria and output schema. Review the checker against the exact mathematical claim, cover every required case, and use exact arithmetic or certified error bounds where needed. A successful exit or another agent's claim that a checker passed is insufficient. Identify the execution evidence and explain why the checks establish the claim in your result. Supply missing verification, not a missing proof step: substantive repairs belong in the authoritative note. ${profile === "proof" ? "This is blind reconstruction. Use only the supplied task, exact statements, approved premises, and declared support. Do not inspect original proofs, campaign transcripts, or other workspaces. Keep your own programs and results in this fresh workspace; installed tools and libraries may be used." : "Read relevant supplied artifacts as evidence and assess their correspondence to the frozen argument. Preserve original artifacts and do your checking in this fresh workspace. Address the unresolved checks identified in any prior assessment."}`,
+        `${system}\nPerform the mathematical check or independent proof required by this assignment, using its stated criteria and output schema. Review the checker against the exact mathematical claim, cover every required case, and use exact arithmetic or certified error bounds where needed. ${computationInstructions} Identify the execution evidence and explain why the checks establish the claim in your result. Supply missing verification, not a missing proof step: substantive repairs belong in the authoritative note. ${profile === "proof" ? "This is blind reconstruction. Use only the supplied task, exact statements, approved premises, and declared support. Do not inspect original proofs, campaign transcripts, or other workspaces. Keep your own programs and results in this fresh workspace; installed tools and libraries may be used." : "Read relevant supplied artifacts as evidence and assess their correspondence to the frozen argument. Preserve original artifacts and do your checking in this fresh workspace. Address the unresolved checks identified in any prior assessment."}`,
         input,
         runtime,
         context,
@@ -458,7 +462,8 @@ export function createRoles(options: RoleOptions) {
       const answer = await functions.external.implementation(
         "worker",
         schema,
-        "Complete the concrete implementation assignment: produce its deliverable for the specified input/domain, expected output, binding constraints, and checks/evidence. Selected notes may define these requirements. The task's completion criteria provide mathematical context; completing the implementation assignment need not solve the whole task. Choose your own implementation and tools. Return useful findings or failed approaches as ordinary notes. Give each new note a permanent ID starting with the supplied noteIdPrefix followed by a fresh short name. Use that exact full ID in text, support, and edits; IDs are never rewritten. Each note has summary, detailedSummary, full text, and support. Put derivations, artifact filenames, and rerun commands in text, never support. Include the claims, relevant program/output evidence, reasoning, and limitations needed to check the note without opening artifact files. Distinguish observations, exhaustive finite results, and mathematical proofs. Declare as support every supplied or newly created note whose result you use without proving it, using its exact full ID. Dead notes are diagnostic only. These are unverified drafts. Set candidate=true on a note only when that note claims a complete solution of the exact task. Return notes=[] only when there is no new information worth retaining.",
+        "Complete the concrete implementation assignment: produce its deliverable for the specified input/domain, expected output, binding constraints, and checks/evidence. Selected notes may define these requirements. The task's completion criteria provide mathematical context; completing the implementation assignment need not solve the whole task. Choose your own implementation and tools. Return useful findings or failed approaches as ordinary notes. Give each new note a permanent ID starting with the supplied noteIdPrefix followed by a fresh short name. Use that exact full ID in text, support, and edits; IDs are never rewritten. Each note has summary, detailedSummary, full text, and support. Put derivations, artifact filenames, and rerun commands in text, never support. Include the claims, relevant program/output evidence, reasoning, and limitations needed to check the note without opening artifact files. Distinguish observations, exhaustive finite results, and mathematical proofs. Declare as support every supplied or newly created note whose result you use without proving it, using its exact full ID. Dead notes are diagnostic only. These are unverified drafts. Set candidate=true on a note only when that note claims a complete solution of the exact task. Return notes=[] only when there is no new information worth retaining. " +
+          computationInstructions,
         { ...input, noteIdPrefix: prefix },
         runtime,
         context,
