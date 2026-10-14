@@ -236,10 +236,14 @@ for (const kind of ["submit", "guide", "recheck"] as const) {
     .command(`${kind} <campaign> <file>`)
     .requiredOption("--id <id>", "Stable command ID for exact retries");
   if (kind === "submit")
-    command.option(
-      "--untrusted",
-      "Require ordinary verification of submitted notes and edits, overriding per-note trust",
-    );
+    command
+      .description(
+        "Publish notes with permanent IDs input/<command-id>/<name>, or edit existing IDs",
+      )
+      .option(
+        "--untrusted",
+        "Require ordinary verification of submitted notes and edits, overriding per-note trust",
+      );
   command.action(
     async (
       campaign: string,

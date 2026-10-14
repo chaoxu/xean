@@ -96,7 +96,7 @@ const result = JSON.parse(
   await run("examples/model-free.ts", "campaign.sqlite"),
 );
 assert.equal(result.status, "completed");
-assert.match(result.acceptedNoteId, /^\d+\/n1$/);
+assert.match(result.acceptedNoteId, /^\d+\/reflexivity$/);
 assert.deepEqual(result.calls, inspected.status.calls);
 const completed = JSON.parse(
   await run(manifest.bin.xean, "run", "campaign.sqlite"),

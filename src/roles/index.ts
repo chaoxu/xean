@@ -7,6 +7,7 @@ import { Assert } from "typebox/value";
 import {
   batchResults,
   explorationSchema,
+  noteResultSchema,
   implementationPlan,
   planSchema,
   type ImplementationInput,
@@ -61,7 +62,7 @@ import {
   type PublishedResult,
   type ExplorerLimit,
 } from "../core/math/results.ts";
-import { readView, seedNotebook } from "../core/math/state.ts";
+import { noteIdPrefix, readView, seedNotebook } from "../core/math/state.ts";
 
 const mathematicalCheck = `Judge the authoritative full text first. Check both summaries against it: preserve hypotheses, quantitative guarantees, conditionality, negative conclusions, and unresolved gaps. A summary must not strengthen a claim or present an unresolved result as established. For notes without external trust, PASS requires the original argument to establish the full claimed statement under declared transitive support, listed external premises, and task-permitted assumptions. A substantive argument supplied only in a report or independent proof cannot repair that note. If missing justification is the only blocker, return INCONCLUSIVE even if you can prove the result. Do not omit conclusions to obtain PASS. FAIL requires a concrete defect. Use INCONCLUSIVE when you cannot settle a check. ${correctionInstructions} External trust grants the mathematical claims stated in the supplied note at their exact scope. When an externally trusted support has no checked statement, use its authoritative full text. Treat established support results as given, but verify their applicability against their exact statements, including hypotheses absent from summaries, and check all new reasoning. Do not infer mathematical truth from an earlier model's confidence.`;
 const externalStatementInstructions =
@@ -452,18 +453,25 @@ export function createRoles(options: RoleOptions) {
       context.abortSignal?.throwIfAborted();
       if (!functions.external.implementation)
         throw new Error("Implementation backend is disabled");
+      const prefix = noteIdPrefix(runtime.taskId);
+      const schema = noteResultSchema(explorationSchema, prefix);
       const answer = await functions.external.implementation(
         "worker",
-        explorationSchema,
-        "Complete the concrete implementation assignment: produce its deliverable for the specified input/domain, expected output, binding constraints, and checks/evidence. Selected notes may define these requirements. The task's completion criteria provide mathematical context; completing the implementation assignment need not solve the whole task. Choose your own implementation and tools. Return useful findings or failed approaches as ordinary notes with local IDs n1, n2, ... . Each note has summary, detailedSummary, full text, and support. Put derivations, artifact filenames, and rerun commands in text, never support. Include the claims, relevant program/output evidence, reasoning, and limitations needed to check the note without opening artifact files. Distinguish observations, exhaustive finite results, and mathematical proofs. Declare as support every supplied or earlier local note whose result you use without proving it. Dead notes are diagnostic only. These are unverified drafts. Set candidate=true on a note only when that note claims a complete solution of the exact task. Return notes=[] only when there is no new information worth retaining.",
-        input,
+        schema,
+        "Complete the concrete implementation assignment: produce its deliverable for the specified input/domain, expected output, binding constraints, and checks/evidence. Selected notes may define these requirements. The task's completion criteria provide mathematical context; completing the implementation assignment need not solve the whole task. Choose your own implementation and tools. Return useful findings or failed approaches as ordinary notes. Give each new note a permanent ID starting with the supplied noteIdPrefix followed by a fresh short name. Use that exact full ID in text, support, and edits; IDs are never rewritten. Each note has summary, detailedSummary, full text, and support. Put derivations, artifact filenames, and rerun commands in text, never support. Include the claims, relevant program/output evidence, reasoning, and limitations needed to check the note without opening artifact files. Distinguish observations, exhaustive finite results, and mathematical proofs. Declare as support every supplied or newly created note whose result you use without proving it, using its exact full ID. Dead notes are diagnostic only. These are unverified drafts. Set candidate=true on a note only when that note claims a complete solution of the exact task. Return notes=[] only when there is no new information worth retaining.",
+        { ...input, noteIdPrefix: prefix },
         runtime,
         context,
       );
-      Assert(explorationSchema, answer.value);
+      Assert(schema, answer.value);
       for (const note of answer.value.notes)
         note.text += externalEvidence(answer);
-      return validateResult({ kind: "notes", ...answer.value }, input.notes);
+      return validateResult(
+        { kind: "notes", ...answer.value },
+        input.notes,
+        false,
+        prefix,
+      );
     },
     async explorer(
       input: ExplorerInput,
@@ -493,29 +501,36 @@ export function createRoles(options: RoleOptions) {
           : "Use read_notes to choose detailed summaries or full arguments from the current notebook, including your own submissions, batching independent IDs. Reading is disabled when its allowance is exhausted and on your final response; then work from available context and submit.";
       const editingInstructions = singleShot
         ? "Create new notes only. Existing full texts are not supplied, so do not edit existing notes. Omit edits or return an empty edits array. Record proposed repairs as new findings with their limitations; they do not change existing notes."
-        : "Repair existing notes with edits, keeping their stable IDs. Read a published note's full text before changing it. Each edit supplies only changed fields and the current revision returned by submission or read_notes. Every changed mathematical field reopens its checks; candidate and retirement flags only advance the revision. Each successful submission publishes its notes and edits immediately and returns their IDs and revisions. Continue thinking and submitting useful work in this conversation. Earlier submissions remain published if the invocation later fails or is cancelled. When repairing a proof or dependency gap, first look for an existing note supplying the missing result, then repair the consuming argument and its support declarations. A new lemma alone does not repair a consumer that still lacks the dependency. Unchanged consumers need no copied replacement notes. Retired notes remain readable for diagnosis; retiring a note does not redirect its consumers. Changing an externally trusted note revokes its caller grant. The edited argument must pass generated-note checks. Do not copy an unchanged failed argument under a new ID or submit no-op edits as progress. read_notes supplies its checked statement when available. Use that statement as the granted result. If you need an additional fact from its proof, prove the fact in your note or establish it as a separate lemma and declare it as support. To mark an existing note as a candidate, set candidate=true in its edit.";
-      const instructions = `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The input contains the task, the complete index of note IDs and summaries, note states, feedback, your assignment, and your read and response allowances. The assignment is fallible. ${explorerInstructions} Follow support IDs when needed. Every completed response counts, including reads, rejected submissions, and responses without a submission. Provider message and output-token limits continue automatically without consuming this allowance. Do mathematics without external search. Record mathematical results and failed approaches that help continue work on the exact task. Provide an index summary, detailed summary, and complete free-form text. Notes may contain proved results, conjectures, observations, questions, failed approaches, or unresolved gaps. Distinguish them explicitly; never present an unproved claim as established. State substantial reusable lemmas as separate notes with complete arguments and refer to them through support; keep routine steps together. Reuse established results when the task permits, stating their hypotheses and flagging uncertain claims or sources for checking. Develop background arguments when they help advance the task. Identify unresolved assumptions and pivotal claims so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it, including factual claims in scope remarks or comparisons. Reading, mentioning, or questioning a note without relying on its result is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. ${editingInstructions} Use a fresh local ID n1, n2, ... for each new note. New notes in a batch may refer to each other by local ID. After submission, use the returned published IDs and revisions for reading, support, and edits. Set candidate=true on a new note only when that note claims a complete solution of the exact task. An empty notes-and-edits submission hands off.`;
+        : "Repair existing notes with edits, keeping their stable IDs. Read a published note's full text before changing it. Each edit supplies only changed fields and the current revision returned by submission or read_notes. Every changed mathematical field reopens its checks; candidate and retirement flags only advance the revision. Each successful submission publishes its notes and edits immediately and returns their IDs and revisions. The invalidated list reports dependent notes whose checks were cleared. Use its revisions when readRequired=false; otherwise reread the note before using or editing it. Continue thinking and submitting useful work in this conversation. Earlier submissions remain published if the invocation later fails or is cancelled. When repairing a proof or dependency gap, first look for an existing note supplying the missing result, then repair the consuming argument and its support declarations. A new lemma alone does not repair a consumer that still lacks the dependency. Unchanged consumers need no copied replacement notes. Retired notes remain readable for diagnosis; retiring a note does not redirect its consumers. Changing an externally trusted note revokes its caller grant. The edited argument must pass generated-note checks. Do not copy an unchanged failed argument under a new ID or submit no-op edits as progress. read_notes supplies its checked statement when available. Use that statement as the granted result. If you need an additional fact from its proof, prove the fact in your note or establish it as a separate lemma and declare it as support. To mark an existing note as a candidate, set candidate=true in its edit.";
+      const instructions = `Work on the exact mathematical task. You own the mathematical strategy: choose approaches, change direction, and continue useful work. The input contains the task, the complete index of note IDs and summaries, note states, feedback, your assignment, and your read and response allowances. The assignment is fallible. ${explorerInstructions} Follow support IDs when needed. Every completed response counts, including reads, rejected submissions, and responses without a submission. Provider message and output-token limits continue automatically without consuming this allowance. Do mathematics without external search. Record mathematical results and failed approaches that help continue work on the exact task. Provide an index summary, detailed summary, and complete free-form text. Notes may contain proved results, conjectures, observations, questions, failed approaches, or unresolved gaps. Distinguish them explicitly; never present an unproved claim as established. State substantial reusable lemmas as separate notes with complete arguments and refer to them through support; keep routine steps together. Reuse established results when the task permits, stating their hypotheses and flagging uncertain claims or sources for checking. Develop background arguments when they help advance the task. Identify unresolved assumptions and pivotal claims so Coordinator can arrange appropriate checks. Declare as support every note whose result you use without proving it, including factual claims in scope remarks or comparisons. Reading, mentioning, or questioning a note without relying on its result is not a dependency. Dead notes are diagnostic only; never use them as mathematical support. Existing verified support need not be reproved. ${editingInstructions} Give each new note a permanent ID starting with the supplied noteIdPrefix followed by a fresh short name. Keep names unique within this invocation. Use that exact full ID in prose, support, reads, and edits, including references between new notes in one submission. IDs are never rewritten. Repair an existing note through edits with its existing ID and current revision. Set candidate=true on a new note only when that note claims a complete solution of the exact task. An empty notes-and-edits submission hands off.`;
       const prompt = {
         task: input.task,
+        noteIdPrefix: noteIdPrefix(runtime.taskId),
         notes: input.notes.filter((note) => !note.retired).map(noteInfo),
         assignment: input.assignment,
         allowance: { reads: maxReads, responses: maxResponses },
       };
       if (functions.external.explorer) {
+        const schema = noteResultSchema(explorationSchema, prompt.noteIdPrefix);
         const { value: result } = await functions.external.explorer(
           "worker",
-          explorationSchema,
+          schema,
           instructions,
           prompt,
           runtime,
           context,
         );
-        Assert(explorationSchema, result);
+        Assert(schema, result);
         if (result.edits?.length)
           throw new Error(
             "External Explorer cannot edit notes without their full text",
           );
-        return validateResult({ kind: "notes", ...result }, input.notes);
+        return validateResult(
+          { kind: "notes", ...result },
+          input.notes,
+          false,
+          prompt.noteIdPrefix,
+        );
       }
       const result = await ask(
         "explorer",
@@ -537,7 +552,6 @@ export function createRoles(options: RoleOptions) {
       );
       return publicationResult(
         result.submissions as Exploration[],
-        runtime.taskId,
         result.limit,
       );
     },
@@ -565,7 +579,7 @@ Verification runs correctness, source, requirements, then reconstruction. Correc
 
 Stable note IDs are editable. Ask Explorer to repair the affected argument and any consuming dependency declarations, reusing existing lemmas when appropriate. The checked statement is a correctness result, not an Explorer-editable field. If it misstates a note, ask Explorer to clarify the intended mathematical claim in the authoritative text using a mathematical edit, then send the revised note through correctness again. Do not request direct edits to the checked statement. Do not require copied consumer chains or new IDs merely to repair an existing note. Retirement affects discovery, not mathematical truth or dependency redirects. Dead and retired notes can be read for diagnosis. Mathematical edits invalidate affected evidence; unchanged summaries and repeated assessments do not establish new mathematics. Use the actual unresolved stage in feedback, not just the requested final stage. Recent outcomes report completed work and operational failures. Submitted edit counts do not establish that the mathematics changed; inspect the current note feedback before requesting another check.
 
-You may select the external Verifier to reassess INCONCLUSIVE correctness, requirements, or reconstruction whenever a specific computational check could resolve the uncertainty. Decide whether another attempt is useful from the prior reports and available evidence. Xean does not automatically retry these checks. Source checks still require relevant new source evidence. A missing proof or supporting statement requires an authoritative note or dependency repair by Explorer. Preserve diagnostic distinctions between a concrete defect and incomplete checking. Use the observed failure and retained execution evidence when deciding whether another attempt is useful. A failed final response does not establish that no commands ran or no artifacts were produced. Transient provider failures may recover through the existing retry policy. Persistent blockers need a relevant change: changing URL paths on the same host does not repair failed DNS, and repeating a solver request does not supply missing software. Identify what could make another attempt succeed, or select useful work that avoids the blocker.
+You may select the external Verifier to reassess INCONCLUSIVE correctness, requirements, or reconstruction whenever a specific computational check could resolve the uncertainty. Decide whether another attempt is useful from the prior reports and available evidence. Xean does not automatically retry these checks. Source checks still require relevant new source evidence. A missing proof or supporting statement requires an authoritative note or dependency repair by Explorer. Preserve diagnostic distinctions between a concrete defect and incomplete checking. Use the observed failure and retained execution evidence when deciding whether another attempt is useful. A failed final response does not establish that no commands ran or no artifacts were produced. Native provider failures may recover through Pi retries. External CLI calls report their own terminal failures. Both verifier backends use the same source-retrieval backend, so switching verifier backend does not bypass a source-checking outage. After repeated capacity or transport failures, prefer useful work independent of that backend, or idle if none is available. A later retry needs a reason to expect recovery. Persistent blockers need a relevant change: changing URL paths on the same host does not repair failed DNS, and repeating a solver request does not supply missing software. Identify what could make another attempt succeed, or select useful work that avoids the blocker.
 
 Prioritize pivotal claims and useful dependencies rather than checking every speculative note. Before returning work=null, assess the latest substantive results and remaining useful work: verification of new claims worth retaining, repairs identified by checks, and focused exploration or computation. Finishing a worker's local objective does not exhaust the campaign. If a concrete admissible step is reasonably likely to advance the exact task or establish useful progress toward it, select it. Return work=null only when no such step is currently available, and briefly explain why in your response before submitting. Unchecked speculative or irrelevant notes alone do not require further work. Use read_notes for detailed summaries or full arguments when this assessment requires them, batching independent IDs. An idle decision does not claim a solution.`,
         prompt,
@@ -686,7 +700,14 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
           if (results === undefined) {
             results = batchResults(
               sources.map((note) => note.id),
-              await research().source(sourceInput, runtime, context),
+              await research()
+                .source(sourceInput, runtime, context)
+                .catch((error) => {
+                  throw new Error(
+                    `Source checking failed: ${error instanceof Error ? error.message : String(error)}`,
+                    { cause: error },
+                  );
+                }),
             );
             results = await runtime.memo("research.source", results, context);
           }
@@ -724,7 +745,10 @@ Prioritize pivotal claims and useful dependencies rather than checking every spe
         runtime,
         context,
       );
-      Assert(literatureResultSchema, result);
+      Assert(
+        noteResultSchema(literatureResultSchema, noteIdPrefix(runtime.taskId)),
+        result,
+      );
       validateNotes(result.notes, input.notes);
       return { kind: "notes", notes: result.notes };
     },

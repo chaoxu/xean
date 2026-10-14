@@ -165,11 +165,14 @@ the full saved guidance. Pasting a paper into `guide` repeats that paper in each
 decision's input.
 
 Use `submit` for initial notes and reference material after `init`, before the
-first `run`, or during an ongoing campaign. Each new note has a local `id`
-(`n1`, `n2`, and so on), a short `summary`, a `detailedSummary`, full `text`, and a
+first `run`, or during an ongoing campaign. Each new note has a permanent `id`,
+a short `summary`, a `detailedSummary`, full `text`, and a
 `support` array of note IDs. Native Coordinator and Explorer receive the short
 index and can read the detailed summary or full text as needed. Preserve the
 result's hypotheses, proof, and provenance in the note.
+For `submit --id initial-notes`, choose IDs such as
+`input/initial-notes/square-bound`. Use the full ID in text and support, including
+references within the same submission. Publication preserves these names.
 
 New caller notes default to external trust, which grants their mathematical
 claims and sources. Set `"trusted": false` on notes that need ordinary
@@ -207,7 +210,7 @@ from `inspect`, then put the fields to change in a JSON file. For example,
   "notes": [],
   "edits": [
     {
-      "id": "input/lemmas/n1",
+      "id": "input/lemmas/square-bound",
       "revision": 42,
       "summary": "A lower bound under the original hypotheses."
     }

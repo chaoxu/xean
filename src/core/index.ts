@@ -17,6 +17,7 @@ export {
   readView,
   readSnapshot,
   publishExploration,
+  noteIdPrefix,
 } from "./math/state.ts";
 export { noteInfo } from "./math/notes.ts";
 export { closure } from "./math/argument.ts";

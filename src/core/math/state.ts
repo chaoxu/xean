@@ -291,36 +291,8 @@ function invalidate(
     head.revision = marker;
   }
 }
-function normalize(
-  value: Exploration,
-  prefix: string,
-  known?: ReadonlySet<string>,
-): Exploration {
-  const ids = new Set(value.notes.map((note) => note.id));
-  const canonical = (id: string) =>
-    /^n[1-9][0-9]*$/.test(id) && known?.has(`${prefix}/${id}`)
-      ? `${prefix}/${id}`
-      : id;
-  const support = (list: string[]) =>
-    list.map((id) => (ids.has(id) ? `${prefix}/${id}` : canonical(id)));
-  return {
-    ...value,
-    notes: value.notes.map((note) => ({
-      ...note,
-      id: `${prefix}/${note.id}`,
-      support: support(note.support),
-    })),
-    ...(value.edits
-      ? {
-          edits: value.edits.map((edit) => ({
-            ...edit,
-            id: ids.has(edit.id) ? edit.id : canonical(edit.id),
-            ...(edit.support ? { support: support(edit.support) } : {}),
-          })),
-        }
-      : {}),
-  };
-}
+/** Pi owns worker identity; note names are permanent from creation. */
+export const noteIdPrefix = (workerId: TaskId): string => `${workerId}/`;
 async function applyNotes(
   tx: Tx,
   root: ConversationId,
@@ -458,17 +430,18 @@ export async function publishExploration(
 ): Promise<{
   notes: { id: string; revision: number }[];
   edits: { id: string; revision: number }[];
+  invalidated: { id: string; revision: number; readRequired: boolean }[];
 }> {
   await publicationOwner(tx, root, workerId);
   if (!delta.notes.length && !delta.edits?.length)
-    return { notes: [], edits: [] };
+    return { notes: [], edits: [], invalidated: [] };
   const current = await readView(tx, root, { bodies: false, inputs: false });
   const known = new Set(current.notes.map((note) => note.id));
-  const normalized = normalize(delta, String(workerId), known);
+  validateExploration(delta, current.notes, noteIdPrefix(workerId));
   for (const note of closure(
     [
-      ...(normalized.edits ?? []).map((edit) => edit.id),
-      ...[...normalized.notes, ...(normalized.edits ?? [])]
+      ...(delta.edits ?? []).map((edit) => edit.id),
+      ...[...delta.notes, ...(delta.edits ?? [])]
         .flatMap((note) => note.support ?? [])
         .filter((id) => known.has(id)),
     ],
@@ -479,19 +452,28 @@ export async function publishExploration(
         `${observed[note.id] === undefined ? "Unseen mathematical input" : "Stale note revision"}: ${note.id}`,
       );
   const catalog = await tx.doc(Catalog, root);
-  await publishNotes(tx, root, catalog, current.notes, normalized);
+  await publishNotes(tx, root, catalog, current.notes, delta);
   const revisions = (values: { id: string }[]) =>
     values.map(({ id }) => ({
       id,
       revision: catalog.notes.find((note) => note.id === id)!.revision,
     }));
   const publication = {
-    notes: revisions(normalized.notes),
-    edits: revisions(normalized.edits ?? []),
+    notes: revisions(delta.notes),
+    edits: revisions(delta.edits ?? []),
   };
+  const edited = new Set(publication.edits.map(({ id }) => id));
+  const invalidated = current.notes.flatMap((before) => {
+    const after = catalog.notes.find((note) => note.id === before.id)!;
+    if (edited.has(before.id) || before.revision === after.revision) return [];
+    const readRequired = observed[before.id] !== before.revision;
+    // Only our invalidation changed an observed note. Never hide an unseen edit.
+    if (!readRequired) observed[before.id] = after.revision;
+    return [{ id: before.id, revision: after.revision, readRequired }];
+  });
   for (const { id } of [...publication.notes, ...publication.edits])
     observed[id] = catalog.notes.find((note) => note.id === id)!.revision;
-  return publication;
+  return { ...publication, invalidated };
 }
 
 function assertFrozen(current: Note[], frozen: Note[], ids: string[]): void {
@@ -519,11 +501,15 @@ export async function publishResult(
   failed = false,
 ): Promise<EntryId> {
   await publicationOwner(tx, root, workerId);
-  const result = validateResult(value, frozen.notes, failed);
+  const result = validateResult(
+    value,
+    frozen.notes,
+    failed,
+    noteIdPrefix(workerId),
+  );
   const current = await readView(tx, root, { bodies: false, inputs: false });
   const catalog = await tx.doc(Catalog, root);
   if (result.kind === "notes") {
-    const normalized = normalize(result, String(workerId));
     assertFrozen(current.notes, frozen.notes, [
       ...(result.edits ?? []).map((edit) => edit.id),
       ...(result.edits ?? [])
@@ -533,7 +519,7 @@ export async function publishResult(
         .flatMap((note) => note.support)
         .filter((id) => frozen.notes.some((note) => note.id === id)),
     ]);
-    return publishNotes(tx, root, catalog, current.notes, normalized);
+    return publishNotes(tx, root, catalog, current.notes, result);
   }
   assertFrozen(
     current.notes,
@@ -632,11 +618,9 @@ export async function publishCommand(
     return { entry: prior.id, created: false };
   }
   const catalog = await tx.doc(Catalog, root);
-  const exploration: Exploration | undefined =
-    command.kind === "submit"
-      ? normalize(command, `input/${command.id}`)
-      : undefined;
-  if (exploration) validateExploration(exploration, current.notes);
+  const exploration = command.kind === "submit" ? command : undefined;
+  if (exploration)
+    validateExploration(exploration, current.notes, `input/${command.id}/`);
   const recheck = new Set<string>();
   if (command.kind === "recheck")
     for (const target of command.notes) {

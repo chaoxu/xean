@@ -87,7 +87,11 @@ export const noteContentSchema = object({
 });
 export type NoteContent = Static<typeof noteContentSchema>;
 export const noteDraftSchema = object({
-  id: Type.String({ pattern: "^n[1-9][0-9]*$" }),
+  id: Type.String({
+    pattern: "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
+    description:
+      "Permanent note ID: the supplied noteIdPrefix followed by a fresh short descriptive name. Use this exact ID in text, support, reads, and edits. Existing notes are changed through edits, keeping their IDs.",
+  }),
   ...noteContentSchema.properties,
   support: Type.Array(text),
   candidate: Type.Optional(Type.Boolean()),
@@ -114,6 +118,17 @@ export const literatureResultSchema = object({
   ),
 });
 export type LiteratureResult = Static<typeof literatureResultSchema>;
+/** Constrain one-shot output to the permanent namespace supplied to that worker. */
+export function noteResultSchema<
+  S extends typeof explorationSchema | typeof literatureResultSchema,
+>(schema: S, prefix: string): S {
+  const result = Value.Clone(schema);
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  Object.assign(result.properties.notes.items.properties.id, {
+    pattern: `^${escaped}[A-Za-z0-9_-]+$`,
+  });
+  return result;
+}
 const correctionSchema = object({
   summary: Type.Union([noteContentSchema.properties.summary, Type.Null()]),
   detailedSummary: Type.Union([
@@ -221,7 +236,7 @@ export const checkSchema = object({
   ),
 });
 export type Check = Static<typeof checkSchema>;
-/** Published IDs include their worker/input prefix; draft IDs are local. */
+/** Note IDs include their worker/input prefix and stay unchanged from drafting. */
 export type Note = Exploration["notes"][number] & {
   revision: number;
   checks: Omit<Check, "noteId" | "correction"> & {

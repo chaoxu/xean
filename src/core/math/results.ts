@@ -1,4 +1,3 @@
-import type { TaskId } from "@earendil-works/pi-durable";
 import type { Exploration } from "./contracts.ts";
 
 export type ExplorerLimit = "context_capacity" | "response_limit";
@@ -19,20 +18,13 @@ export type PublishedResult = {
 /** Published submissions retain references rather than publishing their bodies twice. */
 export function publicationResult(
   submissions: readonly Exploration[],
-  workerId: TaskId,
   limit?: ExplorerLimit,
 ): PublishedResult {
   const notes = new Set(
-    submissions.flatMap(({ notes }) =>
-      notes.map(({ id }) => `${workerId}/${id}`),
-    ),
+    submissions.flatMap(({ notes }) => notes.map(({ id }) => id)),
   );
   const edits = new Set(
-    submissions.flatMap(({ edits }) =>
-      (edits ?? []).map(({ id }) =>
-        notes.has(`${workerId}/${id}`) ? `${workerId}/${id}` : id,
-      ),
-    ),
+    submissions.flatMap(({ edits }) => (edits ?? []).map(({ id }) => id)),
   );
   return {
     kind: "published",

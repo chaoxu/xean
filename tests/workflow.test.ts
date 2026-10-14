@@ -37,7 +37,7 @@ import {
   readView,
 } from "../src/core/math/state.ts";
 import { readReport } from "../src/report.ts";
-import { RoleFailure } from "../src/core/roles.ts";
+import { RoleFailure, type RoleRuntime } from "../src/core/roles.ts";
 import type { Note } from "../src/core/math/contracts.ts";
 import { createRuntime } from "../src/roles/config.ts";
 import { createRoles } from "../src/roles/index.ts";
@@ -179,7 +179,7 @@ test.each(["empty", "independent", "retired-support"] as const)(
     builtins.external.research = {
       ...closedBookResearch,
       retrieval: true,
-      async literature(input) {
+      async literature(input, runtime) {
         searched = true;
         expect(input.notes.map((note) => note.id)).toEqual(["input/seed/n2"]);
         return {
@@ -188,7 +188,7 @@ test.each(["empty", "independent", "retired-support"] as const)(
               ? []
               : [
                   {
-                    ...draft("n1"),
+                    ...draft(`${runtime.taskId}/n1`),
                     support:
                       resultKind === "retired-support" ? [retiredId] : [],
                   },
@@ -225,7 +225,10 @@ test.each(["empty", "independent", "retired-support"] as const)(
       await owner.input({
         kind: "submit",
         id: "seed",
-        notes: [draft("n1"), { ...draft("n2"), support: ["n1"] }],
+        notes: [
+          draft("input/seed/n1"),
+          { ...draft("input/seed/n2"), support: ["input/seed/n1"] },
+        ],
       });
       await owner.root.waitForIdle(context);
       const report = await owner.getReport();
@@ -277,7 +280,7 @@ test("input admission reads only edited bodies and keeps command IDs in native e
     await input({
       kind: "submit",
       id: "seed",
-      notes: [draft("n1"), draft("n2")],
+      notes: [draft("input/seed/n1"), draft("input/seed/n2")],
     });
     const note = (await owner.view()).notes[0]!;
     const guide = { kind: "guide", id: "hint", text: "Check the proof." };
@@ -349,14 +352,14 @@ test.each(["completed", "stale"])(
           ? null
           : { kind: "explorer", assignment: "Improve the proof." },
       }),
-      explorer: async ({ notes }) => {
+      explorer: async ({ notes }, runtime) => {
         invoked = true;
         const note = notes[0] as Note;
         started.resolve();
         await release.promise;
         return {
           kind: "notes",
-          notes: [draft()],
+          notes: [draft(`${runtime.taskId}/n1`)],
           edits: [
             {
               id: note.id,
@@ -372,7 +375,7 @@ test.each(["completed", "stale"])(
       await owner.input({
         kind: "submit",
         id: "seed",
-        notes: [draft()],
+        notes: [draft("input/seed/n1")],
       });
       owner.harness.resume();
       await started.promise;
@@ -432,7 +435,7 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
     const seed = {
       kind: "submit",
       id: "seed",
-      notes: [draft()],
+      notes: [draft("input/seed/n1")],
       edits: undefined,
     };
     try {
@@ -454,7 +457,10 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
         input({ ...seed, id: "invalid", edits: null }),
       ).rejects.toThrow("Invalid value");
       await expect(
-        input({ ...seed, notes: [{ ...draft(), candidate: true }] }),
+        input({
+          ...seed,
+          notes: [{ ...draft("input/seed/n1"), candidate: true }],
+        }),
       ).rejects.toThrow("Input ID already has another value");
       const note = before.notes[0]!;
       await expect(
@@ -488,9 +494,9 @@ test.each(["cancelled", "accepted", "blocked"] as const)(
 test("standalone resume serializes and reuses completed work", async () => {
   let calls = 0;
   const { research, harness, root, getReport } = await setup({
-    explorer: async () => {
+    explorer: async (_input, runtime) => {
       calls++;
-      return { ...empty(), notes: [draft()] };
+      return { ...empty(), notes: [draft(`${runtime.taskId}/n1`)] };
     },
   });
   try {
@@ -534,13 +540,13 @@ test("Coordinator waits for the worker outcome before handling inputs and choosi
           : { kind: "explorer", assignment: "Complete the claim" },
       };
     },
-    explorer: async () => {
+    explorer: async (_input, runtime) => {
       expect(working).toBe(false);
       working = true;
       started.resolve();
       await release.promise;
       working = false;
-      return { kind: "notes", notes: [draft()] };
+      return { kind: "notes", notes: [draft(`${runtime.taskId}/n1`)] };
     },
   });
   try {
@@ -639,7 +645,11 @@ test("inputs during a decision share one fresh successor and discard its stale p
     await root.commit((tx) => research.initialize(tx, root.id), context);
     harness.resume();
     await started.promise;
-    await input({ kind: "submit", id: "seed", notes: [draft()] });
+    await input({
+      kind: "submit",
+      id: "seed",
+      notes: [draft("input/seed/n1")],
+    });
     for (const id of ["first", "second"]) {
       await input({ kind: "guide", id, text: id });
       expect(
@@ -773,10 +783,13 @@ test("a worker fault wakes Coordinator after reopening without repeating the fai
         },
       };
     },
-    explorer: async (input) => {
+    explorer: async (input, runtime) => {
       if (++attempt === 1) throw new Error("fixture failure");
       expect(input.assignment).toBe("revised approach");
-      return { kind: "notes", notes: [{ ...draft(), candidate: true }] };
+      return {
+        kind: "notes",
+        notes: [{ ...draft(`${runtime.taskId}/n1`), candidate: true }],
+      };
     },
   };
   let owner = await setup(
@@ -840,10 +853,10 @@ test.each([
               }
             : { kind: role, assignment: "Explore." },
       }),
-      [role]: async (input: { notes: Note[] }) => {
+      [role]: async (input: { notes: Note[] }, runtime: RoleRuntime) => {
         const result =
           kind === "notes"
-            ? { kind, notes: [draft()] }
+            ? { kind, notes: [draft(`${runtime.taskId}/n1`)] }
             : kind === "published"
               ? { kind, notes: [], edits: [] }
               : {
@@ -861,7 +874,11 @@ test.each([
       },
     });
     try {
-      await owner.input({ kind: "submit", id: "seed", notes: [draft()] });
+      await owner.input({
+        kind: "submit",
+        id: "seed",
+        notes: [draft("input/seed/n1")],
+      });
       const before = await owner.view();
       await owner.harness.waitForIdle(context);
       const [worker] = await owner.getTasks("research.worker");
@@ -897,7 +914,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
               through: "requirements",
             },
       }),
-      verifier: async (input) => {
+      verifier: async (input, runtime) => {
         const failure = new RoleFailure("failure after a completed check");
         failure.result = {
           kind: "verification",
@@ -919,7 +936,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
           });
         if (mode === "invalid kind")
           Object.assign(failure, {
-            result: { kind: "notes", notes: [draft()] },
+            result: { kind: "notes", notes: [draft(`${runtime.taskId}/n1`)] },
           });
         started.resolve();
         await release.promise;
@@ -930,7 +947,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
       await input({
         kind: "submit",
         id: "import",
-        notes: [draft()],
+        notes: [draft("input/import/n1")],
       });
       const original = (await view()).notes[0]!;
       harness.resume();
@@ -949,8 +966,7 @@ test.each(["invalid batch", "invalid kind", "cancelled"])(
       const current = await view();
       expect(current.notes).toHaveLength(1);
       expect(current.notes[0]).toMatchObject({
-        ...draft(),
-        id: "input/import/n1",
+        ...draft("input/import/n1"),
         revision: original.revision,
         checks: {},
       });
@@ -1024,7 +1040,7 @@ test("Verifier recovery keeps its frozen input while only a fresh verdict applie
     await input({
       kind: "submit",
       id: "import",
-      notes: [draft()],
+      notes: [draft("input/import/n1")],
     });
     const initialRevision = (await owner.view()).notes[0]!.revision;
     harness.resume();
@@ -1116,9 +1132,9 @@ test("an edit after Coordinator freezes a checked candidate prevents stale accep
               through: "reconstruction",
             },
     }),
-    explorer: async () => ({
+    explorer: async (_input, runtime) => ({
       kind: "notes",
-      notes: [{ ...draft(), candidate: true }],
+      notes: [{ ...draft(`${runtime.taskId}/n1`), candidate: true }],
     }),
     verifier: async (input) => {
       const note = input.notes[0];
@@ -1376,13 +1392,13 @@ test("pause retains worker failures and input for the next Coordinator on resume
         expect(input.failures[0].error).toContain("failure while paused");
         return { work: null };
       },
-      explorer: async () => {
+      explorer: async (_input, runtime) => {
         if (++attempts === 1) {
           workerStarted.resolve();
           await releaseWorker.promise;
           throw new Error("failure while paused");
         }
-        return { kind: "notes", notes: [draft()] };
+        return { kind: "notes", notes: [draft(`${runtime.taskId}/n1`)] };
       },
     });
   try {

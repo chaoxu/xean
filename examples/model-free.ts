@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { defaultSettings, inspect, open, readReport } from "xean";
+import { noteIdPrefix } from "xean/core";
 
 if (process.argv.length !== 3)
   throw new Error("Usage: examples/model-free.ts NEW_DATABASE.sqlite");
@@ -27,11 +28,11 @@ const owner = await open(path, {
           }
         : { kind: "explorer", assignment: "Use reflexivity." },
     }),
-    explorer: async () => ({
+    explorer: async (_input, runtime) => ({
       kind: "notes",
       notes: [
         {
-          id: "n1",
+          id: `${noteIdPrefix(runtime.taskId)}reflexivity`,
           candidate: true,
           summary: "Equality is reflexive.",
           detailedSummary: "Reflexivity proves the equality.",

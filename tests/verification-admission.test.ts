@@ -49,21 +49,24 @@ async function run(scenario: "retry" | "repair" | "idle") {
           },
         };
       },
-      explorer: async ({ notes }: { notes: Note[] }) => {
+      explorer: async ({ notes }: { notes: Note[] }, runtime) => {
         rounds++;
         const candidate = notes.find((note) => note.candidate);
         return candidate
           ? {
               kind: "notes",
-              notes: noteResult.notes.map((note) => ({
-                ...note,
-                candidate: false,
-              })),
+              notes: [
+                {
+                  ...noteResult.notes[0]!,
+                  id: `${runtime.taskId}/n1`,
+                  candidate: false,
+                },
+              ],
               edits: [
                 {
                   id: candidate.id,
                   revision: candidate.revision,
-                  support: ["n1"],
+                  support: [`${runtime.taskId}/n1`],
                   text: "By the declared reflexivity lemma, 1 = 1.",
                 },
               ],
@@ -73,6 +76,7 @@ async function run(scenario: "retry" | "repair" | "idle") {
               notes: [
                 {
                   ...noteResult.notes[0]!,
+                  id: `${runtime.taskId}/n1`,
                   text: "Claim: 1 = 1. Proof missing.",
                   candidate: true,
                 },
@@ -207,7 +211,10 @@ async function runComputationalVerification(verdict: "PASS" | "INCONCLUSIVE") {
           },
         };
       },
-      explorer: async () => ({ kind: "notes", ...noteResult }),
+      explorer: async (_input, runtime) => ({
+        kind: "notes",
+        notes: [{ ...noteResult.notes[0]!, id: `${runtime.taskId}/n1` }],
+      }),
       verifier: async ({ notes, backend, through }: VerifierInput) => {
         if (backend === "external") codexChecks++;
         const candidate = notes[0]!;

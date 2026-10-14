@@ -184,7 +184,7 @@ async function readOverview(
     if (task === standalone) standaloneResult = result as JsonValue | undefined;
     const publication =
       result?.kind === "notes" && request
-        ? publicationResult([result], task.id)
+        ? publicationResult([result])
         : result?.kind === "published"
           ? result
           : undefined;

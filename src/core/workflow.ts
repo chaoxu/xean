@@ -33,6 +33,7 @@ import {
   readSnapshot,
   publishResult,
   publishCommand,
+  noteIdPrefix,
 } from "./math/state.ts";
 import { readCommand } from "./math/commands.ts";
 import { readDefinition } from "./definition.ts";
@@ -244,6 +245,7 @@ export function createResearch(roles: Roles) {
                 result,
                 input.notes ?? [],
                 outcome.status === "failed",
+                noteIdPrefix(task.id),
               );
             const expected =
               name! === "verifier" || name! === "reconstruct"

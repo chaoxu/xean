@@ -17,7 +17,11 @@ const roles = () =>
     ...settings,
     ...createRuntime(settings, { models: createModels() }),
   });
-const runtime = {} as RoleRuntime;
+const runtime = { taskId: 23 } as RoleRuntime;
+const resultNote = {
+  ...noteResult.notes[0]!,
+  id: `${runtime.taskId}/reflexivity`,
+};
 const answer = (value: unknown): ExternalCall =>
   (async () => ({
     value,
@@ -86,7 +90,7 @@ test("core rejects malformed external implementation and unsupported dependency 
     builtins.implementation(input, runtime, context),
   ).rejects.toThrow();
   builtins.external.implementation = answer({
-    notes: [{ ...noteResult.notes[0], support: ["missing"] }],
+    notes: [{ ...resultNote, support: ["missing"] }],
   });
   await expect(
     builtins.implementation(input, runtime, context),
@@ -100,10 +104,12 @@ test.each(["new notes", "blind edit"])(
     const result =
       mode === "new notes"
         ? {
-            notes: noteResult.notes.map((value) => ({
-              ...value,
-              support: [note.id],
-            })),
+            notes: [
+              {
+                ...resultNote,
+                support: [note.id],
+              },
+            ],
           }
         : {
             notes: [],
@@ -167,9 +173,15 @@ test("standalone replacement results receive the same notebook validation", asyn
     },
     models: createModels(),
     roles: () => ({
-      implementation: async () => ({
+      implementation: async (_input, runtime) => ({
         kind: "notes",
-        notes: [{ ...noteResult.notes[0], support: ["missing"] }],
+        notes: [
+          {
+            ...noteResult.notes[0],
+            id: `${runtime.taskId}/reflexivity`,
+            support: ["missing"],
+          },
+        ],
       }),
     }),
   });

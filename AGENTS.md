@@ -30,6 +30,8 @@ Read README.md and the pinned Pi implementation before changing the design.
   line counts.
 - Reproduce interface failures with local contract tests. Screen model behavior
   with small standalone-role inputs before a full campaign smoke or golden run.
+- Use `gpt-6-luna` by default for new smoke tests. Preserve explicitly selected
+  models and historical run records.
 - Use `xean status` for routine monitoring and read transcripts on demand.
   Keep monitoring storage bounded instead of archiving cumulative snapshots.
 - Preserve historical runs and their pinned runtimes. No compatibility,

@@ -12,6 +12,7 @@ import {
 import { codex, codexCall } from "../src/plugins/role-backends/codex.ts";
 import { chatgpt } from "../src/plugins/role-backends/chatgpt.ts";
 import { explorationSchema } from "../src/core/math/contracts.ts";
+import { noteIdPrefix } from "../src/core/math/state.ts";
 import { temporaryDirectory } from "./directory.ts";
 import { context, noteResult, settings, task } from "./fixture.ts";
 
@@ -71,7 +72,13 @@ test("Claude uses native schema/stdin and journals structured output, usage, and
     if (!schema.properties.notes) throw new Error('Missing output schema');
     const input = await Bun.stdin.json();
     if (!input.task || !input.assignment || require('node:fs').realpathSync(input.workspace) !== process.cwd()) throw new Error('Missing frozen task');
-    process.stdout.write(${JSON.stringify(JSON.stringify(success))});
+    if (!input.noteIdPrefix) throw new Error('Missing permanent note namespace');
+    const permanentId = input.noteIdPrefix + 'reflexivity';
+    const idPattern = new RegExp(schema.properties.notes.items.properties.id.pattern);
+    if (!idPattern.test(permanentId) || idPattern.test('n1')) throw new Error('Missing namespace constraint');
+    const output = ${JSON.stringify(success)};
+    output.structured_output.notes[0].id = permanentId;
+    process.stdout.write(JSON.stringify(output));
   `);
   const report = await runImplementation(options);
   expect(report.status).toMatchObject({ status: "completed" });
@@ -91,7 +98,10 @@ test("Claude uses native schema/stdin and journals structured output, usage, and
 
 test("completed plugin calls reuse Pi results; recovery rejects another adapter or changed configuration", async () => {
   const options = await command(
-    `process.stdout.write(${JSON.stringify(JSON.stringify(success))});`,
+    `const input = await Bun.stdin.json();
+     const output = ${JSON.stringify(success)};
+     output.structured_output.notes[0].id = input.noteIdPrefix + 'reflexivity';
+     process.stdout.write(JSON.stringify(output));`,
   );
   const report = await runImplementation(options, () => ({
     async implementation(input, runtime, context) {
@@ -100,7 +110,7 @@ test("completed plugin calls reuse Pi results; recovery rejects another adapter 
         "worker",
         explorationSchema,
         "Exact task",
-        input,
+        { ...input, noteIdPrefix: noteIdPrefix(runtime.taskId) },
         runtime,
         context,
       ] as const;

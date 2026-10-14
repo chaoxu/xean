@@ -266,11 +266,17 @@ export function conversations(profiles: Profiles) {
                 limited: false,
                 notes: undefined,
                 edits: undefined,
+                invalidated: undefined,
               };
             },
             context,
           );
-          const { notes: created, edits, ...remaining } = allowance;
+          const {
+            notes: created,
+            edits,
+            invalidated,
+            ...remaining
+          } = allowance;
           const hasPublication = !!created?.length || !!edits?.length;
           return {
             output: [
@@ -280,6 +286,13 @@ export function conversations(profiles: Profiles) {
                   recorded: true,
                   done,
                   ...(hasPublication ? { notes: created, edits } : {}),
+                  ...(invalidated?.length
+                    ? {
+                        invalidated,
+                        invalidation:
+                          "This submission cleared dependent checks while preserving those notes' text and support. External grants remain. Use the returned revisions when readRequired=false. When readRequired=true, read_notes is required before using or editing that note because its prior revision was not observed.",
+                      }
+                    : {}),
                   ...(done
                     ? {}
                     : {
@@ -555,10 +568,7 @@ export function conversations(profiles: Profiles) {
           name === "explorer" &&
           results.length
         )
-          error.result = publicationResult(
-            results as Exploration[],
-            runtime.taskId,
-          );
+          error.result = publicationResult(results as Exploration[]);
         throw error;
       }
       if (!results.length)

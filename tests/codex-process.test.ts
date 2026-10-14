@@ -68,15 +68,20 @@ const jsonl = (events: unknown[]) =>
   events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
 test("Codex reuses a completed request without leaking caller edits or conflating assignments", async () => {
-  const output = jsonl([
+  const output = [
     {
       type: "item.completed",
       item: { type: "agent_message", text: JSON.stringify(noteResult) },
     },
     completed,
-  ]);
+  ];
   const { owner } = await codexFixture(
-    `process.stdout.write(${JSON.stringify(output)});`,
+    `const request = JSON.parse(await Bun.stdin.text());
+const output = ${JSON.stringify(output)};
+const result = JSON.parse(output[0].item.text);
+result.notes[0].id = request.noteIdPrefix + "reflexivity";
+output[0].item.text = JSON.stringify(result);
+process.stdout.write(output.map(event => JSON.stringify(event)).join("\\n") + "\\n");`,
     "worker",
     (builtins) => ({
       async implementation(input, runtime, context) {
@@ -103,7 +108,7 @@ test("Codex reuses a completed request without leaking caller edits or conflatin
   try {
     await owner.root.waitForIdle(context);
     const report = await reportOf(owner);
-    expect(report.status.status).toBe("completed");
+    expect(report.status.status, JSON.stringify(report.work)).toBe("completed");
     expect(report.records!.filter(ExternalLog.is)).toHaveLength(2);
   } finally {
     await owner.close();

@@ -62,12 +62,19 @@ Explorer repairs notes through `edits`, retaining their IDs. Each edit supplies
 the expected `revision` and only changed fields. Retiring a note hides it from
 routine discovery and preserves historical reads. Existing consumers can still
 verify their retired dependencies.
+Workers create notes with permanent IDs prefixed by their Pi task ID, such as
+`27/square-bound`. They use those exact IDs
+in text, dependencies, reads, and edits. Names are never rewritten at publication.
+New notes require unused names. Changes to existing notes use edits.
 Caller edits preserve an existing external grant unless they explicitly change
 `trusted`. Explorer edits to mathematical fields revoke that grant. Changes to
 mathematical fields, support, or trust clear affected checks. Candidate and
 retirement flags only advance the revision.
 Verifier may correct summaries on PASS, while proof text and dependencies change
 through edits.
+Explorer publication receipts also identify dependent notes whose checks were
+cleared. A dependent revision can be reused when Explorer had observed its prior
+revision. The receipt requires a read when intervening changes remain unseen.
 Operator `recheck` inputs withdraw assessments for the named note revisions and
 their transitive consumers. They also withdraw external grants on the named
 notes. Note content and prior evidence remain in Pi's journal. Reassessment uses
@@ -84,6 +91,9 @@ retrieval, another approach, or idle.
 New quotations matching a note's exact premises can reopen an eligible
 INCONCLUSIVE source check. Changing receipt IDs or adding unrelated quotations
 does not reopen it.
+Both verifier backends use the registered research backend for source checking.
+Source backend failures identify that stage and preserve completed checks. Switching
+verifier backend leaves the source provider unchanged.
 
 ## Run a campaign
 
@@ -124,6 +134,8 @@ and optional `edits`. Explorer uses the same submission structure. Set
 `guide` takes a text file. `recheck` takes note IDs, current revisions, and a reason
 for withdrawing their assessments. These commands require a stable `--id` for
 exact retries.
+With `submit --id lemmas`, new note IDs have the form `input/lemmas/square-bound`.
+Use the full ID in the JSON and in references between notes in the same batch.
 Use `guide` for short steering instructions and `submit` for initial notes or
 reference material. New caller notes default to external trust. Set a note or
 edit's `trusted` field to `false`, or pass `submit --untrusted` for the batch, to
@@ -622,8 +634,10 @@ execution depends on the host's sandbox configuration.
 Receipts are under `runs/release-3.0.0-qualification-20261008/`, outside the source
 package.
 
-Pi packages come from the official 1.2.0 npm release, tagged at upstream commit
-`06a466935536f8c9bcacb2d5efc0fc021be1bdff`. They include frozen model data.
+Pi packages are built from unreleased upstream commit
+`301617df7b88951c328f8a7b6a732e590713df07`, after the 1.2.0 release.
+They retain the existing frozen model catalog, including the OpenAI/Azure
+context-capacity correction, and all existing Xean patches.
 Artifact and patch hashes are recorded in [provenance](vendor/pi/provenance.json).
 [Pi integration](docs/parity.md#pi-integration) records each retained patch,
 including the adapter fixes, the request hook used to select a profile's stream,

@@ -48,10 +48,18 @@ test("an Explorer continues beyond the retry limit and publishes once in the sam
   const complete = { ...draft, text: "Completed proof of reflexivity." };
   const chunks = 5;
   const retained: string[] = [];
+  let prefix = "";
   provider.setResponses([
     ...Array.from(
       { length: chunks },
       (_, index) => (input: { messages: Message[] }) => {
+        if (index === 0) {
+          const initial = input.messages.find(
+            (message) => message.role === "user",
+          )!;
+          prefix = JSON.parse(initial.content as string).noteIdPrefix;
+          complete.id = `${prefix}reflexivity`;
+        }
         const text = JSON.stringify(input.messages);
         for (const previous of retained) expect(text).toContain(previous);
         expect(
@@ -82,7 +90,7 @@ test("an Explorer continues beyond the retry limit and publishes once in the sam
                 }),
               },
               fauxToolCall("submit_explorer", {
-                notes: [{ ...draft, text: proof }],
+                notes: [{ ...draft, id: `${prefix}reflexivity`, text: proof }],
               }),
             ],
             { stopReason: "error", errorMessage: disconnected },
@@ -139,7 +147,7 @@ test("an Explorer continues beyond the retry limit and publishes once in the sam
       expect(notes).toHaveLength(1);
       expect(notes[0]).toMatchObject({
         ...complete,
-        id: `${workers[0]!.id}/n1`,
+        id: `${workers[0]!.id}/reflexivity`,
       });
       const children = await tx.scanConversations(
         { ownerTaskId: workers[0]!.id },
@@ -295,6 +303,7 @@ function response(answers: string[], status = "completed") {
 }
 const runtime = (memos = new Map<string, unknown>()) =>
   ({
+    taskId: 99,
     memo: async (name: string, ...args: unknown[]) => {
       if (args.length === 2 && !memos.has(name))
         memos.set(name, structuredClone(args[0]));
@@ -320,7 +329,11 @@ test.each(["new notes", "blind edit"])(
       checks: { external: { entry: 1 } },
     };
     const answer = {
-      notes: selection.notes.map((value) => ({ ...value, support: [note.id] })),
+      notes: selection.notes.map((value) => ({
+        ...value,
+        id: "99/reflexivity",
+        support: [note.id],
+      })),
       edits:
         mode === "blind edit"
           ? [
@@ -344,7 +357,15 @@ test.each(["new notes", "blind edit"])(
         expect(payload.text.format).toMatchObject({
           type: "json_schema",
           strict: true,
-          schema: explorationSchema,
+          schema: {
+            properties: {
+              notes: {
+                items: {
+                  properties: { id: { pattern: "^99/[A-Za-z0-9_-]+$" } },
+                },
+              },
+            },
+          },
         });
         const identity = payload.client_metadata["x-codex-turn-metadata"];
         expect(identity).toEqual({

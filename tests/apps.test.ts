@@ -23,7 +23,7 @@ import { inspect, open } from "../src/host.ts";
 import { readDefinition, type Definition } from "../src/core/definition.ts";
 import { Control, type Roles } from "../src/core/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
-import { Bodies, Catalog } from "../src/core/math/state.ts";
+import { Bodies, Catalog, noteIdPrefix } from "../src/core/math/state.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { controlCommand, observeOwner } from "../apps/cli/lifecycle.ts";
 import { requestOwner, serveControl, socketPath } from "../apps/cli/control.ts";
@@ -229,8 +229,13 @@ test("CLI offline inputs are durable, idempotent after cancellation, and do not 
     input,
     JSON.stringify({
       notes: [
-        { ...draft, candidate: true, support: ["n2"] },
-        { ...draft, id: "n2" },
+        {
+          ...draft,
+          id: "input/import/n1",
+          candidate: true,
+          support: ["input/import/n2"],
+        },
+        { ...draft, id: "input/import/n2" },
       ],
     }),
   );
@@ -403,9 +408,18 @@ test("sealed acceptance and native note IDs reach reports and CLI export", async
             : { kind: "explorer", assignment: "Prove equality." },
         };
       },
-      explorer: async () => {
+      explorer: async (_input, runtime) => {
         trace.push("explorer");
-        return { kind: "notes", notes: [{ ...draft, candidate: true }] };
+        return {
+          kind: "notes",
+          notes: [
+            {
+              ...draft,
+              id: noteIdPrefix(runtime.taskId) + "n1",
+              candidate: true,
+            },
+          ],
+        };
       },
       verifier: async (input) => {
         trace.push("verifier");
@@ -821,9 +835,9 @@ test("live owner controls admit revision-checked submissions and reject foreign 
     expect((await inspect(path, readReport)).inputs).toHaveLength(1);
     const file = join(directory, "submission.json");
     const notes = [
-      { ...draft, trusted: true },
-      { ...draft, id: "n2", trusted: false },
-      { ...draft, id: "n3" },
+      { ...draft, id: "input/seed/n1", trusted: true },
+      { ...draft, id: "input/seed/n2", trusted: false },
+      { ...draft, id: "input/seed/n3" },
     ];
     await Bun.write(file, JSON.stringify({ notes }));
     expect((await cli("submit", path, file, "--id", "seed")).code).toBe(0);
@@ -832,7 +846,15 @@ test("live owner controls admit revision-checked submissions and reject foreign 
         (note) => !!note.checks.external,
       ),
     ).toEqual([true, false, true]);
-    await Bun.write(file, JSON.stringify({ notes: [notes[0], notes[2]] }));
+    await Bun.write(
+      file,
+      JSON.stringify({
+        notes: [
+          { ...notes[0], id: "input/forced/n1" },
+          { ...notes[2], id: "input/forced/n3" },
+        ],
+      }),
+    );
     for (let attempt = 0; attempt < 2; attempt++)
       expect(
         (await cli("submit", path, file, "--id", "forced", "--untrusted")).code,

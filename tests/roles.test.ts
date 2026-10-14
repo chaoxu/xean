@@ -1,5 +1,6 @@
 import { temporaryDirectory } from "./directory.ts";
 import { expect, test } from "bun:test";
+import { Check } from "typebox/value";
 import { watchFile, unwatchFile } from "node:fs";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   registerSessionResourceCleanup,
   type AssistantMessage,
   type TranscriptContext,
+  type Static,
 } from "@earendil-works/pi-ai";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import {
@@ -36,12 +38,17 @@ import {
   type RoleOptions,
 } from "../src/roles/index.ts";
 import type { RoleRuntime } from "../src/core/roles.ts";
-import { closedBookResearch } from "../src/roles/research.ts";
-import type { Research } from "../src/roles/backend.ts";
+import { closedBookResearch, externalResearch } from "../src/roles/research.ts";
+import type { ExternalCall, Research } from "../src/roles/backend.ts";
 import { capacityError, createRuntime } from "../src/roles/config.ts";
 import { ExternalLog, ExternalRequest } from "../src/roles/backend.ts";
 import { codex } from "../src/plugins/role-backends/codex.ts";
-import type { Note, SolverResult } from "../src/core/math/contracts.ts";
+import {
+  explorationSchema,
+  literatureResultSchema,
+  type Note,
+  type SolverResult,
+} from "../src/core/math/contracts.ts";
 import { DefinitionDoc, type Definition } from "../src/core/definition.ts";
 import { createResearch, scanTasks } from "../src/core/workflow.ts";
 import { readReport, readStatus, readUsage } from "../src/report.ts";
@@ -49,6 +56,7 @@ import { explorerLimit } from "../src/core/math/results.ts";
 import {
   Bodies,
   Events,
+  publishCommand,
   readView,
   readSnapshot,
   type SnapshotReader,
@@ -72,6 +80,15 @@ const draft = (id: string, support: string[] = []) => ({
   text: `${id} exact claim\n\n${id} secret original proof`,
   support,
 });
+const workerDraft = (
+  input: { noteIdPrefix: string },
+  suffix: string,
+  support: string[] = [],
+) => {
+  expect(input.noteIdPrefix).toBeString();
+  expect(input.noteIdPrefix.endsWith("/")).toBe(true);
+  return draft(`${input.noteIdPrefix}${suffix}`, support);
+};
 const note = (id: string, support: string[] = []): Note => ({
   ...draft(id, support),
   revision: 0,
@@ -344,11 +361,17 @@ test("a repaired support is rechecked with consumers before downstream verificat
         return { work: null };
     }
   };
-  provider.roles.explorer = async (input) => ({
+  provider.roles.explorer = async (input, runtime) => ({
     kind: "notes",
     notes: input.notes.length
       ? []
-      : [draft("n1"), { ...draft("n2", ["n1"]), candidate: true }],
+      : [
+          draft(`${runtime.taskId}/n1`),
+          {
+            ...draft(`${runtime.taskId}/n2`, [`${runtime.taskId}/n1`]),
+            candidate: true,
+          },
+        ],
     ...(input.notes.length
       ? {
           edits: [
@@ -433,8 +456,25 @@ test("standalone Explorer preserves supplied trust and its conversation across p
           text: inputNote.text,
         },
       ]);
-      if (response === 2) return { notes: [draft("n1", ["prior"])] };
-      return { notes: [{ ...draft("n2", ["n1"]), candidate: true }] };
+      if (response === 2)
+        return { notes: [workerDraft(input, "n1", ["prior"])] };
+      const receipt = transcript.messages.findLast(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === "submit_explorer" &&
+          !message.isError,
+      );
+      if (receipt?.role !== "toolResult" || receipt.content[0]?.type !== "text")
+        throw new Error("Expected first note publication receipt");
+      const published = JSON.parse(receipt.content[0].text.split("\n\n")[0]!);
+      return {
+        notes: [
+          {
+            ...workerDraft(input, "n2", [published.notes[0].id]),
+            candidate: true,
+          },
+        ],
+      };
     },
     { maxExplorerReads: 1, maxExplorerResponses: 4 },
   );
@@ -495,12 +535,10 @@ test("standalone Explorer preserves supplied trust and its conversation across p
     expect(view.notes).toHaveLength(3);
     expect(view.notes[0]).toEqual(early.notes[0]!);
     expect(view.notes[1]).toMatchObject({
-      ...draft("n1", ["prior"]),
-      id: `${worker!.id}/n1`,
+      ...draft(`${worker!.id}/n1`, ["prior"]),
     });
     expect(view.notes[2]).toMatchObject({
-      ...draft("n2", [`${worker!.id}/n1`]),
-      id: `${worker!.id}/n2`,
+      ...draft(`${worker!.id}/n2`, [`${worker!.id}/n1`]),
       candidate: true,
     });
     expect(cleaned).toEqual([
@@ -525,6 +563,92 @@ test("standalone Explorer preserves supplied trust and its conversation across p
   } finally {
     await current.harness.close(context);
     unregister();
+  }
+});
+
+test("Explorer rejects bare IDs and preserves permanent prose references across submissions and reopen", async () => {
+  const directory = await temporaryDirectory("pi-role-permanent-ids-");
+  let responses = 0;
+  const submitted: ReturnType<typeof draft>[] = [];
+  const provider = fixture(
+    (_name, input, transcript) => {
+      responses++;
+      if (responses === 1) {
+        expect(input.noteIdPrefix).toBeString();
+        return { notes: [draft("auxiliary-bound")] };
+      }
+      const receipt = transcript.messages.findLast(
+        (message) => message.role === "toolResult",
+      );
+      if (receipt?.role !== "toolResult" || receipt.content[0]?.type !== "text")
+        throw new Error("Expected note publication feedback");
+      if (responses === 2) {
+        expect(receipt.isError).toBe(true);
+        expect(receipt.content[0].text).toContain(
+          `New note IDs must use prefix ${input.noteIdPrefix}`,
+        );
+        const bound = workerDraft(input, "auxiliary-bound");
+        bound.text = `Claim ${bound.id}: the bound holds. Proof: direct calculation.`;
+        const consequence = workerDraft(input, "consequence", [bound.id]);
+        consequence.text = `By ${bound.id}, claim ${consequence.id} follows.`;
+        submitted.push(bound, consequence);
+        return { notes: [bound, consequence] };
+      }
+      expect(responses).toBe(3);
+      expect(receipt.isError).toBe(false);
+      const value = JSON.parse(receipt.content[0].text.split("\n\n")[0]!);
+      expect(value.notes.map(({ id }: { id: string }) => id)).toEqual(
+        submitted.map(({ id }) => id),
+      );
+      expect(value).not.toHaveProperty("nextNoteId");
+      const result = workerDraft(input, "final-result", [submitted[1]!.id]);
+      result.summary = `Result from ${submitted[1]!.id}`;
+      result.detailedSummary = `Use ${submitted[1]!.id} at its stated scope.`;
+      result.text = `Apply ${submitted[1]!.id}, which uses ${submitted[0]!.id}.`;
+      submitted.push(result);
+      return { notes: [{ ...result, candidate: true }] };
+    },
+    { maxExplorerResponses: 4 },
+  );
+  let current = await provider.open(directory);
+  try {
+    const id = await current.invoke({
+      role: "explorer",
+      input: { task, notes: [], assignment: "Publish permanent references." },
+    });
+    const outcome = await resultOf(current.harness, id);
+    expect(outcome).toEqual({
+      status: "completed",
+      result: {
+        kind: "published",
+        notes: [
+          `${id}/auxiliary-bound`,
+          `${id}/consequence`,
+          `${id}/final-result`,
+        ],
+        edits: [],
+      },
+    });
+    const before = await current.root.commit(
+      (tx) => readView(tx, current.root.id),
+      context,
+    );
+    expect(before.notes).toHaveLength(submitted.length);
+    before.notes.forEach((saved, index) =>
+      expect(saved).toMatchObject(submitted[index]!),
+    );
+    expect((await entries(current.harness)).filter(Events.is)).toHaveLength(2);
+    await current.harness.close(context);
+    current = await provider.open(directory);
+    expect(await resultOf(current.harness, id)).toEqual(outcome);
+    const after = await current.root.commit(
+      (tx) => readView(tx, current.root.id),
+      context,
+    );
+    expect(after.notes).toEqual(before.notes);
+    expect(responses).toBe(3);
+  } finally {
+    await current.harness.close(context);
   }
 });
 
@@ -1307,13 +1431,13 @@ test("late terminal Explorer error retains earlier public batches and failure ac
       switch (++calls) {
         case 1:
           return {
-            notes: [draft("n1", [id])],
+            notes: [workerDraft(input, "n1", [id])],
             edits: [
               { id, revision, text: "Repaired proof", summary: "Repair" },
             ],
           };
         case 2:
-          return { notes: [draft("n2", ["missing"])] };
+          return { notes: [workerDraft(input, "n2", ["missing"])] };
         case 3:
           return {
             tool: "read_notes",
@@ -1346,7 +1470,9 @@ test("late terminal Explorer error retains earlier public batches and failure ac
                 type: "toolCall",
                 id: "failed-response-submission",
                 name: "submit_explorer",
-                arguments: { notes: [{ ...draft("n3"), candidate: true }] },
+                arguments: {
+                  notes: [{ ...workerDraft(input, "n3"), candidate: true }],
+                },
               },
             ],
             { stopReason: "error", errorMessage: error },
@@ -1374,7 +1500,7 @@ test("late terminal Explorer error retains earlier public batches and failure ac
         provider.workflow.input(tx, current.root.id, {
           kind: "submit",
           id: "seed",
-          notes: [draft("n1")],
+          notes: [draft("input/seed/n1")],
         }),
       context,
     );
@@ -1404,8 +1530,7 @@ test("late terminal Explorer error retains earlier public batches and failure ac
       decisions[0]!.notes[0]!.revision,
     );
     expect(view.notes[1]).toMatchObject({
-      ...draft("n1", ["input/seed/n1"]),
-      id: `${worker!.id}/n1`,
+      ...draft(`${worker!.id}/n1`, ["input/seed/n1"]),
       candidate: false,
       verified: false,
       accepted: false,
@@ -1470,6 +1595,7 @@ test.each([
   "malformed",
   "source IDs",
   "source premises",
+  "source capacity",
   "cleanup",
   "continuation",
 ] as const)(
@@ -1477,7 +1603,9 @@ test.each([
   async (failure) => {
     const directory = await temporaryDirectory("pi-verifier-failure-");
     const invalidSource =
-      failure === "source IDs" || failure === "source premises";
+      failure === "source IDs" ||
+      failure === "source premises" ||
+      failure === "source capacity";
     let proofs = 0,
       sources = 0,
       retry = false,
@@ -1487,10 +1615,10 @@ test.each([
         if (name === "explorer")
           return {
             notes: [
-              draft("n1"),
+              workerDraft(input, "n1"),
               {
-                ...draft("n2", ["n1"]),
-                text: `${draft("n2").text}\n\n${"Original proof detail. ".repeat(75)}`,
+                ...workerDraft(input, "n2", [`${input.noteIdPrefix}n1`]),
+                text: `${workerDraft(input, "n2").text}\n\n${"Original proof detail. ".repeat(75)}`,
                 candidate: true,
               },
             ],
@@ -1542,6 +1670,10 @@ test.each([
         retrieval: true,
         async source(input) {
           sources++;
+          if (failure === "source capacity" && !retry)
+            throw new Error(
+              "Selected model is at capacity. Please try a different model.",
+            );
           return input.notes.map(({ id }) => ({
             noteId: failure === "source IDs" && !retry ? "unrequested" : id,
             verdict: "PASS",
@@ -1585,7 +1717,9 @@ test.each([
                   )}`
                 : failure === "source premises"
                   ? `Source-checked premises do not match correctness for ${input.notes[0]!.id}`
-                  : "proof did not submit a structured result",
+                  : failure === "source capacity"
+                    ? "Source checking failed: Selected model is at capacity. Please try a different model."
+                    : "proof did not submit a structured result",
         );
         expect(input.notes[0]!.verified).toBe(!invalidSource);
         if (!retry) return { work: null };
@@ -2230,7 +2364,7 @@ function strict(schema) {
 if (worker) strict(await Bun.file(process.argv[process.argv.indexOf("--output-schema") + 1]).json());
 if (process.env.TEST_INTERRUPTION && !(await Bun.file(process.env.TEST_INTERRUPTION).exists())) { await Bun.write(process.env.TEST_INTERRUPTION, "attempted"); console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"Partial opaque work"}})); await Bun.write(input.workspace + "/started", "partial artifact"); await new Promise(() => setInterval(() => {}, 1000)); }
 let value;
-if (input.assignment) value = {notes:[{id:"n1",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[],...(${candidate}?{candidate:true}:{})}]};
+if (input.assignment) value = {notes:[{id:input.noteIdPrefix + "finding",summary:"Finding",detailedSummary:"Exact finding",text:"Finding. Evidence.",support:[],...(${candidate}?{candidate:true}:{})}]};
 else if(input.argument) value = {verdict:input.argument === "malformed" ? "INVALID" : "PASS",report:"Independent review",premises:["External premise"],passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]};
 else value = {results:input.facts.map(fact=>({noteId:fact.id,verdict:"PASS",report:"Sources checked",passages:[{premise:0,url:"https://example.org/theorem",quote:"Exact theorem"}]}))};
 if (worker) { value.edits = null; for (const note of value.notes) note.candidate ??= null; }
@@ -2550,6 +2684,81 @@ test("Codex standalone reconstruction cannot PASS an incomplete independent proo
   }
 });
 
+test.each(["explorer", "implementation", "literature"] as const)(
+  "external %s constrains permanent names before generation and validates returned names",
+  async (role) => {
+    const shared = [explorationSchema, literatureResultSchema];
+    const original = structuredClone(shared);
+    const provider = fixture(
+      () => {
+        throw new Error("External role called a native model");
+      },
+      { literature: true },
+    );
+    let returned: "valid" | "bare" | "foreign" = "valid";
+    let calls = 0;
+    const call: ExternalCall = async (
+      _mode,
+      schema,
+      _instructions,
+      input,
+      runtime,
+    ) => {
+      calls++;
+      const { noteIdPrefix: prefix } = input as { noteIdPrefix: string };
+      expect(prefix).toBe(`${runtime.taskId}/`);
+      expect(Check(schema, { notes: [draft(prefix + "finding")] })).toBe(true);
+      for (const id of [
+        "finding",
+        "999999/finding",
+        prefix,
+        prefix + "nested/finding",
+      ])
+        expect(Check(schema, { notes: [draft(id)] })).toBe(false);
+      const id =
+        returned === "valid"
+          ? prefix + "finding"
+          : returned === "bare"
+            ? "finding"
+            : "999999/finding";
+      return {
+        value: { notes: [draft(id)] } as Static<typeof schema>,
+        workspace: "/external-fixture",
+        operationId: `call-${calls}`,
+        searches: 1,
+        reportedAt: "now",
+      };
+    };
+    provider.roles.external.explorer = call;
+    provider.roles.external.implementation = call;
+    provider.roles.external.research = externalResearch(call);
+    const current = await provider.open();
+    try {
+      for (returned of ["valid", "bare", "foreign"] as const) {
+        const id = await current.invoke({
+          role,
+          input: { task, assignment: "Produce a useful finding", notes: [] },
+        });
+        const outcome = await resultOf(current.harness, id);
+        if (returned === "valid")
+          expect(outcome).toMatchObject({
+            status: "completed",
+            result: { kind: "notes", notes: [{ id: `${id}/finding` }] },
+          });
+        else {
+          expect(outcome.status).toBe("faulted");
+          expect(outcome).not.toHaveProperty("result");
+        }
+      }
+      expect(calls).toBe(3);
+      expect(provider.calls).toEqual([]);
+      expect(shared).toEqual(original);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
+
 test.each(["codex", "custom"] as const)(
   "Literature rejects candidate notes from %s research",
   async (backend) => {
@@ -2563,10 +2772,14 @@ test.each(["codex", "custom"] as const)(
         ? {
             ...closedBookResearch,
             retrieval: true,
-            async literature(input) {
+            async literature(input, runtime) {
               customCalls++;
               expect(input.assignment).toBe(assignment);
-              return { notes: [{ ...draft("n1"), candidate: true }] };
+              return {
+                notes: [
+                  { ...draft(`${runtime.taskId}/finding`), candidate: true },
+                ],
+              };
             },
           }
         : undefined;
@@ -2771,17 +2984,20 @@ test.each([false, true])(
   "provider-limit continuations preserve work without consuming Explorer responses (saved=%s)",
   async (submitted) => {
     let response = 0;
+    let prompt: { noteIdPrefix: string };
     const provider = fixture(
-      () => {
+      (_name, input) => {
+        if (response === 0) prompt = input;
         response++;
-        if (submitted && response === 1) return { notes: [draft("n1")] };
+        if (submitted && response === 1)
+          return { notes: [workerDraft(prompt, "n1")] };
         if (response > 9 + Number(submitted))
-          return { notes: [{ ...draft("n3"), candidate: true }] };
+          return { notes: [{ ...workerDraft(prompt, "n3"), candidate: true }] };
         return fauxAssistantMessage(
           [
             { type: "text", text: `Preserved fragment ${response}` },
             fauxToolCall("submit_explorer", {
-              notes: [{ ...draft("n2"), candidate: true }],
+              notes: [{ ...workerDraft(prompt, "n2"), candidate: true }],
             }),
           ],
           { stopReason: "length" },
@@ -2835,9 +3051,9 @@ test.each([false, true])(
 test("capacity after a note read retains published notes without another provider call", async () => {
   let count = 0;
   const provider = fixture(
-    () =>
+    (_name, input) =>
       ++count === 1
-        ? { notes: [draft("n1")] }
+        ? { notes: [workerDraft(input, "n1")] }
         : { tool: "read_notes", arguments: { ids: ["large"], level: "full" } },
     { maxExplorerReads: 1, maxExplorerResponses: 4 },
     32768,
@@ -2891,7 +3107,7 @@ test.each([
                 },
               ],
             }
-          : { notes: [draft("n1")] };
+          : { notes: [workerDraft(input, "n1")] };
       },
       { maxExplorerResponses: allowance },
     );
@@ -2917,7 +3133,7 @@ test.each([
           await provider.workflow.input(tx, current.root.id, {
             kind: "submit",
             id: "seed",
-            notes: [draft("n1")],
+            notes: [draft("input/seed/n1")],
           });
         else await provider.workflow.initialize(tx, current.root.id);
       }, context);
@@ -2938,7 +3154,7 @@ test.each([
       ]);
       expect(before.notes).toHaveLength(1);
       expect(before.notes[0]!.text).toBe(
-        edit ? "Retained partial repair" : draft("n1").text,
+        edit ? "Retained partial repair" : draft(before.notes[0]!.id).text,
       );
       await current.harness.close(context);
       current = await provider.open(directory);
@@ -2991,13 +3207,14 @@ test.each([
   "Explorer distinguishes %s",
   async (_name, allowance, edit, reason) => {
     const partial = {
-      notes: edit === false ? [draft("n1")] : [],
+      notes: [] as ReturnType<typeof draft>[],
       edits: edit ? [{ id: "prior", revision: 0, text: "Partial repair" }] : [],
     };
     let responses = 0;
     const provider = fixture(
       (_name, input) => {
         if (++responses !== 1) return "No additional result.";
+        if (edit === false) partial.notes = [workerDraft(input, "n1")];
         if (partial.edits.length)
           partial.edits[0]!.revision = input.notes[0].revision;
         return partial;
@@ -3029,10 +3246,13 @@ test.each([
 );
 
 test("invalid submissions consume the response allowance and cannot publish partial results", async () => {
-  const provider = fixture(() => ({ notes: [draft("n1", ["unknown"])] }), {
-    maxExplorerReads: 1,
-    maxExplorerResponses: 2,
-  });
+  const provider = fixture(
+    (_name, input) => ({ notes: [workerDraft(input, "n1", ["unknown"])] }),
+    {
+      maxExplorerReads: 1,
+      maxExplorerResponses: 2,
+    },
+  );
   const current = await provider.open();
   try {
     const id = await current.invoke({
@@ -3053,7 +3273,7 @@ test("invalid submissions consume the response allowance and cannot publish part
 test("an admitted failed read consumes its allowance, while schema-invalid reads do not", async () => {
   let count = 0;
   const provider = fixture(
-    (_name, _input, transcript) => {
+    (_name, input, transcript) => {
       count++;
       if (count === 1)
         return { tool: "read_notes", arguments: { ids: [], level: "full" } };
@@ -3072,7 +3292,7 @@ test("an admitted failed read consumes its allowance, while schema-invalid reads
       expect(text).toContain("0 reads and 3 responses remain");
       expect(text).toContain("Reading is disabled");
       expect(text).not.toContain("sensitive full argument");
-      return { notes: [{ ...draft("n1"), candidate: true }] };
+      return { notes: [{ ...workerDraft(input, "n1"), candidate: true }] };
     },
     { maxExplorerReads: 1, maxExplorerResponses: 5 },
   );
@@ -3421,17 +3641,18 @@ test.each([
 ] as const)(
   "mixed %s read/submission completes without another response (read first: %s, valid read: %s)",
   async (role, readFirst, validRead) => {
-    const submission: Record<string, JsonValue> =
-      role === "explorer"
-        ? { notes: [draft("n1")] }
-        : { work: { kind: "explorer", assignment: "Continue" } };
+    const coordination = { work: { kind: "explorer", assignment: "Continue" } };
     let calls = 0;
     const provider = fixture(
-      () => {
+      (_name, input) => {
         if (++calls > 1)
           return fauxAssistantMessage("Unnecessary truncated response", {
             stopReason: "length",
           });
+        const submission =
+          role === "explorer"
+            ? { notes: [workerDraft(input, "n1")] }
+            : coordination;
         const submit = fauxToolCall(`submit_${role}`, submission);
         const read = fauxToolCall("read_notes", {
           ids: validRead ? ["prior"] : [],
@@ -3472,7 +3693,7 @@ test.each([
                 edits: [],
                 limit: "response_limit",
               }
-            : submission,
+            : coordination,
       });
       expect(calls).toBe(1);
       const retained = await entries(current.harness);
@@ -3507,10 +3728,17 @@ test.each([
 test("Explorer preserves dependencies and response limits across transcript pages", async () => {
   let calls = 0;
   const provider = fixture(
-    () => {
+    (_name, input, transcript) => {
       calls++;
+      const receipt = transcript.messages.findLast(
+        (message) => message.role === "toolResult",
+      );
+      const previous =
+        receipt?.role === "toolResult" && receipt.content[0]?.type === "text"
+          ? JSON.parse(receipt.content[0].text.split("\n\n")[0]!).notes[0].id
+          : undefined;
       return {
-        notes: [draft(`n${calls}`, calls > 1 ? [`n${calls - 1}`] : [])],
+        notes: [workerDraft(input, `n${calls}`, previous ? [previous] : [])],
       };
     },
     { maxExplorerResponses: 70 },
@@ -3551,11 +3779,11 @@ test.each([false, undefined])(
   "Explorer hands off when a non-last new note is a candidate (last candidate=%s)",
   async (lastCandidate) => {
     const provider = fixture(
-      () => ({
+      (_name, input) => ({
         notes: [
-          { ...draft("n1"), candidate: true },
+          { ...workerDraft(input, "n1"), candidate: true },
           {
-            ...draft("n2", ["n1"]),
+            ...workerDraft(input, "n2", [`${input.noteIdPrefix}n1`]),
             ...(lastCandidate === undefined
               ? {}
               : { candidate: lastCandidate }),
@@ -3615,7 +3843,7 @@ test.each([false, undefined])(
 test("Explorer continues after publication and invalid submissions until an empty handoff", async () => {
   let calls = 0;
   const provider = fixture(
-    () => {
+    (_name, input, transcript) => {
       const read = fauxToolCall("read_notes", {
         ids: ["prior"],
         level: "detailed",
@@ -3627,7 +3855,7 @@ test("Explorer continues after publication and invalid submissions until an empt
           return fauxAssistantMessage(
             [
               fauxToolCall("submit_explorer", {
-                notes: [draft("n1", ["prior"])],
+                notes: [workerDraft(input, "n1", ["prior"])],
               }),
               read,
             ],
@@ -3638,15 +3866,30 @@ test("Explorer continues after publication and invalid submissions until an empt
             [
               read,
               fauxToolCall("submit_explorer", {
-                notes: [{ ...draft("n2", ["missing"]), candidate: true }],
+                notes: [
+                  { ...workerDraft(input, "n2", ["missing"]), candidate: true },
+                ],
               }),
             ],
             { stopReason: "toolUse" },
           );
-        case 4:
+        case 4: {
+          const receipt = transcript.messages.findLast(
+            (message) =>
+              message.role === "toolResult" &&
+              message.toolName === "submit_explorer" &&
+              !message.isError,
+          );
+          if (
+            receipt?.role !== "toolResult" ||
+            receipt.content[0]?.type !== "text"
+          )
+            throw new Error("Expected first note publication receipt");
+          const value = JSON.parse(receipt.content[0].text.split("\n\n")[0]!);
           return {
-            notes: [draft("n2", ["n1"])],
+            notes: [workerDraft(input, "n2", [value.notes[0].id])],
           };
+        }
         default:
           return { notes: [] };
       }
@@ -3686,14 +3929,17 @@ test.each([false, true])(
   "Explorer publication survives interruption before acknowledgement (cancel=%s)",
   async (cancel) => {
     const directory = await temporaryDirectory("pi-role-publication-");
-    const initial = draft("n7");
+    let initial!: ReturnType<typeof draft>;
     let canonical = "";
     let revision = 0;
     let response = 0;
     const provider = fixture(
-      (_name, _input, transcript) => {
+      (_name, input, transcript) => {
         response++;
-        if (response === 1) return { notes: [initial] };
+        if (response === 1) {
+          initial = workerDraft(input, "n7");
+          return { notes: [initial] };
+        }
         const last = transcript.messages.findLast(
           (message) => message.role === "toolResult",
         );
@@ -3850,6 +4096,240 @@ test.each([false, true])(
     }
   },
 );
+
+test.each([false, true])(
+  "Explorer uses dependent revision feedback without another read (reopen=%s)",
+  async (reopen) => {
+    const directory = reopen
+      ? await temporaryDirectory("pi-role-dependent-revisions-")
+      : undefined;
+    let responses = 0;
+    const provider = fixture(
+      (_name, input, transcript) => {
+        if (++responses === 1)
+          return {
+            notes: [],
+            edits: [
+              {
+                id: "base",
+                revision: input.notes.find((note: Note) => note.id === "base")
+                  .revision,
+                text: "Repaired base argument",
+              },
+            ],
+          };
+        const receipt = transcript.messages.findLast(
+          (message) => message.role === "toolResult",
+        );
+        if (
+          receipt?.role !== "toolResult" ||
+          receipt.content[0]?.type !== "text"
+        )
+          throw new Error("Expected dependent revision feedback");
+        expect(receipt.isError).toBe(false);
+        const value = JSON.parse(receipt.content[0].text.split("\n\n")[0]!);
+        expect(value.invalidated).toEqual([
+          { id: "consumer", revision: expect.any(Number), readRequired: false },
+          { id: "leaf", revision: expect.any(Number), readRequired: false },
+        ]);
+        return {
+          notes: [workerDraft(input, "n1", ["leaf"])],
+          edits: [
+            {
+              id: "consumer",
+              revision: value.invalidated[0].revision,
+              text: "Consumer repaired after its base",
+            },
+          ],
+        };
+      },
+      { maxExplorerReads: 1, maxExplorerResponses: 2 },
+    );
+    let current = await provider.open(directory);
+    try {
+      const interrupted = reopen
+        ? current.closeAfterEntry(
+            (entry) => Events.is(entry) && entry.data.type === "result",
+          )
+        : undefined;
+      const id = await current.invoke({
+        role: "explorer",
+        input: {
+          task,
+          notes: [
+            preparedNote("base"),
+            preparedNote("consumer", ["base"]),
+            preparedNote("leaf", ["consumer"]),
+          ],
+          assignment: "Repair the base, then its consumer.",
+        },
+      });
+      if (interrupted) {
+        current.harness.resume();
+        await interrupted.promise;
+        expect(responses).toBe(1);
+        current = await provider.open(directory);
+        const records = await entries(current.harness);
+        expect(records.filter(Events.is)).toHaveLength(1);
+        expect(records.some(ToolResultEntry.is)).toBe(false);
+      }
+      expect(await resultOf(current.harness, id)).toEqual({
+        status: "completed",
+        result: {
+          kind: "published",
+          notes: [`${id}/n1`],
+          edits: ["base", "consumer"],
+          limit: "response_limit",
+        },
+      });
+      const view = await current.root.commit(
+        (tx) => readView(tx, current.root.id),
+        context,
+      );
+      expect(view.notes.find((note) => note.id === "consumer")).toMatchObject({
+        text: "Consumer repaired after its base",
+        checks: {},
+        verified: false,
+      });
+      const leaf = view.notes.find((note) => note.id === "leaf")!;
+      expect(leaf.text).toBe(preparedNote("leaf").text);
+      expect(leaf.checks).toEqual({});
+      const records = await entries(current.harness);
+      expect(records.filter(Events.is)).toHaveLength(2);
+      const results = records
+        .sort((left, right) => left.id - right.id)
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role === "toolResult");
+      expect(results).toHaveLength(2);
+      expect(
+        results.every((message) => message.toolName === "submit_explorer"),
+      ).toBe(true);
+      const last = results.at(-1)!;
+      if (last.content[0]?.type !== "text")
+        throw new Error("Expected final publication receipt");
+      expect(JSON.parse(last.content[0].text.split("\n\n")[0]!)).toMatchObject({
+        done: true,
+        invalidated: [
+          { id: "leaf", revision: leaf.revision, readRequired: false },
+        ],
+      });
+      expect(responses).toBe(2);
+    } finally {
+      await current.harness.close(context);
+    }
+  },
+);
+
+test("Explorer invalidation feedback cannot observe an intervening consumer edit", async () => {
+  const directory = await temporaryDirectory("pi-role-unseen-consumer-");
+  let responses = 0;
+  let baseRevision = 0;
+  const provider = fixture(
+    (_name, input, transcript) => {
+      if (++responses === 1) {
+        baseRevision = input.notes.find(
+          (note: Note) => note.id === "base",
+        ).revision;
+        return {
+          tool: "read_notes",
+          arguments: { ids: ["base", "consumer"], level: "full" },
+        };
+      }
+      if (responses === 2)
+        return {
+          notes: [],
+          edits: [
+            { id: "base", revision: baseRevision, text: "Repaired base" },
+          ],
+        };
+      const result = transcript.messages.findLast(
+        (message) => message.role === "toolResult",
+      );
+      if (result?.role !== "toolResult" || result.content[0]?.type !== "text")
+        throw new Error("Expected publication or read result");
+      if (responses === 3) {
+        const value = JSON.parse(result.content[0].text.split("\n\n")[0]!);
+        expect(value.invalidated).toEqual([
+          { id: "consumer", revision: expect.any(Number), readRequired: true },
+        ]);
+        expect(result.content[0].text).not.toContain(
+          "Unseen external argument",
+        );
+        return { notes: [workerDraft(input, "n1", ["consumer"])] };
+      }
+      if (responses === 4) {
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain(
+          "Stale note revision: consumer",
+        );
+        return {
+          tool: "read_notes",
+          arguments: { ids: ["consumer"], level: "full" },
+        };
+      }
+      if (responses === 5) {
+        expect(result.isError).toBe(false);
+        expect(result.content[0].text).toContain("Unseen external argument");
+        return { notes: [workerDraft(input, "n1", ["consumer"])] };
+      }
+      return { notes: [] };
+    },
+    { maxExplorerReads: 2, maxExplorerResponses: 6 },
+  );
+  let current = await provider.open(directory);
+  try {
+    const interrupted = current.closeAfterEntry((entry) =>
+      entry.model?.some(
+        (message) =>
+          message.role === "toolResult" && message.toolName === "read_notes",
+      ),
+    );
+    const id = await current.invoke({
+      role: "explorer",
+      input: {
+        task,
+        notes: [preparedNote("base"), preparedNote("consumer", ["base"])],
+        assignment: "Repair the base and use its consumer.",
+      },
+    });
+    current.harness.resume();
+    await interrupted.promise;
+    expect(responses).toBe(1);
+    current = await provider.open(directory);
+    await current.root.commit(async (tx) => {
+      const view = await readView(tx, current.root.id);
+      const consumer = view.notes.find((note) => note.id === "consumer")!;
+      await publishCommand(tx, current.root.id, {
+        kind: "submit",
+        id: "external-consumer-edit",
+        notes: [],
+        edits: [
+          {
+            id: consumer.id,
+            revision: consumer.revision,
+            text: "Unseen external argument",
+          },
+        ],
+      });
+    }, context);
+    expect(await resultOf(current.harness, id)).toEqual({
+      status: "completed",
+      result: { kind: "published", notes: [`${id}/n1`], edits: ["base"] },
+    });
+    const view = await current.root.commit(
+      (tx) => readView(tx, current.root.id),
+      context,
+    );
+    expect(view.notes.find((note) => note.id === "consumer")!.text).toBe(
+      "Unseen external argument",
+    );
+    expect(view.notes.filter((note) => note.id === `${id}/n1`)).toHaveLength(1);
+    expect((await entries(current.harness)).filter(Events.is)).toHaveLength(3);
+    expect(responses).toBe(6);
+  } finally {
+    await current.harness.close(context);
+  }
+});
 
 test("Explorer rejects a stale public revision and retains its earlier published edit", async () => {
   let calls = 0;

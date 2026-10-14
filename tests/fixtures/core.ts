@@ -10,6 +10,7 @@ import {
   Control,
   DefinitionDoc,
   createResearch,
+  noteIdPrefix,
   publicationResult,
   publishExploration,
   readView,
@@ -20,21 +21,6 @@ import {
 let reopened = false;
 let decisions = 0;
 const published = Promise.withResolvers<void>();
-const submissions: Exploration[] = [
-  "For every x, x = x.",
-  "1 = 1 by reflexivity.",
-].map((text, index) => ({
-  notes: [
-    {
-      id: `n${index + 1}`,
-      summary: text,
-      detailedSummary: text,
-      text,
-      support: index ? ["n1"] : [],
-      candidate: !!index,
-    },
-  ],
-}));
 const pass = { verdict: "PASS" as const, report: "Scripted check." };
 const roles: Roles = {
   capabilities: () => ({ literature: false, implementation: false }),
@@ -52,15 +38,27 @@ const roles: Roles = {
   },
   explorer: async (_input, runtime, ctx, source) => {
     assert.ok(source);
+    const lemma = `${noteIdPrefix(runtime.taskId)}reflexivity`;
+    const target = `${noteIdPrefix(runtime.taskId)}target`;
+    const submissions: Exploration[] = [
+      { id: lemma, text: "For every x, x = x." },
+      { id: target, text: "1 = 1 by reflexivity." },
+    ].map(({ id, text }, index) => ({
+      notes: [
+        {
+          id,
+          summary: text,
+          detailedSummary: text,
+          text,
+          support: index ? [lemma] : [],
+          candidate: !!index,
+        },
+      ],
+    }));
     for (const delta of submissions) {
       await runtime.commit(async (tx) => {
         const view = await readView(tx, source.root);
-        if (
-          view.notes.some(
-            ({ id }) => id === `${runtime.taskId}/${delta.notes[0]!.id}`,
-          )
-        )
-          return;
+        if (view.notes.some(({ id }) => id === delta.notes[0]!.id)) return;
         await publishExploration(
           tx,
           source.root,
@@ -76,19 +74,24 @@ const roles: Roles = {
         await awaitWithContext(new Promise<void>(() => {}), ctx);
       }
     }
-    return publicationResult(submissions, runtime.taskId);
+    return publicationResult(submissions);
   },
-  verifier: async ({ targets }) => ({
+  verifier: async ({ targets, notes }) => ({
     kind: "verification",
     checks: targets.map((noteId: string) => ({
       noteId,
       correctness: {
         ...pass,
-        statement: noteId.endsWith("/n1") ? "For every x, x = x." : "1 = 1.",
+        statement: notes.find(({ id }: { id: string }) => id === noteId)!
+          .candidate
+          ? "1 = 1."
+          : "For every x, x = x.",
         premises: [],
       },
       source: pass,
-      ...(noteId.endsWith("/n2") ? { requirements: pass } : {}),
+      ...(notes.find(({ id }: { id: string }) => id === noteId)!.candidate
+        ? { requirements: pass }
+        : {}),
       reconstruction: { ...pass, proof: "Reflexivity of equality." },
     })),
   }),

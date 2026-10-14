@@ -5,6 +5,19 @@
 External role backends are opt-in, and multiple campaigns can share a foreground
 host while Pi owns each campaign's execution and recovery. This version is unreleased.
 
+- Note IDs are permanent names under the worker's Pi task prefix or the caller's
+  command prefix. Producers use the full ID in text, dependencies, reads, and edits.
+  Publication preserves IDs and rejects duplicate creations. Local aliases and
+  invocation-wide numbering are removed.
+- Explorer publication receipts report dependent revision changes. Previously
+  observed dependents can use the returned revisions. Unseen intervening edits
+  still require a read. Publication and its receipt recover atomically through Pi.
+- Source backend failures identify their stage and retain completed verification
+  work. Coordinator instructions explain the shared source backend and recommend
+  independent work after repeated operational failures.
+- Pin Pi to an unreleased snapshot after 1.2.0. It classifies
+  `unable to forward upstream` as retryable and repairs invalid Unicode escapes
+  in streamed JSON. The frozen model catalog and existing Xean patches remain.
 - Import `xean/core` for the workflow, notebook rules, and role contracts without
   loading bundled role implementations, CLI, or adapters. `xean/roles` exports
   the default roles, and `xean/report` provides inspection. `open` from `xean`
