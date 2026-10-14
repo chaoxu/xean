@@ -69,6 +69,7 @@
     "@earendil-works/pi-durable@vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-durable-1.2.0-c92e0838617b.tgz": "patches/@earendil-works%2Fpi-durable@1.2.0.patch"
   },
   "optionalDependencies": {
-    "execa": "10.0.1"
+    "execa": "10.0.1",
+    "jsonc-parser": "3.3.1"
   }
 }

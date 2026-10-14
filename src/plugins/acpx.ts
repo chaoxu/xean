@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { visit } from "jsonc-parser";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -165,11 +166,27 @@ export function acpxTranscript(
     result.error ??= new Error("acpx emitted no unique final result block");
   if (!result.error)
     try {
-      result.value = JSON.parse(block![1]!) as JsonValue;
-    } catch (error) {
-      result.error = new Error("acpx final answer was not JSON", {
-        cause: error,
+      const value = JSON.parse(block![1]!) as JsonValue;
+      const objects: Set<string>[] = [];
+      visit(block![1]!, {
+        onObjectBegin: () => {
+          objects.push(new Set());
+        },
+        onObjectProperty: (key) => {
+          const keys = objects.at(-1)!;
+          if (keys.has(key)) throw new Error(`Duplicate JSON key: ${key}`);
+          keys.add(key);
+        },
+        onObjectEnd: () => {
+          objects.pop();
+        },
       });
+      result.value = value;
+    } catch (error) {
+      result.error = new Error(
+        `acpx final answer was not valid JSON: ${String(error)}`,
+        { cause: error },
+      );
     }
   return result;
 }

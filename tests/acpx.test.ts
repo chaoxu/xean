@@ -54,6 +54,32 @@ const review = {
   passages: [],
 };
 const output = (value: unknown) => jsonl([chunk(framed(value)), completed]);
+// Exact r03 result whose duplicate key silently discarded the Gamma-function note.
+const duplicateNotes = String.raw`{"notes":[{"id":"12/gamma-euler-integral","summary":"NIST DLMF defines Gamma(z) by Euler’s integral for complex z with Re z > 0.","detailedSummary":"The Euler integral definition is Gamma(z) = integral from 0 to infinity of e^{-t} t^{z-1} dt, valid when Re z > 0. DLMF states that for Re z <= 0, Gamma is instead defined by analytic continuation.","text":"12/gamma-euler-integral: NIST Digital Library of Mathematical Functions, §5.2(i), equation 5.2.1, gives the definition Gamma(z) = ∫_0^∞ e^{-t} t^{z-1} dt with domain Re z > 0. Exact supporting quotation: “Γ(z)={∫}_{0}^{∞}e^{-t}t^{z-1}dt,” followed by “Re z>0.” Source: https://dlmf.nist.gov/5.2#E1. The same source states that when Re z <= 0, Gamma(z) is defined by analytic continuation.","support":[]}],"notes":[]}`;
+
+test.each([
+  ["notes", duplicateNotes],
+  ["notes", '{"notes":[],"notes":[]}'],
+  ["summary", '{"notes":[{"summary":"first","summary":"second"}]}'],
+  ["notes", String.raw`{"notes":[],"\u006eotes":[{}]}`],
+  ['a"b', String.raw`{"a\"b":1,"a\u0022b":2}`],
+])("acpx rejects duplicate JSON key %j without losing usage", (key, json) => {
+  const parsed = acpxTranscript(
+    jsonl([chunk(`<xean-result>${json}</xean-result>`), completed]),
+  );
+  expect(parsed.error?.message).toContain(`Duplicate JSON key: ${key}`);
+  expect(parsed.value).toBeUndefined();
+  expect(parsed.usage).toEqual(usage);
+});
+
+test("acpx allows keys repeated across sibling objects and escaped key text", () => {
+  const json = String.raw`{"notes":[{"id":"a","text":"An escaped \"notes\":[] is text","child":{"id":"inner"}},{"id":"b","\u0074ext":"Braces { } and \"id\":0 are text"}]}`;
+  const parsed = acpxTranscript(
+    jsonl([chunk(`<xean-result>${json}</xean-result>`), completed]),
+  );
+  expect(parsed.error).toBeUndefined();
+  expect(parsed.value).toEqual(JSON.parse(json));
+});
 
 test.each(["failed", "pending", "in_progress"])(
   "local search and %s retrieval cannot unlock fresh source evidence",
@@ -249,6 +275,14 @@ test.each([
   ],
   ["multiple terminal events", output(review) + jsonl([completed])],
   ["malformed JSONL", "not-json\n" + output(review)],
+  [
+    "JSON comment",
+    jsonl([chunk("<xean-result>{/*comment*/}</xean-result>"), completed]),
+  ],
+  [
+    "JSON trailing comma",
+    jsonl([chunk('<xean-result>{"notes":[],}</xean-result>'), completed]),
+  ],
 ])("acpx rejects %s without losing available accounting", (_kind, stdout) => {
   const parsed = acpxTranscript(stdout);
   expect(parsed.error).toBeInstanceOf(Error);
@@ -432,13 +466,18 @@ test("acpx uses the role envelope and Pi memo; changed assignment dispatches, ch
   }
 });
 
-test.each(["provider", "schema", "exit"])(
+test.each(["provider", "schema", "exit", "duplicate"])(
   "acpx %s failure retains receipts and never publishes an early result",
   async (failure) => {
     const events =
-      (failure === "provider"
-        ? ""
-        : output(failure === "schema" ? {} : review)) +
+      (failure === "duplicate"
+        ? jsonl([
+            chunk(`<xean-result>${duplicateNotes}</xean-result>`),
+            completed,
+          ])
+        : failure === "provider"
+          ? ""
+          : output(failure === "schema" ? {} : review)) +
       (failure === "provider"
         ? jsonl([
             {
@@ -459,7 +498,7 @@ test.each(["provider", "schema", "exit"])(
       const log = report.records!.find(ExternalLog.is)!;
       expect(report.status.error).toContain(`Request entry: ${request.id}`);
       expect(report.status.error).toContain(`acpx log entry: ${log.id}`);
-      if (failure !== "schema")
+      if (failure === "provider" || failure === "exit")
         expect(report.status.error).toContain(
           failure === "provider"
             ? "Selected model is at capacity"
@@ -471,6 +510,10 @@ test.each(["provider", "schema", "exit"])(
         usage: failure === "provider" ? null : usage,
       });
       expect(report.result).toBeUndefined();
+      if (failure === "duplicate") {
+        expect(report.status.error).toContain("Duplicate JSON key: notes");
+        expect(report.notes).toEqual([]);
+      }
       await expect(access(request.data.workspace)).rejects.toThrow();
       await owner.close();
       const retained = await inspect(path, (tx, root) =>
