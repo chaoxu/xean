@@ -216,6 +216,7 @@ export function noteInfo(note: Note): NoteInfo {
     support: note.support,
     external: note.checks.external,
     verified: note.verified,
+    accepted: note.accepted,
     dead: note.dead,
     candidate: note.candidate,
     revision: note.revision,

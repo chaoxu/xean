@@ -63,7 +63,7 @@ export function acpx(options: AcpxRoleOptions) {
 
 const defaultWebTools = [{ kind: "fetch" }];
 
-/** ACP has no final-answer phase. The role prompt supplies one explicit result block. */
+/** Standard ACP has no final-answer phase; the role supplies an explicit result block. */
 export function acpxTranscript(
   stdout: string,
   failed = false,
@@ -72,6 +72,8 @@ export function acpxTranscript(
   const result: AcpxTranscript = { usage: null, searches: 0 };
   const calls = new Map<string, AcpxCallState>();
   let text = "";
+  let message: { id: string; start: number } | undefined;
+  let interrupted: typeof message;
   let completed = 0;
   let protocolError: RoleFailure | undefined;
   const usage: Record<string, number> = {};
@@ -94,8 +96,29 @@ export function acpxTranscript(
       if (
         update?.sessionUpdate === "agent_message_chunk" &&
         update.content?.type === "text"
-      )
+      ) {
+        const id = update.messageId;
+        if (interrupted && typeof id === "string" && id !== interrupted.id) {
+          text = text.slice(0, interrupted.start);
+          message = undefined;
+        }
+        interrupted = undefined;
+        if (
+          typeof id !== "string" ||
+          update._meta?.codex?.phase !== "final_answer"
+        )
+          message = undefined;
+        else if (message?.id !== id) message = { id, start: text.length };
         text += update.content.text;
+      }
+      // Codex may replace an interrupted message within the same successful ACP turn.
+      const retry = update?._meta?.codex?.error;
+      if (
+        update?.sessionUpdate === "session_info_update" &&
+        retry?.willRetry === true &&
+        retry.codexErrorInfo?.responseStreamDisconnected
+      )
+        interrupted = message;
       if (
         ["tool_call", "tool_call_update"].includes(update?.sessionUpdate) &&
         typeof update.toolCallId === "string"

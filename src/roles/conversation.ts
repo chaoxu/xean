@@ -376,7 +376,12 @@ export function conversations(profiles: Profiles) {
               detailedSummary: note.detailedSummary,
               statement: note.checks.correctness?.statement,
               ...(note.retired ? { retired: true } : {}),
-              ...(level === "full" ? { text: note.text } : {}),
+              ...(level === "full"
+                ? {
+                    text: note.text,
+                    premises: note.checks.correctness?.premises,
+                  }
+                : {}),
             };
           });
       }

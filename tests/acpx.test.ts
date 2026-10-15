@@ -54,6 +54,80 @@ const review = {
   passages: [],
 };
 const output = (value: unknown) => jsonl([chunk(framed(value)), completed]);
+const finalChunk = (text: string, messageId = "replacement") =>
+  update({
+    sessionUpdate: "agent_message_chunk",
+    messageId,
+    content: { type: "text", text },
+    _meta: { codex: { phase: "final_answer" } },
+  });
+// P05 worker 689: Codex replaced a disconnected final response and ended normally.
+const reconnect = (willRetry = true) =>
+  update({
+    sessionUpdate: "session_info_update",
+    _meta: {
+      codex: {
+        error: {
+          codexErrorInfo: {
+            responseStreamDisconnected: { httpStatusCode: null },
+          },
+          willRetry,
+        },
+      },
+    },
+  });
+
+test("acpx discards a disconnected final message only when Codex replaces it", () => {
+  const parsed = acpxTranscript(
+    jsonl([
+      chunk("Computing.\n"),
+      update({ sessionUpdate: "tool_call", toolCallId: "web", kind: "fetch" }),
+      finalChunk('<xean-result>{"notes":[', "interrupted"),
+      reconnect(),
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "web",
+        status: "completed",
+      }),
+      finalChunk(framed(review)),
+      completed,
+    ]),
+  );
+  expect(parsed).toEqual({ value: review, usage, searches: 1 });
+});
+
+test.each([
+  ["no reconnect", []],
+  ["no retry", [reconnect(false)]],
+  ["same message", [reconnect(), finalChunk("more", "interrupted")]],
+  ["no message identity", [reconnect(), chunk("more")]],
+])("acpx keeps ambiguous partial output with %s", (_label, events) => {
+  const parsed = acpxTranscript(
+    jsonl([
+      finalChunk('<xean-result>{"notes":[', "interrupted"),
+      ...events,
+      finalChunk(framed(review)),
+      completed,
+    ]),
+  );
+  expect(parsed.error?.message).toContain("no unique final result block");
+  expect(parsed.value).toBeUndefined();
+  expect(parsed.usage).toEqual(usage);
+});
+
+test("acpx retry preserves earlier results and rejects conflicting final blocks", () => {
+  const parsed = acpxTranscript(
+    jsonl([
+      finalChunk(framed(review), "earlier"),
+      finalChunk('<xean-result>{"notes":[', "interrupted"),
+      reconnect(),
+      finalChunk(framed(review)),
+      completed,
+    ]),
+  );
+  expect(parsed.error?.message).toContain("no unique final result block");
+});
+
 // Exact r03 result whose duplicate key silently discarded the Gamma-function note.
 const duplicateNotes = String.raw`{"notes":[{"id":"12/gamma-euler-integral","summary":"NIST DLMF defines Gamma(z) by Euler’s integral for complex z with Re z > 0.","detailedSummary":"The Euler integral definition is Gamma(z) = integral from 0 to infinity of e^{-t} t^{z-1} dt, valid when Re z > 0. DLMF states that for Re z <= 0, Gamma is instead defined by analytic continuation.","text":"12/gamma-euler-integral: NIST Digital Library of Mathematical Functions, §5.2(i), equation 5.2.1, gives the definition Gamma(z) = ∫_0^∞ e^{-t} t^{z-1} dt with domain Re z > 0. Exact supporting quotation: “Γ(z)={∫}_{0}^{∞}e^{-t}t^{z-1}dt,” followed by “Re z>0.” Source: https://dlmf.nist.gov/5.2#E1. The same source states that when Re z <= 0, Gamma(z) is defined by analytic continuation.","support":[]}],"notes":[]}`;
 

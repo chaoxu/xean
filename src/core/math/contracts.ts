@@ -315,6 +315,7 @@ export type NoteInfo = Pick<
   | "summary"
   | "support"
   | "verified"
+  | "accepted"
   | "dead"
   | "candidate"
   | "revision"
