@@ -323,7 +323,7 @@ export function conversations(profiles: Profiles) {
     name: "read_notes",
     callers: ["model"],
     description:
-      "Read detailed summaries or authoritative full notes. Explorer reads the current notebook, including its own submissions. Other roles read their frozen inputs. Batch independent IDs. Dead notes are diagnostic only.",
+      "Read detailed summaries or authoritative full notes. Explorer reads the current notebook, including its own submissions. Other roles read their frozen inputs. Returned statement and premises are read-only correctness results, not Explorer submission fields. Batch independent IDs. Dead notes are diagnostic only.",
     parameters: Type.Object(
       {
         ids: Type.Array(Type.String({ minLength: 1 }), {
