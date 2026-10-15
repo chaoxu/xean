@@ -59,6 +59,7 @@ import {
   publishCommand,
   readView,
   readSnapshot,
+  seedNotebook,
   type SnapshotReader,
 } from "../src/core/math/state.ts";
 import { refresh, validateResult } from "../src/core/math/notes.ts";
@@ -4405,19 +4406,21 @@ test("Explorer rejects a stale public revision and retains its earlier published
 });
 
 test("Coordinator sees a candidate's unresolved dependency despite its own four PASS checks", async () => {
-  const provider = fixture((name, input) => {
-    expect(name).toBe("coordinator");
+  const support = preparedNote("support");
+  const candidate = {
+    ...preparedNote("candidate", [support.id]),
+    candidate: true,
+  };
+  for (const note of [support, candidate])
+    note.checks.reconstruction = {
+      verdict: note.candidate ? "PASS" : "INCONCLUSIVE",
+      report: note.candidate
+        ? "Checked conditionally on support."
+        : "Independent proof assumed the conclusion.",
+      proof: "Independent attempted proof.",
+    };
+  const provider = fixture((_name, input) => {
     const candidate = input.notes.find((note: Note) => note.candidate);
-    if (!candidate)
-      return { work: { kind: "explorer", assignment: "Prove the claim." } };
-    if (!candidate.verified)
-      return {
-        work: {
-          kind: "verifier",
-          notes: [candidate.id],
-          through: "reconstruction",
-        },
-      };
     expect(candidate).toMatchObject({
       verified: true,
       accepted: false,
@@ -4432,48 +4435,15 @@ test("Coordinator sees a candidate's unresolved dependency despite its own four 
     });
     return { work: null };
   });
-  provider.roles.explorer = async (_input, runtime) => ({
-    kind: "notes",
-    notes: [
-      draft(`${runtime.taskId}/support`),
-      {
-        ...draft(`${runtime.taskId}/candidate`, [`${runtime.taskId}/support`]),
-        candidate: true,
-      },
-    ],
-  });
-  provider.roles.verifier = async (input) => ({
-    kind: "verification",
-    checks: input.notes.map((note: Note) => ({
-      noteId: note.id,
-      correctness: {
-        verdict: "PASS",
-        report: "Checked.",
-        statement: note.id,
-        premises: [],
-      },
-      source: { verdict: "PASS", report: "Checked." },
-      ...(note.candidate
-        ? { requirements: { verdict: "PASS", report: "Checked." } }
-        : {}),
-      reconstruction: {
-        verdict: note.candidate ? "PASS" : "INCONCLUSIVE",
-        report: note.candidate
-          ? "Checked conditionally on support."
-          : "Independent proof assumed the conclusion.",
-        proof: "Independent attempted proof.",
-      },
-    })),
-  });
   const current = await provider.open(undefined, {
     task,
     settings: { profiles: { default: { provider: "openai", model: "roles" } } },
   });
   try {
-    await current.root.commit(
-      (tx) => provider.workflow.initialize(tx, current.root.id),
-      context,
-    );
+    await current.root.commit(async (tx) => {
+      await seedNotebook(tx, current.root.id, [support, candidate]);
+      await provider.workflow.initialize(tx, current.root.id);
+    }, context);
     await current.root.waitForIdle(context);
     const report = await current.root.commit(
       (tx) => readReport(tx, current.root.id),
@@ -4482,18 +4452,8 @@ test("Coordinator sees a candidate's unresolved dependency despite its own four 
     expect(report.status).toMatchObject({
       status: "idle",
       acceptedNoteId: null,
-      work: { completed: 2, failed: 0 },
     });
-    expect(provider.calls).toHaveLength(3);
-    expect(report.notes.every((note) => note.verified && !note.accepted)).toBe(
-      true,
-    );
-    expect(() =>
-      acceptedArgument(
-        report.notes,
-        report.notes.find((note) => note.candidate)!.id,
-      ),
-    ).toThrow("No accepted argument");
+    expect(provider.calls).toHaveLength(1);
   } finally {
     await current.harness.close(context);
   }

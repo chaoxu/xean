@@ -56,9 +56,8 @@ const review = {
 const output = (value: unknown) => jsonl([chunk(framed(value)), completed]);
 const finalChunk = (text: string, messageId = "replacement") =>
   update({
-    sessionUpdate: "agent_message_chunk",
+    ...chunk(text).params.update,
     messageId,
-    content: { type: "text", text },
     _meta: { codex: { phase: "final_answer" } },
   });
 // P05 worker 689: Codex replaced a disconnected final response and ended normally.
@@ -77,13 +76,22 @@ const reconnect = (willRetry = true) =>
     },
   });
 
-test("acpx discards a disconnected final message only when Codex replaces it", () => {
+test.each([
+  ["replacement", [reconnect()], true],
+  ["no reconnect", [], false],
+  ["no retry", [reconnect(false)], false],
+  ["same message", [reconnect(), finalChunk("more", "interrupted")], false],
+  ["no message identity", [reconnect(), chunk("more")], false],
+  ["earlier result", [reconnect()], false],
+])("acpx final-response recovery: %s", (label, events, accepted) => {
   const parsed = acpxTranscript(
     jsonl([
-      chunk("Computing.\n"),
+      label === "earlier result"
+        ? finalChunk(framed(review), "earlier")
+        : chunk("Computing.\n"),
       update({ sessionUpdate: "tool_call", toolCallId: "web", kind: "fetch" }),
       finalChunk('<xean-result>{"notes":[', "interrupted"),
-      reconnect(),
+      ...events,
       update({
         sessionUpdate: "tool_call_update",
         toolCallId: "web",
@@ -93,39 +101,12 @@ test("acpx discards a disconnected final message only when Codex replaces it", (
       completed,
     ]),
   );
-  expect(parsed).toEqual({ value: review, usage, searches: 1 });
-});
-
-test.each([
-  ["no reconnect", []],
-  ["no retry", [reconnect(false)]],
-  ["same message", [reconnect(), finalChunk("more", "interrupted")]],
-  ["no message identity", [reconnect(), chunk("more")]],
-])("acpx keeps ambiguous partial output with %s", (_label, events) => {
-  const parsed = acpxTranscript(
-    jsonl([
-      finalChunk('<xean-result>{"notes":[', "interrupted"),
-      ...events,
-      finalChunk(framed(review)),
-      completed,
-    ]),
+  expect(parsed.error?.message).toBe(
+    accepted ? undefined : "acpx emitted no unique final result block",
   );
-  expect(parsed.error?.message).toContain("no unique final result block");
-  expect(parsed.value).toBeUndefined();
+  expect(parsed.value).toEqual(accepted ? review : undefined);
   expect(parsed.usage).toEqual(usage);
-});
-
-test("acpx retry preserves earlier results and rejects conflicting final blocks", () => {
-  const parsed = acpxTranscript(
-    jsonl([
-      finalChunk(framed(review), "earlier"),
-      finalChunk('<xean-result>{"notes":[', "interrupted"),
-      reconnect(),
-      finalChunk(framed(review)),
-      completed,
-    ]),
-  );
-  expect(parsed.error?.message).toContain("no unique final result block");
+  expect(parsed.searches).toBe(1);
 });
 
 // Exact r03 result whose duplicate key silently discarded the Gamma-function note.
