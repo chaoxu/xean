@@ -92,11 +92,11 @@
     {
       "package": "@earendil-works/pi-ai",
       "path": "patches/@earendil-works%2Fpi-ai@1.2.0.patch",
-      "sha256": "71290f4762d68d005541b380a1d12a3a564e58bde401a608be3bf20e881d3cd9",
+      "sha256": "c4aed906c617975de6161481d99295d0f248c6e1281f7f5464c05f6347c9ffba",
       "files": {
         "dist/api/anthropic-messages.js": "422bcaa52271351b87487189ca374f0bb72dc4eca1be5327539d617d71731522",
         "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
-        "dist/api/openai-codex-responses.js": "3e9fd36ad62d067886802095b2565d5aad74f52520f008c08d28b9ce54611332",
+        "dist/api/openai-codex-responses.js": "5fae7ce7ddd700e2159953b54763a6d32829d3ab811d3073e7f6dba6d710a9a6",
         "dist/api/openai-responses-shared.js": "5bafa2226e1c1bc34f3232c48c5880273ee769474f11f6e65e7b26c323547659",
         "dist/api/openai-responses.js": "08e2957f91929af8f85cccc314971f4551ef29660a306180e7af2fe57f805f8d",
         "dist/providers/data/.manifest.json": "9a94e0d1bd4008d4f070b243c3d41aa89d3478c4beea5be3399ae21b564979bb",
@@ -105,26 +105,31 @@
         "dist/types.d.ts": "d2a4a18c5bf1e2f6eadda32981c8f7127b8af9875dc7efd30f2875a426423430",
         "dist/utils/retry.js": "2757997359c46f4c2f0fd0329a98cdeb73991ef4e2639849de7ace801067a747"
       },
-      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier. Retain v1 transient gateway codes and diagnostic recovery while leaving authentication, quota, request and schema failures terminal."
+      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier. Retain v1 transient gateway codes and diagnostic recovery while leaving authentication, quota, request and schema failures terminal. Send the native Codex output cap only when its model compatibility explicitly opts in."
     },
     {
       "package": "@earendil-works/pi-durable",
       "path": "patches/@earendil-works%2Fpi-durable@1.2.0.patch",
-      "sha256": "4f3a810f77af868f212ca98ebaa3a2d6afd0060df5d26a9cd8f2d683538e3f8c",
+      "sha256": "b53275ec7ffda2ad0cc7bf847681c36faee8924e5eb8e0925fe9c624f41d7393",
       "files": {
-        "dist/harness/context.d.ts": "9e964eb80f67331c090017202549008e3ea67dcb5f31ec355ad5373b314ac917",
-        "dist/harness/context.js": "3e820054879cec32a6169e2d96105909a00b5d5aa4d1876c666ae5d355965c2c",
-        "dist/harness/generation.js": "0ce24becc7bc3bec73fa1087496e43b66ee5b52017fbbbc420aaae21cc5e1c04",
-        "dist/harness/types.d.ts": "090416fd80b5e3e411c737b01c354c6ec86abc45cc680cb4b5bc6a62683b1deb",
-        "dist/index.d.ts": "9fba08524b82dcd2e68ea43198843ceff8c5cde6e126ebd28db6d1c5bfa4f11e",
+        "dist/harness/agent.js": "ef029723e6a247deb937f7480daa2fb8550948b9670373fa11bfe75b56ba610d",
+        "dist/harness/context.d.ts": "390486e6a195c10a7910e3a287159f81d9faf3a021af75f0f3fb60d427485a25",
+        "dist/harness/context.js": "550849ff840f85bff91e1e995212d17e8f206608bd556bba83fc92e1608bbbeb",
+        "dist/harness/generation.js": "3366d18ddc42ec728ef5a38fd5cc6c4961354038c5f8e2aeb991c781012e02ad",
+        "dist/harness/harness.js": "38eb74d07802b589adce28f0e28a05aaf201f8a4896d179c77f986cd7311d44c",
+        "dist/harness/live.d.ts": "c458c6fbc7eebefa11db5367887383967bc4bd73e9ddcf79b6000b9714ec3981",
+        "dist/harness/scheduler.js": "fff95e10cb83e81062cfe4a236a07922ed26869071a1f8a949a53f09c57ecb67",
+        "dist/harness/types.d.ts": "8733ca05820cb8f672e8dcca1162fbc8582c093db562712063d2e0e3226f2ff9",
+        "dist/index.d.ts": "ce5cb47d08f6b122bd38669421802af1b7c14f3061d1bc0acfe863d095cd3a11",
         "dist/index.js": "a8f912867382e5778912df2439ce569102422e905afe37e2bba8f0a1d8dba421",
         "dist/session/session.js": "c89d7cadd04dfae353e616071c3ba3c12aa52070e045aeb0eb24d9c4af206b42",
         "dist/storage/sqlite/node.d.ts": "8a16cbc753f4f18e623c072adf13a36fb30d0200425cd79fc0064e69d416eada",
         "dist/storage/sqlite/node.js": "6fd67e0e4e9b91adaa949372e33f673ed9a445536be08ca1dbbbcaaa5860399f",
         "dist/storage/sqlite/storage.d.ts": "60ccb3c57f3847f37cdcc891df8950f00c4e6b4e6383aa60995226264f7fecfd",
-        "dist/storage/sqlite/storage.js": "704a85b9b3223df00147bec672196565f24af91288bf77ca1d1f094fb877dca2"
+        "dist/storage/sqlite/storage.js": "704a85b9b3223df00147bec672196565f24af91288bf77ca1d1f094fb877dca2",
+        "dist/types.d.ts": "0140f335b116f5e5d71c8595a955cf99f66a390882757215a3873e89cda60372"
       },
-      "reason": "Expose native request and context hooks, continue resumable provider limits, release obsolete observers, and support read-only SQLite inspection."
+      "reason": "Expose native request and context hooks, continue resumable provider limits, release obsolete observers, and support read-only SQLite inspection. Add optional durable run response, truncation and recovery budgets, configurable continuation text, and model-matched completed-reasoning retry projection while preserving raw responses and usage."
     }
   ]
 }

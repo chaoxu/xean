@@ -91,18 +91,12 @@ const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
 };
 
 export async function lastCampaign(tx: Tx, root: ConversationId) {
-  const tasks: any[] = [];
-  let cursor;
-  do {
-    const page = await tx.scanTasks(
-      { conversationId: root, kind: campaignKind },
-      128,
-      cursor,
-    );
-    tasks.push(...page.items);
-    cursor = page.next;
-  } while (cursor);
-  return tasks.at(-1);
+  return (
+    await tx.scanTasks(
+      { conversationId: root, kind: campaignKind, order: "descending" },
+      1,
+    )
+  ).items[0];
 }
 
 /** Pi owns execution and recovery. These tasks retain v1's research decisions. */
@@ -127,8 +121,6 @@ export function createWorkflow(
         context,
         previousTasks as TaskId[],
       );
-    const saved = await runtime.memo<CallResult>(`role/${key}`, context);
-    if (saved) return { ...saved, fresh: false };
     let prior: CallResult | undefined;
     const owners = [runtime.taskId, ...previousTasks];
     await runtime.commit(async (tx) => {
@@ -172,11 +164,7 @@ export function createWorkflow(
         })
       ).id;
     }, context);
-    return runtime.memo(
-      `role/${key}`,
-      { value, call: id, fresh: result.fresh ?? true },
-      context,
-    );
+    return { value, call: id, fresh: result.fresh ?? true };
   }
 
   const Worker = defineTask<WorkerInput, { phase: "run" }, WorkerResult>({

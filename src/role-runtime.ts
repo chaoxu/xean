@@ -2,14 +2,11 @@ import { copyJson, type Context, type JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   cleanupSessionResources,
-  lazyStream,
   Type,
-  type AssistantMessage,
   type TSchema,
 } from "@earendil-works/pi-ai";
 import {
   configure,
-  continuationContent,
   defineDoc,
   defineDocFamily,
   defineExtension,
@@ -17,7 +14,6 @@ import {
   GenerationTask,
   hook,
   ProviderDoc,
-  responsesReasoningId,
   ToolResultEntry,
   type ConversationHandle,
   type ConversationId,
@@ -43,10 +39,15 @@ import {
 import type { PiRoleProfile } from "./policy/settings.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
-const nativeContinuation =
-  "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments.";
-const lengthContinuation =
-  "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work.";
+export const roleGenerationPolicy = {
+  maxResponses: 32,
+  maxLengthContinuations: 8,
+  maxRecoveries: 8,
+  continueEmptyLength: true,
+  continuationPrompt:
+    "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work.",
+  retryContent: "completed-reasoning" as const,
+};
 type Assignment = { descriptor?: CallDescriptor; profile?: PiRoleProfile };
 const Assignment = defineDoc({
   kind: "xean.role.assignment",
@@ -152,7 +153,7 @@ export function createRoleRuntime(
     tools,
     hooks: [
       hook(GenerationTask, {
-        async beforeRequest({ messages, entries, stream }, api, context) {
+        async beforeRequest({ messages, stream }, api, context) {
           const assignment = await api.snapshot(
             Assignment,
             api.conversationId,
@@ -160,49 +161,6 @@ export function createRoleRuntime(
           );
           if (!assignment?.descriptor) return;
           const call = await resolve(assignment.descriptor);
-          const recorded = entries.flatMap((entry) => entry.model ?? []);
-          const history = recorded.filter(
-            (message) => message.role === "assistant",
-          );
-          const failed = history
-            .filter((message) => message.stopReason === "error")
-            .map((message) => ({
-              raw: message,
-              projected: {
-                ...message,
-                content: continuationContent(message),
-                stopReason: "length" as const,
-              },
-            }));
-          const reasoning = new Set<string>();
-          const continuations: (AssistantMessage["stopReason"] | undefined)[] =
-            [];
-          let previous: AssistantMessage | undefined;
-          for (const message of recorded) {
-            if (message.role === "assistant") previous = message;
-            if (
-              message.role === "user" &&
-              message.content === nativeContinuation
-            )
-              continuations.push(previous?.stopReason);
-          }
-          const lengths = history.filter(
-            (message) => message.stopReason === "length",
-          ).length;
-          let interrupted = 0;
-          for (const message of history) {
-            if (message.stopReason === "error") interrupted += 1;
-            else if (["stop", "toolUse"].includes(message.stopReason))
-              interrupted = 0;
-          }
-          const limit =
-            history.length >= 32
-              ? "Role exhausted 32 responses"
-              : lengths > 8
-                ? "Role exhausted eight output-length continuations"
-                : interrupted > 8
-                  ? "Role exhausted eight provider recoveries"
-                  : undefined;
           const declaration = {
             name: call.tool,
             description: call.description,
@@ -221,101 +179,48 @@ export function createRoleRuntime(
                 toolsAdded: [declaration],
                 timestamp: 0,
               },
-              ...messages
-                .filter((message) => message.role !== "system")
-                .flatMap((message) => {
-                  if (message.role === "assistant") {
-                    const error = failed.find(({ projected }) =>
-                      isDeepStrictEqual(projected, message),
-                    )?.raw;
-                    if (error) {
-                      const content =
-                        ["openai-responses", "openai-codex-responses"].includes(
-                          error.api,
-                        ) &&
-                        error.provider === assignment.profile?.provider &&
-                        error.model === assignment.profile.model &&
-                        (error.responseModel === undefined ||
-                          error.responseModel === error.model)
-                          ? error.content.filter((part) => {
-                              const id = responsesReasoningId(part);
-                              if (!id || reasoning.has(id)) return false;
-                              reasoning.add(id);
-                              return true;
-                            })
-                          : [];
-                      return content.length
-                        ? [{ ...error, content, stopReason: "stop" as const }]
-                        : [];
-                    }
-                    for (const part of message.content) {
-                      const id = responsesReasoningId(part);
-                      if (id) reasoning.add(id);
-                    }
-                  }
-                  if (
-                    message.role === "user" &&
-                    message.content === nativeContinuation
-                  ) {
-                    const reason = continuations.shift();
-                    if (reason === "error") return [];
-                    if (reason === "length")
-                      return [{ ...message, content: lengthContinuation }];
-                  }
-                  return [message];
-                }),
+              ...messages.filter((message) => message.role !== "system"),
             ],
             stream: (model, transcript, options) =>
-              lazyStream(model, async () => {
-                if (limit) throw new Error(limit);
-                return stream(model, transcript, {
-                  ...options,
-                  transport:
-                    model.api === "openai-codex-responses" ? "auto" : "sse",
-                  onPayload: async (payload, requestModel) => {
-                    const original =
-                      (await options?.onPayload?.(payload, requestModel)) ??
-                      payload;
-                    if (
-                      !original ||
-                      typeof original !== "object" ||
-                      !["openai-responses", "openai-codex-responses"].includes(
-                        model.api,
-                      )
+              stream(model, transcript, {
+                ...options,
+                transport:
+                  model.api === "openai-codex-responses" ? "auto" : "sse",
+                onPayload: async (payload, requestModel) => {
+                  const original =
+                    (await options?.onPayload?.(payload, requestModel)) ??
+                    payload;
+                  if (
+                    !original ||
+                    typeof original !== "object" ||
+                    !["openai-responses", "openai-codex-responses"].includes(
+                      model.api,
                     )
-                      return original;
-                    const request = { ...original } as Record<string, unknown>;
-                    request.parallel_tool_calls = false;
-                    request.tool_choice = "required";
+                  )
+                    return original;
+                  const request = { ...original } as Record<string, unknown>;
+                  request.parallel_tool_calls = false;
+                  request.tool_choice = "required";
+                  if (
+                    model.api === "openai-responses" &&
+                    !request.instructions &&
+                    Array.isArray(request.input)
+                  ) {
+                    const [head, ...rest] = request.input;
                     if (
-                      model.api === "openai-responses" &&
-                      !request.instructions &&
-                      Array.isArray(request.input)
+                      head?.role === "developer" &&
+                      typeof head.content === "string"
                     ) {
-                      const [head, ...rest] = request.input;
-                      if (
-                        head?.role === "developer" &&
-                        typeof head.content === "string"
-                      ) {
-                        request.instructions = head.content;
-                        request.input = rest;
-                      }
+                      request.instructions = head.content;
+                      request.input = rest;
                     }
-                    if ("prompt_cache_key" in request)
-                      request.prompt_cache_key = createHash("sha256")
-                        .update(`${roleLabels[call.role]}\n${call.system}`)
-                        .digest("hex");
-                    if (
-                      model.api === "openai-codex-responses" &&
-                      model.compat &&
-                      "supportsMaxOutputTokens" in model.compat &&
-                      model.compat.supportsMaxOutputTokens === true
-                    )
-                      request.max_output_tokens =
-                        options?.maxTokens ?? model.maxTokens;
-                    return request;
-                  },
-                });
+                  }
+                  if ("prompt_cache_key" in request)
+                    request.prompt_cache_key = createHash("sha256")
+                      .update(`${roleLabels[call.role]}\n${call.system}`)
+                      .digest("hex");
+                  return request;
+                },
               }),
           };
         },

@@ -32,13 +32,17 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai/utils/transcript";
 import { z } from "zod";
-import { createRoleRuntime } from "../src/role-runtime.ts";
+import {
+  createRoleRuntime,
+  roleGenerationPolicy,
+} from "../src/role-runtime.ts";
 import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
 import { open, inspect } from "../src/host.ts";
 import { readReport } from "../src/report.ts";
 import { solveSettings } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 import provenance from "../vendor/pi/provenance.json";
+import historical from "./fixtures/v100-contracts.json";
 
 const context = BACKGROUND_CONTEXT;
 const descriptor: CallDescriptor = {
@@ -61,7 +65,7 @@ const submitted = (
 function fixture(
   responses: FauxResponseStep[],
   inspectPayload?: (payload: unknown) => void,
-  retry = false,
+  retry = true,
 ) {
   const provider = fauxProvider({
     provider: "test",
@@ -140,6 +144,7 @@ function fixture(
           settings: {
             compaction: { enabled: false },
             retry: { enabled: retry, maxRetries: 8, baseDelayMs: 0 },
+            generation: roleGenerationPolicy,
             toolExecution: "sequential",
           },
         },
@@ -186,12 +191,12 @@ test("v1 prompt and contextual schema reach Pi; the first submission hands off",
     expect(
       input!.messages.filter((message) => message.role === "user")[0]?.content,
     ).toBe(call.prompt);
-    expect(getCurrentTools(input!.messages)).toEqual([
+    expect<unknown>(getCurrentTools(input!.messages)).toEqual([
       {
         name: call.tool,
         description: call.description,
         parameters: z.toJSONSchema(call.schema),
-        constrainedSampling: { type: "json_schema", strict: "prefer" },
+        constrainedSampling: historical.contracts.explorer.constrainedSampling,
       },
     ]);
     if (outcome.status !== "completed") throw new Error("Role failed");
@@ -643,7 +648,14 @@ test("one native verification worker completes all six distinct role calls", asy
   const tools: string[] = [];
   provider.setResponses(
     responses.map((response) => (transcript) => {
-      const name = getCurrentTools(transcript.messages)[0]!.name;
+      const declaration = getCurrentTools(transcript.messages)[0]!;
+      const name = declaration.name;
+      const expected = Object.values(historical.contracts).find(
+        (contract) => contract.name === name,
+      );
+      expect<unknown>(declaration.constrainedSampling).toEqual(
+        expected?.constrainedSampling,
+      );
       tools.push(name);
       return fauxAssistantMessage([fauxToolCall(name, response)], {
         stopReason: "toolUse",

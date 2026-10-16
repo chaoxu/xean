@@ -1,5 +1,17 @@
+diff --git a/dist/harness/agent.js b/dist/harness/agent.js
+index d71a7a9..cea9681 100644
+--- a/dist/harness/agent.js
++++ b/dist/harness/agent.js
+@@ -38,6 +38,7 @@ export function resolveSettings(settings) {
+         ...(extensions === undefined ? {} : { extensions }),
+         stream: { ...settings?.stream },
+         retry: { ...DEFAULT_RETRY_POLICY, ...settings?.retry },
++        generation: { ...settings?.generation },
+         compaction: { ...DEFAULT_COMPACTION_POLICY, ...settings?.compaction },
+         // Field by field, so an explicitly undefined interval keeps its default.
+         progress: {
 diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
-index c87d2f1..f7490b5 100644
+index c87d2f1..5aad4e6 100644
 --- a/dist/harness/context.d.ts
 +++ b/dist/harness/context.d.ts
 @@ -1,8 +1,13 @@
@@ -8,7 +20,8 @@ index c87d2f1..f7490b5 100644
 +import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
  import type { SessionImpl } from "../session/session.ts";
  import type { ConversationId, EntryId, EntryRecord, Storage } from "../types.ts";
- import type { ContextView } from "./types.ts";
+-import type { ContextView } from "./types.ts";
++import type { ContextView, ContextProjection } from "./types.ts";
 +/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
 +export declare function continuationContent(message: AssistantMessage): AssistantMessage["content"];
 +/** Identity of a completed, replayable OpenAI Responses reasoning item. */
@@ -17,8 +30,31 @@ index c87d2f1..f7490b5 100644
  /** Head marker and newest visible entry that fix one committed context range. */
  export type ContextBounds = {
      readonly head: (EntryRecord & {
+@@ -44,19 +49,19 @@ type Baseline = Message | null | undefined;
+  * entries after its tail are scanned. Returns the view and the range to pass to the next read. A range outlives the
+  * read, so its entries are frozen like `MemoryStorage` records, and the returned view has its own arrays.
+  */
+-export declare function readContextFrom(session: SessionImpl, storage: Storage, conversationId: ConversationId, context: Context, at: EntryId | undefined, previous: ContextRange | undefined): Promise<{
++export declare function readContextFrom(session: SessionImpl, storage: Storage, conversationId: ConversationId, context: Context, at: EntryId | undefined, previous: ContextRange | undefined, projection?: ContextProjection): Promise<{
+     readonly view: ContextView;
+     readonly range: ContextRange | undefined;
+ }>;
+ /** Committed context of one conversation: bounds captured on the Session line, entries derived off it. */
+-export declare function readContext(session: SessionImpl, storage: Storage, conversationId: ConversationId, context: Context, at?: EntryId): Promise<ContextView>;
++export declare function readContext(session: SessionImpl, storage: Storage, conversationId: ConversationId, context: Context, at?: EntryId, projection?: ContextProjection): Promise<ContextView>;
+ /**
+  * Derive the active transcript and model context of one conversation within captured bounds.
+  *
+  * H = newest visible head marker; the range runs from `H.head` (or transcript start) through the tail. Per target,
+  * the newest edit in the range wins. Context entries are H followed by the range's non-head entries.
+  */
+-export declare function deriveContext(storage: Storage, conversationId: ConversationId, bounds: ContextBounds | undefined, context: Context): Promise<ContextView>;
++export declare function deriveContext(storage: Storage, conversationId: ConversationId, bounds: ContextBounds | undefined, context: Context, projection?: ContextProjection): Promise<ContextView>;
+ /** The raw active entries within captured bounds, without deriving model context. */
+ export declare function activeEntries(storage: Storage, conversationId: ConversationId, bounds: ContextBounds | undefined, context: Context): Promise<readonly EntryRecord[]>;
+ /**
 diff --git a/dist/harness/context.js b/dist/harness/context.js
-index 1e208d2..da330f4 100644
+index 1e208d2..a39ef45 100644
 --- a/dist/harness/context.js
 +++ b/dist/harness/context.js
 @@ -1,5 +1,9 @@
@@ -31,7 +67,70 @@ index 1e208d2..da330f4 100644
  const SCAN_PAGE_SIZE = 256;
  const EXCLUDED_STOP_REASONS = new Set(["aborted", "error", "deferred"]);
  const MISSING_RESULT_TEXT = "Tool result unavailable: history ends before this call completed.";
-@@ -161,7 +165,48 @@ function contribute(entry, edit) {
+@@ -28,10 +32,15 @@ export async function captureContextBounds(storage, conversationId, context, at)
+  * entries after its tail are scanned. Returns the view and the range to pass to the next read. A range outlives the
+  * read, so its entries are frozen like `MemoryStorage` records, and the returned view has its own arrays.
+  */
+-export async function readContextFrom(session, storage, conversationId, context, at, previous) {
++export async function readContextFrom(session, storage, conversationId, context, at, previous, projection) {
+     const bounds = await session.readOnLine(() => captureContextBounds(storage, conversationId, context, at));
+     if (bounds === undefined)
+         return { view: emptyView(), range: undefined };
++    if (projection) {
++        // Custom projections are derived from raw contributions and never share the default incremental cache.
++        const entries = freezeJson(await scanRange(storage, conversationId, rangeQuery(bounds), context));
++        return { view: deriveRange(bounds, entries, projection).view, range: undefined };
++    }
+     freezeJson(bounds.head);
+     let range;
+     if (previous === undefined || previous.bounds.head?.id !== bounds.head?.id) {
+@@ -60,9 +69,9 @@ export async function readContextFrom(session, storage, conversationId, context,
+     };
+ }
+ /** Committed context of one conversation: bounds captured on the Session line, entries derived off it. */
+-export async function readContext(session, storage, conversationId, context, at) {
++export async function readContext(session, storage, conversationId, context, at, projection) {
+     const bounds = await session.readOnLine(() => captureContextBounds(storage, conversationId, context, at));
+-    return deriveContext(storage, conversationId, bounds, context);
++    return deriveContext(storage, conversationId, bounds, context, projection);
+ }
+ /**
+  * Derive the active transcript and model context of one conversation within captured bounds.
+@@ -70,23 +79,24 @@ export async function readContext(session, storage, conversationId, context, at)
+  * H = newest visible head marker; the range runs from `H.head` (or transcript start) through the tail. Per target,
+  * the newest edit in the range wins. Context entries are H followed by the range's non-head entries.
+  */
+-export async function deriveContext(storage, conversationId, bounds, context) {
++export async function deriveContext(storage, conversationId, bounds, context, projection) {
+     if (bounds === undefined)
+         return emptyView();
+-    return deriveRange(bounds, await scanRange(storage, conversationId, rangeQuery(bounds), context)).view;
++    return deriveRange(bounds, await scanRange(storage, conversationId, rangeQuery(bounds), context), projection).view;
+ }
+ function emptyView() {
+     return { head: undefined, entries: [], contributions: [], messages: [] };
+ }
+ /** Derive the context view from the entries scanned within `bounds`. */
+-function deriveRange(bounds, entries) {
++function deriveRange(bounds, entries, projection) {
+     const edits = new Map();
+     // Edits of every entry in the range count, including older head markers that `selectActive()` drops.
+     for (const entry of entries)
+         for (const edit of entry.edits ?? [])
+             edits.set(edit.target, edit);
+     const active = selectActive(bounds.head, entries);
+-    const contributions = active.map((entry) => contribute(entry, edits.get(entry.id)));
++    const reasoning = new Set();
++    const contributions = active.map((entry) => contribute(entry, edits.get(entry.id), projection, reasoning));
+     const { settled, open } = settle([], contributions.flat());
+     const baseline = findBaseline(bounds.head, active);
+     const messages = leadWithSystem([...settled, ...orderToolResults(open)], baseline);
+@@ -157,11 +167,72 @@ function leadWithSystem(messages, baseline) {
+     return [system, ...messages.slice(0, index), ...messages.slice(index + 1)];
+ }
+ /** One active entry's model messages after its edit and excluded stop reasons, before tool result ordering. */
+-function contribute(entry, edit) {
++function contribute(entry, edit, projection, reasoning) {
      if (edit?.action === "omit")
          return Object.freeze([]);
      const contributed = edit?.action === "replace" ? edit.messages : (entry.model ?? []);
@@ -39,6 +138,26 @@ index 1e208d2..da330f4 100644
 +    return Object.freeze(contributed.flatMap((message) => {
 +        if (message.role !== "assistant")
 +            return [message];
++        if (projection?.retryContent === "completed-reasoning") {
++            if (message.stopReason === "error") {
++                const model = projection.model;
++                const same = ["openai-responses", "openai-codex-responses"].includes(message.api) &&
++                    message.api === model.api && message.provider === model.provider && message.model === model.modelId &&
++                    (message.responseModel === undefined || message.responseModel === model.modelId);
++                const content = same ? message.content.filter((part) => {
++                    const id = responsesReasoningId(part);
++                    if (!id || reasoning.has(id)) return false;
++                    reasoning.add(id);
++                    return true;
++                }) : [];
++                return content.length ? [freezeJson({ ...message, content, stopReason: "stop" })] : [];
++            }
++            if (!EXCLUDED_STOP_REASONS.has(message.stopReason))
++                for (const part of message.content) {
++                    const id = responsesReasoningId(part);
++                    if (id) reasoning.add(id);
++                }
++        }
 +        if (!isIncompleteResponse(message))
 +            return EXCLUDED_STOP_REASONS.has(message.stopReason) ? [] : [message];
 +        const content = continuationContent(message);
@@ -82,7 +201,7 @@ index 1e208d2..da330f4 100644
  /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
  const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 136bed4..5963691 100644
+index 136bed4..8157db6 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
@@ -93,9 +212,36 @@ index 136bed4..5963691 100644
  import { applyBoundary, prepareBoundary } from "./inbox.js";
  import { assignJson } from "./json.js";
  import { endRun, LiveDoc } from "./live.js";
-@@ -114,10 +115,11 @@ export const GenerationTask = defineTask({
+@@ -14,6 +15,11 @@ import { ensureProviderSessionId } from "./provider.js";
+ import { appendToolResult, harnessError, ToolTask } from "./tool.js";
+ import { recordUsage } from "./usage.js";
+ const DEFAULT_POLL_AFTER_MS = 5000;
++function contextProjection(settings, model) {
++    return settings.generation.retryContent === "completed-reasoning" && model ? {
++        retryContent: "completed-reasoning", model: { api: model.api, provider: model.provider, modelId: model.id },
++    } : undefined;
++}
+ /**
+  * Built-in generation task: prepares the positional system prompt and tool loadout, requests or polls the model,
+  * retries, and classifies the response. The run's inputs live in `pi.live.run`.
+@@ -52,7 +58,10 @@ export const GenerationTask = defineTask({
+                     return failModelError(runtime, compactionFailure(outcome), context);
+                 }
+             }
+-            const view = await runtime.context(conversationId, context);
++            const run = (await runtime.snapshot(LiveDoc, conversationId, context))?.run;
++            if (settings.generation.maxResponses !== undefined && (run?.responses ?? 0) >= settings.generation.maxResponses)
++                return failModelError(runtime, `Model run exhausted ${settings.generation.maxResponses} responses`, context);
++            const view = await runtime.context(conversationId, context, { projection: contextProjection(settings, resolved) });
+             const shown = replaySections(view.messages);
+             const report = (error) => runtime.report(error);
+             let env;
+@@ -112,12 +121,13 @@ export const GenerationTask = defineTask({
+             const model = runtime.models.getModel(ref.provider, ref.modelId);
+             if (model === undefined)
                  return failNoModel(runtime, ref, context);
-             const view = await runtime.context(conversationId, context, { at: cutoff });
+-            const view = await runtime.context(conversationId, context, { at: cutoff });
++            const view = await runtime.context(conversationId, context, { at: cutoff, projection: contextProjection(runtime.settings, model) });
              let messages = view.messages;
 +            let stream = runtime.models.streamSimple.bind(runtime.models);
              await runtime.hooks.each("beforeRequest", async (hook) => {
@@ -108,7 +254,7 @@ index 136bed4..5963691 100644
              });
              const options = {
                  ...streamOptions,
-@@ -125,7 +127,7 @@ export const GenerationTask = defineTask({
+@@ -125,7 +135,7 @@ export const GenerationTask = defineTask({
                  sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
@@ -117,7 +263,7 @@ index 136bed4..5963691 100644
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -278,7 +280,7 @@ export async function convertPartial(tx, live, conversationId) {
+@@ -278,7 +288,7 @@ export async function convertPartial(tx, live, conversationId) {
   * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
   * commit, so no stale partial lands after the outcome.
   */
@@ -126,7 +272,7 @@ index 136bed4..5963691 100644
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
      let timer;
-@@ -312,7 +314,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+@@ -312,7 +322,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
          });
      };
      try {
@@ -135,11 +281,21 @@ index 136bed4..5963691 100644
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -355,12 +357,13 @@ async function classify(runtime, request, message, context) {
+@@ -355,19 +365,30 @@ async function classify(runtime, request, message, context) {
          return;
      }
      await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
-+    const incomplete = isIncompleteResponse(message) && continuationContent(message).length > 0;
++    const generation = runtime.settings.generation;
++    const prior = (await runtime.snapshot(LiveDoc, conversationId, context))?.run;
++    const canContinue = generation.maxResponses === undefined || (prior?.responses ?? 0) + 1 < generation.maxResponses;
++    const retryAsError = generation.retryContent === "completed-reasoning" && message.stopReason === "error";
++    const length = message.stopReason === "length";
++    const lengthAllowed = !length || generation.maxLengthContinuations === undefined ||
++        (prior?.lengths ?? 0) < generation.maxLengthContinuations;
++    const recoveryAllowed = generation.maxRecoveries === undefined || (prior?.errors ?? 0) < generation.maxRecoveries;
++    const incomplete = !retryAsError && canContinue && lengthAllowed &&
++        (message.stopReason !== "error" || recoveryAllowed) && isIncompleteResponse(message) &&
++        (continuationContent(message).length > 0 || (length && generation.continueEmptyLength));
      const calls = message.content.filter((content) => content.type === "toolCall");
      if (message.stopReason === "toolUse" && calls.length > 0) {
          return startToolRound(runtime, request, message, calls, context);
@@ -151,18 +307,41 @@ index 136bed4..5963691 100644
      }
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
      const settings = runtime.settings;
-@@ -402,7 +405,9 @@ async function classify(runtime, request, message, context) {
+     const overflow = message.stopReason === "error" && isContextOverflow(message);
+     if (overflow && compacted === undefined && settings.compaction.enabled) {
+         const policy = settings.compaction;
+-        const view = await runtime.context(conversationId, context, { at: cutoff });
++        const view = await runtime.context(conversationId, context, { at: cutoff, projection: contextProjection(runtime.settings, runtime.models.getModel(ref.provider, ref.modelId)) });
+         if (selectCut(view, policy.keepRecentTokens) !== undefined) {
+             const text = message.errorMessage ?? "Context overflow";
+             await runtime.commit(async (tx) => {
+@@ -386,7 +407,7 @@ async function classify(runtime, request, message, context) {
+     const retry = message.stopReason === "error" &&
+         !overflow &&
+         isRetryableAssistantError(message) &&
+-        policy.enabled &&
++        policy.enabled && canContinue && recoveryAllowed &&
+         attempt <= policy.maxRetries;
+     const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
+     await runtime.commit(async (tx) => {
+@@ -402,7 +423,15 @@ async function classify(runtime, request, message, context) {
              };
              return { status: "running", checkpoint };
          }
 -        const text = message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
-+        const text = message.stopReason === "length"
-+            ? "Model response reached its output limit without resumable text or reasoning"
-+            : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
++        const text = !canContinue
++            ? `Model run exhausted ${generation.maxResponses} responses`
++            : !lengthAllowed
++                ? `Model run exhausted ${generation.maxLengthContinuations} output-length continuations`
++                : message.stopReason === "error" && !recoveryAllowed
++                    ? `Model run exhausted ${generation.maxRecoveries} error recoveries`
++                    : message.stopReason === "length"
++                        ? "Model response reached its output limit without resumable text or reasoning"
++                        : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
          endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -411,12 +416,14 @@ async function classify(runtime, request, message, context) {
+@@ -411,12 +440,14 @@ async function classify(runtime, request, message, context) {
      }, context);
  }
  /**
@@ -177,12 +356,12 @@ index 136bed4..5963691 100644
 -    let continuation;
 +async function answer(runtime, message, context, incomplete) {
 +    let continuation = incomplete
-+        ? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
++        ? runtime.settings.generation.continuationPrompt ?? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
 +        : undefined;
      await runtime.hooks.each("onYield", async (hook) => {
          if (continuation !== undefined)
              return;
-@@ -429,15 +436,19 @@ async function answer(runtime, message, context) {
+@@ -429,15 +460,19 @@ async function answer(runtime, message, context) {
          const live = await tx.doc(LiveDoc, conversationId);
          const entry = await appendAssistant(tx, conversationId, message);
          const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
@@ -205,17 +384,116 @@ index 136bed4..5963691 100644
          if (users.length > 0)
              await startRun(tx, conversationId, live, users);
          return result;
+@@ -547,6 +582,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
+  * REMINDER: every built-in writer of assistant entries goes through here, so the usage ledger stays complete.
+  */
+ async function appendAssistant(tx, conversationId, message) {
++    const run = (await tx.doc(LiveDoc, conversationId)).run;
++    if (run && ["stop", "toolUse", "length", "error"].includes(message.stopReason)) {
++        run.responses = (run.responses ?? 0) + 1;
++        if (message.stopReason === "length") run.lengths = (run.lengths ?? 0) + 1;
++        if (message.stopReason === "error") run.errors = (run.errors ?? 0) + 1;
++        else if (["stop", "toolUse"].includes(message.stopReason)) run.errors = 0;
++    }
+     await recordUsage(tx, conversationId, "models", `${message.provider}/${message.model}`, message.usage);
+     return tx.appendEntry(AssistantEntry, conversationId, { model: [message] });
+ }
+diff --git a/dist/harness/harness.js b/dist/harness/harness.js
+index d228c4c..a9bf92d 100644
+--- a/dist/harness/harness.js
++++ b/dist/harness/harness.js
+@@ -50,7 +50,7 @@ class ConversationImpl {
+         return this.#host.harness.commitWith(change, context, { conversationId: this.id });
+     }
+     context(context, options) {
+-        return readContext(this.#host.harness, this.#host.storage, this.id, context, options?.at);
++        return readContext(this.#host.harness, this.#host.storage, this.id, context, options?.at, options?.projection);
+     }
+     entries(query, limit, cursor, context) {
+         const bounded = {
+diff --git a/dist/harness/live.d.ts b/dist/harness/live.d.ts
+index 4694cf9..ba23077 100644
+--- a/dist/harness/live.d.ts
++++ b/dist/harness/live.d.ts
+@@ -78,6 +78,9 @@ export type LiveState = {
+     run?: {
+         taskId: TaskId;
+         inputs: SubmissionId[];
++        responses?: number;
++        lengths?: number;
++        errors?: number;
+     };
+     /** Presentation of the current generation attempt. */
+     generation?: {
+diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
+index e40b597..38fe30e 100644
+--- a/dist/harness/scheduler.js
++++ b/dist/harness/scheduler.js
+@@ -1611,7 +1611,7 @@ export class TaskScheduler {
+                 });
+             }),
+             context: (conversationId, context, options) => this.#read(invocation, async () => {
+-                const { view, range } = await readContextFrom(this.#session, this.#storage, conversationId, context, options?.at, this.#contexts.get(conversationId)?.range);
++                const { view, range } = await readContextFrom(this.#session, this.#storage, conversationId, context, options?.at, this.#contexts.get(conversationId)?.range, options?.projection);
+                 // Keep it unless the invocation ended or a concurrent read already kept a newer range.
+                 const kept = this.#contexts.get(conversationId);
+                 if (range !== undefined &&
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index ea3adc9..bec59c2 100644
+index ea3adc9..31dc50f 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -680,17 +680,25 @@ export interface HookApi extends DocumentReader {
+@@ -472,12 +472,27 @@ export type CompactionResult = {
+     entryId?: EntryId;
+     submissionId?: SubmissionId;
+ };
++/** Optional controls for one input run, including successor generations. */
++export type GenerationPolicy = {
++    maxResponses?: number;
++    maxLengthContinuations?: number;
++    maxRecoveries?: number;
++    continueEmptyLength?: boolean;
++    continuationPrompt?: string;
++    retryContent?: "completed-reasoning";
++};
++/** Request context projection; raw entries and diagnostic reads are unchanged. */
++export type ContextProjection = {
++    retryContent: "completed-reasoning";
++    model: { api: string; provider: string; modelId: string };
++};
+ /** Harness-wide run policy. Read at every resolution and never copied; getters are fine. Synchronous: some readers run on the Session line. */
+ export type HarnessSettings = {
+     /** Default extension selection; absent: every installed extension, in install order. */
+     readonly extensions?: readonly Extension[];
+     readonly stream?: ConversationStreamOptions;
+     readonly retry?: Partial<ConversationRetryPolicy>;
++    readonly generation?: GenerationPolicy;
+     readonly compaction?: Partial<CompactionPolicy>;
+     readonly progress?: Partial<ProgressPolicy>;
+     readonly toolExecution?: ToolExecutionMode;
+@@ -501,6 +516,7 @@ export type Settings = {
+     readonly extensions?: readonly Extension[];
+     readonly stream: ConversationStreamOptions;
+     readonly retry: ConversationRetryPolicy;
++    readonly generation: GenerationPolicy;
+     readonly compaction: CompactionPolicy;
+     readonly progress: ProgressPolicy;
+     readonly toolExecution: ToolExecutionMode;
+@@ -616,6 +632,7 @@ export interface Conversation {
+      */
+     context(context: Context, options?: {
+         readonly at?: EntryId;
++        readonly projection?: ContextProjection;
+     }): Promise<ContextView>;
+     /** Fork-aware history of this conversation, newest first unless `query.order` is `ascending`. */
+     entries(query: Omit<EntryQuery, "conversationId">, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<EntryRecord, Cursor>>;
+@@ -680,17 +697,26 @@ export interface HookApi extends DocumentReader {
      readonly conversationId: ConversationId;
      /** `HarnessOptions.models`. */
      readonly models: Models;
 +    /** Committed raw active transcript and model context, optionally cut off at a visible entry. */
 +    context(conversationId: ConversationId, context: Context, options?: {
 +        readonly at?: EntryId;
++        readonly projection?: ContextProjection;
 +    }): Promise<ContextView>;
      memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
      memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
@@ -238,7 +516,7 @@ index ea3adc9..bec59c2 100644
      /** Every terminal provider message, before classification. */
      afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 47a494d..8cff5a7 100644
+index 47a494d..8fde7ac 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
@@ -249,6 +527,15 @@ index 47a494d..8cff5a7 100644
  export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.ts";
  export { type AgentEvent, type AgentEventStream, type MessageChange, type SnapshotEvent, type ToolEventCall, watchEvents, } from "./harness/events.ts";
  export { type GenerationCheckpoint, type GenerationInput, type GenerationResult, GenerationTask, } from "./harness/generation.ts";
+@@ -13,7 +14,7 @@ export { ProviderDoc, type ProviderState } from "./harness/provider.ts";
+ export { createRegistry } from "./harness/registry.ts";
+ export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from "./harness/task-graph.ts";
+ export { NestedCallDoc, type NestedCallState, ToolTask, type ToolTaskCheckpoint, type ToolTaskInput, type ToolTaskResult, } from "./harness/tool.ts";
+-export type { Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, ContextView, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wrap, } from "./harness/types.ts";
++export type { Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, ContextView, ContextProjection, GenerationPolicy, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wrap, } from "./harness/types.ts";
+ export { UsageDoc, type UsageState } from "./harness/usage.ts";
+ export type { ConversationView } from "./harness/view.ts";
+ export { createSession } from "./session/session.ts";
 diff --git a/dist/index.js b/dist/index.js
 index aed8e9d..4c165bd 100644
 --- a/dist/index.js
@@ -416,3 +703,24 @@ index 86b5fe4..10a12ea 100644
  }
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 54c217f..32d3cea 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -2,7 +2,7 @@ import type { AttachedReplicatedState, Context, Draft, JsonValue } from "@earend
+ import type { Op } from "@earendil-works/chord/delta";
+ import type { Message, Models } from "@earendil-works/pi-ai";
+ import type { ExecutionEnv } from "./env/index.ts";
+-import type { Agent, ContextView, ConversationHandle, RegistrySnapshot, Settings, SettledTask } from "./harness/types.ts";
++import type { Agent, ContextView, ContextProjection, ConversationHandle, RegistrySnapshot, Settings, SettledTask } from "./harness/types.ts";
+ /** JSON object used as the root of every durable document. */
+ export type JsonObject = {
+     [key: string]: JsonValue;
+@@ -187,6 +187,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
+     /** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
+     context(conversationId: ConversationId, context: Context, options?: {
+         readonly at?: EntryId;
++        readonly projection?: ContextProjection;
+     }): Promise<ContextView>;
+     /** The Harness clock. */
+     now(): number;

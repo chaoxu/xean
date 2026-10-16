@@ -69,7 +69,7 @@ index a413006..eb09927 100644
              stream.end();
          }
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index 42aac9d..e8d90e4 100644
+index 42aac9d..bdb1537 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
 @@ -10,6 +10,7 @@ import { getPiUserAgent } from "../utils/pi-user-agent.js";
@@ -138,7 +138,18 @@ index 42aac9d..e8d90e4 100644
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
-@@ -487,11 +489,14 @@ async function processStream(response, output, stream, model, grammarToolInputPr
+@@ -399,6 +401,10 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
+         tool_choice: options?.toolChoice ?? "auto",
+         parallel_tool_calls: true,
+     };
++    // Codex endpoints omit this field unless the model explicitly opts in.
++    if (model.compat?.supportsMaxOutputTokens === true) {
++        body.max_output_tokens = options?.maxTokens ?? model.maxTokens;
++    }
+     if (options?.temperature !== undefined) {
+         body.temperature = options.temperature;
+     }
+@@ -487,11 +493,14 @@ async function processStream(response, output, stream, model, grammarToolInputPr
  class CodexApiError extends Error {
      code;
      payload;
@@ -153,7 +164,7 @@ index 42aac9d..e8d90e4 100644
          this.cause = options?.cause;
      }
  }
-@@ -512,7 +517,9 @@ class ProviderStreamEventCallbackError extends Error {
+@@ -512,7 +521,9 @@ class ProviderStreamEventCallbackError extends Error {
      }
  }
  function isCodexNonTransportError(error) {
@@ -164,7 +175,7 @@ index 42aac9d..e8d90e4 100644
          error instanceof CodexProtocolError ||
          error instanceof ProviderStreamEventCallbackError);
  }
-@@ -556,6 +563,10 @@ async function* mapCodexEvents(events, output, model, onProviderStreamEvent) {
+@@ -556,6 +567,10 @@ async function* mapCodexEvents(events, output, model, onProviderStreamEvent) {
              const response = event.response;
              const code = response?.error?.code;
              const message = response?.error?.message;
@@ -175,7 +186,7 @@ index 42aac9d..e8d90e4 100644
              throw new CodexApiError(message || "Codex response failed", { code, payload: event });
          }
          if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
-@@ -600,6 +611,7 @@ async function* parseSSE(response, signal) {
+@@ -600,6 +615,7 @@ async function* parseSSE(response, signal) {
                  throw new Error("Request was aborted");
              }
              buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
@@ -183,7 +194,7 @@ index 42aac9d..e8d90e4 100644
              // Treat EOF as terminating the residual SSE frame.
              if (done && buffer.trim())
                  buffer += "\n\n";
-@@ -1241,13 +1253,14 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
+@@ -1241,13 +1257,14 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
  async function parseErrorResponse(response) {
      const raw = await response.text();
      let message = raw || response.statusText || "Request failed";
@@ -201,7 +212,7 @@ index 42aac9d..e8d90e4 100644
                  const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
                  const mins = err.resets_at
                      ? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
-@@ -1259,7 +1272,7 @@ async function parseErrorResponse(response) {
+@@ -1259,7 +1276,7 @@ async function parseErrorResponse(response) {
          }
      }
      catch { }

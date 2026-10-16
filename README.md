@@ -5,6 +5,15 @@ appends notes, Coordinator selects verification work, and Verifier checks source
 correctness, task requirements, and blind reconstruction in that order. Pi owns
 conversations, tasks, checkpoints, and SQLite storage.
 
+The runtime uses Pi 1.2.0 at `b45e0eb`, with retained patches listed in
+[provenance](vendor/pi/provenance.json). Pi handles responses interrupted by
+`max_output_tokens` or `max_messages` limits, transport retries, and
+interrupted-response context. Xean configures role limits and the
+output-continuation prompt through Pi settings.
+Pi retains truncated tool calls as text for resubmission. This recovery context
+differs from the old agent loop, while the mathematical role prompts, tool
+schemas, and verification sequence retain the v1.0.0 contracts.
+
 The policy reference is Xean 1.0.0 at `d4af872`, with the transport repair at
 `949a385`. This port requires Explorer continuation to be off. A valid note submission ends
 that Explorer call. Mathematical note content is append-only, and corrections
@@ -101,8 +110,11 @@ bun run check
 bun run pack
 ```
 
-`check` runs TypeScript, formatting, and the parity tests. `pack` installs a fresh
-source archive, checks its imports and CLI, runs the packaged tests, and writes
+`check` runs TypeScript, formatting, and the parity tests. Historical fixtures
+check role prompts, tool schemas, and source request fields against the archived
+v1.0.0 runtime. Native Pi tests cover provider-limit recovery and persisted limits.
+`pack` installs a fresh source archive, checks its imports and CLI, runs the
+packaged tests, and writes
 `dist/xean-4.0.0.tgz`. These checks exercise scripted behavior. Live mathematical
 performance and full equivalence to historical runs require separate experiments.
 The pinned Pi artifacts and patches are recorded in

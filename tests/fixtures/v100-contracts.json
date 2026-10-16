@@ -1,0 +1,604 @@
+{
+  "provenance": {
+    "policyTag": "v1.0.0",
+    "policyCommit": "d4af872a4bb8f09b660c13f566d7dae839a24440",
+    "runtimeCommit": "949a385bd7fdddc99143465eb96cb70aa85c29a9",
+    "bun": "1.4.2",
+    "zod": "4.5.4",
+    "generation": "Original archived runPi with a local stream captures provider tool declarations; original sourceCall produces Codex request fields. No port imports or model calls.",
+    "sourceSha256": {
+      "packages/solve/pi-roles.ts": "d3c04ff1d9952d4d5aba6aed2552081b3b95bd4d6956fc9cb611da6ef1810905",
+      "packages/solve/roles.ts": "b3d14657b7e310b1ede02db2388192b3e19310c46d39de7bc2e89008f91eabde",
+      "src/pi.ts": "a146f6c58d35ce2b38a0933a4715ff8b43a1583c673de953261f01a2989d70cb",
+      "packages/solve/package.json": "e0982808b561f693c9365b4006528e768c120f643ec638a2ceed49fc974207c0",
+      "bun.lock": "d7ed27d19443a830fc02987068946dcf684719b7f75b2c77467a481e220f8558"
+    }
+  },
+  "input": {
+    "task": {
+      "problem": "Prove P.",
+      "completionCriteria": "Prove P fully."
+    },
+    "support": {
+      "id": "n1",
+      "summary": "P holds.",
+      "text": "Proof of P.",
+      "support": [],
+      "verified": true,
+      "dead": false,
+      "verdicts": [
+        {
+          "verifier": "correctness",
+          "note": "n1",
+          "verdict": "PASS",
+          "report": "Sound."
+        }
+      ]
+    },
+    "target": {
+      "id": "n2",
+      "summary": "P holds.",
+      "text": "Proof of P.",
+      "support": ["n1"],
+      "verified": false,
+      "dead": false,
+      "verdicts": []
+    },
+    "explorerGuidance": "Extend P. Test the degenerate instances first."
+  },
+  "contracts": {
+    "explorer": {
+      "name": "submit_notes",
+      "description": "Return the notes written during this explorer turn",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "notes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "support": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^n[1-9][0-9]*$"
+                  }
+                }
+              },
+              "required": ["text", "support"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["notes"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "coordinator": {
+      "name": "submit_coordination",
+      "description": "File every note without a summary, give explorer guidance and support for the next turn, and list the notes to verify with their verifiers",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "filings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": ["note", "summary"],
+              "additionalProperties": false
+            }
+          },
+          "explorerGuidance": {
+            "type": "string"
+          },
+          "support": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^n[1-9][0-9]*$"
+            }
+          },
+          "verify": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verifiers": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "source",
+                      "correctness",
+                      "requirements",
+                      "reconstruction"
+                    ]
+                  }
+                }
+              },
+              "required": ["note", "verifiers"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["filings", "explorerGuidance", "support", "verify"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "source": {
+      "name": "submit_verdict",
+      "description": "Return this verifier's verdict on each note under verification",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                }
+              },
+              "required": ["note", "verdict", "report"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "correctness": {
+      "name": "submit_verdict",
+      "description": "Return this verifier's verdict on each note under verification",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                }
+              },
+              "required": ["note", "verdict", "report"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "requirements": {
+      "name": "submit_verdict",
+      "description": "Return this verifier's verdict on each note under verification",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                }
+              },
+              "required": ["note", "verdict", "report"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "statement": {
+      "name": "submit_statement",
+      "description": "State what the note establishes",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "statement": {
+            "type": "string"
+          }
+        },
+        "required": ["statement"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "proof": {
+      "name": "submit_proof",
+      "description": "Return a proof of the statement",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "proof": {
+            "type": "string"
+          }
+        },
+        "required": ["proof"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    },
+    "reconstruction": {
+      "name": "submit_verdict",
+      "description": "Return a verdict on the note, or a corrected statement without a verdict",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "statement": {
+            "type": ["string", "null"]
+          },
+          "verdicts": {
+            "maxItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                }
+              },
+              "required": ["note", "verdict", "report"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["statement", "verdicts"],
+        "additionalProperties": false
+      },
+      "constrainedSampling": {
+        "type": "json_schema",
+        "strict": "prefer"
+      }
+    }
+  },
+  "codex": {
+    "online": {
+      "protocol": "xean/codex-exec/v1",
+      "model": "codex-model",
+      "reasoning": "low",
+      "search": true,
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["result", "source", "url"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["note", "verdict", "report", "sources"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+      }
+    },
+    "offline": {
+      "protocol": "xean/codex-exec/v1",
+      "model": "codex-model",
+      "reasoning": "low",
+      "search": false,
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "note": {
+                  "type": "string",
+                  "pattern": "^n[1-9][0-9]*$"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+                },
+                "report": {
+                  "type": "string"
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "result": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["result", "source", "url"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["note", "verdict", "report", "sources"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "validation": {
+    "explorer": {
+      "value": {
+        "notes": [
+          {
+            "text": "New proof.",
+            "support": ["n1"]
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "notes": false
+      },
+      "extraField": false
+    },
+    "coordinator": {
+      "value": {
+        "filings": [],
+        "explorerGuidance": "Extend P.",
+        "support": ["n1"],
+        "verify": [
+          {
+            "note": "n2",
+            "verifiers": [
+              "source",
+              "correctness",
+              "requirements",
+              "reconstruction"
+            ]
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "filings": false,
+        "explorerGuidance": false,
+        "support": false,
+        "verify": false
+      },
+      "extraField": false
+    },
+    "source": {
+      "value": {
+        "verdicts": [
+          {
+            "note": "n2",
+            "verdict": "PASS",
+            "report": "Checked."
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "verdicts": false
+      },
+      "extraField": false
+    },
+    "correctness": {
+      "value": {
+        "verdicts": [
+          {
+            "note": "n2",
+            "verdict": "PASS",
+            "report": "Checked."
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "verdicts": false
+      },
+      "extraField": false
+    },
+    "requirements": {
+      "value": {
+        "verdicts": [
+          {
+            "note": "n2",
+            "verdict": "PASS",
+            "report": "Checked."
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "verdicts": false
+      },
+      "extraField": false
+    },
+    "statement": {
+      "value": {
+        "statement": "P holds."
+      },
+      "accepted": true,
+      "missingFields": {
+        "statement": false
+      },
+      "extraField": false
+    },
+    "proof": {
+      "value": {
+        "proof": "Independent proof."
+      },
+      "accepted": true,
+      "missingFields": {
+        "proof": false
+      },
+      "extraField": false
+    },
+    "reconstruction": {
+      "value": {
+        "statement": null,
+        "verdicts": [
+          {
+            "note": "n2",
+            "verdict": "PASS",
+            "report": "Checked."
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "statement": false,
+        "verdicts": false
+      },
+      "extraField": false
+    },
+    "codex": {
+      "value": {
+        "verdicts": [
+          {
+            "note": "n2",
+            "verdict": "PASS",
+            "report": "Checked.",
+            "sources": []
+          }
+        ]
+      },
+      "accepted": true,
+      "missingFields": {
+        "verdicts": false
+      },
+      "extraField": false
+    }
+  }
+}

@@ -32,6 +32,7 @@ import {
 } from "./workflow.ts";
 import { acceptedArgument, readReport } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
+import { roleGenerationPolicy } from "./role-runtime.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -219,6 +220,7 @@ export async function open(path: string, options: OpenOptions = {}) {
         settings: {
           compaction: { enabled: false },
           retry: { enabled: true, maxRetries: 8 },
+          generation: roleGenerationPolicy,
           toolExecution: "sequential",
           contextRetentionMs: 0,
           documentRetentionMs: 0,
