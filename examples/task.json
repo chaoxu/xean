@@ -1,4 +1,4 @@
 {
-  "problem": "For every real number x >= 1, prove x squared >= x.",
-  "completionCriteria": "Give a self-contained proof using elementary real arithmetic."
+  "problem": "For every real x >= 1, prove x squared >= x.",
+  "completionCriteria": "Give a self-contained elementary proof."
 }

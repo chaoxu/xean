@@ -13,7 +13,6 @@ const formatPaths = [
   "tests",
   "scripts",
   "examples",
-  "docs",
   "package.json",
   "tsconfig.json",
   "README.md",
@@ -78,32 +77,12 @@ if (command === "check" || command === "test") {
   const source = resolve(directory.path, "package");
   assert.equal(await Bun.file(resolve(source, "bun.lock")).text(), lockfile);
   await run(
-    [
-      "install",
-      "--production",
-      "--omit=optional",
-      "--frozen-lockfile",
-      "--ignore-scripts",
-    ],
-    source,
-    env,
-  );
-  await run(["tests/distribution.ts"], source, env);
-  await run(
     ["install", "--production", "--frozen-lockfile", "--ignore-scripts"],
     source,
     env,
   );
-  await run(
-    [
-      "test",
-      "./tests/pi.test.ts",
-      "./tests/pi-continuation.test.ts",
-      "./tests/roles.test.ts",
-    ],
-    source,
-    env,
-  );
+  await run(["scripts/distribution.ts"], source, env);
+  await run(["test", "./tests"], source, env);
   const output =
     command === "pack"
       ? resolve(args[0] ?? `dist/${manifest.name}-${manifest.version}.tgz`)

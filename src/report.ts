@@ -1,384 +1,93 @@
-import type {
-  ConversationId,
-  Cursor,
-  EntryId,
-  EntryRecord,
-  TaskRecord,
-  Tx,
+import {
+  UsageDoc,
+  type ConversationId,
+  type Cursor,
+  type Tx,
+  type UsageState,
 } from "@earendil-works/pi-durable";
-import type { JsonValue } from "@earendil-works/chord";
-import { readDefinition } from "./core/definition.ts";
-import {
-  Control,
-  scanTasks,
-  blockedDecision,
-  pendingDecisions,
-  type WorkerInput,
-} from "./core/workflow.ts";
-import { readView } from "./core/math/state.ts";
-import {
-  explorerLimit,
-  publicationResult,
-  type PublishedResult,
-} from "./core/math/results.ts";
-import { closure } from "./core/math/argument.ts";
-import { stagePassed } from "./core/math/notes.ts";
-import {
-  verificationStages,
-  type SolverResult,
-  type Note,
-} from "./core/math/contracts.ts";
-import { ExternalLog, ExternalRequest } from "./roles/backend.ts";
+import { definition, Notebook, project } from "./state.ts";
+import type { Note } from "./policy/contracts.ts";
+import { byId, supportClosure } from "./policy/support.ts";
 
-const statusText = (value: string | null | undefined): string | null =>
-  value == null ? null : value.length > 500 ? `${value.slice(0, 499)}…` : value;
-const preview = <T, R>(items: readonly T[], select: (item: T) => R) => ({
-  items: items.slice(0, 10).map(select),
-  omitted: Math.max(0, items.length - 10),
-});
-const errorOf = (
-  task: TaskRecord<JsonValue, JsonValue, JsonValue>,
-): string | null => {
-  const outcome = task.state.outcome;
-  return outcome?.error?.message ?? outcome?.reason ?? null;
-};
+import {
+  campaignKind,
+  type CampaignResult,
+  type CampaignState,
+} from "./workflow.ts";
 
-/** Native assistant entries are responses, not a count of outbound retries. */
-export async function readUsage(tx: Tx, includeRecords = false) {
-  type UsageGroup = {
-    provider: string;
-    model: string;
-    servedModel: string | null;
-    api?: string;
-    responses: number;
-    invocations: number;
-    unknownUsage: number;
-    reportedUsage: Record<string, number>;
+/** Status comes from the latest native campaign task, not a second run table. */
+export async function readStatus(tx: Tx, root: ConversationId) {
+  const page = await tx.scanTasks(
+    { conversationId: root, kind: campaignKind, order: "descending" },
+    1,
+  );
+  const campaign = page.items[0];
+  if (!campaign) throw new Error("Campaign task is missing");
+  const state = campaign.state;
+  const result = state.outcome?.result as CampaignResult | undefined;
+  const checkpoint = state.checkpoint as CampaignState | undefined;
+  return {
+    taskId: campaign.id,
+    status: state.status,
+    outcome:
+      result?.outcome ?? (state.outcome ? state.outcome.status : "running"),
+    turns: result?.turns ?? checkpoint?.turns ?? 0,
+    accepted: result?.accepted ?? null,
+    error:
+      result?.error ??
+      state.outcome?.error?.message ??
+      state.outcome?.reason ??
+      null,
   };
-  const groups = new Map<string, UsageGroup>();
-  const accumulate = (
-    identity: Pick<UsageGroup, "provider" | "model" | "api"> & {
-      responseModel?: string;
-    },
-    counter: "responses" | "invocations",
-    usage: Record<string, number> | null,
-  ) => {
-    const { provider, model, api } = identity;
-    const servedModel = identity.responseModel ?? null;
-    const key = JSON.stringify([counter, provider, model, api, servedModel]);
-    const group = groups.get(key) ?? {
-      provider,
-      model,
-      api,
-      servedModel,
-      responses: 0,
-      invocations: 0,
-      unknownUsage: 0,
-      reportedUsage: {},
-    };
-    group[counter]++;
-    if (usage === null) group.unknownUsage++;
-    for (const [name, value] of Object.entries(usage ?? {}))
-      group.reportedUsage[name] = (group.reportedUsage[name] ?? 0) + value;
-    groups.set(key, group);
-  };
-  const records: EntryRecord[] = [];
-  const external = new Map<
-    string,
-    { provider: string; model: string; api: string }
-  >();
-  const settlements = new Map<string, Record<string, number> | null>();
+}
+
+/** Report Pi's native per-conversation ledgers without inventing request counts. */
+export async function readUsage(tx: Tx) {
+  const conversations: ({ conversationId: ConversationId } & UsageState)[] = [];
   let cursor: Cursor | undefined;
   do {
-    const conversations = await tx.scanConversations({}, 128, cursor);
-    for (const conversation of conversations.items) {
-      let entriesCursor: Cursor | undefined;
-      do {
-        const page = await tx.scanEntries(
-          {
-            conversationId: conversation.id,
-            minEntryId: conversation.parent
-              ? ((conversation.parent.at + 1) as EntryId)
-              : undefined,
-          },
-          128,
-          entriesCursor,
-        );
-        for (const entry of page.items) {
-          if (entry.conversationId !== conversation.id) continue;
-          if (includeRecords) records.push(entry);
-          if (ExternalRequest.is(entry))
-            external.set(entry.data.operationId, entry.data);
-          if (ExternalLog.is(entry)) {
-            const receipt = entry.data;
-            if (!settlements.has(receipt.operationId))
-              settlements.set(receipt.operationId, receipt.usage);
-          }
-          for (const message of entry.model ?? []) {
-            if (message.role !== "assistant") continue;
-            const reported = message.usageReported;
-            const numeric = Object.entries(message.usage ?? {}).filter(
-              (entry): entry is [string, number] =>
-                typeof entry[1] === "number" && Number.isFinite(entry[1]),
-            );
-            // Pi initializes missing provider usage to zero. Without an explicit
-            // marker, a zero-only record cannot distinguish absence from zero.
-            const measured =
-              reported !== false &&
-              (reported === true || numeric.some(([, value]) => value !== 0));
-            accumulate(
-              message,
-              "responses",
-              measured && numeric.length ? Object.fromEntries(numeric) : null,
-            );
-          }
-        }
-        entriesCursor = page.next;
-      } while (entriesCursor);
+    const page = await tx.scanConversations({}, 128, cursor);
+    for (const conversation of page.items) {
+      const usage = await tx.doc(UsageDoc, conversation.id);
+      if (Object.keys(usage.models).length || Object.keys(usage.tools).length)
+        conversations.push({ conversationId: conversation.id, ...usage });
     }
-    cursor = conversations.next;
+    cursor = page.next;
   } while (cursor);
-  for (const [operationId, identity] of external)
-    accumulate(identity, "invocations", settlements.get(operationId) ?? null);
-  const byModel = [...groups.values()];
-  const total = (field: "responses" | "invocations" | "unknownUsage") =>
-    byModel.reduce((sum, group) => sum + group[field], 0);
-  return {
-    calls: {
-      recordedResponses: total("responses"),
-      externalInvocations: total("invocations"),
-      unknownUsage: total("unknownUsage"),
-      byModel: preview(byModel, (item) => item),
-    },
-    ...(includeRecords ? { records: records.sort((a, b) => a.id - b.id) } : {}),
-  };
+  return JSON.parse(JSON.stringify(conversations)) as typeof conversations;
 }
 
-async function readOverview(
-  tx: Tx,
-  root: ConversationId,
-  options: { records?: boolean; bodies?: boolean } = {},
-  details = true,
-) {
-  const definition = await readDefinition(tx, root);
-  const view = await readView(tx, root, {
-    bodies: options.bodies,
-    inputs: details,
-  });
-  const control = await tx.doc(Control, root);
-  const tasks = await scanTasks(tx, root);
-  const workers = tasks.filter((task) => task.kind === "research.worker");
-  const standalone = definition.mode ? workers.at(-1) : undefined;
-  let standaloneResult: JsonValue | undefined;
-  const work = workers.map((task) => {
-    const input = task.input as unknown as WorkerInput;
-    const request = "request" in input ? input.request : undefined;
-    const result =
-      details &&
-      task.state.status === "terminal" &&
-      task.state.outcome.result !== undefined &&
-      (task.state.outcome.status === "completed" ||
-        task.state.outcome.status === "failed")
-        ? (task.state.outcome.result as SolverResult | PublishedResult)
-        : undefined;
-    if (task === standalone) standaloneResult = result as JsonValue | undefined;
-    const publication =
-      result?.kind === "notes" && request
-        ? publicationResult([result])
-        : result?.kind === "published"
-          ? result
-          : undefined;
-    const limit =
-      (request?.kind ?? definition.mode?.role) === "explorer" &&
-      task.state.outcome?.status === "completed"
-        ? explorerLimit(task.state.outcome.result)
-        : undefined;
-    return {
-      id: String(task.id),
-      role: request?.kind ?? definition.mode?.role ?? task.kind,
-      status:
-        task.state.status === "terminal"
-          ? task.state.outcome.status === "completed"
-            ? "completed"
-            : task.state.outcome.status === "aborted"
-              ? "cancelled"
-              : "failed"
-          : task.state.status === "pending" || task.state.status === "waiting"
-            ? "queued"
-            : "active",
-      retryOf: input.retryOf === undefined ? null : String(input.retryOf),
-      error: errorOf(task),
-      ...(limit ? { limit } : {}),
-      assignment:
-        details && request && "assignment" in request
-          ? request.assignment
-          : null,
-      noteIds: publication
-        ? [...new Set([...publication.notes, ...publication.edits])]
-        : request && result?.kind === "verification"
-          ? result.checks.map((check) => check.noteId)
-          : [],
-      checkCount: result?.kind === "verification" ? result.checks.length : 0,
-    };
-  });
-  const metadata = ({ id, role, status }: (typeof work)[number]) => ({
-    id,
-    role,
+export async function readReport(tx: Tx, root: ConversationId) {
+  const value = await definition(tx, root);
+  const status = await readStatus(tx, root);
+  const notebook = await tx.doc(Notebook, root);
+  // Detach Pi's transaction overlays before the read-only Session closes.
+  const result = {
+    ...value,
     status,
-  });
-  const acceptedNoteId = definition.mode
-    ? null
-    : (control.accepted?.candidateId ?? null);
-  if (
-    acceptedNoteId !== null &&
-    !view.notes.find((note) => note.id === acceptedNoteId)?.accepted
-  )
-    throw new Error("Accepted note is missing or no longer accepted");
-  const failure =
-    standalone?.state.outcome?.status !== "completed" &&
-    standalone?.state.status === "terminal"
-      ? standalone
-      : blockedDecision(tasks);
-  const status =
-    acceptedNoteId !== null ||
-    (standalone?.state.status === "terminal" &&
-      standalone.state.outcome.status === "completed")
-      ? "completed"
-      : control.cancelled
-        ? "cancelled"
-        : control.paused
-          ? tasks.some((task) => task.state.status !== "terminal")
-            ? "pausing"
-            : "paused"
-          : failure
-            ? "blocked"
-            : tasks.some((task) => task.state.status !== "terminal")
-              ? "running"
-              : "idle";
-  const workCounts: Record<string, number> = {
-    queued: 0,
-    active: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
+    ...project(notebook),
+    checks: notebook.checks,
+    guidance: notebook.guidance,
+    inputs: notebook.inputs,
+    usage: await readUsage(tx),
   };
-  for (const item of work)
-    workCounts[item.status] = (workCounts[item.status] ?? 0) + 1;
-  const candidates = new Set(
-    view.notes
-      .filter((note) => note.candidate && !note.accepted && !note.retired)
-      .map((note) => note.id),
+  return JSON.parse(JSON.stringify(result)) as typeof result;
+}
+
+/** Append-only support makes the accepted argument stable after its terminal result. */
+export async function acceptedArgument(
+  notes: Note[],
+  candidateId: string,
+): Promise<string> {
+  const candidate = notes.find((note) => note.id === candidateId);
+  if (!candidate) throw new Error("Accepted candidate is missing");
+  const ids = [...(await supportClosure([candidate], notes)), candidateId].sort(
+    byId,
   );
-  const issues = closure([...candidates], view.notes).flatMap((note) =>
-    verificationStages.flatMap((stage) => {
-      if (
-        (!candidates.has(note.id) && stage === "requirements") ||
-        stagePassed(note, stage)
-      )
-        return [];
-      const checked = note.checks[stage];
-      return [
-        {
-          noteId: note.id,
-          stage,
-          verdict: checked?.verdict ?? "unchecked",
-          report: statusText(checked?.report),
-        },
-      ];
-    }),
-  );
-  const nextAction = {
-    blocked: "Resolve the recorded failure, then resume with a fresh decision.",
-    paused: "Resume when ready.",
-    pausing: "Admitted work is draining.",
-    completed: definition.mode
-      ? "The standalone procedure completed. Its verdict remains separate."
-      : "Export the accepted argument. Independent review is separate.",
-    cancelled: "Start a new campaign to continue.",
-    running: undefined,
-    idle: "No further work was selected. Add guidance or resume to request another decision.",
-  }[status];
-  const summary = {
-    status,
-    error: statusText(failure ? errorOf(failure) : null),
-    work: workCounts,
-    pendingDecisions: pendingDecisions(tasks).length,
-    acceptedNoteId,
-    activity: preview(
-      ["active", "queued"].flatMap((status) =>
-        work.filter((item) => item.status === status),
-      ),
-      metadata,
-    ),
-    failures: preview(
-      work.filter((item) => item.status === "failed").reverse(),
-      (item) => ({ ...metadata(item), error: statusText(item.error) }),
-    ),
-    limits: preview(work.filter((item) => item.limit).reverse(), (item) => ({
-      ...metadata(item),
-      reason: item.limit!,
-    })),
-    notes: {
-      total: view.notes.length,
-      trusted: view.notes.filter((note) => note.checks.external).length,
-      verified: view.notes.filter((note) => note.verified).length,
-      dead: view.notes.filter((note) => note.dead).length,
-      candidates: view.notes.filter((note) => note.candidate).length,
-    },
-    ...(nextAction ? { nextAction } : {}),
-    ...(issues.length
-      ? { verificationIssues: preview(issues, (item) => item) }
-      : {}),
-  };
-  return { definition, view, tasks, work, standaloneResult, summary };
-}
-
-/** Current progress without notebook bodies, inputs, or usage accounting. */
-export async function readStatus(tx: Tx, root: ConversationId) {
-  return (await readOverview(tx, root, { bodies: false }, false)).summary;
-}
-
-/** Project the mathematical view, operations, and usage from the supplied transaction. */
-export async function readReport(
-  tx: Tx,
-  root: ConversationId,
-  options: { records?: boolean; bodies?: boolean } = {},
-) {
-  const { definition, view, tasks, work, standaloneResult, summary } =
-    await readOverview(tx, root, options);
-  const usage = await readUsage(tx, options.records);
-  return {
-    kind: definition.mode?.role ?? "solve",
-    task: definition.task,
-    status: {
-      ...summary,
-      calls: usage.calls,
-      usageNote:
-        "Counts describe native assistant responses, not outbound retries or external CLI internal requests. Native numeric usage fields can overlap. Subscription usage stays unknown unless reported; price estimates are omitted.",
-    },
-    notes: view.notes,
-    work,
-    inputs: view.inputs,
-    ...(standaloneResult !== undefined ? { result: standaloneResult } : {}),
-    ...(options.records ? { records: usage.records, tasks } : {}),
-  };
-}
-export type Report = Awaited<ReturnType<typeof readReport>>;
-export type Status = Awaited<ReturnType<typeof readStatus>>;
-
-export function acceptedArgument(
-  notes: readonly Note[],
-  noteId: string,
-): string {
-  if (!notes.find((note) => note.id === noteId)?.accepted)
-    throw new Error("No accepted argument");
-  return closure([noteId], notes)
-    .map(
-      (note) =>
-        `## ${note.id}\n\n${note.text}` +
-        (note.checks.external
-          ? `\n\n### Independent proof\n\n${note.checks.reconstruction!.proof}`
-          : ""),
-    )
-    .join("\n\n");
+  return ids
+    .map((id) => {
+      const note = notes.find((item) => item.id === id)!;
+      return `## ${note.id}\n\n${note.summary ? note.summary + "\n\n" : ""}${note.text}\n`;
+    })
+    .join("\n");
 }

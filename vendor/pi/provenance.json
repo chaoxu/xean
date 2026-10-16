@@ -92,7 +92,7 @@
     {
       "package": "@earendil-works/pi-ai",
       "path": "patches/@earendil-works%2Fpi-ai@1.2.0.patch",
-      "sha256": "79e2b5f2fecc2cd8d33f355cf80458a97139db3f661f9a3accf65cf56716dd9c",
+      "sha256": "71290f4762d68d005541b380a1d12a3a564e58bde401a608be3bf20e881d3cd9",
       "files": {
         "dist/api/anthropic-messages.js": "422bcaa52271351b87487189ca374f0bb72dc4eca1be5327539d617d71731522",
         "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
@@ -103,9 +103,9 @@
         "dist/providers/data/azure.json": "461094e4a9cd73242887bcdd20ea06269efebcbd1d191d58fbf103bfb08e0484",
         "dist/providers/data/openai.json": "424021682a20a14646b38d48da4f742476bcddd53f68075d82b38c8f42bf2e5f",
         "dist/types.d.ts": "d2a4a18c5bf1e2f6eadda32981c8f7127b8af9875dc7efd30f2875a426423430",
-        "dist/utils/retry.js": "d3cc5c60457eef6f7d253e0773f617c94c6ce7faa88df6062ba381909ff5da0f"
+        "dist/utils/retry.js": "2757997359c46f4c2f0fd0329a98cdeb73991ef4e2639849de7ace801067a747"
       },
-      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier."
+      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier. Retain v1 transient gateway codes and diagnostic recovery while leaving authentication, quota, request and schema failures terminal."
     },
     {
       "package": "@earendil-works/pi-durable",

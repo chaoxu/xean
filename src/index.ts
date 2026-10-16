@@ -5,19 +5,25 @@ export {
   ResearchOwnedError,
   type OpenOptions,
 } from "./host.ts";
-export * from "./core/index.ts";
-export { closedBookResearch, externalResearch } from "./roles/research.ts";
 export {
-  readSettings,
-  defaultSettings,
-  type Settings,
-} from "./roles/config.ts";
-export { acceptedArgument } from "./report.ts";
-export { readReport, readStatus, type Report, type Status } from "./report.ts";
-export type {
-  ExternalAnswer,
-  ExternalCall,
-  ExternalRoles,
-  Research,
-  LiteratureInput,
-} from "./roles/backend.ts";
+  readStatus,
+  readReport,
+  readUsage,
+  acceptedArgument,
+} from "./report.ts";
+export {
+  createWorkflow,
+  type Executor,
+  type SourceExecutor,
+} from "./workflow.ts";
+export {
+  DefinitionDoc,
+  Notebook,
+  definition,
+  project,
+  type Definition,
+} from "./state.ts";
+export { solveSettings, type SolveSettings } from "./policy/settings.ts";
+export type { Task, Note, Verdict } from "./policy/contracts.ts";
+export { codexExec } from "./source-runtime.ts";
+export { submitNotes, guide } from "./inputs.ts";

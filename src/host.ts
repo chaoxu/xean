@@ -6,13 +6,13 @@ import { Database } from "bun:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   createRegistry,
   createSession,
   Harness,
   ROOT_CONVERSATION_ID,
   type ConversationId,
-  type Registry,
   type Storage,
   type Session,
   type Tx,
@@ -22,29 +22,16 @@ import {
   type SqliteValue,
 } from "@earendil-works/pi-durable/storage/sqlite";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createRuntime, readSettings } from "./roles/config.ts";
+import { task as taskSchema } from "./policy/contracts.ts";
+import { solveSettings } from "./policy/settings.ts";
+import { DefinitionDoc, Notebook, type Definition } from "./state.ts";
 import {
-  DefinitionDoc,
-  readDefinition,
-  UninitializedResearchError,
-  validateDefinition,
-  type Definition,
-} from "./core/definition.ts";
-import { createRoles } from "./roles/index.ts";
-import type { ExternalRoles } from "./roles/backend.ts";
-import {
-  Control,
-  createResearch,
-  roleNames,
-  type RoleName,
-  type Roles,
-} from "./core/workflow.ts";
-import {
-  Catalog,
-  readSnapshot,
-  type SnapshotReader,
-} from "./core/math/state.ts";
-import { acceptedArgument } from "./report.ts";
+  createWorkflow,
+  type Executor,
+  type SourceExecutor,
+} from "./workflow.ts";
+import { acceptedArgument, readReport } from "./report.ts";
+import { codexExec } from "./source-runtime.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -55,14 +42,21 @@ export class ResearchOwnedError extends Error {
 export type OpenOptions = {
   create?: Definition;
   models?: Models;
-  roles?: (
-    builtins: ReturnType<typeof createRoles>,
-  ) => Partial<Roles> & { external?: ExternalRoles };
-  key?: string;
-  usagePrefix?: string;
-  registry?: Registry;
-  initialize?: (tx: Tx, root: ConversationId) => unknown | Promise<unknown>;
+  execute?: Executor;
+  source?: SourceExecutor;
 };
+
+function validateDefinition(value: unknown): Definition {
+  if (!value || typeof value !== "object")
+    throw new Error("Not an initialized Xean 4 campaign");
+  const input = value as Definition;
+  const settings = solveSettings.parse(input.settings);
+  if (settings.explorerContinuation === true)
+    throw new Error(
+      "This Xean 1.0.0 baseline port requires Explorer continuation to be off",
+    );
+  return { task: taskSchema.parse(input.task), settings };
+}
 
 async function canonicalPath(path: string, create: boolean) {
   const absolute = resolve(path);
@@ -163,10 +157,9 @@ function piDatabase(database: Database, readOnly = false) {
   });
 }
 
-/** Own one native Harness. Close it to suspend; reopen it to recover. */
+/** Own one native Harness. Closing suspends work; reopening recovers its checkpoints. */
 export async function open(path: string, options: OpenOptions = {}) {
   const requested = options.create && validateDefinition(options.create);
-  if (requested) readSettings(requested.settings);
   const canonical = await canonicalPath(path, requested !== undefined);
   const release = acquireOwnership(canonical);
   let storage: Storage | undefined;
@@ -195,43 +188,38 @@ export async function open(path: string, options: OpenOptions = {}) {
       },
     );
     if (existing) assertSingleLink(existing.nlink);
-    if (existing?.size) recognize(canonical);
-    storage = await openOwnedStorage(canonical);
-    const value = await createSession(storage, {
-      documentRetentionMs: 0,
-    }).snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context);
-    const stored = value === undefined ? undefined : validateDefinition(value);
+    // Validate existing databases through a read-only transaction before opening a writer.
+    const stored = existing?.size
+      ? await inspectSession(canonical, async (session) =>
+          validateDefinition(
+            await session.snapshot(
+              DefinitionDoc,
+              ROOT_CONVERSATION_ID,
+              context,
+            ),
+          ),
+        )
+      : undefined;
     if (stored && requested && !isDeepStrictEqual(stored, requested))
       throw new Error("Research task and settings are frozen");
     const definition = stored ?? requested;
-    if (!definition) throw new UninitializedResearchError();
-    if (!stored && (await storage.conversation(ROOT_CONVERSATION_ID, context)))
-      throw new UninitializedResearchError();
-    const settings = readSettings(definition.settings);
-    if (options.usagePrefix !== undefined)
-      settings.usagePrefix = options.usagePrefix;
-    const runtime = createRuntime(settings, {
-      models: options.models,
-      key: options.key,
+    if (!definition) throw new Error("Campaign is not initialized");
+    storage = await openOwnedStorage(canonical);
+    const workflow = createWorkflow({
+      execute: options.execute,
+      source: options.source ?? codexExec(),
     });
-    const builtins = createRoles({ ...settings, profiles: runtime.profiles });
-    const roles = Object.assign(builtins, options.roles?.({ ...builtins }));
-    const workflow = createResearch(roles);
-    const registry = options.registry ?? createRegistry();
-    registry.install(builtins.extension);
+    const registry = createRegistry();
     registry.install(workflow.extension);
-    if (
-      definition.mode &&
-      !roleNames.includes(definition.mode.role as RoleName)
-    )
-      throw new Error("Unknown standalone role");
     harness = await Harness.open(
       storage,
       {
         registry,
-        models: runtime.models,
+        models: options.models ?? builtinModels(),
         settings: {
           compaction: { enabled: false },
+          retry: { enabled: true, maxRetries: 8 },
+          toolExecution: "sequential",
           contextRetentionMs: 0,
           documentRetentionMs: 0,
         },
@@ -239,25 +227,22 @@ export async function open(path: string, options: OpenOptions = {}) {
       },
       context,
     );
-    // Native failure closes storage before releasing this host's owner lock.
     void harness.closed.then(close).catch(() => {});
     const root = await harness.root(context, {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
-        await tx.doc(Control, root);
-        await tx.doc(Catalog, root);
-        if (options.initialize) await options.initialize(tx, root);
-        else await workflow.initialize(tx, root);
+        await tx.doc(Notebook, root);
+        await workflow.initialize(tx, root);
       },
     });
-    // The scheduler opens paused; reconcile cancellation before recovery.
-    if ((await harness.snapshot(Control, root.id, context))?.cancelled)
-      await root.abort(context);
     return {
       harness,
       root,
-      workflow,
       close,
+      resume: async () => {
+        await root.commit((tx) => workflow.resume(tx, root.id), context);
+        harness!.resume();
+      },
     };
   } catch (error) {
     await close().catch(() => {});
@@ -265,13 +250,13 @@ export async function open(path: string, options: OpenOptions = {}) {
   }
 }
 
-/** Inspect one SQLite read transaction through Pi without recovering work. */
+/** Read one SQLite transaction through Pi without recovering work or calling models. */
 async function inspectSession<T>(
   path: string,
   read: (session: Session, root: ConversationId) => T | Promise<T>,
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  if (!recognize(path)) throw new UninitializedResearchError();
+  if (!recognize(path)) throw new Error("Not an initialized Xean 4 campaign");
   using database = openReadDatabase(path);
   database.exec("BEGIN");
   const storage = await SqliteStorage.open(piDatabase(database, true), {
@@ -280,10 +265,8 @@ async function inspectSession<T>(
   const session = createSession(storage, { documentRetentionMs: 0 });
   try {
     validateDefinition(
-      (await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context)) ??
-        {},
+      await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context),
     );
-    await session.snapshot(Control, ROOT_CONVERSATION_ID, context);
     return await read(session, ROOT_CONVERSATION_ID);
   } finally {
     await session.close(context);
@@ -299,28 +282,15 @@ export function inspect<T>(
   );
 }
 
-/** Export the immutable notebook snapshot sealed by acceptance. */
 export function exportAccepted(path: string): Promise<string> {
-  return inspectSession(path, async (session, root) => {
-    const accepted = await session.commit(async (tx) => {
-      if ((await readDefinition(tx, root)).mode)
-        throw new Error("No accepted argument");
-      const accepted = (await tx.doc(Control, root)).accepted;
-      return accepted && { ...accepted };
-    }, context);
-    if (!accepted) throw new Error("No accepted argument");
-    const reader: SnapshotReader = {
-      snapshotAsOf: session.snapshotAsOf.bind(session),
-      getTask: (id, context) => session.commit((tx) => tx.task(id), context),
-      entry: (id, context) => session.commit((tx) => tx.entry(id), context),
-    };
-    const view = await readSnapshot(
-      reader,
-      root,
-      accepted.snapshotEntry,
-      context,
-      { inputs: false },
-    );
-    return acceptedArgument(view.notes, accepted.candidateId);
+  return inspect(path, async (tx, root) => {
+    const report = await readReport(tx, root);
+    if (
+      report.status.status !== "terminal" ||
+      report.status.outcome !== "accepted" ||
+      !report.status.accepted
+    )
+      throw new Error("No accepted argument");
+    return acceptedArgument(report.notes, report.status.accepted);
   });
 }
