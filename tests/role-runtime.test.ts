@@ -31,6 +31,7 @@ import {
   getCurrentTools,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai/utils/transcript";
+import { convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { z } from "zod";
 import {
   createRoleRuntime,
@@ -232,6 +233,63 @@ test("a syntactically valid unknown support is rejected before a successful rece
     const result = (await harness.waitForTask(await invoke(), context)).state
       .outcome;
     expect(result).toMatchObject({ status: "completed", result: { value } });
+    expect(fixture_.provider.state.callCount).toBe(2);
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("Coordinator disables provider constraints while retaining its prompt, schema and contextual validation", async () => {
+  const input: CallDescriptor = {
+    kind: "coordinator",
+    input: {
+      task: descriptor.input.task,
+      notes: [],
+    },
+  };
+  const call = await resolveCall(input);
+  const coordination = {
+    filings: [],
+    explorerGuidance: "Prove the claim.",
+    support: [],
+    verify: [],
+  };
+  const fixture_ = fixture([
+    (transcript) => {
+      const tools = getCurrentTools(transcript.messages);
+      expect(getCurrentSystemPrompt(transcript.messages)).toBe(call.system);
+      expect(
+        transcript.messages.find((message) => message.role === "user")?.content,
+      ).toBe(call.prompt);
+      expect(tools[0]?.parameters).toEqual(z.toJSONSchema(call.schema));
+      expect(tools[0]?.constrainedSampling).toBe(false);
+      expect(convertResponsesTools(tools)[0]).toMatchObject({
+        name: "submit_coordination",
+        parameters: z.toJSONSchema(call.schema),
+        strict: false,
+      });
+      return fauxAssistantMessage(
+        [fauxToolCall(call.tool, { ...coordination, support: ["n99"] })],
+        { stopReason: "toolUse" },
+      );
+    },
+    (transcript) => {
+      expect(
+        transcript.messages.some(
+          (message) => message.role === "toolResult" && message.isError,
+        ),
+      ).toBe(true);
+      return fauxAssistantMessage([fauxToolCall(call.tool, coordination)], {
+        stopReason: "toolUse",
+      });
+    },
+  ]);
+  const { harness, invoke } = await fixture_.open();
+  try {
+    expect(
+      (await harness.waitForTask(await invoke([], input), context)).state
+        .outcome,
+    ).toMatchObject({ status: "completed", result: { value: coordination } });
     expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -654,8 +712,11 @@ test("one native verification worker completes all six distinct role calls", asy
         (contract) => contract.name === name,
       );
       expect<unknown>(declaration.constrainedSampling).toEqual(
-        expected?.constrainedSampling,
+        name === "submit_coordination" ? false : expected?.constrainedSampling,
       );
+      expect(convertResponsesTools([declaration])[0]).toMatchObject({
+        strict: name !== "submit_coordination",
+      });
       tools.push(name);
       return fauxAssistantMessage([fauxToolCall(name, response)], {
         stopReason: "toolUse",

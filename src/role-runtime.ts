@@ -120,7 +120,10 @@ export function createRoleRuntime(
       callers: ["model"],
       replay: "safe",
       executionMode: "sequential",
-      constrainedSampling: { type: "json_schema", strict: "prefer" },
+      constrainedSampling:
+        name === roleTools.coordinator
+          ? false
+          : { type: "json_schema", strict: "prefer" },
       async execute(value, api, context) {
         const assignment = await api.snapshot(
           Assignment,
@@ -165,10 +168,13 @@ export function createRoleRuntime(
             name: call.tool,
             description: call.description,
             parameters: z.toJSONSchema(call.schema) as TSchema,
-            constrainedSampling: {
-              type: "json_schema" as const,
-              strict: "prefer" as const,
-            },
+            constrainedSampling:
+              call.role === "coordinator"
+                ? (false as const)
+                : {
+                    type: "json_schema" as const,
+                    strict: "prefer" as const,
+                  },
           };
           return {
             // Pi stores the assignment; the provider sees v1's exact prompt and tool schema.
