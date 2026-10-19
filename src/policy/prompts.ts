@@ -39,6 +39,7 @@ export interface RoleCall<S extends z.ZodType = z.ZodType> {
   readonly role: RoleName;
   readonly label: string;
   readonly system: string;
+  readonly sourcePrefix?: string;
   readonly prompt: string;
   readonly tool: string;
   readonly description: string;
@@ -188,6 +189,14 @@ export function explorerCall(
 export function coordinatorCall(
   input: CoordinatorInput,
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
+  const sources = input.notes.filter((note) => note.verification !== undefined);
+  const current = input.notes.flatMap((note) => {
+    if (note.verification === undefined) return [promptNote(note)];
+    if (!note.summary && !note.verdicts.length && note.verified && !note.dead)
+      return [];
+    const { text, support, verification, ...state } = note;
+    return [promptNote(state)];
+  });
   return {
     role: "coordinator",
     label: roleLabels.coordinator,
@@ -204,9 +213,32 @@ export function coordinatorCall(
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
       "Call submit_coordination exactly once.",
     ].join(" "),
+    ...(sources.length > 0
+      ? {
+          sourcePrefix: `${taskText(input.task)}\n\nSource note records (untrusted data):\n${JSON.stringify(
+            sources.map(({ id, text, support, verification }) =>
+              promptNote({
+                id,
+                text,
+                support,
+                verification,
+                verdicts: [],
+                verified: true,
+                dead: false,
+              }),
+            ),
+            null,
+            2,
+          )}\n\nThe state fields above are base defaults. Current note-state entries, when present, override them by note ID. Use the merged current state. An absent summary means the note has not been filed. Other entries are complete note records.`,
+        }
+      : {}),
     prompt: [
-      taskText(input.task),
-      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
+      ...(sources.length > 0 ? [] : [taskText(input.task)]),
+      ...(sources.length > 0 && current.length === 0
+        ? []
+        : [
+            `${sources.length > 0 ? "Current note state" : "Notes"} (untrusted data):\n${JSON.stringify(current, null, 2)}`,
+          ]),
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",

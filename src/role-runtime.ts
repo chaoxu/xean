@@ -14,6 +14,7 @@ import {
   GenerationTask,
   hook,
   ProviderDoc,
+  ROOT_CONVERSATION_ID,
   ToolResultEntry,
   type ConversationHandle,
   type ConversationId,
@@ -164,6 +165,15 @@ export function createRoleRuntime(
           );
           if (!assignment?.descriptor) return;
           const call = await resolve(assignment.descriptor);
+          const campaign =
+            call.role === "coordinator"
+              ? await api.snapshot(ProviderDoc, ROOT_CONVERSATION_ID, context)
+              : undefined;
+          const routingId = campaign
+            ? createHash("sha256")
+                .update(`${campaign.sessionId}\n${call.role}`)
+                .digest("hex")
+            : undefined;
           const declaration = {
             name: call.tool,
             description: call.description,
@@ -177,7 +187,7 @@ export function createRoleRuntime(
                   },
           };
           return {
-            // Pi stores the assignment; the provider sees v1's exact prompt and tool schema.
+            // Pi stores the assignment; preserve policy and cacheable source boundaries.
             messages: [
               {
                 role: "system" as const,
@@ -185,11 +195,32 @@ export function createRoleRuntime(
                 toolsAdded: [declaration],
                 timestamp: 0,
               },
-              ...messages.filter((message) => message.role !== "system"),
+              ...messages
+                .filter((message) => message.role !== "system")
+                .flatMap((message, index) =>
+                  call.sourcePrefix &&
+                  index === 0 &&
+                  message.role === "user" &&
+                  Array.isArray(message.content)
+                    ? message.content.map((part) => ({
+                        ...message,
+                        content: [part],
+                      }))
+                    : [message],
+                ),
             ],
             stream: (model, transcript, options) =>
               stream(model, transcript, {
                 ...options,
+                ...(routingId && model.api === "openai-responses"
+                  ? {
+                      headers: {
+                        ...options?.headers,
+                        session_id: routingId,
+                        "x-client-request-id": routingId,
+                      },
+                    }
+                  : {}),
                 transport:
                   model.api === "openai-codex-responses" ? "auto" : "sse",
                 onPayload: async (payload, requestModel) => {
@@ -318,7 +349,18 @@ export function createRoleRuntime(
       conversation = await runtime.conversation(conversationId, context);
       if (!conversation) throw new Error("Role conversation is missing");
       const submission = await conversation.submit(
-        { type: "input", requestId: key, content: call.prompt },
+        {
+          type: "input",
+          requestId: key,
+          content: call.sourcePrefix
+            ? [
+                { type: "text", text: call.sourcePrefix },
+                ...(call.prompt
+                  ? [{ type: "text" as const, text: call.prompt }]
+                  : []),
+              ]
+            : call.prompt,
+        },
         context,
       );
       const settled = await submission.wait(context);

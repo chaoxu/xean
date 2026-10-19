@@ -30,8 +30,10 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import {
   getCurrentTools,
   getCurrentSystemPrompt,
+  normalizeContext,
 } from "@earendil-works/pi-ai/utils/transcript";
 import { convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import { streamSimple as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import { z } from "zod";
 import {
   createRoleRuntime,
@@ -67,6 +69,7 @@ function fixture(
   responses: FauxResponseStep[],
   inspectPayload?: (payload: unknown) => void,
   retry = true,
+  headers?: Record<string, string>,
 ) {
   const provider = fauxProvider({
     provider: "test",
@@ -147,6 +150,7 @@ function fixture(
             retry: { enabled: retry, maxRetries: 8, baseDelayMs: 0 },
             generation: roleGenerationPolicy,
             toolExecution: "sequential",
+            ...(headers ? { stream: { headers } } : {}),
           },
         },
         context,
@@ -244,7 +248,18 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
     kind: "coordinator",
     input: {
       task: descriptor.input.task,
-      notes: [],
+      notes: [
+        {
+          id: "n1",
+          text: "Given P.",
+          summary: "P holds.",
+          support: [],
+          verdicts: [],
+          verified: true,
+          dead: false,
+          verification: { source: "Given premise", report: "Assumed correct." },
+        },
+      ],
     },
   };
   const call = await resolveCall(input);
@@ -254,13 +269,18 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
     support: [],
     verify: [],
   };
+  const assignmentMessages = [call.sourcePrefix!, call.prompt].map((text) => [
+    { type: "text" as const, text },
+  ]);
   const fixture_ = fixture([
     (transcript) => {
       const tools = getCurrentTools(transcript.messages);
       expect(getCurrentSystemPrompt(transcript.messages)).toBe(call.system);
       expect(
-        transcript.messages.find((message) => message.role === "user")?.content,
-      ).toBe(call.prompt);
+        transcript.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content),
+      ).toEqual(assignmentMessages);
       expect(tools[0]?.parameters).toEqual(z.toJSONSchema(call.schema));
       expect(tools[0]?.constrainedSampling).toBe(false);
       expect(convertResponsesTools(tools)[0]).toMatchObject({
@@ -275,10 +295,15 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
     },
     (transcript) => {
       expect(
-        transcript.messages.some(
+        transcript.messages.filter(
           (message) => message.role === "toolResult" && message.isError,
         ),
-      ).toBe(true);
+      ).toHaveLength(1);
+      expect(
+        transcript.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content),
+      ).toEqual(assignmentMessages);
       return fauxAssistantMessage([fauxToolCall(call.tool, coordination)], {
         stopReason: "toolUse",
       });
@@ -294,6 +319,152 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
   } finally {
     await harness.close(context);
   }
+});
+
+test("Coordinator routing is stable within a campaign without changing native sessions or request bodies", async () => {
+  const input: CallDescriptor = {
+    kind: "coordinator",
+    input: {
+      task: descriptor.input.task,
+      notes: [
+        {
+          id: "n1",
+          text: "Reflexivity: x = x.",
+          summary: "Reflexivity holds.",
+          support: [],
+          verdicts: [],
+          verified: true,
+          dead: false,
+          verification: { source: "Given premise", report: "Assumed correct." },
+        },
+      ],
+    },
+  };
+  const coordination = {
+    filings: [],
+    explorerGuidance: "Prove the claim.",
+    support: [],
+    verify: [],
+  };
+  const headers = { "x-existing-header": "preserved" };
+  const initial: CallDescriptor = {
+    ...input,
+    input: {
+      ...input.input,
+      notes: input.input.notes.map(({ summary: _summary, ...note }) => note),
+    },
+  };
+  const assignments = [initial, input, descriptor, input];
+  const requests: {
+    sessionId: string | undefined;
+    headers: Record<string, string | null> | undefined;
+    body: Record<string, unknown>;
+  }[] = [];
+  const capture: FauxResponseStep = async (
+    transcript,
+    options,
+    _state,
+    model,
+  ) => {
+    const tools = getCurrentTools(transcript.messages);
+    const tool = tools[0]!.name;
+    const call = await resolveCall(assignments[requests.length]!);
+    let body: Record<string, unknown> | undefined;
+    const captured = await responsesStream(
+      {
+        ...model,
+        api: "openai-responses",
+        compat: { supportsStrictMode: true },
+      },
+      normalizeContext(transcript),
+      {
+        ...options,
+        apiKey: "fixture-not-a-credential",
+        async onPayload(payload, selected) {
+          body = ((await options?.onPayload?.(payload, selected)) ??
+            payload) as Record<string, unknown>;
+          throw new Error("captured before HTTP");
+        },
+      },
+    ).result();
+    expect(captured.errorMessage).toContain("captured before HTTP");
+    expect(body!.instructions).toBe(call.system);
+    expect(body!.tools).toEqual(convertResponsesTools(tools));
+    expect(body!.input).toEqual(
+      (call.sourcePrefix
+        ? [call.sourcePrefix, call.prompt].filter(Boolean)
+        : [call.prompt]
+      ).map((text) => ({
+        role: "user",
+        content: [{ type: "input_text", text }],
+      })),
+    );
+    requests.push({
+      sessionId: options?.sessionId,
+      headers: options?.headers,
+      body: body!,
+    });
+    return fauxAssistantMessage(
+      [
+        fauxToolCall(
+          tool,
+          tool === "submit_notes"
+            ? value
+            : {
+                ...coordination,
+                filings:
+                  requests.length === 1
+                    ? [{ note: "n1", summary: "Reflexivity holds." }]
+                    : [],
+              },
+        ),
+      ],
+      { stopReason: "toolUse" },
+    );
+  };
+  const fixture_ = fixture(
+    [capture, capture, capture, capture],
+    () => {},
+    true,
+    headers,
+  );
+  for (const inputs of [assignments.slice(0, 3), assignments.slice(3)]) {
+    const { harness, invoke } = await fixture_.open();
+    try {
+      for (const assignment of inputs)
+        expect(
+          (await harness.waitForTask(await invoke([], assignment), context))
+            .state.outcome,
+        ).toMatchObject({ status: "completed" });
+    } finally {
+      await harness.close(context);
+    }
+  }
+  const [first, second, explorer, otherCampaign] = requests;
+  expect(requests.map((request) => request.sessionId)).toEqual(
+    Array(4).fill(expect.any(String)),
+  );
+  expect(new Set(requests.map((request) => request.sessionId)).size).toBe(4);
+  expect<unknown>(first!.headers).toEqual({
+    ...headers,
+    session_id: expect.any(String),
+    "x-client-request-id": first!.headers!.session_id,
+  });
+  expect(second!.headers).toEqual(first!.headers);
+  expect(otherCampaign!.headers!.session_id).not.toBe(
+    first!.headers!.session_id,
+  );
+  expect(otherCampaign!.headers!["x-client-request-id"]).toBe(
+    otherCampaign!.headers!.session_id,
+  );
+  expect(explorer!.headers).toEqual(headers);
+  const { input: firstInput, ...firstSettings } = first!.body;
+  const { input: nextInput, ...nextSettings } = second!.body;
+  expect(firstInput).toHaveLength(1);
+  expect(nextInput).toHaveLength(2);
+  expect((nextInput as unknown[])[0]).toEqual((firstInput as unknown[])[0]);
+  expect(nextSettings).toEqual(firstSettings);
+  expect(otherCampaign!.body).toEqual(second!.body);
 });
 
 test("terminal provider failure never becomes a completed role", async () => {

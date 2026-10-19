@@ -11,8 +11,17 @@ The runtime uses Pi 1.2.0 at `b45e0eb`, with retained patches listed in
 interrupted-response context. Xean configures role limits and the
 output-continuation prompt through Pi settings.
 Pi retains truncated tool calls as text for resubmission. This recovery context
-differs from the old agent loop, while the mathematical role prompts, tool
+differs from the old agent loop, while the mathematical role instructions, tool
 schemas, and verification sequence retain the v1.0.0 contracts.
+
+Coordinator sends source records in a stable initial message, followed by current
+note state and other notes when present. Current state overrides source-record
+defaults by note ID. For a fresh campaign containing only newly admitted, verified
+sources, the first Coordinator request ends at the source message so later calls
+can reuse that boundary for implicit caching. Coordinator uses stable routing
+headers for OpenAI Responses calls within a campaign. Cache reuse depends on
+provider support, input length, retention, and availability. Adding sources changes
+the prefix.
 
 The policy reference is Xean 1.0.0 at `d4af872`, with the transport repair at
 `949a385`. This port requires Explorer continuation to be off. A valid note submission ends
