@@ -44,6 +44,8 @@ export interface VerificationDependencies {
   }>;
   recorded(): Promise<Verdict[]>;
   record(call: number, verdicts: Verdict[]): Promise<void>;
+  /** Refresh derived evidence fields before the next verifier stage. */
+  refresh?(input: VerifierInput): Promise<VerifierInput>;
 }
 
 export class RoleCallError extends Error {
@@ -116,10 +118,12 @@ export async function verify(
   settings: SolveSettings,
   dependencies: VerificationDependencies,
 ): Promise<Verdict[]> {
-  const input = await verifierInput.parseAsync(inputValue);
+  let input = await verifierInput.parseAsync(inputValue);
+  const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
     if (name === "reconstruction") {
       for (;;) {
+        input = await refresh(input);
         const have = await dependencies.recorded();
         const next = missingVerdicts(
           have,
@@ -175,6 +179,7 @@ export async function verify(
         verifier: name,
       })),
     );
+    input = await refresh(input);
   }
   return dependencies.recorded();
 }

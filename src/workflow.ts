@@ -212,6 +212,26 @@ export function createWorkflow(
                   input.previousTasks,
                 ),
               recorded,
+              refresh: async (value) => {
+                const refreshed = copy(value);
+                await runtime.commit(async (tx) => {
+                  const book = await tx.doc(Notebook, task.conversationId);
+                  const current = new Map(
+                    project(copy(book)).notes.map((note) => [note.id, note]),
+                  );
+                  for (const note of [
+                    ...refreshed.notes,
+                    ...refreshed.support,
+                  ]) {
+                    const latest = current.get(note.id);
+                    if (latest === undefined) continue;
+                    note.verdicts = copy(latest.verdicts);
+                    note.verified = latest.verified;
+                    note.dead = latest.dead;
+                  }
+                }, context);
+                return refreshed;
+              },
               record: async (id, values) => {
                 await runtime.commit(async (tx) => {
                   const book = await tx.doc(Notebook, task.conversationId);

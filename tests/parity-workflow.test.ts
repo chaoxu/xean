@@ -229,6 +229,49 @@ test("all partial batches settle before Explorer receives selected full support 
   expect(report.accepted).toEqual([]);
 });
 
+test("reconstruction sees evidence recorded earlier in the same verifier worker", async () => {
+  const drive = await fixture(
+    [
+      {
+        notes: [note("Lemma L."), note("Complete P from L.", ["n1"])],
+      },
+      coordinate(
+        ["n1", "n2"],
+        [
+          { note: "n1", verifiers: lemma },
+          { note: "n2", verifiers: all },
+        ],
+      ),
+      check("n1"),
+      check("n1"),
+      check("n2"),
+      check("n2"),
+      check("n2"),
+      { statement: "P holds." },
+      { proof: "Independent proof from L." },
+      { statement: null, ...check("n2") },
+    ],
+    { maxExplorerTurns: 1, window: 1 },
+  );
+  const report = await drive.settle();
+  expect(report.status).toMatchObject({
+    outcome: "accepted",
+    accepted: "n2",
+  });
+  const independent = drive.calls.find((call) => call.kind === "proof");
+  if (independent?.kind !== "proof") throw new Error("Missing proof call");
+  const support = independent.input.support.find(({ id }) => id === "n1");
+  expect(support).toMatchObject({
+    id: "n1",
+    verified: true,
+    dead: false,
+    verdicts: [
+      { verifier: "source", verdict: "PASS" },
+      { verifier: "correctness", verdict: "PASS" },
+    ],
+  });
+});
+
 test.each(["FAIL", "INCONCLUSIVE"] as const)(
   "source %s skips correctness and remains visible to the next Explorer",
   async (value) => {
