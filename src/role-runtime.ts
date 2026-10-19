@@ -33,6 +33,7 @@ import {
   roleTools,
 } from "./policy/contracts.ts";
 import {
+  coordinatorUpdate,
   resolveCall,
   type CallDescriptor,
   type RoleCall,
@@ -65,11 +66,47 @@ const Progress = defineDocFamily({
   family: true,
   initial: (): { conversation?: ConversationId } => ({}),
 });
+type InputBoundary = { conversationId: ConversationId; at: EntryId };
+const CoordinatorPrefix = defineDoc({
+  kind: "xean.coordinator.prefix",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: (): { latest?: InputBoundary } => ({}),
+});
+
+async function prefixFits(tx: Tx, boundary: InputBoundary, remaining: number) {
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: boundary.conversationId, maxEntryId: boundary.at },
+      128,
+      cursor,
+    );
+    for (const entry of page.items)
+      for (const message of entry.model ?? [])
+        if (message.role === "user")
+          remaining -=
+            typeof message.content === "string"
+              ? message.content.length
+              : message.content.reduce(
+                  (n, part) =>
+                    n + (part.type === "text" ? part.text.length : 0),
+                  0,
+                );
+    if (remaining < 0) return false;
+    cursor = page.next;
+  } while (cursor);
+  return true;
+}
+
 type Receipt = { call: EntryId; value: JsonValue; fresh: boolean };
 async function receipt(
   tx: Tx,
   conversationId: ConversationId,
   call: RoleCall,
+  key: string,
 ): Promise<Receipt | undefined> {
   let cursor: Cursor | undefined;
   let found: Receipt | undefined;
@@ -101,6 +138,14 @@ async function receipt(
     }
     cursor = page.next;
   } while (cursor);
+  if (found && call.role === "coordinator") {
+    const submission = await tx.submissionByRequest(conversationId, key);
+    if (submission?.status === "done")
+      (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID)).latest = {
+        conversationId,
+        at: submission.entry,
+      };
+  }
   return found;
 }
 
@@ -187,7 +232,7 @@ export function createRoleRuntime(
                   },
           };
           return {
-            // Pi stores the assignment; preserve policy and cacheable source boundaries.
+            // Pi stores the assignment and the forked notebook input history.
             messages: [
               {
                 role: "system" as const,
@@ -195,19 +240,7 @@ export function createRoleRuntime(
                 toolsAdded: [declaration],
                 timestamp: 0,
               },
-              ...messages
-                .filter((message) => message.role !== "system")
-                .flatMap((message, index) =>
-                  call.sourcePrefix &&
-                  index === 0 &&
-                  message.role === "user" &&
-                  Array.isArray(message.content)
-                    ? message.content.map((part) => ({
-                        ...message,
-                        content: [part],
-                      }))
-                    : [message],
-                ),
+              ...messages.filter((message) => message.role !== "system"),
             ],
             stream: (model, transcript, options) =>
               stream(model, transcript, {
@@ -285,6 +318,7 @@ export function createRoleRuntime(
     let conversation: ConversationHandle | undefined;
     let recovered: Receipt | undefined;
     let fresh = true;
+    let prompt = call.prompt;
     const assignment = copyJson(
       { descriptor, profile },
       { omitUndefinedProperties: true },
@@ -312,13 +346,14 @@ export function createRoleRuntime(
                 (await tx.submissionByRequest(child.id, key))?.status !== "done"
               )
                 continue;
-              recovered = await receipt(tx, child.id, call);
+              recovered = await receipt(tx, child.id, call, key);
               if (recovered) return;
             }
             cursor = page.next;
           } while (cursor);
         }
         const progress = await tx.doc(Progress, runtime.taskId, key, null);
+        let parent: InputBoundary | undefined;
         if (progress.conversation !== undefined) {
           conversationId = progress.conversation;
           const saved = await tx.doc(Assignment, conversationId);
@@ -326,12 +361,43 @@ export function createRoleRuntime(
             throw new Error(
               "Recovered role arguments do not match the durable assignment",
             );
-          fresh = (await receipt(tx, conversationId, call)) === undefined;
-        } else {
+          fresh = (await receipt(tx, conversationId, call, key)) === undefined;
+          parent = (await tx.conversation(conversationId))?.parent;
+        } else if (descriptor.kind === "coordinator") {
+          parent = (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID))
+            .latest;
+        }
+        if (parent && descriptor.kind === "coordinator") {
+          const prior = await tx.doc(Assignment, parent.conversationId);
+          const update =
+            prior.descriptor?.kind === "coordinator" &&
+            isDeepStrictEqual(prior.profile, profile)
+              ? coordinatorUpdate(prior.descriptor.input, descriptor.input)
+              : undefined;
+          if (progress.conversation !== undefined && update === undefined)
+            throw new Error(
+              "Recovered Coordinator input no longer matches its parent",
+            );
+          if (
+            update !== undefined &&
+            (progress.conversation !== undefined ||
+              (await prefixFits(
+                tx,
+                parent,
+                2 * call.prompt.length - update.length,
+              )))
+          )
+            prompt = update;
+          else parent = undefined;
+        }
+        if (progress.conversation === undefined) {
+          const ownership = { kind: "task" as const, taskId: runtime.taskId };
           conversationId = (
-            await tx.createConversation({
-              ownership: { kind: "task", taskId: runtime.taskId },
-            })
+            parent
+              ? await tx.forkConversation(parent.conversationId, parent.at, {
+                  ownership,
+                })
+              : await tx.createConversation({ ownership })
           ).id;
           Object.assign(await tx.doc(Assignment, conversationId), assignment);
           await configure(tx, conversationId, {
@@ -352,14 +418,7 @@ export function createRoleRuntime(
         {
           type: "input",
           requestId: key,
-          content: call.sourcePrefix
-            ? [
-                { type: "text", text: call.sourcePrefix },
-                ...(call.prompt
-                  ? [{ type: "text" as const, text: call.prompt }]
-                  : []),
-              ]
-            : call.prompt,
+          content: prompt,
         },
         context,
       );
@@ -371,7 +430,7 @@ export function createRoleRuntime(
         );
       let result: Receipt | undefined;
       await runtime.commit(async (tx) => {
-        result = await receipt(tx, conversationId, call);
+        result = await receipt(tx, conversationId, call, key);
       }, context);
       if (result) return { ...result, fresh };
       throw new Error(`${call.role} returned no ${call.tool} submission`);

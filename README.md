@@ -14,14 +14,20 @@ Pi retains truncated tool calls as text for resubmission. This recovery context
 differs from the old agent loop, while the mathematical role instructions, tool
 schemas, and verification sequence retain the v1.0.0 contracts.
 
-Coordinator sends source records in a stable initial message, followed by current
-note state and other notes when present. Current state overrides source-record
-defaults by note ID. For a fresh campaign containing only newly admitted, verified
-sources, the first Coordinator request ends at the source message so later calls
-can reuse that boundary for implicit caching. Coordinator uses stable routing
-headers for OpenAI Responses calls within a campaign. Cache reuse depends on
-provider support, input length, retention, and availability. Adding sources changes
-the prefix.
+Coordinator treats supplied sources and generated notes uniformly. It forks Pi's
+history at the previous successful input message and appends new notes and changed
+fields by note ID. Previous Coordinator reasoning and tool output stay outside
+that history. First summaries and added verdicts are ordinary updates.
+
+A changed existing summary, text, support, or provenance starts an exact current
+snapshot, as do revised or removed verdicts, a dead-state change, or lost verification.
+Task or model-setting changes and empty Explorer handoffs also start fresh.
+Coordinator rebuilds when accumulated input text plus the update would exceed
+twice the current snapshot's character count. Rebuilds use stored records and
+retain current failure evidence. Coordinator’s OpenAI Responses calls use stable
+routing headers within a campaign. Cache reuse depends on provider support, input length,
+retention, and availability. These changes preserve the current notebook data,
+while their effect on mathematical decisions requires evaluation.
 
 The policy reference is Xean 1.0.0 at `d4af872`, with the transport repair at
 `949a385`. This port requires Explorer continuation to be off. A valid note submission ends

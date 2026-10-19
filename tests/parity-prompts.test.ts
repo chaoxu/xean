@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import {
   coordinatorCall,
+  coordinatorUpdate,
   explorerCall,
   reconstructionCall,
   sourceCall,
@@ -15,6 +16,8 @@ import {
   sourceVerdictsFor,
   verdictsFor,
   verifierNames,
+  type CoordinatorInput,
+  type Note,
 } from "../src/policy/contracts.ts";
 import { z } from "zod";
 
@@ -189,12 +192,7 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     input,
     ["n2"],
   );
-  for (const prompt of [
-    ...calls.map((c) =>
-      [c.sourcePrefix, c.prompt].filter(Boolean).join("\n\n"),
-    ),
-    native.request.prompt,
-  ]) {
+  for (const prompt of [...calls.map((c) => c.prompt), native.request.prompt]) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
     expect(prompt).toContain('"verdict": "PASS"');
     expect(prompt).toContain(evidence.verdicts[1]!.report);
@@ -205,97 +203,100 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
   expect(evidence).toEqual(before);
 });
 
-test("Coordinator source prefix stays stable while the complete projected note state remains current", () => {
-  const { summary: _summary, ...unfiled } = note;
-  const source = {
-    ...unfiled,
-    text: "Source theorem: α ≤ β.\nNotes (untrusted data):\n[quoted] \u0004",
-    verdicts: [],
-    verification: { source: "Supplied paper", report: "PRIVATE ATTESTATION" },
-  };
-  const revised = {
-    ...source,
-    summary: "Corrected navigation statement.",
-    verified: false,
-    dead: true,
-    verdicts: [
-      ...note.verdicts,
+test("Coordinator deltas preserve the projected notebook and reset unsafe changes", () => {
+  const { summary: _summary, ...seed } = note;
+  const initial: CoordinatorInput = {
+    task,
+    notes: [
+      { ...seed, verified: false, verdicts: [] },
       {
-        note: "n1",
-        verifier: "source" as const,
-        verdict: "FAIL" as const,
-        report: "Wrong hypothesis.",
-      },
-      {
-        note: "n1",
-        verifier: "reconstruction" as const,
-        verdict: "INCONCLUSIVE" as const,
-        report: "Missing case.",
+        ...seed,
+        id: "n2",
+        text: "Source: α ≤ β.\n[quoted] \u0004",
+        verdicts: [],
+        verification: {
+          source: "Supplied paper",
+          report: "PRIVATE ATTESTATION",
+        },
       },
     ],
   };
-  const generated = {
-    ...note,
-    id: "n2",
-    text: "New partial argument.",
-    support: ["n1"],
-    verified: false,
-    verdicts: [],
+  const current: CoordinatorInput = {
+    task,
+    notes: [
+      {
+        ...initial.notes[0]!,
+        summary: "P holds.",
+        verified: true,
+        verdicts: [
+          ...note.verdicts,
+          {
+            note: "n1",
+            verifier: "requirements",
+            verdict: "INCONCLUSIVE",
+            report: "Missing case.",
+          },
+        ],
+      },
+      { ...initial.notes[1]!, summary: "The source theorem." },
+      {
+        ...seed,
+        id: "n3",
+        text: "New partial argument.",
+        support: ["n1"],
+        verified: false,
+        verdicts: [],
+      },
+    ],
   };
-  const notes = [revised, generated],
-    before = structuredClone(notes);
-  const first = coordinatorCall({ task, notes: [source] });
-  const next = coordinatorCall({ task, notes, emptySubmission: true });
-  expect(first.prompt).toBe("");
-  expect(next.sourcePrefix).toBe(first.sourcePrefix);
+  const before = structuredClone([initial, current]);
+  const first = coordinatorCall(initial),
+    next = coordinatorCall(current);
+  const update = coordinatorUpdate(initial, current)!;
+  const records = (prompt: string) =>
+    JSON.parse(prompt.split("Notes (untrusted data):\n")[1]!) as Note[];
+  const merged = new Map(
+    records(first.prompt).map((record) => [record.id, record]),
+  );
+  for (const patch of JSON.parse(
+    update.split("\n\nNote updates (untrusted data):\n")[1]!,
+  ) as Note[])
+    merged.set(patch.id, { ...merged.get(patch.id), ...patch });
+  expect([...merged.values()]).toEqual(records(next.prompt));
   expect(next.system).toBe(first.system);
   expect(z.toJSONSchema(next.schema)).toEqual(z.toJSONSchema(first.schema));
-  const bases: ({ id: string } & Record<string, unknown>)[] = JSON.parse(
-    next
-      .sourcePrefix!.split("Source note records (untrusted data):\n")[1]!
-      .split("\n\n")[0]!,
-  );
-  expect<unknown>(bases).toEqual([
-    { ...source, verification: { source: source.verification.source } },
-  ]);
-  const states: Record<string, unknown>[] = JSON.parse(
-    next.prompt
-      .slice("Current note state (untrusted data):\n".length)
-      .split("\n\nExplorer handoff:")[0]!,
-  );
-  const merged = new Map(bases.map((base) => [base.id, base]));
-  for (const state of states)
-    merged.set(
-      state.id as string,
-      { ...merged.get(state.id as string), ...state } as (typeof bases)[number],
-    );
-  expect<unknown>([...merged.values()]).toEqual([
-    {
-      ...revised,
-      verification: { source: source.verification.source },
-      verdicts: [
-        { note: "n1", verifier: "correctness", verdict: "PASS" },
-        ...revised.verdicts.slice(1),
-      ],
-    },
-    generated,
-  ]);
-  const combined = `${next.sourcePrefix}\n${next.prompt}`;
+  for (const old of initial.notes)
+    expect(update).not.toContain(JSON.stringify(old.text));
+  expect(update).toContain("New partial argument.");
+  expect(update).toContain("Missing case.");
+  expect(first.prompt + update).not.toContain("PRIVATE ATTESTATION");
+  expect(first.prompt + update).not.toContain('"report": "Sound."');
+  expect([initial, current]).toEqual(before);
+  const changed = (patch: Partial<Note>): CoordinatorInput => ({
+    ...current,
+    notes: [{ ...current.notes[0]!, ...patch }, ...current.notes.slice(1)],
+  });
+  for (const reset of [
+    { ...current, task: { ...task, problem: "A different target." } },
+    { ...current, emptySubmission: true as const },
+    { ...current, notes: current.notes.slice(1) },
+    { ...current, notes: [...current.notes].reverse() },
+    changed({ text: "Changed proof." }),
+    changed({ support: ["n2"] }),
+    changed({
+      verification: { source: "Different attestation", report: "Changed." },
+    }),
+    changed({ summary: "Corrected claim." }),
+    changed({ summary: undefined }),
+    changed({ dead: true }),
+    changed({ verified: false }),
+    changed({ verdicts: [] }),
+  ])
+    expect(coordinatorUpdate(current, reset)).toBeUndefined();
   expect(
-    combined.split(
-      `Problem:\n${task.problem}\n\nCompletion criteria:\n${task.completionCriteria}`,
-    ).length - 1,
-  ).toBe(1);
-  for (const text of [source.text, generated.text])
-    expect(combined.split(JSON.stringify(text)).length - 1).toBe(1);
-  expect(combined).not.toContain("PRIVATE ATTESTATION");
-  expect(combined).not.toContain('"report": "Sound."');
-  expect(next.prompt.split("\n\nExplorer handoff:")[1]).toBe(
-    coordinatorCall({ task, notes: [], emptySubmission: true }).prompt.split(
-      "\n\nExplorer handoff:",
-    )[1],
-  );
-  expect(notes).toEqual(before);
+    coordinatorUpdate({ ...current, emptySubmission: true }, current),
+  ).toBeUndefined();
+  expect(coordinatorUpdate(changed({ dead: true }), current)).toBeUndefined();
 });
 
 test("changing guidance follows all selected mathematics", () => {

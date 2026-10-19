@@ -1,5 +1,6 @@
 // Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
 import { codexProfile } from "./settings";
 import { codexRequest, type CodexRequest } from "./source";
 import {
@@ -39,7 +40,6 @@ export interface RoleCall<S extends z.ZodType = z.ZodType> {
   readonly role: RoleName;
   readonly label: string;
   readonly system: string;
-  readonly sourcePrefix?: string;
   readonly prompt: string;
   readonly tool: string;
   readonly description: string;
@@ -189,14 +189,6 @@ export function explorerCall(
 export function coordinatorCall(
   input: CoordinatorInput,
 ): RoleCall<ReturnType<typeof coordinatorResultFor>> {
-  const sources = input.notes.filter((note) => note.verification !== undefined);
-  const current = input.notes.flatMap((note) => {
-    if (note.verification === undefined) return [promptNote(note)];
-    if (!note.summary && !note.verdicts.length && note.verified && !note.dead)
-      return [];
-    const { text, support, verification, ...state } = note;
-    return [promptNote(state)];
-  });
   return {
     role: "coordinator",
     label: roleLabels.coordinator,
@@ -213,32 +205,9 @@ export function coordinatorCall(
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
       "Call submit_coordination exactly once.",
     ].join(" "),
-    ...(sources.length > 0
-      ? {
-          sourcePrefix: `${taskText(input.task)}\n\nSource note records (untrusted data):\n${JSON.stringify(
-            sources.map(({ id, text, support, verification }) =>
-              promptNote({
-                id,
-                text,
-                support,
-                verification,
-                verdicts: [],
-                verified: true,
-                dead: false,
-              }),
-            ),
-            null,
-            2,
-          )}\n\nThe state fields above are base defaults. Current note-state entries, when present, override them by note ID. Use the merged current state. An absent summary means the note has not been filed. Other entries are complete note records.`,
-        }
-      : {}),
     prompt: [
-      ...(sources.length > 0 ? [] : [taskText(input.task)]),
-      ...(sources.length > 0 && current.length === 0
-        ? []
-        : [
-            `${sources.length > 0 ? "Current note state" : "Notes"} (untrusted data):\n${JSON.stringify(current, null, 2)}`,
-          ]),
+      taskText(input.task),
+      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
       ...(input.emptySubmission === true
         ? [
             "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
@@ -250,6 +219,51 @@ export function coordinatorCall(
       "File every note without a summary, give explorer guidance and support for the next turn, and list the notes to verify with their verifiers",
     schema: coordinatorResultFor(input.notes),
   };
+}
+
+/** Append ordinary progress. Corrections require an exact current snapshot. */
+export function coordinatorUpdate(
+  previous: CoordinatorInput,
+  current: CoordinatorInput,
+): string | undefined {
+  if (
+    previous.emptySubmission ||
+    current.emptySubmission ||
+    !isDeepStrictEqual(previous.task, current.task) ||
+    previous.notes.length > current.notes.length
+  )
+    return;
+  const updates = [];
+  for (const [index, note] of current.notes.entries()) {
+    const old = previous.notes[index];
+    if (!old) {
+      updates.push(promptNote(note));
+      continue;
+    }
+    if (
+      old.id !== note.id ||
+      old.text !== note.text ||
+      !isDeepStrictEqual(old.support, note.support) ||
+      !isDeepStrictEqual(old.verification, note.verification) ||
+      (old.summary !== undefined && old.summary !== note.summary) ||
+      old.dead !== note.dead ||
+      (old.verified && !note.verified) ||
+      !isDeepStrictEqual(
+        old.verdicts,
+        note.verdicts.slice(0, old.verdicts.length),
+      )
+    )
+      return;
+    const before = promptNote(old);
+    const changed = Object.fromEntries(
+      Object.entries(promptNote(note)).filter(
+        ([key, value]) =>
+          !isDeepStrictEqual(value, before[key as keyof typeof before]),
+      ),
+    );
+    if (Object.keys(changed).length) updates.push({ id: note.id, ...changed });
+  }
+  return `Update the notebook by note ID. For an existing note, replace only the fields present below and retain all other fields. New IDs are complete note records. Use the resulting current notebook for this coordination.\n\nNote updates (untrusted data):\n${JSON.stringify(updates, null, 2)}`;
 }
 
 const sourceListing =

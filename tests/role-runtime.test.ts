@@ -39,7 +39,11 @@ import {
   createRoleRuntime,
   roleGenerationPolicy,
 } from "../src/role-runtime.ts";
-import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
+import {
+  coordinatorUpdate,
+  resolveCall,
+  type CallDescriptor,
+} from "../src/policy/prompts.ts";
 import { open, inspect } from "../src/host.ts";
 import { readReport } from "../src/report.ts";
 import { solveSettings } from "../src/policy/settings.ts";
@@ -251,7 +255,7 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
       notes: [
         {
           id: "n1",
-          text: "Given P.",
+          text: "Given P. ".repeat(50),
           summary: "P holds.",
           support: [],
           verdicts: [],
@@ -269,9 +273,7 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
     support: [],
     verify: [],
   };
-  const assignmentMessages = [call.sourcePrefix!, call.prompt].map((text) => [
-    { type: "text" as const, text },
-  ]);
+  const assignmentMessages = [call.prompt];
   const fixture_ = fixture([
     (transcript) => {
       const tools = getCurrentTools(transcript.messages);
@@ -308,6 +310,19 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
         stopReason: "toolUse",
       });
     },
+    (transcript) => {
+      expect(
+        transcript.messages
+          .filter((message) => message.role !== "system")
+          .map((message) => [message.role, message.content]),
+      ).toEqual([
+        ["user", call.prompt],
+        ["user", coordinatorUpdate(input.input, input.input)!],
+      ]);
+      return fauxAssistantMessage([fauxToolCall(call.tool, coordination)], {
+        stopReason: "toolUse",
+      });
+    },
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
@@ -316,21 +331,25 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
         .outcome,
     ).toMatchObject({ status: "completed", result: { value: coordination } });
     expect(fixture_.provider.state.callCount).toBe(2);
+    expect(
+      (await harness.waitForTask(await invoke([], input), context)).state
+        .outcome.status,
+    ).toBe("completed");
+    expect(fixture_.provider.state.callCount).toBe(3);
   } finally {
     await harness.close(context);
   }
 });
 
-test("Coordinator routing is stable within a campaign without changing native sessions or request bodies", async () => {
-  const input: CallDescriptor = {
+test("Coordinator forks preserve notebook input, reset corrections, and keep campaign routing isolated", async () => {
+  const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
     kind: "coordinator",
     input: {
       task: descriptor.input.task,
       notes: [
         {
           id: "n1",
-          text: "Reflexivity: x = x.",
-          summary: "Reflexivity holds.",
+          text: "Reflexivity: x = x. ".repeat(30),
           support: [],
           verdicts: [],
           verified: true,
@@ -340,24 +359,53 @@ test("Coordinator routing is stable within a campaign without changing native se
       ],
     },
   };
-  const coordination = {
-    filings: [],
-    explorerGuidance: "Prove the claim.",
-    support: [],
-    verify: [],
-  };
-  const headers = { "x-existing-header": "preserved" };
-  const initial: CallDescriptor = {
-    ...input,
+  const updated: typeof initial = {
+    ...initial,
     input: {
-      ...input.input,
-      notes: input.input.notes.map(({ summary: _summary, ...note }) => note),
+      ...initial.input,
+      notes: [
+        { ...initial.input.notes[0]!, summary: "Reflexivity holds." },
+        {
+          id: "n2",
+          text: "New partial argument.",
+          support: ["n1"],
+          verdicts: [],
+          verified: false,
+          dead: false,
+        },
+      ],
     },
   };
-  const assignments = [initial, input, descriptor, input];
+  const reset: typeof initial = {
+    ...updated,
+    input: {
+      ...updated.input,
+      notes: updated.input.notes.map((note) => ({
+        ...note,
+        summary: note.summary ?? "New claim.",
+        dead: true,
+        verified: false,
+      })),
+    },
+  };
+  const assignments: CallDescriptor[] = [
+    initial,
+    updated,
+    reset,
+    ...Array(6).fill(reset),
+    descriptor,
+    updated,
+  ];
+  const calls = await Promise.all(assignments.map(resolveCall));
+  const inputs = [
+    [calls[0]!.prompt],
+    [calls[0]!.prompt, coordinatorUpdate(initial.input, updated.input)!],
+    [calls[2]!.prompt],
+  ];
+  const headers = { "x-existing-header": "preserved" };
   const requests: {
-    sessionId: string | undefined;
-    headers: Record<string, string | null> | undefined;
+    sessionId?: string;
+    headers?: Record<string, string | null>;
     body: Record<string, unknown>;
   }[] = [];
   const capture: FauxResponseStep = async (
@@ -366,9 +414,14 @@ test("Coordinator routing is stable within a campaign without changing native se
     _state,
     model,
   ) => {
-    const tools = getCurrentTools(transcript.messages);
-    const tool = tools[0]!.name;
-    const call = await resolveCall(assignments[requests.length]!);
+    const index = requests.length,
+      call = calls[index]!;
+    expect(
+      transcript.messages.filter(
+        (message) =>
+          message.role === "assistant" || message.role === "toolResult",
+      ),
+    ).toHaveLength(0);
     let body: Record<string, unknown> | undefined;
     const captured = await responsesStream(
       {
@@ -389,68 +442,105 @@ test("Coordinator routing is stable within a campaign without changing native se
     ).result();
     expect(captured.errorMessage).toContain("captured before HTTP");
     expect(body!.instructions).toBe(call.system);
-    expect(body!.tools).toEqual(convertResponsesTools(tools));
-    expect(body!.input).toEqual(
-      (call.sourcePrefix
-        ? [call.sourcePrefix, call.prompt].filter(Boolean)
-        : [call.prompt]
-      ).map((text) => ({
-        role: "user",
-        content: [{ type: "input_text", text }],
-      })),
+    expect(body!.tools).toEqual(
+      convertResponsesTools(getCurrentTools(transcript.messages)),
     );
+    const actual = body!.input as {
+      role: string;
+      content: { type: string; text: string }[];
+    }[];
+    const expected =
+      inputs[index] ??
+      (index >= assignments.length - 2 ? [call.prompt] : undefined);
+    if (expected)
+      expect(actual).toEqual(
+        expected.map((text) => ({
+          role: "user",
+          content: [{ type: "input_text", text }],
+        })),
+      );
+    else if (actual.length === 1)
+      expect(actual[0]!.content[0]!.text).toBe(call.prompt);
+    else {
+      expect<unknown>(actual.slice(0, -1)).toEqual(requests.at(-1)!.body.input);
+      expect(actual.at(-1)!.content[0]!.text).toBe(
+        coordinatorUpdate(reset.input, reset.input)!,
+      );
+    }
+    expect(
+      actual
+        .flatMap((message) => message.content)
+        .reduce((sum, part) => sum + part.text.length, 0),
+    ).toBeLessThanOrEqual(2 * call.prompt.length);
     requests.push({
       sessionId: options?.sessionId,
       headers: options?.headers,
       body: body!,
     });
+    const assignment = assignments[index]!;
     return fauxAssistantMessage(
       [
         fauxToolCall(
-          tool,
-          tool === "submit_notes"
-            ? value
-            : {
-                ...coordination,
-                filings:
-                  requests.length === 1
-                    ? [{ note: "n1", summary: "Reflexivity holds." }]
-                    : [],
-              },
+          call.tool,
+          assignment.kind === "coordinator"
+            ? {
+                filings: assignment.input.notes
+                  .filter((note) => note.summary === undefined)
+                  .map((note) => ({
+                    note: note.id,
+                    summary:
+                      note.id === "n1" ? "Reflexivity holds." : "New claim.",
+                  })),
+                explorerGuidance:
+                  "Prior Coordinator output must not become future context.",
+                support: [],
+                verify: [],
+              }
+            : value,
         ),
       ],
       { stopReason: "toolUse" },
     );
   };
   const fixture_ = fixture(
-    [capture, capture, capture, capture],
+    Array(assignments.length).fill(capture),
     () => {},
     true,
     headers,
   );
-  for (const inputs of [assignments.slice(0, 3), assignments.slice(3)]) {
+  for (const batch of [assignments.slice(0, -1), assignments.slice(-1)]) {
     const { harness, invoke } = await fixture_.open();
     try {
-      for (const assignment of inputs)
+      for (const input of batch)
         expect(
-          (await harness.waitForTask(await invoke([], assignment), context))
-            .state.outcome,
+          (await harness.waitForTask(await invoke([], input), context)).state
+            .outcome,
         ).toMatchObject({ status: "completed" });
     } finally {
       await harness.close(context);
     }
   }
-  const [first, second, explorer, otherCampaign] = requests;
+  const [first, second, correction] = requests;
+  const explorer = requests.at(-2)!,
+    otherCampaign = requests.at(-1)!;
+  expect(
+    requests
+      .slice(3, -2)
+      .some((request) => (request.body.input as unknown[]).length === 1),
+  ).toBe(true);
   expect(requests.map((request) => request.sessionId)).toEqual(
-    Array(4).fill(expect.any(String)),
+    Array(assignments.length).fill(expect.any(String)),
   );
-  expect(new Set(requests.map((request) => request.sessionId)).size).toBe(4);
+  expect(new Set(requests.map((request) => request.sessionId)).size).toBe(
+    assignments.length,
+  );
   expect<unknown>(first!.headers).toEqual({
     ...headers,
     session_id: expect.any(String),
     "x-client-request-id": first!.headers!.session_id,
   });
   expect(second!.headers).toEqual(first!.headers);
+  expect(correction!.headers).toEqual(first!.headers);
   expect(otherCampaign!.headers!.session_id).not.toBe(
     first!.headers!.session_id,
   );
@@ -458,28 +548,70 @@ test("Coordinator routing is stable within a campaign without changing native se
     otherCampaign!.headers!.session_id,
   );
   expect(explorer!.headers).toEqual(headers);
-  const { input: firstInput, ...firstSettings } = first!.body;
-  const { input: nextInput, ...nextSettings } = second!.body;
-  expect(firstInput).toHaveLength(1);
-  expect(nextInput).toHaveLength(2);
-  expect((nextInput as unknown[])[0]).toEqual((firstInput as unknown[])[0]);
-  expect(nextSettings).toEqual(firstSettings);
-  expect(otherCampaign!.body).toEqual(second!.body);
+  expect((second!.body.input as unknown[])[0]).toEqual(
+    (first!.body.input as unknown[])[0],
+  );
+  const { input: _firstInput, ...settings } = first!.body;
+  for (const request of [second!, correction!, otherCampaign!]) {
+    const { input: _input, ...currentSettings } = request.body;
+    expect(currentSettings).toEqual(settings);
+  }
 });
 
-test("terminal provider failure never becomes a completed role", async () => {
+test("a failed Coordinator call never advances the notebook input boundary", async () => {
+  const input: CallDescriptor = {
+    kind: "coordinator",
+    input: {
+      task: descriptor.input.task,
+      notes: [
+        {
+          id: "n1",
+          text: "Uncommitted notebook input. ".repeat(30),
+          summary: "A claim.",
+          support: [],
+          verdicts: [],
+          verified: false,
+          dead: false,
+        },
+      ],
+    },
+  };
+  const call = await resolveCall(input);
   const fixture_ = fixture([
     fauxAssistantMessage("", {
       stopReason: "error",
       errorMessage: "Invalid API key",
     }),
+    (transcript) => {
+      expect(
+        transcript.messages
+          .filter((message) => message.role !== "system")
+          .map((message) => [message.role, message.content]),
+      ).toEqual([["user", call.prompt]]);
+      return fauxAssistantMessage(
+        [
+          fauxToolCall(call.tool, {
+            filings: [],
+            explorerGuidance: "Try the proof.",
+            support: [],
+            verify: [],
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    },
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    const result = (await harness.waitForTask(await invoke(), context)).state
-      .outcome;
-    expect(result.status).not.toBe("completed");
-    expect(fixture_.provider.state.callCount).toBe(1);
+    expect(
+      (await harness.waitForTask(await invoke([], input), context)).state
+        .outcome.status,
+    ).not.toBe("completed");
+    expect(
+      (await harness.waitForTask(await invoke([], input), context)).state
+        .outcome,
+    ).toMatchObject({ status: "completed" });
+    expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
   }
@@ -753,42 +885,100 @@ test("schema repairs may pass sixteen responses but stop at v1's limit of thirty
   }
 });
 
-test("restart after the tool receipt reuses the native conversation without a model call", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "xean-role-recovery-"));
-  const fixture_ = fixture([submitted()]);
-  let harness: Harness | undefined;
-  try {
-    const first = await fixture_.open(directory);
-    harness = first.harness;
-    const closed = Promise.withResolvers<void>();
-    let closing = false;
-    harness.subscribeCommits(({ changes }) => {
-      if (
-        !closing &&
-        changes.some(
-          (change) =>
-            change.type === "entry" && ToolResultEntry.is(change.value),
-        )
-      ) {
-        closing = true;
-        void first.harness.close(context).then(closed.resolve, closed.reject);
-      }
-    });
-    const id = await first.invoke();
-    void harness.waitForTask(id, context).catch(() => {});
-    await closed.promise;
-    harness = (await fixture_.open(directory)).harness;
-    const result = (await harness.waitForTask(id, context)).state.outcome;
-    expect(result).toMatchObject({
-      status: "completed",
-      result: { value, fresh: false },
-    });
-    expect(fixture_.provider.state.callCount).toBe(1);
-  } finally {
-    await harness?.close(context);
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+test.each(["explorer", "coordinator"] as const)(
+  "restart after %s receipt publication reuses the native conversation",
+  async (role) => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-role-recovery-"));
+    const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
+      kind: "coordinator",
+      input: {
+        task: descriptor.input.task,
+        notes: [
+          {
+            id: "n1",
+            text: "Reflexivity: x = x. ".repeat(30),
+            support: [],
+            verdicts: [],
+            verified: false,
+            dead: false,
+          },
+        ],
+      },
+    };
+    const updated: typeof initial = {
+      ...initial,
+      input: {
+        ...initial.input,
+        notes: [{ ...initial.input.notes[0]!, summary: "P holds." }],
+      },
+    };
+    const coordination = {
+      filings: [],
+      explorerGuidance: "Try the proof.",
+      support: [],
+      verify: [],
+    };
+    const answer = (filings: { note: string; summary: string }[]) =>
+      fauxAssistantMessage(
+        [fauxToolCall("submit_coordination", { ...coordination, filings })],
+        { stopReason: "toolUse" },
+      );
+    const fixture_ = fixture(
+      role === "coordinator"
+        ? [answer([{ note: "n1", summary: "P holds." }]), answer([])]
+        : [submitted()],
+    );
+    let harness: Harness | undefined;
+    try {
+      const first = await fixture_.open(directory);
+      harness = first.harness;
+      if (role === "coordinator")
+        expect(
+          (await harness.waitForTask(await first.invoke([], initial), context))
+            .state.outcome.status,
+        ).toBe("completed");
+      const closed = Promise.withResolvers<void>();
+      let closing = false;
+      harness.subscribeCommits(({ changes }) => {
+        if (
+          !closing &&
+          changes.some((change) =>
+            role === "coordinator"
+              ? change.type === "document" &&
+                change.record.kind === "xean.coordinator.prefix" &&
+                change.value?.latest !== undefined
+              : change.type === "entry" && ToolResultEntry.is(change.value),
+          )
+        ) {
+          closing = true;
+          void first.harness.close(context).then(closed.resolve, closed.reject);
+        }
+      });
+      const id = await first.invoke(
+        [],
+        role === "coordinator" ? updated : descriptor,
+      );
+      void harness.waitForTask(id, context).catch(() => {});
+      await closed.promise;
+      harness = (await fixture_.open(directory)).harness;
+      expect(
+        (await harness.waitForTask(id, context)).state.outcome,
+      ).toMatchObject({
+        status: "completed",
+        result: {
+          value: role === "coordinator" ? coordination : value,
+          fresh: false,
+        },
+      });
+      expect(fixture_.provider.state.callCount).toBe(
+        role === "coordinator" ? 2 : 1,
+      );
+    } finally {
+      await harness?.close(context);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a replacement worker reuses only matching completed native role receipts", async () => {
   const fixture_ = fixture([submitted(), submitted()]);
