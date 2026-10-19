@@ -322,6 +322,15 @@ test("persisted resume retries only the failed comparison on the original verifi
     error: "provider disconnected",
     turns: 1,
   });
+  const workerOutcomes = await inspect(drive.path, async (tx) =>
+    (
+      await tx.scanTasks({ kind: "xean.worker", order: "ascending" }, 128)
+    ).items.map((worker) => worker.state.outcome),
+  );
+  expect(workerOutcomes).toContainEqual({
+    status: "failed",
+    error: { message: "provider disconnected" },
+  });
   expect(failed.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(failed.checks).toHaveLength(3);
   await expect(exportAccepted(drive.path)).rejects.toThrow(

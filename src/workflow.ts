@@ -54,8 +54,6 @@ type WorkerInput = (
       candidate?: number;
     }
 ) & { previousTasks?: number[] };
-type WorkerResult =
-  { ok: true; value: JsonValue } | { ok: false; error: string };
 type Step = "explorer" | "coordinator" | "verifier";
 export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
   step: Step;
@@ -167,14 +165,14 @@ export function createWorkflow(
     return { value, call: id, fresh: result.fresh ?? true };
   }
 
-  const Worker = defineTask<WorkerInput, { phase: "run" }, WorkerResult>({
+  const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
     name: "xean.worker",
     version: 1,
     initial: () => ({ phase: "run" }),
     abort,
     phases: {
       async run(task, runtime, context) {
-        let result: WorkerResult;
+        let value: JsonValue;
         try {
           if (task.input.kind === "call") {
             const answer = await call(
@@ -185,21 +183,22 @@ export function createWorkflow(
               task.input.profile,
               task.input.previousTasks as TaskId[],
             );
-            result = { ok: true, value: answer.value };
+            value = answer.value;
           } else {
             const input = task.input;
             const candidate = input.candidate ?? task.id;
             const recorded = async (): Promise<Verdict[]> => {
-              let values: Verdict[] = [];
-              await runtime.commit(async (tx) => {
-                const book = await tx.doc(Notebook, task.conversationId);
-                values = copy(
-                  book.checks
-                    .filter((c) => c.candidate === candidate)
-                    .flatMap((c) => c.values),
-                );
-              }, context);
-              return values;
+              const book = await runtime.snapshot(
+                Notebook,
+                task.conversationId,
+                context,
+              );
+              if (!book) throw new Error("Campaign notebook is missing");
+              return copy(
+                book.checks
+                  .filter((c) => c.candidate === candidate)
+                  .flatMap((c) => c.values),
+              );
             };
             const values = await verify(input.input, input.settings, {
               call: (key, descriptor, profile) =>
@@ -214,22 +213,22 @@ export function createWorkflow(
               recorded,
               refresh: async (value) => {
                 const refreshed = copy(value);
-                await runtime.commit(async (tx) => {
-                  const book = await tx.doc(Notebook, task.conversationId);
-                  const current = new Map(
-                    project(copy(book)).notes.map((note) => [note.id, note]),
-                  );
-                  for (const note of [
-                    ...refreshed.notes,
-                    ...refreshed.support,
-                  ]) {
-                    const latest = current.get(note.id);
-                    if (latest === undefined) continue;
-                    note.verdicts = copy(latest.verdicts);
-                    note.verified = latest.verified;
-                    note.dead = latest.dead;
-                  }
-                }, context);
+                const book = await runtime.snapshot(
+                  Notebook,
+                  task.conversationId,
+                  context,
+                );
+                if (!book) throw new Error("Campaign notebook is missing");
+                const current = new Map(
+                  project(copy(book)).notes.map((note) => [note.id, note]),
+                );
+                for (const note of [...refreshed.notes, ...refreshed.support]) {
+                  const latest = current.get(note.id);
+                  if (latest === undefined) continue;
+                  note.verdicts = copy(latest.verdicts);
+                  note.verified = latest.verified;
+                  note.dead = latest.dead;
+                }
                 return refreshed;
               },
               record: async (id, values) => {
@@ -316,19 +315,29 @@ export function createWorkflow(
                 return { call: id, value: validate(output) };
               },
             });
-            result = { ok: true, value: copy(values) as JsonValue };
+            value = copy(values) as JsonValue;
           }
         } catch (error) {
           if (runtime.signal.aborted) throw error;
-          result = {
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          };
+          await runtime.commit(
+            () => ({
+              status: "terminal",
+              outcome: {
+                status: "failed",
+                error: {
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                },
+              },
+            }),
+            context,
+          );
+          return;
         }
         await runtime.commit(
           () => ({
             status: "terminal",
-            outcome: { status: "completed", result },
+            outcome: { status: "completed", result: value },
           }),
           context,
         );
@@ -508,10 +517,8 @@ export function createWorkflow(
           const child = await tx.task(state.child! as TaskId);
           const outcome = child?.state.outcome;
           const result =
-            outcome?.status === "completed"
-              ? (outcome.result as WorkerResult)
-              : undefined;
-          if (!result || !result.ok) {
+            outcome?.status === "completed" ? outcome.result : undefined;
+          if (result === undefined) {
             const request = state.request!;
             request.previousTasks = [
               ...(request.previousTasks ?? []),
@@ -528,8 +535,8 @@ export function createWorkflow(
                   outcome: "call-failure",
                   turns: state.turns,
                   error:
-                    result && !result.ok
-                      ? result.error
+                    outcome?.status === "failed"
+                      ? outcome.error.message
                       : `Worker ${child?.id} did not complete`,
                   resume: state,
                 },
@@ -547,7 +554,7 @@ export function createWorkflow(
             const value = explorerResultFor(
               request.descriptor.input.notes,
               request.descriptor.continuation,
-            ).parse(result.value);
+            ).parse(result);
             for (const note of value.notes)
               book.notes.push({
                 ...note,
@@ -564,7 +571,7 @@ export function createWorkflow(
               throw new Error("Coordinator request mismatch");
             const value = await coordinatorResultFor(
               request.descriptor.input.notes,
-            ).parseAsync(result.value);
+            ).parseAsync(result);
             for (const filing of value.filings)
               pick(book.notes, filing.note).summary = filing.summary;
             state.guidance = value.explorerGuidance;
