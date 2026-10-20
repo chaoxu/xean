@@ -64,7 +64,7 @@ async function canonicalPath(path: string, create: boolean) {
   }
 }
 
-export function acquireOwnership(path: string) {
+function acquireOwnership(path: string) {
   const lock = new DatabaseSync(`${path}.owner.sqlite`);
   try {
     lock.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
@@ -82,7 +82,7 @@ function assertSingleLink(nlink: number) {
 }
 
 /** Reject SQL writes and missing files while allowing SQLite to maintain WAL sidecars. */
-export function openReadDatabase(path: string) {
+function openReadDatabase(path: string) {
   const database = new Database(path, {
     create: false,
     readwrite: true,

@@ -146,7 +146,6 @@ export const explorerResult = z.strictObject({
     .array(z.strictObject({ text: nonblank, support: z.array(noteId) }))
     .min(1),
 });
-export type ExplorerResult = z.output<typeof explorerResult>;
 
 /** The explorer's notes are numbered after the notes it received, in order. */
 export function noteIdAfter(count: number, position: number): string {
@@ -176,11 +175,7 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
   });
 }
 
-export const coordinatorInput = z.strictObject({
-  task,
-  notes: z.array(note),
-});
-export type CoordinatorInput = z.output<typeof coordinatorInput>;
+export type CoordinatorInput = { task: Task; notes: Note[] };
 
 /** One entry of a verify list: a note and the verifiers to run on it, a prefix of the verifier order. */
 const verification = z
@@ -204,7 +199,6 @@ export const coordinatorResult = z.strictObject({
   support: z.array(noteId),
   verify: z.array(verification),
 });
-export type CoordinatorResult = z.output<typeof coordinatorResult>;
 
 export function coordinatorResultFor(
   notes: readonly Pick<

@@ -126,7 +126,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   .flatMap((c) => c.values),
               );
             };
-            const values = await verify(input.input, input.settings, {
+            await verify(input.input, input.settings, {
               call: (key, descriptor, profile) =>
                 roles.run(
                   runtime,
@@ -241,7 +241,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 return { call: id, value: validate(output) };
               },
             });
-            value = copy(values) as JsonValue;
+            value = null;
           }
         } catch (error) {
           if (runtime.signal.aborted) throw error;
@@ -508,7 +508,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
 
   const extension = defineExtension({
     ...roles.extension,
-    tasks: [...(roles.extension.tasks ?? []), Campaign, Worker],
+    tasks: [Campaign, Worker],
   });
   return {
     extension,

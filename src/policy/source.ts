@@ -23,27 +23,15 @@ export const codexRequest = z.strictObject({
 });
 export type CodexRequest = z.output<typeof codexRequest>;
 
-const execution = {
-  codexVersion: z.string().min(1).optional(),
-  stdout: z.string(),
-  stderr: z.string(),
-  exitCode: z.number().int().nullable().optional(),
-};
-export const codexResult = z.discriminatedUnion("state", [
-  z.strictObject({
-    state: z.literal("succeeded"),
-    codexVersion: z.string().min(1),
-    stdout: z.string(),
-    stderr: z.string(),
-  }),
-  z.strictObject({ state: z.literal("failed"), ...execution, error: nonblank }),
-  z.strictObject({
-    state: z.literal("cancelled"),
-    ...execution,
-    error: nonblank,
-  }),
-]);
-export type CodexResult = z.output<typeof codexResult>;
+export type CodexResult = { stdout: string; stderr: string } & (
+  | { state: "succeeded"; codexVersion: string }
+  | {
+      state: "failed" | "cancelled";
+      codexVersion?: string;
+      exitCode?: number | null;
+      error: string;
+    }
+);
 export type CodexExec = (
   request: CodexRequest,
   signal?: AbortSignal,

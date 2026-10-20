@@ -1,16 +1,10 @@
 // Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
 import { z } from "zod";
+import { THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { nonblank } from "./contracts";
 import { codexReasoning } from "./source";
 
-export const piReasoning = z.enum([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+export const piReasoning = z.enum(THINKING_LEVELS);
 export const settingsDefaults = {
   maxExplorerTurns: 10,
   window: 100_000,

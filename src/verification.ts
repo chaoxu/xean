@@ -108,7 +108,7 @@ export async function verify(
   inputValue: VerifierInput,
   settings: SolveSettings,
   dependencies: VerificationDependencies,
-): Promise<Verdict[]> {
+): Promise<void> {
   let input = await verifierInput.parseAsync(inputValue);
   const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
@@ -116,7 +116,7 @@ export async function verify(
       const have = await dependencies.recorded();
       // A comparison publishes its entire batch in one commit. Do not regroup
       // that frozen assignment from the outcomes it has already published.
-      if (have.some((value) => value.verifier === name)) return have;
+      if (have.some((value) => value.verifier === name)) return;
       input = await refresh(input);
       const roots = judgedBy(input, have, name);
       if (roots.length === 0) continue;
@@ -129,7 +129,7 @@ export async function verify(
         result.call,
         result.verdicts.map((value) => ({ ...value, verifier: name })),
       );
-      return dependencies.recorded();
+      return;
     }
     const have = await dependencies.recorded();
     const judged = missingVerdicts(have, name, judgedBy(input, have, name));
@@ -166,5 +166,4 @@ export async function verify(
     );
     input = await refresh(input);
   }
-  return dependencies.recorded();
 }
