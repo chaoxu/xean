@@ -307,10 +307,6 @@ export function createRoleRuntime(
     previousTasks: readonly number[] = [],
   ): Promise<Receipt> {
     const call = await resolve(descriptor);
-    if (call.submissionGate)
-      throw new Error(
-        "This v1.0.0 port requires Explorer continuation to be off",
-      );
     const tool = tools.find((tool) => tool.name === call.tool);
     if (!tool) throw new Error(`Unregistered role tool: ${call.tool}`);
     let conversationId!: ConversationId;

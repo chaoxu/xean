@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { z } from "zod";
 import {
   coordinatorResultFor,
   explorerResultFor,
@@ -46,16 +45,9 @@ const verdict = (
   report: `${verifier}: ${value}`,
 });
 
-test("v1.0.0 omits continuation by default and the ordinary submission has no solution flag", () => {
+test("Explorer continuation is rejected and ordinary submissions have no solution flag", () => {
   const input = { task, explorerGuidance: "", notes: [], support: [] };
-  const ordinary = explorerCall(input),
-    disabled = explorerCall(input, false);
-  expect(ordinary.submissionGate).toBeUndefined();
-  expect(ordinary.system).toBe(disabled.system);
-  expect(ordinary.prompt).toBe(disabled.prompt);
-  expect(z.toJSONSchema(ordinary.schema)).toEqual(
-    z.toJSONSchema(disabled.schema),
-  );
+  const ordinary = explorerCall(input);
   const submitted = { notes: [{ text: "A partial result.", support: [] }] };
   expect(ordinary.schema.safeParse(submitted).success).toBe(true);
   expect(
@@ -77,6 +69,15 @@ test("v1.0.0 omits continuation by default and the ordinary submission has no so
   expect(
     solveSettings.parse({ ...settings, explorerContinuation: false })
       .explorerContinuation,
+  ).toBe(false);
+  expect(() =>
+    solveSettings.parse({ ...settings, explorerContinuation: true }),
+  ).toThrow("requires Explorer continuation to be off");
+  expect(
+    solveSettings.safeParse({
+      ...settings,
+      explorerContextBudgetTokens: 400000,
+    }).success,
   ).toBe(false);
 });
 

@@ -112,8 +112,7 @@ try {
 const report = await inspect("campaign.sqlite", readReport);
 ```
 
-`open` accepts injected Pi `models`, a role `execute` callback, and a `source`
-executor. It returns the native `harness`, root conversation, `close`, and
+`open` accepts injected Pi `models` and a `source` executor. It returns the native `harness`, root conversation, `close`, and
 `resume`. Library callers using saved Pi credentials supply authenticated
 `models`. Application data lives in Pi documents and task records.
 
@@ -129,7 +128,7 @@ bun run pack
 
 `check` runs TypeScript, formatting, and the parity tests. Historical fixtures
 check role prompts, tool schemas, and source request fields against the archived
-v1.0.0 runtime. Native Pi tests cover provider-limit recovery and persisted limits.
+v1.0.0 runtime. Native Pi tests cover workflow replay, provider-limit recovery, and persisted limits.
 `pack` installs a fresh source archive, checks its imports and CLI, runs the
 packaged tests, and writes
 `dist/xean-4.0.0.tgz`. These checks exercise scripted behavior. Live mathematical

@@ -11,11 +11,7 @@ export {
   readUsage,
   acceptedArgument,
 } from "./report.ts";
-export {
-  createWorkflow,
-  type Executor,
-  type SourceExecutor,
-} from "./workflow.ts";
+export { createWorkflow, type SourceExecutor } from "./workflow.ts";
 export {
   DefinitionDoc,
   Notebook,

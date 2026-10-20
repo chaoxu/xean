@@ -72,7 +72,6 @@ test("every role retains the historical tool name, description and complete JSON
       parameters: expected.parameters,
     });
   }
-  expect(current.explorer.submissionGate).toBeUndefined();
 });
 
 test("Codex source retains the historical request fields and output schema with search on or off", async () => {

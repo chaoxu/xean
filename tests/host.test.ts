@@ -8,6 +8,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { Harness, createRegistry, defineDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { fauxModels } from "./faux-models.ts";
 import {
   open,
   inspect,
@@ -50,13 +51,10 @@ afterEach(async () => {
 
 test("inspection returns detached snapshots, rejects mutation, and never runs pending work", async () => {
   const { path } = await fixture();
-  let calls = 0;
+  const native = fauxModels();
   const owner = await open(path, {
     create: { task, settings },
-    execute: async () => {
-      calls++;
-      throw new Error("Unexpected execution");
-    },
+    models: native.models,
   });
   owners.push(owner);
   const before = await inspect(path, readReport);
@@ -79,7 +77,7 @@ test("inspection returns detached snapshots, rejects mutation, and never runs pe
     ),
   ).rejects.toThrow();
   expect(await inspect(path, readReport)).toEqual(before);
-  expect(calls).toBe(0);
+  expect(native.provider.state.callCount).toBe(0);
 });
 
 test("old native Pi campaigns are rejected before any database rewrite", async () => {
@@ -145,7 +143,11 @@ test("continuation-on rejects before creating a campaign database", async () => 
   const { path } = await fixture();
   await expect(
     open(path, {
-      create: { task, settings: { ...settings, explorerContinuation: true } },
+      create: {
+        task,
+        // @ts-expect-error Exercise rejection of unsupported persisted input.
+        settings: { ...settings, explorerContinuation: true },
+      },
     }),
   ).rejects.toThrow("requires Explorer continuation to be off");
   expect(await Bun.file(path).exists()).toBe(false);

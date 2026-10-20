@@ -11,7 +11,6 @@ import {
   exportAccepted,
   solveSettings,
   Notebook,
-  type Executor,
 } from "../src/index.ts";
 import {
   verifierNames,
@@ -19,6 +18,17 @@ import {
   type Verification,
 } from "../src/policy/contracts.ts";
 import type { CallDescriptor } from "../src/policy/prompts.ts";
+import { defineDoc } from "@earendil-works/pi-durable";
+import { fauxModels } from "./faux-models.ts";
+
+const Assignment = defineDoc({
+  kind: "xean.role.assignment",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: (): { descriptor?: CallDescriptor } => ({}),
+});
 
 const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const profile = { provider: "test", model: "math", reasoning: "high" };
@@ -67,43 +77,51 @@ afterEach(async () => {
 async function fixture(
   replies: (JsonValue | Error)[],
   overrides = {},
-  observe?: (...args: Parameters<Executor>) => Promise<void>,
+  observe?: (
+    descriptor: CallDescriptor,
+    owner: Awaited<ReturnType<typeof open>>,
+  ) => Promise<void>,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "xean-v1-parity-"));
   directories.push(directory);
   const path = join(directory, "research.sqlite"),
     calls: CallDescriptor[] = [];
-  const execute: Executor = async (...args) => {
-    const descriptor = args[0];
-    calls.push(structuredClone(descriptor));
-    await observe?.(...args);
-    const value = replies.shift();
-    if (value instanceof Error) throw value;
-    if (value === undefined) throw new Error(`Unexpected ${descriptor.kind}`);
-    return { value };
-  };
+  let owner: Awaited<ReturnType<typeof open>>;
+  const native = fauxModels(replies, async () => {
+    const descriptor = await owner.root.commit(async (tx) => {
+      const child = (await tx.scanConversations({ order: "descending" }, 1))
+        .items[0]!;
+      return JSON.parse(
+        JSON.stringify((await tx.doc(Assignment, child.id)).descriptor),
+      ) as CallDescriptor;
+    }, BACKGROUND_CONTEXT);
+    calls.push(descriptor);
+    await observe?.(descriptor, owner);
+  });
   const create = {
     task,
     settings: solveSettings.parse({ ...settings, ...overrides }),
   };
-  const owner = await open(path, { create, execute });
+  owner = await open(path, { create, models: native.models });
   owners.push(owner);
   return {
-    owner,
+    get owner() {
+      return owner;
+    },
     path,
     calls,
-    replies,
+    replies: native.replies,
     create,
-    execute,
+    models: native.models,
     async settle() {
       await owner.root.waitForIdle(BACKGROUND_CONTEXT);
       return inspect(path, readReport);
     },
     async reopen() {
       await owner.close();
-      const next = await open(path, { execute });
-      owners.push(next);
-      return next;
+      owner = await open(path, { models: native.models });
+      owners.push(owner);
+      return owner;
     },
   };
 }
@@ -319,7 +337,7 @@ test("persisted resume retries only the failed comparison on the original verifi
   const failed = await drive.settle();
   expect(failed.status).toMatchObject({
     outcome: "call-failure",
-    error: "provider disconnected",
+    error: "verifier failed: provider disconnected",
     turns: 1,
   });
   const workerOutcomes = await inspect(drive.path, async (tx) =>
@@ -329,7 +347,7 @@ test("persisted resume retries only the failed comparison on the original verifi
   );
   expect(workerOutcomes).toContainEqual({
     status: "failed",
-    error: { message: "provider disconnected" },
+    error: { message: "verifier failed: provider disconnected" },
   });
   expect(failed.notes[0]).toMatchObject({ verified: true, dead: false });
   expect(failed.checks).toHaveLength(3);
@@ -369,7 +387,7 @@ test("completed reopening makes no calls and cannot change the frozen task or se
         ...drive.create,
         task: { ...task, completionCriteria: "A weaker target." },
       },
-      execute: drive.execute,
+      models: drive.models,
     }),
   ).rejects.toThrow("frozen");
   await expect(
@@ -378,7 +396,7 @@ test("completed reopening makes no calls and cannot change the frozen task or se
         ...drive.create,
         settings: { ...drive.create.settings, maxExplorerTurns: 2 },
       },
-      execute: drive.execute,
+      models: drive.models,
     }),
   ).rejects.toThrow("frozen");
   const owner = await drive.reopen();
@@ -465,10 +483,10 @@ test("caller input arriving during verification waits for every batch and reache
       coordinate(["n4"], []),
     ],
     { maxExplorerTurns: 2, window: 1 },
-    async (descriptor, _profile, runtime, context) => {
+    async (descriptor, owner) => {
       if (descriptor.kind !== "verifier") return;
-      await runtime.commit(async (tx) => {
-        const book = await tx.doc(Notebook, runtime.conversationId);
+      await owner.root.commit(async (tx) => {
+        const book = await tx.doc(Notebook, owner.root.id);
         if (descriptor.name === "source" && descriptor.judged[0] === "n1") {
           book.inputs.push({
             id: "caller-during-verification",
@@ -482,7 +500,7 @@ test("caller input arriving during verification waits for every batch and reache
           consumed: book.inputs[0]!.consumed,
           notes: book.notes.map(({ id }) => id),
         });
-      }, context);
+      }, BACKGROUND_CONTEXT);
     },
   );
   const report = await drive.settle();

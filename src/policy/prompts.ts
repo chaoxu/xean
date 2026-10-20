@@ -28,14 +28,6 @@ import {
 } from "./contracts";
 import { supportClosure } from "./support";
 
-export interface SubmissionGate {
-  readonly completeArgument: string;
-  readonly emptyArgument?: string;
-  readonly reserveTokens?: number;
-  readonly contextBudgetTokens?: number;
-  readonly continuationPrompt?: string;
-}
-
 export interface RoleCall<S extends z.ZodType = z.ZodType> {
   readonly role: RoleName;
   readonly label: string;
@@ -44,17 +36,11 @@ export interface RoleCall<S extends z.ZodType = z.ZodType> {
   readonly tool: string;
   readonly description: string;
   readonly schema: S;
-  readonly submissionGate?: SubmissionGate | undefined;
 }
 
 /** Serializable arguments from which a resumed native role reconstructs its schema. */
 export type CallDescriptor =
-  | {
-      kind: "explorer";
-      input: ExplorerInput;
-      continuation?: boolean;
-      contextBudgetTokens?: number;
-    }
+  | { kind: "explorer"; input: ExplorerInput }
   | { kind: "coordinator"; input: CoordinatorInput }
   | {
       kind: "verifier";
@@ -82,11 +68,7 @@ export type CallDescriptor =
 export async function resolveCall(value: CallDescriptor): Promise<RoleCall> {
   switch (value.kind) {
     case "explorer":
-      return explorerCall(
-        value.input,
-        value.continuation,
-        value.contextBudgetTokens,
-      );
+      return explorerCall(value.input);
     case "coordinator":
       return coordinatorCall(value.input);
     case "verifier":
@@ -140,8 +122,6 @@ const completionText =
 
 export function explorerCall(
   input: ExplorerInput,
-  continuation = false,
-  contextBudgetTokens = 400_000,
 ): RoleCall<ReturnType<typeof explorerResultFor>> {
   return {
     role: "explorer",
@@ -155,11 +135,7 @@ export function explorerCall(
       "Spend the turn doing mathematics. A note is one self-contained text: a result with its complete proof, a partial result with its gaps stated, or a failed approach with the reason it fails. Split a long argument into notes, one per result, so each can be verified and built on. Say in the text when a note meets the completion criteria.",
       "Each note names as support every note whose result its text uses without proving it, in any form: a fact it cites, a case it inherits, an object it takes as defined, or a hypothesis it assumes established. Mentioning a note for provenance or discussing its failure does not itself make it support. Your notes are numbered in the order you return them, and a note may name an earlier note of yours as support.",
       "Do not use web search or external tools.",
-      ...(continuation
-        ? [
-            "Continue mathematical work in this same context while there is room. Saving intermediate notes leaves the original problem unresolved. After a partial submission, reassess the current approach using what you have learned: identify the unresolved obstacle, then work through it or choose another promising approach. Resume mathematical work after replanning; a separate planning submission is not required. Call submit_notes to save new results, concrete gaps, or failed approaches with their reasons when useful, one tool call per response. Every valid submission appends notes and returns their assigned noteIds; later submissions may use those notes as support. Submit only new notes, never copy earlier submissions. To revise an earlier note, write a new note explaining the correction and its limitations. All saved notes reach the coordinator at handoff. Set solution=true only when a note claims a complete solution to the original task; this ends the call early and does not bypass mathematical verification. Otherwise set solution=false and continue from the existing work when the next user message asks you to keep trying. If you have no new notes to submit, submit notes=[] with solution=false. The first empty submission ends this Explorer call and hands all saved notes to the coordinator. Finalize when the user message requests handoff near the context limit. Never claim a solution merely to end the call.",
-          ]
-        : ["Call submit_notes exactly once."]),
+      "Call submit_notes exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
@@ -174,15 +150,7 @@ export function explorerCall(
     ].join("\n\n"),
     tool: roleTools.explorer,
     description: "Return the notes written during this explorer turn",
-    schema: explorerResultFor(input.notes, continuation),
-    submissionGate: continuation
-      ? {
-          completeArgument: "solution",
-          emptyArgument: "notes",
-          contextBudgetTokens,
-          continuationPrompt: "Keep trying, you can do it.",
-        }
-      : undefined,
+    schema: explorerResultFor(input.notes),
   };
 }
 
@@ -208,11 +176,6 @@ export function coordinatorCall(
     prompt: [
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
-      ...(input.emptySubmission === true
-        ? [
-            "Explorer handoff: The latest Explorer turn ended with an empty submission. All notes saved earlier in that turn are included above. Choose a different promising approach for the next Explorer turn, using the saved results and failed attempts to explain the change. Do not simply ask it to continue the same attempt. This handoff makes no claim that the task is solved or that earlier work is invalid.",
-          ]
-        : []),
     ].join("\n\n"),
     tool: roleTools.coordinator,
     description:
@@ -227,8 +190,6 @@ export function coordinatorUpdate(
   current: CoordinatorInput,
 ): string | undefined {
   if (
-    previous.emptySubmission ||
-    current.emptySubmission ||
     !isDeepStrictEqual(previous.task, current.task) ||
     previous.notes.length > current.notes.length
   )

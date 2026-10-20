@@ -10,11 +10,11 @@ import {
   readReport,
   Notebook,
   solveSettings,
-  type Executor,
   type SourceExecutor,
 } from "../src/index.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 import type { CodexRequest, CodexResult } from "../src/policy/source.ts";
+import { fauxModels } from "./faux-models.ts";
 
 const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const profile = { provider: "test", model: "math", reasoning: "high" };
@@ -97,12 +97,7 @@ async function fixture(
     if (!output) throw new Error("Unexpected Codex execution");
     return output;
   };
-  const execute: Executor = async () => {
-    const value = replies.shift();
-    if (value instanceof Error) throw value;
-    if (value === undefined) throw new Error("Unexpected Pi execution");
-    return { value };
-  };
+  const native = fauxModels(replies);
   const settings = solveSettings.parse({
     ...Object.fromEntries(
       ["explorer", "coordinator", ...verifierNames].map((role) => [
@@ -118,12 +113,16 @@ async function fixture(
     },
     maxExplorerTurns: 1,
   });
-  let owner = await open(path, { create: { task, settings }, source, execute });
+  let owner = await open(path, {
+    create: { task, settings },
+    source,
+    models: native.models,
+  });
   owners.push(owner);
   return {
     path,
     requests,
-    replies,
+    replies: native.replies,
     outputs,
     get owner() {
       return owner;
@@ -134,7 +133,7 @@ async function fixture(
     },
     async resume() {
       await owner.close();
-      owner = await open(path, { source, execute });
+      owner = await open(path, { source, models: native.models });
       owners.push(owner);
       await owner.resume();
     },
@@ -170,7 +169,7 @@ test("a simulated receipt-before-verdict interruption reuses the exact durable C
   const failed = await drive.settle();
   expect(failed.status).toMatchObject({
     outcome: "call-failure",
-    error: "Correctness disconnected",
+    error: "verifier failed: Correctness disconnected",
   });
   expect(failed.checks).toHaveLength(1);
   const sourceCheck = failed.checks[0]!;

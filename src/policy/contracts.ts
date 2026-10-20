@@ -172,10 +172,6 @@ export const explorerResult = z.strictObject({
     .array(z.strictObject({ text: nonblank, support: z.array(noteId) }))
     .min(1),
 });
-export const explorerContinuationResult = explorerResult.extend({
-  notes: z.array(explorerResult.shape.notes.element),
-  solution: z.boolean(),
-});
 export type ExplorerResult = z.output<typeof explorerResult>;
 
 /** The explorer's notes are numbered after the notes it received, in order. */
@@ -188,12 +184,8 @@ export function noteIdAfter(count: number, position: number): string {
  * same turn. Mathematical verification checks whether that support suffices;
  * validation does not infer dependencies from the note's prose or notation.
  */
-export function explorerResultFor(
-  notes: readonly Pick<Note, "id" | "dead">[],
-  continuation = false,
-) {
-  const schema = continuation ? explorerContinuationResult : explorerResult;
-  return schema.superRefine((value, ctx) => {
+export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
+  return explorerResult.superRefine((value, ctx) => {
     const allowed = new Set(
       notes.filter(({ dead }) => !dead).map(({ id }) => id),
     );
@@ -213,7 +205,6 @@ export function explorerResultFor(
 export const coordinatorInput = z.strictObject({
   task,
   notes: z.array(note),
-  emptySubmission: z.literal(true).optional(),
 });
 export type CoordinatorInput = z.output<typeof coordinatorInput>;
 

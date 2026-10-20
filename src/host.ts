@@ -25,11 +25,7 @@ import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/no
 import { task as taskSchema } from "./policy/contracts.ts";
 import { solveSettings } from "./policy/settings.ts";
 import { DefinitionDoc, Notebook, type Definition } from "./state.ts";
-import {
-  createWorkflow,
-  type Executor,
-  type SourceExecutor,
-} from "./workflow.ts";
+import { createWorkflow, type SourceExecutor } from "./workflow.ts";
 import { acceptedArgument, readReport } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
 import { roleGenerationPolicy } from "./role-runtime.ts";
@@ -43,7 +39,6 @@ export class ResearchOwnedError extends Error {
 export type OpenOptions = {
   create?: Definition;
   models?: Models;
-  execute?: Executor;
   source?: SourceExecutor;
 };
 
@@ -52,10 +47,6 @@ function validateDefinition(value: unknown): Definition {
     throw new Error("Not an initialized Xean 4 campaign");
   const input = value as Definition;
   const settings = solveSettings.parse(input.settings);
-  if (settings.explorerContinuation === true)
-    throw new Error(
-      "This Xean 1.0.0 baseline port requires Explorer continuation to be off",
-    );
   return { task: taskSchema.parse(input.task), settings };
 }
 
@@ -207,7 +198,6 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (!definition) throw new Error("Campaign is not initialized");
     storage = await openOwnedStorage(canonical);
     const workflow = createWorkflow({
-      execute: options.execute,
       source: options.source ?? codexExec(),
     });
     const registry = createRegistry();

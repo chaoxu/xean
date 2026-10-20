@@ -72,8 +72,11 @@ export const solveSettings = z.strictObject({
     .positive()
     .default(settingsDefaults.maxExplorerTurns),
   window: z.number().int().positive().default(settingsDefaults.window),
-  explorerContinuation: z.boolean().optional(),
-  explorerContextBudgetTokens: z.number().int().positive().optional(),
+  explorerContinuation: z
+    .literal(false, {
+      error: "This v1.0.0 port requires Explorer continuation to be off",
+    })
+    .optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
 

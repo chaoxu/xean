@@ -10,6 +10,7 @@ import { guide, submitNotes } from "../src/inputs.ts";
 import { DefinitionDoc, Notebook } from "../src/state.ts";
 import { solveSettings } from "../src/policy/settings.ts";
 import { open, inspect, readReport } from "../src/index.ts";
+import { fauxModels } from "./faux-models.ts";
 
 const directories: string[] = [],
   close: (() => Promise<unknown>)[] = [];
@@ -221,23 +222,18 @@ test("uninitialized research rejects both admissions without a queued payload", 
 
 test("terminal input remains pending without changing the completed result", async () => {
   const file = await path();
-  let calls = 0;
+  const native = fauxModels([
+    supplied,
+    {
+      filings: [{ note: "n1", summary: "Partial result." }],
+      explorerGuidance: "Continue.",
+      support: [],
+      verify: [],
+    },
+  ]);
   const owner = await open(file, {
     create: { task, settings: { ...settings, maxExplorerTurns: 1 } },
-    execute: async (descriptor) => {
-      calls++;
-      if (descriptor.kind === "explorer") return { value: supplied };
-      if (descriptor.kind === "coordinator")
-        return {
-          value: {
-            filings: [{ note: "n1", summary: "Partial result." }],
-            explorerGuidance: "Continue.",
-            support: [],
-            verify: [],
-          },
-        };
-      throw new Error("Unexpected verification");
-    },
+    models: native.models,
   });
   close.push(owner.close);
   await owner.root.waitForIdle(context);
@@ -251,7 +247,7 @@ test("terminal input remains pending without changing the completed result", asy
   const after = await inspect(file, readReport);
   expect(after.status).toEqual(before.status);
   expect(after.notes).toEqual(before.notes);
-  expect(calls).toBe(2);
+  expect(native.provider.state.callCount).toBe(2);
   expect(
     await owner.root.commit(
       async (tx) =>

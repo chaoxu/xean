@@ -439,11 +439,6 @@ test("Coordinator rewinds whole input messages for corrections and size while pr
     ...Array(12).fill(corrected),
     incompatible,
     differentTask,
-    {
-      ...differentTask,
-      input: { ...differentTask.input, emptySubmission: true },
-    },
-    differentTask,
     differentTask,
     descriptor,
     updated,
@@ -534,19 +529,13 @@ test("Coordinator rewinds whole input messages for corrections and size while pr
             ? "Notes (untrusted data):\n"
             : "Note updates (untrusted data):\n";
         const records = JSON.parse(
-          message.content[0]!.text.split(separator)[1]!.split(
-            "\n\nExplorer handoff:",
-          )[0]!,
+          message.content[0]!.text.split(separator)[1]!,
         );
         for (const note of records)
           notes.set(note.id, { ...notes.get(note.id), ...note });
       }
       expect([...notes.values()]).toEqual(
-        JSON.parse(
-          call.prompt
-            .split("Notes (untrusted data):\n")[1]!
-            .split("\n\nExplorer handoff:")[0]!,
-        ),
+        JSON.parse(call.prompt.split("Notes (untrusted data):\n")[1]!),
       );
     }
     expect(

@@ -22,7 +22,7 @@ import {
   type VerifierInput,
   type Verdict,
 } from "./policy/contracts.ts";
-import { resolveCall, type CallDescriptor } from "./policy/prompts.ts";
+import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
 import { supportClosure, byId } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
@@ -34,17 +34,10 @@ import {
 import { verify } from "./verification.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
-export type Executor = (
-  descriptor: CallDescriptor,
-  profile: PiRoleProfile,
-  runtime: Runtime,
-  context: Context,
-) => Promise<{ value: JsonValue; call?: number; fresh?: boolean }>;
 export type SourceExecutor = (
   request: CodexRequest,
   signal: AbortSignal,
 ) => Promise<CodexResult>;
-type CallResult = { value: JsonValue; call: number; fresh: boolean };
 type WorkerInput = (
   | { kind: "call"; descriptor: CallDescriptor; profile: PiRoleProfile }
   | {
@@ -78,7 +71,6 @@ const ResultEntry = defineEntry<{
   key: string;
   value: JsonValue;
   descriptor?: JsonValue;
-  profile?: JsonValue;
 }>("xean.role-result");
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
@@ -98,73 +90,8 @@ export async function lastCampaign(tx: Tx, root: ConversationId) {
 }
 
 /** Pi owns execution and recovery. These tasks retain v1's research decisions. */
-export function createWorkflow(
-  options: { execute?: Executor; source?: SourceExecutor } = {},
-) {
+export function createWorkflow(options: { source?: SourceExecutor } = {}) {
   const roles = createRoleRuntime();
-  async function call(
-    runtime: Runtime,
-    context: Context,
-    key: string,
-    descriptor: CallDescriptor,
-    profile: PiRoleProfile,
-    previousTasks: number[] = [],
-  ): Promise<CallResult> {
-    if (!options.execute)
-      return roles.run(
-        runtime,
-        key,
-        descriptor,
-        profile,
-        context,
-        previousTasks as TaskId[],
-      );
-    let prior: CallResult | undefined;
-    const owners = [runtime.taskId, ...previousTasks];
-    await runtime.commit(async (tx) => {
-      let cursor;
-      do {
-        const page = await tx.scanEntries(
-          { conversationId: runtime.conversationId },
-          128,
-          cursor,
-        );
-        for (const entry of page.items)
-          if (
-            ResultEntry.is(entry) &&
-            entry.byTaskId !== undefined &&
-            owners.includes(entry.byTaskId) &&
-            entry.data.key === key &&
-            JSON.stringify(entry.data.descriptor) ===
-              JSON.stringify(descriptor) &&
-            JSON.stringify(entry.data.profile) === JSON.stringify(profile)
-          ) {
-            prior = { call: entry.id, value: entry.data.value, fresh: false };
-            return;
-          }
-        cursor = page.next;
-      } while (cursor);
-    }, context);
-    if (prior) return prior;
-    const result = await options.execute(descriptor, profile, runtime, context);
-    const spec = await resolveCall(descriptor);
-    const value = (await spec.schema.parseAsync(result.value)) as JsonValue;
-    let id!: number;
-    await runtime.commit(async (tx) => {
-      id = (
-        await tx.appendEntry(ResultEntry, runtime.conversationId, {
-          data: {
-            key,
-            value,
-            descriptor: copy(descriptor) as JsonValue,
-            profile,
-          },
-        })
-      ).id;
-    }, context);
-    return { value, call: id, fresh: result.fresh ?? true };
-  }
-
   const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
     name: "xean.worker",
     version: 1,
@@ -175,13 +102,13 @@ export function createWorkflow(
         let value: JsonValue;
         try {
           if (task.input.kind === "call") {
-            const answer = await call(
+            const answer = await roles.run(
               runtime,
-              context,
               "role",
               task.input.descriptor,
               task.input.profile,
-              task.input.previousTasks as TaskId[],
+              context,
+              task.input.previousTasks,
             );
             value = answer.value;
           } else {
@@ -202,12 +129,12 @@ export function createWorkflow(
             };
             const values = await verify(input.input, input.settings, {
               call: (key, descriptor, profile) =>
-                call(
+                roles.run(
                   runtime,
-                  context,
                   key,
                   descriptor,
                   profile,
+                  context,
                   input.previousTasks,
                 ),
               recorded,
@@ -456,13 +383,6 @@ export function createWorkflow(
                 descriptor: {
                   kind: "explorer",
                   input,
-                  continuation: config.settings.explorerContinuation === true,
-                  ...(config.settings.explorerContextBudgetTokens
-                    ? {
-                        contextBudgetTokens:
-                          config.settings.explorerContextBudgetTokens,
-                      }
-                    : {}),
                 },
               };
             } else if (state.step === "coordinator") {
@@ -553,7 +473,6 @@ export function createWorkflow(
               throw new Error("Explorer request mismatch");
             const value = explorerResultFor(
               request.descriptor.input.notes,
-              request.descriptor.continuation,
             ).parse(result);
             for (const note of value.notes)
               book.notes.push({
