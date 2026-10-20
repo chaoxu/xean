@@ -206,6 +206,68 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
   expect(argument).not.toContain("Unrelated alternative.");
 });
 
+test("solution-only verification waits for a nomination, then checks its dependency batches and excludes unrelated work", async () => {
+  const drive = await fixture(
+    [
+      { notes: [note("Lemma L."), note("Unrelated partial result.")] },
+      coordinate(
+        ["n1", "n2"],
+        [
+          { note: "n1", verifiers: lemma },
+          { note: "n2", verifiers: lemma },
+        ],
+      ),
+      { notes: [note("Complete P from L.", ["n1"])] },
+      coordinate(
+        ["n3"],
+        [
+          { note: "n2", verifiers: lemma },
+          { note: "n1", verifiers: lemma },
+          { note: "n3", verifiers: all },
+        ],
+      ),
+      check("n1"),
+      check("n1"),
+      ...pass("n3", ["n1"]),
+    ],
+    { verifyOnSolution: true, maxExplorerTurns: 2, window: 1 },
+  );
+  const report = await drive.settle();
+  expect(report.status).toMatchObject({
+    outcome: "accepted",
+    turns: 2,
+    accepted: "n3",
+  });
+  expect(labels(drive.calls)).toEqual([
+    "explorer",
+    "coordinator",
+    "explorer",
+    "coordinator",
+    "source",
+    "correctness",
+    "source",
+    "correctness",
+    "requirements",
+    "statement",
+    "proof",
+    "reconstruction",
+  ]);
+  const continued = drive.calls[2];
+  if (continued?.kind !== "explorer")
+    throw new Error("Missing continued exploration");
+  expect(
+    continued.input.notes.every((note) => note.verdicts.length === 0),
+  ).toBe(true);
+  for (const call of drive.calls)
+    if (call.kind === "coordinator")
+      expect(call.input.verifyOnSolution).toBe(true);
+  expect(
+    report.notes.map((note) => note.verdicts.map((value) => value.verifier)),
+  ).toEqual([[...lemma, "reconstruction"], [], all]);
+  const reconstructed = drive.calls.find((call) => call.kind === "proof");
+  expect(reconstructed?.input.notes.map(({ id }) => id)).toEqual(["n1", "n3"]);
+});
+
 test("all partial batches settle before Explorer receives selected full support and appends new notes", async () => {
   const originals = [
     note("Lemma L."),
@@ -308,9 +370,13 @@ test("reconstruction sees evidence recorded earlier in the same verifier worker"
   ).toEqual(["source", "correctness", "requirements"]);
 });
 
-test.each(["FAIL", "INCONCLUSIVE"] as const)(
-  "source %s skips correctness and remains visible to the next Explorer",
-  async (value) => {
+test.each(
+  (["FAIL", "INCONCLUSIVE"] as const).flatMap((value) =>
+    [false, true].map((verifyOnSolution) => ({ value, verifyOnSolution })),
+  ),
+)(
+  "source $value returns to exploration (verifyOnSolution=$verifyOnSolution)",
+  async ({ value, verifyOnSolution }) => {
     const drive = await fixture(
       [
         { notes: [note("Original proof.")] },
@@ -319,7 +385,7 @@ test.each(["FAIL", "INCONCLUSIVE"] as const)(
         { notes: [note("New proof.")] },
         coordinate(["n2"], []),
       ],
-      { maxExplorerTurns: 2 },
+      { maxExplorerTurns: 2, verifyOnSolution },
     );
     const report = await drive.settle();
     expect(report.status).toMatchObject({ outcome: "turn-limit", turns: 2 });

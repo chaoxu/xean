@@ -17,26 +17,42 @@ import { cliModels } from "./models.ts";
 const print = (value: unknown) =>
   Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
 const program = new Command("xean")
-  .description("Xean v1 mathematical policy on native Pi Durable")
+  .description("Mathematical research with joint dependency reconstruction")
   .version(version);
 program
   .command("init <task> <campaign> <settings>")
   .description("Freeze a task and settings in a fresh campaign database")
-  .action(async (task: string, campaign: string, settings: string) => {
-    const owner = await open(resolve(campaign), {
-      create: {
-        task: await Bun.file(task).json(),
-        settings: await Bun.file(settings).json(),
-      },
-    });
-    try {
-      await print(
-        await owner.root.commit((tx) => readStatus(tx, owner.root.id), context),
-      );
-    } finally {
-      await owner.close();
-    }
-  });
+  .option(
+    "--verify-on-solution",
+    "Defer verification until a claimed complete solution",
+  )
+  .action(
+    async (
+      task: string,
+      campaign: string,
+      settings: string,
+      options: { verifyOnSolution?: boolean },
+    ) => {
+      const config = await Bun.file(settings).json();
+      if (options.verifyOnSolution) config.verifyOnSolution = true;
+      const owner = await open(resolve(campaign), {
+        create: {
+          task: await Bun.file(task).json(),
+          settings: config,
+        },
+      });
+      try {
+        await print(
+          await owner.root.commit(
+            (tx) => readStatus(tx, owner.root.id),
+            context,
+          ),
+        );
+      } finally {
+        await owner.close();
+      }
+    },
+  );
 for (const command of ["run", "resume"] as const) {
   program
     .command(`${command} <campaign>`)

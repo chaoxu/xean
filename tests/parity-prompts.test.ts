@@ -157,6 +157,36 @@ test("the coordinator gives fallible guidance while the original task and note f
   );
 });
 
+test("solution-only verification changes Coordinator instructions without changing the default prompt or crossing cache modes", () => {
+  const input = { task, notes: [] };
+  const baseline = coordinatorCall(input);
+  expect(
+    createHash("sha256")
+      .update(
+        JSON.stringify({ system: baseline.system, prompt: baseline.prompt }),
+      )
+      .digest("hex"),
+  ).toBe("fd882eb1c658f3ffbf93408e08cc5849dce6cf80813df20c79241c643cf91d2a");
+  const disabled = coordinatorCall({ ...input, verifyOnSolution: false });
+  const enabled = coordinatorCall({ ...input, verifyOnSolution: true });
+  expect(disabled.system).toBe(baseline.system);
+  expect(enabled.prompt).toBe(baseline.prompt);
+  expect(enabled.system).toContain("Until then return verify=[]");
+  expect(enabled.system).toContain(
+    "List its unverified support earlier with source and correctness",
+  );
+  expect(z.toJSONSchema(enabled.schema)).toEqual(
+    z.toJSONSchema(baseline.schema),
+  );
+  const mode = { ...input, verifyOnSolution: true };
+  expect(coordinatorUpdate(input, mode)).toBeUndefined();
+  expect(coordinatorUpdate(mode, input)).toBeUndefined();
+  expect(coordinatorUpdate(mode, mode)).toBeDefined();
+  expect(
+    coordinatorUpdate(input, { ...input, verifyOnSolution: false }),
+  ).toBeDefined();
+});
+
 test("role prompts omit PASS reports without changing evidence or hiding failed checks", async () => {
   const evidence = {
     ...note,

@@ -71,6 +71,19 @@ assert.deepEqual(
   await Bun.file(join(root, "examples/task.json")).json(),
 );
 assert.deepEqual(report.notes, []);
+assert.equal(report.settings.verifyOnSolution, undefined);
+const deferredPath = join(temporary.path, "deferred.sqlite");
+await cli(
+  "init",
+  join(root, "examples/task.json"),
+  deferredPath,
+  join(root, "examples/settings.json"),
+  "--verify-on-solution",
+);
+assert.equal(
+  JSON.parse(await cli("inspect", deferredPath)).settings.verifyOnSolution,
+  true,
+);
 const notesPath = join(temporary.path, "notes.json");
 const guidancePath = join(temporary.path, "guidance.txt");
 await writeFile(

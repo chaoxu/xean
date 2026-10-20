@@ -1,4 +1,4 @@
-// Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
+// Role settings derived from Xean v1.0.0 (949a385).
 import { z } from "zod";
 import { THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { nonblank } from "./contracts";
@@ -58,6 +58,7 @@ export const solveSettings = z.strictObject({
     .positive()
     .default(settingsDefaults.maxExplorerTurns),
   window: z.number().int().positive().default(settingsDefaults.window),
+  verifyOnSolution: z.boolean().optional(),
   explorerContinuation: z
     .literal(false, {
       error: "This v1.0.0 port requires Explorer continuation to be off",

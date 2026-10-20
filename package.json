@@ -1,7 +1,7 @@
 {
   "name": "xean",
-  "version": "4.0.0",
-  "description": "The Xean 1.0.0 mathematical workflow on native Pi Durable",
+  "version": "4.1.0-rc.1",
+  "description": "Mathematical research on native Pi Durable with joint dependency reconstruction",
   "license": "MIT",
   "private": true,
   "type": "module",

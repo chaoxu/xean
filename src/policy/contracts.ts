@@ -175,7 +175,11 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
   });
 }
 
-export type CoordinatorInput = { task: Task; notes: Note[] };
+export type CoordinatorInput = {
+  task: Task;
+  notes: Note[];
+  verifyOnSolution?: boolean;
+};
 
 /** One entry of a verify list: a note and the verifiers to run on it, a prefix of the verifier order. */
 const verification = z

@@ -1,6 +1,6 @@
 # Xean
 
-Xean 4.0 runs a mathematical research workflow on native Pi Durable. Explorer
+Xean 4.1.0-rc.1 runs a mathematical research workflow on native Pi Durable. Explorer
 appends notes, Coordinator selects verification work, and Verifier checks source,
 correctness, task requirements, and blind reconstruction in that order. Joint
 reconstruction of generated dependencies strengthens the v1.0.0 acceptance policy.
@@ -39,9 +39,10 @@ The policy reference is Xean 1.0.0 at `d4af872`, with the transport repair at
 that Explorer call. Mathematical note content is append-only, and corrections
 use new notes. Coordinator files each note's summary once.
 Internal acceptance remains a model judgment requiring independent mathematical
-review. The former 3.5 implementation develops separately as Yean.
+review. The 3.5 implementation is preserved in the separate `yean-3.5` repository
+at `c546de8`, a rename-only fork of `148bb128`.
 
-## Mathematical policy compared with 3.5
+## Default mathematical policy compared with 3.5
 
 This comparison uses the 3.5 implementation at `148bb12`, including its native
 Explorer.
@@ -62,9 +63,15 @@ Each eligible verification batch uses a joint statement extraction, blind proof,
 and comparison. Reconstruction publishes the whole batch's verdicts atomically. A statement
 correction replaces the complete statement batch, publishes no verdicts, and
 triggers a new blind proof before comparison. Supporting lemmas need not satisfy
-the task's completion criteria. Pi's existing calls, checkpoints, and result
-records carry this work. [Implementation and regression tests](TODO.md) are
-complete, with live mathematical qualification still pending.
+the task's completion criteria. Joint reconstruction has scripted regression
+coverage. [Live mathematical qualification](TODO.md) is pending.
+
+The earlier First Proof Batch 3 run tested `b9ee726`, before joint reconstruction
+of generated dependencies. All ten candidates were internally accepted.
+Independent review after source adjudication recorded nine PASS results and
+P08 INCONCLUSIVE. Recorded API-equivalent costs were at least $134.48 for the
+solver and $39.80 for independent review, excluding unreported usage. Those
+results do not qualify this release candidate's stronger acceptance policy.
 
 ## Run a fresh campaign
 
@@ -84,12 +91,22 @@ Set `OPENAI_API_KEY` in the environment. The CLI also uses Pi's saved credential
 in `~/.pi/agent/auth.json`. Use `bun run pi` and `/login` to configure a supported
 subscription. Set the matching provider and model in each role profile.
 `PI_CODING_AGENT_DIR` selects another Pi credential directory.
+The tested configuration uses OpenAI. Other Pi providers are accepted by the
+configuration schema but remain unqualified.
 
 `init` freezes the task and settings without model calls. `run` starts or recovers
 the current native task. Closing the process suspends unfinished work. `resume`
 explicitly retries failed work from its recorded progress. A turn-limit result
 remains stopped. Inspect the returned outcome: `accepted`, `turn-limit`, or `call-failure`.
 A successful process exit alone does not establish acceptance.
+
+Add `--verify-on-solution` to `init`, or set `verifyOnSolution: true` in settings,
+to defer all verification until Coordinator nominates a claimed complete solution
+for all four checks. This mode verifies only nominated candidates and their
+declared dependency closure, using the existing stage order and joint
+reconstruction. If no solution is accepted after these checks, exploration
+continues while turns remain.
+The mode defaults to off and keeps the Explorer turn allowance unchanged.
 
 `status` reads compact progress. `inspect` includes notes, verification
 evidence, and Pi's native per-conversation usage ledgers. These ledgers do not
@@ -105,6 +122,28 @@ bun run xean guide .xean/demo.sqlite guidance.txt --id try-construction
 ```
 
 `notes.json` contains `{ "notes": [{ "text": "...", "support": [] }] }`.
+Convert papers to text in `notes[].text` before submission. To admit a supplied
+excerpt as an external premise, include its provenance and the caller's attestation:
+
+```json
+{
+  "notes": [
+    {
+      "text": "Source excerpt, including hypotheses and conventions.",
+      "support": [],
+      "verification": {
+        "source": "Paper title, version, and section",
+        "report": "Caller admits the established results under their stated hypotheses."
+      }
+    }
+  ]
+}
+```
+
+Include the exact hypotheses and conventions in the note text. Admit only
+established results. Conjectures and questions retain their status, and new
+applications require verification. `verified` is a derived field, not an input
+attribute. Omit `verification` for a note that needs source and correctness checks.
 A stable `--id` makes an exact retry idempotent. Reusing it with different input
 fails. These commands queue input without starting models or reopening a terminal
 result. An active library owner can call `submitNotes` or `guide` through
@@ -113,15 +152,31 @@ implemented.
 
 The six role profiles in [settings](examples/settings.json) select the models.
 `maxExplorerTurns` defaults to 10. `window` defaults to 100,000 characters for
-verification batches. The example source profile runs through Pi without web
-access. To use native Codex search for source verification, select
-`{ "provider": "codex", "model": "gpt-6-astra", "reasoning": "high", "search": true }`
-for `source` and authenticate the Codex CLI separately. `search: false` disables
-that search. Set `XEAN_CODEX_COMMAND` for another Codex executable. The source
+verification batches. Explorer works from the notebook without web access or
+external tools. The example source profile also runs through Pi without web
+access. To enable citation lookup, replace the `source` profile with:
+
+```json
+{
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "reasoning": "high",
+  "search": true
+}
+```
+
+Install the Codex CLI and authenticate with
+`codex -c 'cli_auth_credentials_store="file"' login`. The adapter reads
+`$CODEX_HOME/auth.json`, defaulting to `~/.codex/auth.json`.
+`search: false` disables search. Set `XEAN_CODEX_COMMAND` for another Codex executable. The source
 adapter uses a temporary configuration and the native Codex credential. It ignores
 user configuration and execpolicy rules, suppresses skill instructions, and
-disables plugins. This source path provides live search,
-with no historical date cutoff. The host adds no process isolation of its own.
+disables plugins. It searches citations invoked by notes under verification,
+without a historical date cutoff. It does not gather literature for Explorer.
+A live smoke with Codex 0.163.0 and `gpt-6-luna` opened
+[Forni's Lemma 3.5](https://arxiv.org/pdf/0706.3981v1), accepted its exact attribution,
+and rejected an attribution omitting conservativity. The host adds no process
+isolation of its own.
 
 ## Library
 
@@ -161,7 +216,7 @@ verdicts, corrections, and acceptance within the same attempt. Native Pi tests
 cover workflow replay, provider-limit recovery, and persisted limits.
 `pack` installs a fresh source archive, checks its imports and CLI, runs the
 packaged tests, and writes
-`dist/xean-4.0.0.tgz`. These checks exercise scripted behavior. Live mathematical
+`dist/xean-4.1.0-rc.1.tgz`. These checks exercise scripted behavior. Live mathematical
 performance requires separate experiments under the stronger acceptance policy.
 The pinned Pi artifacts and patches are recorded in
 [vendor/pi/provenance.json](vendor/pi/provenance.json).

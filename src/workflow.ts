@@ -390,7 +390,13 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 profile: config.settings.coordinator,
                 descriptor: {
                   kind: "coordinator",
-                  input: { task: config.task, notes },
+                  input: {
+                    task: config.task,
+                    notes,
+                    ...(config.settings.verifyOnSolution
+                      ? { verifyOnSolution: true }
+                      : {}),
+                  },
                 },
               };
             } else {
@@ -492,6 +498,19 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             state.guidance = value.explorerGuidance;
             state.support = value.support;
             state.pending = value.verify;
+            if (request.descriptor.input.verifyOnSolution) {
+              const notes = request.descriptor.input.notes;
+              const roots = value.verify
+                .filter((entry) => entry.verifiers.includes("reconstruction"))
+                .map((entry) => pick(notes, entry.note));
+              const selected = new Set([
+                ...roots.map((note) => note.id),
+                ...(await supportClosure(roots, notes)),
+              ]);
+              state.pending = value.verify.filter((entry) =>
+                selected.has(entry.note),
+              );
+            }
             state.step = "verifier";
           } else {
             if (request.kind !== "verify")
