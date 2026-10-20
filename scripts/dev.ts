@@ -70,7 +70,7 @@ if (command === "check" || command === "test") {
   await new Bun.Archive(await Bun.file(archive).bytes()).extract(staging);
   const lockfile = await Bun.file(resolve(root, "bun.lock")).text();
   await Bun.write(resolve(staging, "package/bun.lock"), lockfile);
-  await $`tar -czf ${archive} -C ${staging} package`;
+  await $`COPYFILE_DISABLE=1 tar -czf ${archive} -C ${staging} package`;
   const bytes = await Bun.file(archive).bytes();
   await new Bun.Archive(bytes).extract(directory.path);
   const source = resolve(directory.path, "package");
