@@ -66,12 +66,14 @@ triggers a new blind proof before comparison. Supporting lemmas need not satisfy
 the task's completion criteria. Joint reconstruction has scripted regression
 coverage. [Live mathematical qualification](TODO.md) is pending.
 
-The earlier First Proof Batch 3 run tested `b9ee726`, before joint reconstruction
-of generated dependencies. All ten candidates were internally accepted.
+The earlier First Proof Batch 3 run tested `b9ee726` with curated source notes
+and source checking without web access, before joint reconstruction of generated
+dependencies. All ten candidates were internally accepted.
 Independent review after source adjudication recorded nine PASS results and
 P08 INCONCLUSIVE. Recorded API-equivalent costs were at least $134.48 for the
 solver and $39.80 for independent review, excluding unreported usage. Those
-results do not qualify this release candidate's stronger acceptance policy.
+results do not qualify open-ended retrieval or this release candidate's stronger
+acceptance policy.
 
 ## Run a fresh campaign
 
@@ -100,13 +102,21 @@ explicitly retries failed work from its recorded progress. A turn-limit result
 remains stopped. Inspect the returned outcome: `accepted`, `turn-limit`, or `call-failure`.
 A successful process exit alone does not establish acceptance.
 
-Add `--verify-on-solution` to `init`, or set `verifyOnSolution: true` in settings,
-to defer all verification until Coordinator nominates a claimed complete solution
-for all four checks. This mode verifies only nominated candidates and their
-declared dependency closure, using the existing stage order and joint
-reconstruction. If no solution is accepted after these checks, exploration
-continues while turns remain.
-The mode defaults to off and keeps the Explorer turn allowance unchanged.
+By default, Coordinator can request verification of intermediate notes during
+exploration. To defer verification until a claimed complete solution, initialize
+a fresh campaign with:
+
+```sh
+bun run xean init examples/task.json .xean/deferred.sqlite examples/settings.json --verify-on-solution
+```
+
+The flag sets `verifyOnSolution: true`, which can also be supplied in settings.
+All verification, including source checking, waits until Coordinator nominates
+a claimed solution for all four checks. Only nominated candidates and their
+declared dependency closure are verified. The verification order, acceptance
+criteria, and joint reconstruction stay unchanged. If no solution is accepted
+after these checks, exploration continues while turns remain. The mode defaults
+to off, keeps the Explorer turn allowance unchanged, and is frozen at `init`.
 
 `status` reads compact progress. `inspect` includes notes, verification
 evidence, and Pi's native per-conversation usage ledgers. These ledgers do not
@@ -140,10 +150,12 @@ excerpt as an external premise, include its provenance and the caller's attestat
 }
 ```
 
-Include the exact hypotheses and conventions in the note text. Admit only
+This attestation grants source and correctness trust when the note serves as
+support. A directly nominated candidate still receives its requested checks and
+reconstruction. Include exact hypotheses and conventions, and admit only
 established results. Conjectures and questions retain their status, and new
-applications require verification. `verified` is a derived field, not an input
-attribute. Omit `verification` for a note that needs source and correctness checks.
+applications require verification. `verified` is derived, not an input attribute.
+Omit `verification` for a note that needs source and correctness checks.
 A stable `--id` makes an exact retry idempotent. Reusing it with different input
 fails. These commands queue input without starting models or reopening a terminal
 result. An active library owner can call `submitNotes` or `guide` through
@@ -153,8 +165,8 @@ implemented.
 The six role profiles in [settings](examples/settings.json) select the models.
 `maxExplorerTurns` defaults to 10. `window` defaults to 100,000 characters for
 verification batches. Explorer works from the notebook without web access or
-external tools. The example source profile also runs through Pi without web
-access. To enable citation lookup, replace the `source` profile with:
+external tools. The example source profile runs through Pi without web access.
+To enable Codex citation lookup, replace the `source` profile with:
 
 ```json
 {
@@ -171,12 +183,32 @@ Install the Codex CLI and authenticate with
 `search: false` disables search. Set `XEAN_CODEX_COMMAND` for another Codex executable. The source
 adapter uses a temporary configuration and the native Codex credential. It ignores
 user configuration and execpolicy rules, suppresses skill instructions, and
-disables plugins. It searches citations invoked by notes under verification,
-without a historical date cutoff. It does not gather literature for Explorer.
-A live smoke with Codex 0.163.0 and `gpt-6-luna` opened
-[Forni's Lemma 3.5](https://arxiv.org/pdf/0706.3981v1), accepted its exact attribution,
-and rejected an attribution omitting conservativity. The host adds no process
-isolation of its own.
+disables plugins. Search has no historical date cutoff. Source-call receipts retain
+the reported citations and web-tool result metadata. Retrieved papers are not
+automatically imported as notebook notes.
+Explorer has no literature-gathering tool. The host adds no process isolation.
+
+Source verification checks invoked results, declared dependencies, and whether
+the results' hypotheses apply. PASS means the model finds these established, or
+finds no external result to check. FAIL identifies a concrete defect, such as a
+source mismatch, missing dependency, or incorrect application. INCONCLUSIVE
+identifies what the available evidence cannot settle. With search enabled, the
+verifier is instructed to open authoritative sources when available. It may also
+use mathematical knowledge and supplied texts, so a fresh lookup is not required
+for every PASS. The runtime does not match each reported URL and result against
+retrieved content. These verdicts remain model judgments.
+
+Paired live checks with Codex 0.163.0 locally and 0.162.1 under Nomad, using
+`gpt-6-luna`, demonstrated discovery and primary-paper retrieval for
+[Forni's Lemma 3.5](https://arxiv.org/pdf/0706.3981v1). They returned PASS for the
+exact attribution and FAIL when conservativity was omitted. This covers that
+source and hypothesis distinction.
+
+A separate applicability check admitted the exact Forni premise. It returned
+PASS for applying it to $X=\partial_\theta$ on $S^1$ with invariant volume
+$d\theta$, and FAIL for $X=\sin\theta\,\partial_\theta$, because smoothness alone
+does not supply a positive smooth invariant volume. This checks only that
+hypothesis distinction. Broad mathematical reliability remains unqualified.
 
 ## Library
 
