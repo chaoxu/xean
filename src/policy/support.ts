@@ -36,29 +36,27 @@ export function reconstructionInput(
   input: ReconstructionInput,
   roots: readonly string[],
 ): ReconstructionInput {
-  const byName = new Map(
-    [...input.notes, ...input.support].map((note) => [note.id, note]),
-  );
-  const targets = new Set(roots),
-    seen = new Set<string>(),
-    pending = [...targets],
+  const needed = new Set(roots),
     notes: Note[] = [],
     support: Note[] = [];
-  while (pending.length) {
-    const id = pending.pop()!;
-    if (seen.has(id)) continue;
-    const note = byName.get(id)!;
-    if (note.dead) throw new Error(`dead reconstruction note ${id}`);
-    seen.add(id);
-    if (!targets.has(id) && note.verification !== undefined) {
-      if (!note.verified) throw new Error(`unverified source premise ${id}`);
+  // Validated dependencies have earlier IDs, so visit consumers first.
+  for (const note of [...input.notes, ...input.support].sort((a, b) =>
+    byId(b.id, a.id),
+  )) {
+    if (!needed.has(note.id)) continue;
+    if (note.dead) throw new Error(`dead reconstruction note ${note.id}`);
+    if (!roots.includes(note.id) && note.verification !== undefined) {
+      if (!note.verified)
+        throw new Error(`unverified source premise ${note.id}`);
       support.push(note);
-      continue;
+    } else {
+      notes.push(note);
+      for (const id of note.support) needed.add(id);
     }
-    notes.push(note);
-    pending.push(...note.support);
   }
-  notes.sort((a, b) => byId(a.id, b.id));
-  support.sort((a, b) => byId(a.id, b.id));
-  return { task: input.task, notes, support };
+  return {
+    task: input.task,
+    notes: notes.reverse(),
+    support: support.reverse(),
+  };
 }

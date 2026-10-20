@@ -69,7 +69,6 @@ export function project(book: NotebookState): {
       passes.set(verdict.note, attempts);
     }
   const notes = new Map<string, Note>(),
-    reconstructed = new Map<string, Set<number>>(),
     accepted: string[] = [];
   for (const entry of [...book.notes].sort((a, b) => byId(a.id, b.id))) {
     const support = entry.support.map((id) => notes.get(id));
@@ -88,26 +87,22 @@ export function project(book: NotebookState): {
       verified,
     });
     notes.set(note.id, note);
-    const complete = new Set<number>();
-    if (verified)
-      for (const [candidate, passed] of attempts)
-        if (
-          passed.has("reconstruction") &&
-          support.every(
-            (parent) =>
-              parent &&
-              (parent.verification !== undefined ||
-                reconstructed.get(parent.id)?.has(candidate)),
-          )
+    // Keep only reconstruction passes whose generated support passed in this
+    // attempt. Parents are processed first; recorded verdicts stay unchanged.
+    for (const [candidate, passed] of attempts)
+      if (
+        !verified ||
+        !support.every(
+          (parent) =>
+            parent &&
+            (parent.verification !== undefined ||
+              passes.get(parent.id)?.get(candidate)?.has("reconstruction")),
         )
-          complete.add(candidate);
-    reconstructed.set(note.id, complete);
+      )
+        passed.delete("reconstruction");
     if (
       verified &&
-      attempts.some(
-        ([candidate, p]) =>
-          complete.has(candidate) && verifierNames.every((name) => p.has(name)),
-      )
+      attempts.some(([, p]) => verifierNames.every((name) => p.has(name)))
     )
       accepted.push(note.id);
   }

@@ -352,83 +352,43 @@ export function judgedBy(
   recorded: readonly Verdict[],
   verifier: VerifierName,
 ): string[] {
-  const position = new Map(
-    input.verify.map(({ note }, index) => [note, index]),
-  );
   const known = new Map(
     [...input.notes, ...input.support].map((note) => [note.id, note]),
   );
-  const judged: string[] = [];
+  const preceding = verifierNames.slice(0, verifierIndex(verifier));
   const passes = new Set<string>();
   const failures = new Set<string>();
-  const deadMemo = new Map<string, boolean>();
-  const supportMemo = new Map<string, boolean>();
-  let evidenceReady = false;
-  for (const [index, entry] of input.verify.entries()) {
-    if (!entry.verifiers.includes(verifier)) continue;
-    // Earlier reconstruction failures can block dependent roots. The joint
-    // batch is formed after this eligibility selection.
-    if (!evidenceReady || verifier === "reconstruction") {
-      passes.clear();
-      failures.clear();
-      deadMemo.clear();
-      supportMemo.clear();
-      const prior = recorded.filter(
-        (value) =>
-          verifierIndex(value.verifier) < verifierIndex(verifier) ||
-          (verifier === "reconstruction" &&
-            value.verifier === "reconstruction" &&
-            (position.get(value.note) ?? Number.POSITIVE_INFINITY) < index),
-      );
-      for (const value of prior) {
-        if (value.verdict === "PASS")
-          passes.add(`${value.note}/${value.verifier}`);
-        if (value.verifier !== "requirements" && value.verdict === "FAIL")
-          failures.add(value.note);
-      }
-      evidenceReady = true;
-    }
-    const passed = (id: string, name: VerifierName): boolean =>
-      passes.has(`${id}/${name}`);
-    const dead = (id: string): boolean => {
-      const saved = deadMemo.get(id);
-      if (saved !== undefined) return saved;
-      const result =
-        failures.has(id) || (known.get(id)?.support ?? []).some(dead);
-      deadMemo.set(id, result);
-      return result;
-    };
-    const supportPassed = (id: string): boolean => {
-      const saved = supportMemo.get(id);
-      if (saved !== undefined) return saved;
-      const result = (known.get(id)?.support ?? []).every(
-        (support) =>
-          known.get(support)?.verified === true ||
-          (verifierNames
-            .slice(0, Math.min(verifierIndex(verifier), 2))
-            .every((name) => passed(support, name)) &&
-            supportPassed(support)),
-      );
-      supportMemo.set(id, result);
-      return result;
-    };
-    if (deadMemo.size === 0) {
-      for (const id of [...known.keys()].sort(byId)) {
-        dead(id);
-        supportPassed(id);
-      }
-    }
-    if (
-      verifierNames
-        .slice(0, verifierIndex(verifier))
-        .every((name) => passed(entry.note, name)) &&
-      !dead(entry.note) &&
-      supportPassed(entry.note)
-    ) {
-      judged.push(entry.note);
-    }
+  for (const value of recorded) {
+    if (!preceding.includes(value.verifier)) continue;
+    if (value.verdict === "PASS") passes.add(`${value.note}/${value.verifier}`);
+    if (value.verifier !== "requirements" && value.verdict === "FAIL")
+      failures.add(value.note);
   }
-  return judged;
+  const dead = new Set<string>(),
+    supported = new Set<string>();
+  // Validated support edges point to earlier numeric IDs.
+  for (const note of [...known.values()].sort((a, b) => byId(a.id, b.id))) {
+    if (failures.has(note.id) || note.support.some((id) => dead.has(id)))
+      dead.add(note.id);
+    if (
+      note.support.every(
+        (id) =>
+          known.get(id)?.verified === true ||
+          (supported.has(id) &&
+            preceding.slice(0, 2).every((name) => passes.has(`${id}/${name}`))),
+      )
+    )
+      supported.add(note.id);
+  }
+  return input.verify
+    .filter(
+      (entry) =>
+        entry.verifiers.includes(verifier) &&
+        preceding.every((name) => passes.has(`${entry.note}/${name}`)) &&
+        !dead.has(entry.note) &&
+        supported.has(entry.note),
+    )
+    .map(({ note }) => note);
 }
 
 /** Checks without a verdict within one candidate. */

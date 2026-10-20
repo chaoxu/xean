@@ -181,13 +181,9 @@ test("source then correctness then requirements then reconstruction gate reachab
     ...required,
     verdict("reconstruction", "n2", "INCONCLUSIVE"),
   ];
-  expect(
-    missingVerdicts(
-      inconclusive,
-      "reconstruction",
-      judgedBy(input, inconclusive, "reconstruction"),
-    ),
-  ).toEqual([]);
+  expect(missingVerdicts(inconclusive, "reconstruction", reachable)).toEqual(
+    [],
+  );
   expect(
     judgedBy(
       input,
@@ -201,26 +197,37 @@ test("source then correctness then requirements then reconstruction gate reachab
   expect(judgedBy(input, failed, "reconstruction")).toEqual([]);
 });
 
-test("reconstruction failure blocks later consumers even when an intermediate support was verified", () => {
-  const input = {
-    notes: [note("n1"), note("n3", ["n2"])],
-    support: [{ ...note("n2", ["n1"]), verified: true }],
-    verify: [
-      { note: "n1", verifiers: all },
-      { note: "n3", verifiers: all },
-    ],
-  };
-  const passed = ["n1", "n3"].flatMap((id) => [
-    verdict("source", id),
-    verdict("correctness", id),
-    verdict("requirements", id),
-  ]);
-  expect(judgedBy(input, passed, "reconstruction")).toEqual(["n1", "n3"]);
-  const failed = [...passed, verdict("reconstruction", "n1", "FAIL")];
-  const reachable = judgedBy(input, failed, "reconstruction");
-  expect(reachable).toEqual(["n1"]);
-  expect(missingVerdicts(failed, "reconstruction", reachable)).toEqual([]);
-});
+test.each(["source", "correctness"] as const)(
+  "%s failure blocks descendants through verified support but leaves unrelated roots eligible",
+  (stage) => {
+    const input = {
+      notes: [note("n1"), note("n3", ["n2"]), note("n4")],
+      support: [{ ...note("n2", ["n1"]), verified: true }],
+      verify: [
+        { note: "n1", verifiers: all },
+        { note: "n3", verifiers: all },
+        { note: "n4", verifiers: all },
+      ],
+    };
+    const passed = ["n1", "n3", "n4"].flatMap((id) => [
+      verdict("source", id),
+      verdict("correctness", id),
+      verdict("requirements", id),
+    ]);
+    expect(judgedBy(input, passed, "reconstruction")).toEqual([
+      "n1",
+      "n3",
+      "n4",
+    ]);
+    expect(
+      judgedBy(
+        input,
+        [...passed, verdict(stage, "n1", "FAIL")],
+        "reconstruction",
+      ),
+    ).toEqual(["n4"]);
+  },
+);
 
 test("verification receives the complete ordered support closure and counts shared texts once", async () => {
   const notes = [
