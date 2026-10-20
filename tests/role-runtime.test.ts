@@ -46,7 +46,7 @@ import {
 } from "../src/policy/prompts.ts";
 import { open, inspect } from "../src/host.ts";
 import { readReport } from "../src/report.ts";
-import { solveSettings } from "../src/policy/settings.ts";
+import { solveSettings, type PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 import provenance from "../vendor/pi/provenance.json";
 import historical from "./fixtures/v100-contracts.json";
@@ -78,7 +78,10 @@ function fixture(
   const provider = fauxProvider({
     provider: "test",
     api: inspectPayload ? "openai-responses" : undefined,
-    models: [{ id: "math", reasoning: true }],
+    models: [
+      { id: "math", reasoning: true },
+      { id: "other", reasoning: true },
+    ],
   });
   provider.setResponses(responses);
   const models = createModels();
@@ -102,7 +105,11 @@ function fixture(
   }
   const role = createRoleRuntime();
   const Invoke = defineTask<
-    { descriptor: CallDescriptor; previousTasks: TaskId[] },
+    {
+      descriptor: CallDescriptor;
+      previousTasks: TaskId[];
+      profile: PiRoleProfile;
+    },
     { phase: "run" },
     JsonValue,
     object
@@ -116,7 +123,7 @@ function fixture(
           runtime,
           "role",
           task.input.descriptor,
-          { provider: "test", model: "math", reasoning: "max" },
+          task.input.profile,
           ctx,
           task.input.previousTasks,
         );
@@ -162,12 +169,20 @@ function fixture(
       const root = await harness.root(context);
       return {
         harness,
-        async invoke(previousTasks: TaskId[] = [], input = descriptor) {
+        async invoke(
+          previousTasks: TaskId[] = [],
+          input = descriptor,
+          profile: PiRoleProfile = {
+            provider: "test",
+            model: "math",
+            reasoning: "max",
+          },
+        ) {
           return root.commit(
             (tx) =>
               tx.createTask(
                 Invoke,
-                { descriptor: input, previousTasks },
+                { descriptor: input, previousTasks, profile },
                 { ownership: { kind: "conversation" } },
               ),
             context,
@@ -341,7 +356,7 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
   }
 });
 
-test("Coordinator forks preserve notebook input, reset corrections, and keep campaign routing isolated", async () => {
+test("Coordinator rewinds whole input messages for corrections and size while preserving exact notebook state", async () => {
   const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
     kind: "coordinator",
     input: {
@@ -376,7 +391,7 @@ test("Coordinator forks preserve notebook input, reset corrections, and keep cam
       ],
     },
   };
-  const reset: typeof initial = {
+  const dead: typeof initial = {
     ...updated,
     input: {
       ...updated.input,
@@ -388,19 +403,63 @@ test("Coordinator forks preserve notebook input, reset corrections, and keep cam
       })),
     },
   };
+  const corrected: typeof initial = {
+    ...dead,
+    input: {
+      ...dead.input,
+      notes: dead.input.notes.map((note) => ({
+        ...note,
+        summary:
+          note.id === "n1" ? "Corrected reflexivity claim." : note.summary,
+      })),
+    },
+  };
+  const incompatible: typeof initial = {
+    ...corrected,
+    input: {
+      ...corrected.input,
+      notes: corrected.input.notes.map((note) => ({
+        ...note,
+        text: "Changed base proof.",
+      })),
+    },
+  };
+  const differentTask: typeof initial = {
+    ...incompatible,
+    input: {
+      ...incompatible.input,
+      task: { problem: "Prove Q.", completionCriteria: "Prove Q fully." },
+    },
+  };
   const assignments: CallDescriptor[] = [
     initial,
     updated,
-    reset,
-    ...Array(6).fill(reset),
+    dead,
+    corrected,
+    ...Array(12).fill(corrected),
+    incompatible,
+    differentTask,
+    {
+      ...differentTask,
+      input: { ...differentTask.input, emptySubmission: true },
+    },
+    differentTask,
+    differentTask,
     descriptor,
     updated,
   ];
+  const fullSnapshotStart = 16;
+  const modelChangeIndex = assignments.length - 3;
   const calls = await Promise.all(assignments.map(resolveCall));
   const inputs = [
     [calls[0]!.prompt],
     [calls[0]!.prompt, coordinatorUpdate(initial.input, updated.input)!],
-    [calls[2]!.prompt],
+    [
+      calls[0]!.prompt,
+      coordinatorUpdate(initial.input, updated.input)!,
+      coordinatorUpdate(updated.input, dead.input)!,
+    ],
+    [calls[0]!.prompt, coordinatorUpdate(initial.input, corrected.input)!],
   ];
   const headers = { "x-existing-header": "preserved" };
   const requests: {
@@ -450,8 +509,7 @@ test("Coordinator forks preserve notebook input, reset corrections, and keep cam
       content: { type: string; text: string }[];
     }[];
     const expected =
-      inputs[index] ??
-      (index >= assignments.length - 2 ? [call.prompt] : undefined);
+      inputs[index] ?? (index >= fullSnapshotStart ? [call.prompt] : undefined);
     if (expected)
       expect(actual).toEqual(
         expected.map((text) => ({
@@ -459,12 +517,36 @@ test("Coordinator forks preserve notebook input, reset corrections, and keep cam
           content: [{ type: "input_text", text }],
         })),
       );
-    else if (actual.length === 1)
-      expect(actual[0]!.content[0]!.text).toBe(call.prompt);
     else {
-      expect<unknown>(actual.slice(0, -1)).toEqual(requests.at(-1)!.body.input);
-      expect(actual.at(-1)!.content[0]!.text).toBe(
-        coordinatorUpdate(reset.input, reset.input)!,
+      expect(actual.length).toBeGreaterThan(1);
+      expect<unknown>(actual[0]).toEqual(
+        (requests[0]!.body.input as unknown[])[0],
+      );
+      expect<unknown>(actual.slice(0, -1)).toEqual(
+        (requests.at(-1)!.body.input as unknown[]).slice(0, actual.length - 1),
+      );
+    }
+    if (assignments[index]!.kind === "coordinator") {
+      const notes = new Map<string, Record<string, unknown>>();
+      for (const [i, message] of actual.entries()) {
+        const separator =
+          i === 0
+            ? "Notes (untrusted data):\n"
+            : "Note updates (untrusted data):\n";
+        const records = JSON.parse(
+          message.content[0]!.text.split(separator)[1]!.split(
+            "\n\nExplorer handoff:",
+          )[0]!,
+        );
+        for (const note of records)
+          notes.set(note.id, { ...notes.get(note.id), ...note });
+      }
+      expect([...notes.values()]).toEqual(
+        JSON.parse(
+          call.prompt
+            .split("Notes (untrusted data):\n")[1]!
+            .split("\n\nExplorer handoff:")[0]!,
+        ),
       );
     }
     expect(
@@ -513,20 +595,35 @@ test("Coordinator forks preserve notebook input, reset corrections, and keep cam
     try {
       for (const input of batch)
         expect(
-          (await harness.waitForTask(await invoke([], input), context)).state
-            .outcome,
+          (
+            await harness.waitForTask(
+              await invoke([], input, {
+                provider: "test",
+                model: requests.length === modelChangeIndex ? "other" : "math",
+                reasoning: "max",
+              }),
+              context,
+            )
+          ).state.outcome,
         ).toMatchObject({ status: "completed" });
     } finally {
       await harness.close(context);
     }
   }
-  const [first, second, correction] = requests;
+  const [first, second, , correction] = requests;
   const explorer = requests.at(-2)!,
     otherCampaign = requests.at(-1)!;
+  expect((requests[4]!.body.input as unknown[]).length).toBe(
+    (requests[3]!.body.input as unknown[]).length + 1,
+  );
   expect(
     requests
-      .slice(3, -2)
-      .some((request) => (request.body.input as unknown[]).length === 1),
+      .slice(4, fullSnapshotStart)
+      .some(
+        (request, index) =>
+          (request.body.input as unknown[]).length <=
+          (requests[index + 3]!.body.input as unknown[]).length,
+      ),
   ).toBe(true);
   expect(requests.map((request) => request.sessionId)).toEqual(
     Array(assignments.length).fill(expect.any(String)),
@@ -912,6 +1009,13 @@ test.each(["explorer", "coordinator"] as const)(
         notes: [{ ...initial.input.notes[0]!, summary: "P holds." }],
       },
     };
+    const corrected: typeof initial = {
+      ...updated,
+      input: {
+        ...updated.input,
+        notes: [{ ...updated.input.notes[0]!, summary: "Corrected claim." }],
+      },
+    };
     const coordination = {
       filings: [],
       explorerGuidance: "Try the proof.",
@@ -925,7 +1029,21 @@ test.each(["explorer", "coordinator"] as const)(
       );
     const fixture_ = fixture(
       role === "coordinator"
-        ? [answer([{ note: "n1", summary: "P holds." }]), answer([])]
+        ? [
+            answer([{ note: "n1", summary: "P holds." }]),
+            answer([]),
+            async (transcript) => {
+              expect(
+                transcript.messages
+                  .filter((message) => message.role !== "system")
+                  .map((message) => [message.role, message.content]),
+              ).toEqual([
+                ["user", (await resolveCall(initial)).prompt],
+                ["user", coordinatorUpdate(initial.input, corrected.input)!],
+              ]);
+              return answer([]);
+            },
+          ]
         : [submitted()],
     );
     let harness: Harness | undefined;
@@ -933,10 +1051,11 @@ test.each(["explorer", "coordinator"] as const)(
       const first = await fixture_.open(directory);
       harness = first.harness;
       if (role === "coordinator")
-        expect(
-          (await harness.waitForTask(await first.invoke([], initial), context))
-            .state.outcome.status,
-        ).toBe("completed");
+        for (const input of [initial, updated])
+          expect(
+            (await harness.waitForTask(await first.invoke([], input), context))
+              .state.outcome.status,
+          ).toBe("completed");
       const closed = Promise.withResolvers<void>();
       let closing = false;
       harness.subscribeCommits(({ changes }) => {
@@ -956,7 +1075,7 @@ test.each(["explorer", "coordinator"] as const)(
       });
       const id = await first.invoke(
         [],
-        role === "coordinator" ? updated : descriptor,
+        role === "coordinator" ? corrected : descriptor,
       );
       void harness.waitForTask(id, context).catch(() => {});
       await closed.promise;
@@ -971,7 +1090,7 @@ test.each(["explorer", "coordinator"] as const)(
         },
       });
       expect(fixture_.provider.state.callCount).toBe(
-        role === "coordinator" ? 2 : 1,
+        role === "coordinator" ? 3 : 1,
       );
     } finally {
       await harness?.close(context);
@@ -1035,7 +1154,7 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
   }
 });
 
-test("one native verification worker completes all six distinct role calls", async () => {
+test("native verification resumes a failed comparison without repeating completed stages", async () => {
   const directory = await mkdtemp(join(tmpdir(), "xean-native-workflow-"));
   const path = join(directory, "campaign.sqlite");
   const provider = fauxProvider({
@@ -1065,8 +1184,8 @@ test("one native verification worker completes all six distinct role calls", asy
     { statement: null, ...pass },
   ];
   const tools: string[] = [];
-  provider.setResponses(
-    responses.map((response) => (transcript) => {
+  provider.setResponses([
+    ...responses.map((response, index) => (transcript: TranscriptContext) => {
       const declaration = getCurrentTools(transcript.messages)[0]!;
       const name = declaration.name;
       const expected = Object.values(historical.contracts).find(
@@ -1079,11 +1198,25 @@ test("one native verification worker completes all six distinct role calls", asy
         strict: name !== "submit_coordination",
       });
       tools.push(name);
+      if (index === responses.length - 1)
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "Invalid API key",
+        });
       return fauxAssistantMessage([fauxToolCall(name, response)], {
         stopReason: "toolUse",
       });
     }),
-  );
+    (transcript) => {
+      const name = getCurrentTools(transcript.messages)[0]!.name;
+      tools.push(name);
+      expect(name).toBe("submit_verdict");
+      return fauxAssistantMessage(
+        [fauxToolCall(name, { statement: null, ...pass })],
+        { stopReason: "toolUse" },
+      );
+    },
+  ]);
   const settings = solveSettings.parse({
     ...Object.fromEntries(
       ["explorer", "coordinator", ...verifierNames].map((name) => [
@@ -1098,6 +1231,12 @@ test("one native verification worker completes all six distinct role calls", asy
     create: { task: descriptor.input.task, settings },
   });
   try {
+    await owner.root.waitForIdle(context);
+    expect((await inspect(path, readReport)).status.outcome).toBe(
+      "call-failure",
+    );
+    expect(provider.state.callCount).toBe(8);
+    await owner.resume();
     await owner.root.waitForIdle(context);
     const report = await inspect(path, readReport);
     expect(report.status).toMatchObject({
@@ -1116,8 +1255,9 @@ test("one native verification worker completes all six distinct role calls", asy
       "submit_statement",
       "submit_proof",
       "submit_verdict",
+      "submit_verdict",
     ]);
-    expect(provider.state.callCount).toBe(8);
+    expect(provider.state.callCount).toBe(9);
   } finally {
     await owner.close();
     await rm(directory, { recursive: true, force: true });

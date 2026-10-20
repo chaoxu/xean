@@ -15,24 +15,26 @@ differs from the old agent loop, while the mathematical role instructions, tool
 schemas, and verification sequence retain the v1.0.0 contracts.
 
 Coordinator treats supplied sources and generated notes uniformly. It forks Pi's
-history at the previous successful input message and appends new notes and changed
-fields by note ID. Previous Coordinator reasoning and tool output stay outside
-that history. First summaries and added verdicts are ordinary updates.
+history at the newest compatible input boundary from a successful Coordinator call
+and appends new notes and changed fields by note ID. First summaries, added
+verdicts, and newly dead notes are ordinary updates, including any resulting loss
+of verification. Previous Coordinator reasoning and tool output stay outside that
+history.
 
-A changed existing summary, text, support, or provenance starts an exact current
-snapshot, as do revised or removed verdicts, a dead-state change, or lost verification.
-Task or model-setting changes and empty Explorer handoffs also start fresh.
-Coordinator rebuilds when accumulated input text plus the update would exceed
-twice the current snapshot's character count. Rebuilds use stored records and
-retain current failure evidence. Coordinator’s OpenAI Responses calls use stable
-routing headers within a campaign. Cache reuse depends on provider support, input length,
+Coordinator tries earlier native parent boundaries when corrections or accumulated
+updates prevent reuse of the latest boundary. It appends the cumulative changes
+from the chosen boundary, keeping retained input text plus the update within twice
+the current snapshot's character count. If no boundary qualifies, it sends an exact
+current snapshot. Recovery retains the call's recorded parent. Current failure
+evidence remains available. Coordinator's OpenAI Responses calls use stable routing
+headers within a campaign. Cache reuse depends on provider support, input length,
 retention, and availability. These changes preserve the current notebook data,
 while their effect on mathematical decisions requires evaluation.
 
 The policy reference is Xean 1.0.0 at `d4af872`, with the transport repair at
 `949a385`. This port requires Explorer continuation to be off. A valid note submission ends
 that Explorer call. Mathematical note content is append-only, and corrections
-use new notes. Coordinator may update summaries.
+use new notes. Coordinator files each note's summary once.
 Internal acceptance remains a model judgment requiring independent mathematical
 review. The former 3.5 implementation develops separately as Yean.
 

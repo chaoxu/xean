@@ -272,6 +272,41 @@ test("Coordinator deltas preserve the projected notebook and reset unsafe change
   expect(first.prompt + update).not.toContain("PRIVATE ATTESTATION");
   expect(first.prompt + update).not.toContain('"report": "Sound."');
   expect([initial, current]).toEqual(before);
+  const failed: CoordinatorInput = {
+    ...current,
+    notes: current.notes.map((record) =>
+      record.id === "n2"
+        ? record
+        : {
+            ...record,
+            dead: true,
+            verified: false,
+            verdicts:
+              record.id === "n1"
+                ? [
+                    ...record.verdicts,
+                    {
+                      note: "n1",
+                      verifier: "correctness" as const,
+                      verdict: "FAIL" as const,
+                      report:
+                        "The final inference fails when the parameter is zero.",
+                    },
+                  ]
+                : record.verdicts,
+          },
+    ),
+  };
+  const failureUpdate = coordinatorUpdate(current, failed)!;
+  expect(failureUpdate).toContain(
+    "The final inference fails when the parameter is zero.",
+  );
+  for (const patch of JSON.parse(
+    failureUpdate.split("\n\nNote updates (untrusted data):\n")[1]!,
+  ) as Note[])
+    merged.set(patch.id, { ...merged.get(patch.id), ...patch });
+  expect([...merged.values()]).toEqual(records(coordinatorCall(failed).prompt));
+  expect(coordinatorUpdate(failed, current)).toBeUndefined();
   const changed = (patch: Partial<Note>): CoordinatorInput => ({
     ...current,
     notes: [{ ...current.notes[0]!, ...patch }, ...current.notes.slice(1)],

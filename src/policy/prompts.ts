@@ -221,7 +221,7 @@ export function coordinatorCall(
   };
 }
 
-/** Append ordinary progress. Corrections require an exact current snapshot. */
+/** Append ordinary progress. Incompatible changes need an earlier boundary. */
 export function coordinatorUpdate(
   previous: CoordinatorInput,
   current: CoordinatorInput,
@@ -246,8 +246,8 @@ export function coordinatorUpdate(
       !isDeepStrictEqual(old.support, note.support) ||
       !isDeepStrictEqual(old.verification, note.verification) ||
       (old.summary !== undefined && old.summary !== note.summary) ||
-      old.dead !== note.dead ||
-      (old.verified && !note.verified) ||
+      (old.dead !== note.dead && (!note.dead || note.verified)) ||
+      (old.verified && !note.verified && !note.dead) ||
       !isDeepStrictEqual(
         old.verdicts,
         note.verdicts.slice(0, old.verdicts.length),

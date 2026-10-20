@@ -329,7 +329,8 @@ export function createRoleRuntime(
           const previous = await tx.task(ownerTaskId as TaskId);
           if (
             previous?.state.status !== "terminal" ||
-            previous.state.outcome.status !== "completed"
+            (previous.state.outcome.status !== "completed" &&
+              previous.state.outcome.status !== "failed")
           )
             continue;
           let cursor: Cursor | undefined;
@@ -367,7 +368,7 @@ export function createRoleRuntime(
           parent = (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID))
             .latest;
         }
-        if (parent && descriptor.kind === "coordinator") {
+        while (parent && descriptor.kind === "coordinator") {
           const prior = await tx.doc(Assignment, parent.conversationId);
           const update =
             prior.descriptor?.kind === "coordinator" &&
@@ -386,9 +387,11 @@ export function createRoleRuntime(
                 parent,
                 2 * call.prompt.length - update.length,
               )))
-          )
+          ) {
             prompt = update;
-          else parent = undefined;
+            break;
+          }
+          parent = (await tx.conversation(parent.conversationId))?.parent;
         }
         if (progress.conversation === undefined) {
           const ownership = { kind: "task" as const, taskId: runtime.taskId };
