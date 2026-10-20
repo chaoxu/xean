@@ -19,6 +19,7 @@
     "vendor/",
     "tests/",
     "README.md",
+    "TODO.md",
     "AGENTS.md",
     "LICENSE",
     "bun.lock",

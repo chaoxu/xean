@@ -16,6 +16,7 @@ const formatPaths = [
   "package.json",
   "tsconfig.json",
   "README.md",
+  "TODO.md",
   "AGENTS.md",
 ];
 async function run(argv: string[], cwd = root, env = process.env) {
