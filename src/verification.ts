@@ -3,19 +3,19 @@ import { z } from "zod";
 import {
   judgedBy,
   missingVerdicts,
-  pick,
   proof,
   reconstructionResultFor,
   sourceVerdicts,
   sourceVerdictsFor,
-  statement,
+  statementsFor,
   verdictsFor,
   verifierInput,
   verifierNames,
-  type Note,
+  type ReconstructionInput,
   type Verdict,
   type VerifierInput,
 } from "./policy/contracts.ts";
+import { reconstructionInput } from "./policy/support.ts";
 import { sourceCall, type CallDescriptor } from "./policy/prompts.ts";
 import {
   codexSource,
@@ -49,17 +49,17 @@ export interface VerificationDependencies {
 }
 
 async function reconstruct(
-  input: VerifierInput,
-  note: Note,
+  input: ReconstructionInput,
   profile: PiRoleProfile,
   dependencies: VerificationDependencies,
 ) {
-  const key = `reconstruction/${note.id}`;
-  let value = statement.parse(
+  const ids = input.notes.map((note) => note.id);
+  const key = `reconstruction/${ids.join(",")}`;
+  let value = statementsFor(ids).parse(
     (
       await dependencies.call(
         `${key}/statement`,
-        { kind: "statement", input, note },
+        { kind: "statement", input },
         profile,
       )
     ).value,
@@ -72,7 +72,7 @@ async function reconstruct(
       (
         await dependencies.call(
           `${key}/proof/${suffix}`,
-          { kind: "proof", input, note, statement: value, previous },
+          { kind: "proof", input, statement: value },
           profile,
         )
       ).value,
@@ -82,16 +82,14 @@ async function reconstruct(
       {
         kind: "reconstruction",
         input,
-        note,
         statement: value,
         proof: proofValue,
-        previous,
       },
       profile,
     );
-    const parsed = reconstructionResultFor(note.id).parse(result.value);
-    if (parsed.statement !== null) {
-      value = { statement: parsed.statement };
+    const parsed = reconstructionResultFor(ids).parse(result.value);
+    if (parsed.statements.length > 0) {
+      value = { statements: parsed.statements };
       previous = result.call;
       // Replayed corrections remain available without spending the fresh-call allowance.
       if (result.fresh && corrections++ >= 1) {
@@ -105,7 +103,7 @@ async function reconstruct(
   }
 }
 
-/** The v1 verification order; native callbacks own calls, recovery, and verdicts. */
+/** Native callbacks own calls, recovery, and atomic batch verdicts. */
 export async function verify(
   inputValue: VerifierInput,
   settings: SolveSettings,
@@ -115,29 +113,23 @@ export async function verify(
   const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
     if (name === "reconstruction") {
-      for (;;) {
-        input = await refresh(input);
-        const have = await dependencies.recorded();
-        const next = missingVerdicts(
-          have,
-          name,
-          judgedBy(input, have, name),
-        )[0];
-        if (next === undefined) break;
-        const result = await reconstruct(
-          input,
-          pick(input.notes, next),
-          settings.reconstruction,
-          dependencies,
-        );
-        await dependencies.record(
-          result.call,
-          result.verdicts.map((value) => ({ ...value, verifier: name })),
-        );
-        if (result.verdicts[0]!.verdict === "PASS")
-          return dependencies.recorded();
-      }
-      continue;
+      const have = await dependencies.recorded();
+      // A comparison publishes its entire batch in one commit. Do not regroup
+      // that frozen assignment from the outcomes it has already published.
+      if (have.some((value) => value.verifier === name)) return have;
+      input = await refresh(input);
+      const roots = judgedBy(input, have, name);
+      if (roots.length === 0) continue;
+      const result = await reconstruct(
+        reconstructionInput(input, roots),
+        settings.reconstruction,
+        dependencies,
+      );
+      await dependencies.record(
+        result.call,
+        result.verdicts.map((value) => ({ ...value, verifier: name })),
+      );
+      return dependencies.recorded();
     }
     const have = await dependencies.recorded();
     const judged = missingVerdicts(have, name, judgedBy(input, have, name));

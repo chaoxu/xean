@@ -144,6 +144,17 @@ test("the coordinator gives fallible guidance while the original task and note f
   expect(explorer.prompt).toContain(
     `Explorer guidance (fallible advice):\n${explorerGuidance}`,
   );
+  for (const call of [coordinator, explorer]) {
+    expect(call.system).toContain(
+      "Reconstruction then checks eligible candidates and their generated dependencies, without requiring supporting lemmas to pass requirements.",
+    );
+    expect(call.system).toContain(
+      "Unresolved reconstruction blocks acceptance even when source and correctness leave the note verified.",
+    );
+  }
+  expect(coordinator.system).toContain(
+    "Reuse verified notes unless reconstruction identifies an unresolved obligation that needs a new corrected note.",
+  );
 });
 
 test("role prompts omit PASS reports without changing evidence or hiding failed checks", async () => {
@@ -184,8 +195,6 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     coordinatorCall({ task, notes: [evidence] }),
     await verifierCall("source", input, ["n2"]),
     await verifierCall("correctness", input, ["n2"]),
-    await statementCall(input, target),
-    await proofCall(input, target, { statement: "P holds." }),
   ];
   const native = await sourceCall(
     { provider: "codex", model: "test", reasoning: "low", search: false },
@@ -420,8 +429,7 @@ test("correctness permits valid partial claims and reserves task completion for 
   );
 });
 
-test("supported v1.0.0 prompt fixtures retain their archived fingerprint", async () => {
-  const { text, ...heading } = note;
+test("unchanged verifier and Codex prompts retain their pre-batch baseline fingerprint", async () => {
   const second = {
     ...note,
     id: "n2",
@@ -440,36 +448,10 @@ test("supported v1.0.0 prompt fixtures retain their archived fingerprint", async
     system: string;
     prompt: string;
   }[] = [
-    explorerCall({
-      task,
-      explorerGuidance: "Extend P. Test the degenerate instances first.",
-      notes: [heading],
-      support: [note],
-    }),
-    coordinatorCall({ task, notes: [note, second] }),
     await verifierCall("source", verification, ["n2"]),
     await verifierCall("correctness", verification, ["n2"]),
     await verifierCall("requirements", verification, ["n2"]),
   ];
-  const stated = { statement: "P holds." };
-  calls.push(
-    await statementCall(verification, second),
-    await proofCall(verification, second, stated),
-    await reconstructionCall(
-      verification,
-      second,
-      stated,
-      "Independent proof of P.",
-    ),
-    await proofCall(verification, second, stated, 42),
-    await reconstructionCall(
-      verification,
-      second,
-      stated,
-      "Independent proof of P.",
-      42,
-    ),
-  );
   const source = await sourceCall(
     { provider: "codex", model: "codex-model", reasoning: "low", search: true },
     verification,
@@ -494,9 +476,92 @@ test("supported v1.0.0 prompt fixtures retain their archived fingerprint", async
       `${call.label}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
     );
   }
-  // Captured from archived 949a385 after excluding its unsupported continuation
-  // and empty-handoff calls. The full archived digest was checked first.
+  // Captured from pre-batch port ae15a025 for these unchanged calls. The old
+  // aggregate archived fingerprint also included reconstruction, Explorer, and
+  // Coordinator, whose instructions intentionally change with batch acceptance.
   expect(digest.digest("hex")).toBe(
-    "55555364e76b62ca7874885f45940e86a3a31015337397083d753bebb748f634",
+    "d0cb6f75ce5e247ded7c4961206e4b8a7308f81bc717e137d3b5d3a6a6555b70",
   );
+});
+
+test("initial and corrected blind calls contain only statements, dependency edges, and admitted source text", async () => {
+  const source: Note = {
+    ...note,
+    text: "ADMITTED_SOURCE_BODY",
+    summary: "PRIVATE_SOURCE_SUMMARY",
+    verdicts: [],
+    verification: {
+      source: "Trusted theorem",
+      report: "PRIVATE_SOURCE_REPORT",
+    },
+  };
+  const generated: Note[] = ["n2", "n3"].map((id, index) => ({
+    ...note,
+    id,
+    text: `ORIGINAL_GENERATED_BODY_${id}`,
+    summary: `GENERATED_SUMMARY_${id}`,
+    support: [index === 0 ? "n1" : "n2"],
+    verdicts: [
+      {
+        verifier: "correctness",
+        note: id,
+        verdict: "PASS",
+        report: `GENERATED_REPORT_${id}`,
+      },
+      {
+        verifier: "reconstruction",
+        note: id,
+        verdict: "INCONCLUSIVE",
+        report: `GENERATED_UNRESOLVED_REPORT_${id}`,
+      },
+    ],
+  }));
+  const input = { task, notes: generated, support: [source] };
+  const before = structuredClone(input);
+  const initial = {
+    statements: generated.map(({ id }) => ({
+      note: id,
+      statement: `Exact claim ${id}.`,
+    })),
+  };
+  const corrected = {
+    statements: generated.map(({ id }) => ({
+      note: id,
+      statement: `Corrected exact claim ${id}.`,
+    })),
+  };
+  const extract = await statementCall(input);
+  const comparison = await reconstructionCall(
+    input,
+    initial,
+    "INDEPENDENT_OLD_ARGUMENT",
+  );
+  for (const call of [extract, comparison]) {
+    for (const generatedNote of generated)
+      expect(call.prompt).toContain(generatedNote.text);
+    expect(call.system).toContain(
+      "Do not weaken an unproved unconditional claim into a conditional statement",
+    );
+  }
+  expect(extract.system).toContain("Preserve each note's asserted scope");
+  for (const value of [initial, corrected]) {
+    const call = await proofCall(input, value);
+    expect(call.system).toContain(
+      "Every listed statement is a proof obligation, not an axiom.",
+    );
+    expect(call.prompt).toContain(source.text);
+    expect(call.prompt).not.toContain(source.summary);
+    expect(call.prompt).not.toContain(source.verification!.report);
+    expect(call.prompt).not.toContain("INDEPENDENT_OLD_ARGUMENT");
+    expect(call.prompt).toContain('"support"');
+    for (const entry of value.statements)
+      expect(call.prompt).toContain(entry.statement);
+    for (const generatedNote of generated) {
+      expect(call.prompt).not.toContain(generatedNote.text);
+      expect(call.prompt).not.toContain(generatedNote.summary);
+      for (const verdict of generatedNote.verdicts)
+        expect(call.prompt).not.toContain(verdict.report);
+    }
+  }
+  expect(input).toEqual(before);
 });

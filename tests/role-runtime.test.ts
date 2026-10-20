@@ -1143,112 +1143,210 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
   }
 });
 
-test("native verification resumes a failed comparison without repeating completed stages", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "xean-native-workflow-"));
-  const path = join(directory, "campaign.sqlite");
-  const provider = fauxProvider({
-    provider: "test",
-    models: [{ id: "math", reasoning: true }],
-  });
-  const models = createModels();
-  models.setProvider(provider.provider);
-  const pass = {
-    verdicts: [
-      { note: "n1", verdict: "PASS", report: "The claim is established." },
-    ],
-  };
-  const responses: Record<string, JsonValue>[] = [
-    value,
-    {
-      filings: [{ note: "n1", summary: "A complete reflexivity proof." }],
-      explorerGuidance: "Verify the proof.",
-      support: [],
-      verify: [{ note: "n1", verifiers: [...verifierNames] }],
-    },
-    pass,
-    pass,
-    pass,
-    { statement: "1 = 1." },
-    { proof: "Equality is reflexive." },
-    { statement: null, ...pass },
-  ];
-  const tools: string[] = [];
-  provider.setResponses([
-    ...responses.map((response, index) => (transcript: TranscriptContext) => {
-      const declaration = getCurrentTools(transcript.messages)[0]!;
-      const name = declaration.name;
-      const expected = Object.values(historical.contracts).find(
-        (contract) => contract.name === name,
-      );
-      expect<unknown>(declaration.constrainedSampling).toEqual(
-        name === "submit_coordination" ? false : expected?.constrainedSampling,
-      );
-      expect(convertResponsesTools([declaration])[0]).toMatchObject({
-        strict: name !== "submit_coordination",
-      });
-      tools.push(name);
-      if (index === responses.length - 1)
-        return fauxAssistantMessage("", {
-          stopReason: "error",
-          errorMessage: "Invalid API key",
-        });
-      return fauxAssistantMessage([fauxToolCall(name, response)], {
-        stopReason: "toolUse",
-      });
-    }),
-    (transcript) => {
-      const name = getCurrentTools(transcript.messages)[0]!.name;
-      tools.push(name);
-      expect(name).toBe("submit_verdict");
-      return fauxAssistantMessage(
-        [fauxToolCall(name, { statement: null, ...pass })],
-        { stopReason: "toolUse" },
-      );
-    },
-  ]);
-  const settings = solveSettings.parse({
-    ...Object.fromEntries(
-      ["explorer", "coordinator", ...verifierNames].map((name) => [
-        name,
-        { provider: "test", model: "math", reasoning: "max" },
-      ]),
-    ),
-    maxExplorerTurns: 1,
-  });
-  const owner = await open(path, {
-    models,
-    create: { task: descriptor.input.task, settings },
-  });
-  try {
-    await owner.root.waitForIdle(context);
-    expect((await inspect(path, readReport)).status.outcome).toBe(
-      "call-failure",
-    );
-    expect(provider.state.callCount).toBe(8);
-    await owner.resume();
-    await owner.root.waitForIdle(context);
-    const report = await inspect(path, readReport);
-    expect(report.status).toMatchObject({
-      outcome: "accepted",
-      accepted: "n1",
+test.each(["comparison failure", "comparison receipt"] as const)(
+  "native reconstruction batch recovers after %s without partial verdicts or repeated proof stages",
+  async (interruption) => {
+    const directory = await mkdtemp(join(tmpdir(), "xean-native-workflow-"));
+    const path = join(directory, "campaign.sqlite");
+    const provider = fauxProvider({
+      provider: "test",
+      models: [{ id: "math", reasoning: true }],
     });
-    expect(
-      report.notes[0]?.verdicts.map((verdict) => verdict.verifier),
-    ).toEqual([...verifierNames]);
-    expect(tools).toEqual([
-      "submit_notes",
-      "submit_coordination",
-      "submit_verdict",
-      "submit_verdict",
-      "submit_verdict",
-      "submit_statement",
-      "submit_proof",
-      "submit_verdict",
-      "submit_verdict",
+    const models = createModels();
+    models.setProvider(provider.provider);
+    const pass = (ids: string[]) => ({
+      verdicts: ids.map((note) => ({
+        note,
+        verdict: "PASS" as const,
+        report: "The claim is established.",
+      })),
+    });
+    const batch = ["n1", "n2"];
+    const comparison = { statements: [], ...pass(batch) };
+    const responses: Record<string, JsonValue>[] = [
+      {
+        notes: [
+          { text: "ORIGINAL_LEMMA: equality is reflexive.", support: [] },
+          { text: "ORIGINAL_SOLUTION: hence 1 = 1.", support: ["n1"] },
+        ],
+      },
+      {
+        filings: batch.map((note) => ({ note, summary: `Claim ${note}.` })),
+        explorerGuidance: "Verify the proof.",
+        support: [],
+        verify: [
+          { note: "n1", verifiers: ["source", "correctness"] },
+          { note: "n2", verifiers: [...verifierNames] },
+        ],
+      },
+      pass(batch),
+      pass(batch),
+      pass(["n2"]),
+      {
+        statements: batch.map((note) => ({
+          note,
+          statement: note === "n1" ? "Equality is reflexive." : "1 = 1.",
+        })),
+      },
+      { proof: "Equality is reflexive." },
+      comparison,
+    ];
+    const tools: string[] = [];
+    provider.setResponses([
+      ...responses.map((response, index) => (transcript: TranscriptContext) => {
+        const declaration = getCurrentTools(transcript.messages)[0]!;
+        const name = declaration.name;
+        const expected = Object.values(historical.contracts).find(
+          (contract) => contract.name === name,
+        );
+        expect<unknown>(declaration.constrainedSampling).toEqual(
+          name === "submit_coordination"
+            ? false
+            : expected?.constrainedSampling,
+        );
+        expect(convertResponsesTools([declaration])[0]).toMatchObject({
+          strict: name !== "submit_coordination",
+        });
+        tools.push(name);
+        if (name === "submit_proof") {
+          expect(JSON.stringify(transcript.messages)).not.toContain(
+            "ORIGINAL_",
+          );
+          expect(JSON.stringify(transcript.messages)).toContain(
+            "Equality is reflexive.",
+          );
+          expect(JSON.stringify(transcript.messages)).toContain("1 = 1.");
+        }
+        if (
+          interruption === "comparison failure" &&
+          index === responses.length - 1
+        )
+          return fauxAssistantMessage("", {
+            stopReason: "error",
+            errorMessage: "provider disconnected",
+          });
+        return fauxAssistantMessage([fauxToolCall(name, response)], {
+          stopReason: "toolUse",
+        });
+      }),
+      (transcript) => {
+        const name = getCurrentTools(transcript.messages)[0]!.name;
+        tools.push(name);
+        expect(name).toBe("submit_verdict");
+        return fauxAssistantMessage([fauxToolCall(name, comparison)], {
+          stopReason: "toolUse",
+        });
+      },
     ]);
-    expect(provider.state.callCount).toBe(9);
-  } finally {
-    await owner.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+    const settings = solveSettings.parse({
+      ...Object.fromEntries(
+        ["explorer", "coordinator", ...verifierNames].map((name) => [
+          name,
+          { provider: "test", model: "math", reasoning: "max" },
+        ]),
+      ),
+      maxExplorerTurns: 1,
+    });
+    let owner = await open(path, {
+      models,
+      create: { task: descriptor.input.task, settings },
+    });
+    try {
+      if (interruption === "comparison receipt") {
+        const closed = Promise.withResolvers<void>();
+        let closing = false;
+        owner.harness.subscribeCommits(({ changes }) => {
+          if (
+            !closing &&
+            changes.some((change) => {
+              if (change.type !== "entry" || !ToolResultEntry.is(change.value))
+                return false;
+              const message = change.value.model?.[0];
+              return (
+                message?.role === "toolResult" &&
+                message.toolName === "submit_verdict" &&
+                !message.isError &&
+                typeof message.details === "object" &&
+                message.details !== null &&
+                !Array.isArray(message.details) &&
+                "statements" in message.details &&
+                Array.isArray(message.details.statements) &&
+                message.details.statements.length === 0
+              );
+            })
+          ) {
+            closing = true;
+            void owner.close().then(closed.resolve, closed.reject);
+          }
+        });
+        void owner.root.waitForIdle(context).catch(() => {});
+        await closed.promise;
+      } else {
+        await owner.root.waitForIdle(context);
+      }
+      const before = await inspect(path, readReport);
+      if (interruption === "comparison failure")
+        expect(before.status).toMatchObject({
+          outcome: "call-failure",
+          error: "verifier failed: provider disconnected",
+        });
+      expect(before.accepted).toEqual([]);
+      expect(before.checks.map((check) => check.values.length)).toEqual([
+        2, 2, 1,
+      ]);
+      expect(
+        before.notes
+          .flatMap((note) => note.verdicts)
+          .every((verdict) => verdict.verifier !== "reconstruction"),
+      ).toBe(true);
+      expect(provider.state.callCount).toBe(8);
+      await owner.close();
+      owner = await open(path, { models });
+      if (interruption === "comparison failure") {
+        await owner.root.waitForIdle(context);
+        expect(provider.state.callCount).toBe(8);
+        await owner.resume();
+      }
+      await owner.root.waitForIdle(context);
+      const report = await inspect(path, readReport);
+      expect(report.status).toMatchObject({
+        outcome: "accepted",
+        accepted: "n2",
+      });
+      expect(
+        report.notes[1]?.verdicts.map((verdict) => verdict.verifier),
+      ).toEqual([...verifierNames]);
+      expect(
+        report.notes[0]?.verdicts.map((verdict) => verdict.verifier),
+      ).toEqual(["source", "correctness", "reconstruction"]);
+      expect(report.checks).toHaveLength(4);
+      expect(report.checks.at(-1)?.values).toEqual(
+        comparison.verdicts.map((verdict) => ({
+          ...verdict,
+          verifier: "reconstruction",
+        })),
+      );
+      expect(new Set(report.checks.map((check) => check.call)).size).toBe(4);
+      expect(new Set(report.checks.map((check) => check.candidate))).toEqual(
+        new Set(before.checks.map((check) => check.candidate)),
+      );
+      expect(tools).toEqual([
+        "submit_notes",
+        "submit_coordination",
+        "submit_verdict",
+        "submit_verdict",
+        "submit_verdict",
+        "submit_statement",
+        "submit_proof",
+        "submit_verdict",
+        ...(interruption === "comparison failure" ? ["submit_verdict"] : []),
+      ]);
+      expect(provider.state.callCount).toBe(
+        interruption === "comparison failure" ? 9 : 8,
+      );
+    } finally {
+      await owner.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

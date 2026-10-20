@@ -31,9 +31,9 @@ const initial: JsonValue[] = [
 const remaining: JsonValue[] = [
   { verdicts: [verdict] },
   { verdicts: [verdict] },
-  { statement: "P holds." },
+  { statements: [{ note: "n1", statement: "P holds." }] },
   { proof: "Independent proof of P." },
-  { statement: null, verdicts: [verdict] },
+  { statements: [], verdicts: [verdict] },
 ];
 
 // The same event shape as v1.0.0's codex-stdout fixture, with no live execution.

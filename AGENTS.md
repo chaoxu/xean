@@ -12,9 +12,14 @@ Read README.md and the pinned Pi implementation before changing the design.
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
-- Preserve the v1.0.0 research policy: Explorer appends one completed submission,
+- Preserve the v1.0.0 research sequence: Explorer appends one completed submission,
   Coordinator selects verification work, and Verifier checks source, correctness,
   requirements, and reconstruction in that order. Explorer continuation is off.
+  The authorized policy change is joint reconstruction of selected roots and
+  their generated dependency closure. Admitted verified source dependencies are
+  premise leaves, while selected roots always require reconstruction. Acceptance
+  requires the root and its generated ancestors to pass reconstruction in the
+  same attempt.
   Use Pi's native task waits and recovery. Keep the outer workflow sequential,
   with no separate scheduler, worker queue, or mutable mathematical note edits.
 - Have a separate agent review each substantial design change specifically for

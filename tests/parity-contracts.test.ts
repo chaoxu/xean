@@ -14,7 +14,7 @@ import historical from "./fixtures/v100-contracts.json";
 
 // These expected declarations and validation outcomes were captured by the
 // archived 949a385 runtime with its own frozen dependencies, never by the port.
-// The existing v1 prompt digest covers the instruction and prompt strings.
+// Reconstruction has an intentionally different batch contract below.
 const { task, explorerGuidance } = historical.input;
 const support = note.parse(historical.input.support);
 const target = note.parse(historical.input.target);
@@ -43,18 +43,10 @@ async function calls() {
     source: await verifierCall("source", verification, [target.id]),
     correctness: await verifierCall("correctness", verification, [target.id]),
     requirements: await verifierCall("requirements", verification, [target.id]),
-    statement: await statementCall(verification, target),
-    proof: await proofCall(verification, target, { statement: "P holds." }),
-    reconstruction: await reconstructionCall(
-      verification,
-      target,
-      { statement: "P holds." },
-      "Independent proof of P.",
-    ),
   };
 }
 
-test("every role retains the historical tool name, description and complete JSON Schema", async () => {
+test("ordinary roles retain the historical tool name, description and complete JSON Schema", async () => {
   const current = await calls();
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const call = current[name],
@@ -90,7 +82,7 @@ test("Codex source retains the historical request fields and output schema with 
   }
 });
 
-test("historical submissions retain required fields, nullable statements and rejection of extra fields", async () => {
+test("ordinary historical submissions retain required fields and rejection of extra fields", async () => {
   const current = {
     ...(await calls()),
     codex: await sourceCall({ ...profile, search: true }, verification, [
@@ -116,4 +108,86 @@ test("historical submissions retain required fields, nullable statements and rej
       `${name} with extra field`,
     ).toBe(expected.extraField);
   }
+});
+
+test("batch reconstruction requires exact statement and verdict IDs and an atomic correction", async () => {
+  const input = { task, notes: [support, target], support: [] };
+  const value = {
+    statements: [
+      { note: support.id, statement: "The supporting claim holds." },
+      { note: target.id, statement: "The target claim holds." },
+    ],
+  };
+  const extract = await statementCall(input);
+  const prove = await proofCall(input, value);
+  const compare = await reconstructionCall(
+    input,
+    value,
+    "Independent joint proof.",
+  );
+  expect([extract.tool, prove.tool, compare.tool]).toEqual([
+    "submit_statement",
+    "submit_proof",
+    "submit_verdict",
+  ]);
+  expect<unknown>(z.toJSONSchema(prove.schema)).toEqual(
+    historical.contracts.proof.parameters,
+  );
+  expect(extract.schema.safeParse(value).success).toBe(true);
+  const verdict = (note: string) => ({
+    note,
+    verdict: "PASS",
+    report: "Checked.",
+  });
+  const verdicts = [verdict(support.id), verdict(target.id)];
+  expect(compare.schema.safeParse({ statements: [], verdicts }).success).toBe(
+    true,
+  );
+  expect(compare.schema.safeParse({ statements: null, verdicts }).success).toBe(
+    false,
+  );
+  expect(compare.schema.safeParse({ ...value, verdicts: [] }).success).toBe(
+    true,
+  );
+  expect(compare.schema.safeParse({ ...value, verdicts }).success).toBe(false);
+  expect(
+    compare.schema.safeParse({ statements: [], verdicts: [] }).success,
+  ).toBe(false);
+  expect(
+    extract.schema.safeParse({ statement: "Old singular contract." }).success,
+  ).toBe(false);
+  for (const ids of [
+    [support.id, "n99"],
+    [support.id, support.id],
+    [support.id],
+    [],
+  ]) {
+    const statements = ids.map((note) => ({ note, statement: "A claim." }));
+    expect(extract.schema.safeParse({ statements }).success).toBe(false);
+    expect(compare.schema.safeParse({ statements, verdicts: [] }).success).toBe(
+      false,
+    );
+    expect(
+      compare.schema.safeParse({ statements: [], verdicts: ids.map(verdict) })
+        .success,
+    ).toBe(false);
+  }
+  expect(extract.schema.safeParse({ ...value, extra: true }).success).toBe(
+    false,
+  );
+  expect(
+    compare.schema.safeParse({ statements: [], verdicts, extra: true }).success,
+  ).toBe(false);
+  const other = { ...input, notes: [{ ...target, id: "n3", support: [] }] };
+  const otherStatements = {
+    statements: [{ note: "n3", statement: "Q holds." }],
+  };
+  expect(z.toJSONSchema((await statementCall(other)).schema)).toEqual(
+    z.toJSONSchema(extract.schema),
+  );
+  expect(
+    z.toJSONSchema(
+      (await reconstructionCall(other, otherStatements, "Q proof.")).schema,
+    ),
+  ).toEqual(z.toJSONSchema(compare.schema));
 });

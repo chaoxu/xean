@@ -1,18 +1,20 @@
 # Xean
 
-Xean 4.0 implements the Xean 1.0.0 mathematical workflow on native Pi Durable. Explorer
+Xean 4.0 runs a mathematical research workflow on native Pi Durable. Explorer
 appends notes, Coordinator selects verification work, and Verifier checks source,
-correctness, task requirements, and blind reconstruction in that order. Pi owns
-conversations, tasks, checkpoints, and SQLite storage.
+correctness, task requirements, and blind reconstruction in that order. Joint
+reconstruction of generated dependencies strengthens the v1.0.0 acceptance policy.
+Pi owns conversations, tasks, checkpoints, and SQLite storage.
 
 The runtime uses Pi 1.2.0 at `b45e0eb`, with retained patches listed in
 [provenance](vendor/pi/provenance.json). Pi handles responses interrupted by
 `max_output_tokens` or `max_messages` limits, transport retries, and
 interrupted-response context. Xean configures role limits and the
 output-continuation prompt through Pi settings.
-Pi retains truncated tool calls as text for resubmission. Supported role-call
-fixtures match the archived v1.0.0 runtime's prompts, tool schemas, and source
-request fields. Native recovery and Coordinator history construction differ
+Pi retains truncated tool calls as text for resubmission. Ordinary verifier
+contracts and Codex source requests retain their archived v1.0.0 fixtures. Explorer
+and Coordinator acceptance instructions and reconstruction contracts reflect the
+stronger policy. Native recovery and Coordinator history construction also differ
 from that runtime.
 
 Coordinator treats supplied sources and generated notes uniformly. It forks Pi's
@@ -44,21 +46,25 @@ review. The former 3.5 implementation develops separately as Yean.
 This comparison uses the 3.5 implementation at `148bb12`, including its native
 Explorer.
 
-| Area                            | Current policy                                                                                                                                                                                                                                                              | 3.5                                                                                                                                                                                                 |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Note changes                    | Mathematical content is append-only. Corrections use new notes, and Coordinator files each summary once.                                                                                                                                                                    | Revision-checked edits preserve note IDs and invalidate affected checks. Explorer edits to mathematical content revoke external trust.                                                              |
-| Context                         | Coordinator receives full note texts through snapshots or compatible deltas. Explorer receives all note summaries and Coordinator-selected support texts.                                                                                                                   | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |
-| Explorer continuation           | A valid submission ends the call. The requested verification batches finish before the next Explorer turn.                                                                                                                                                                  | Native Explorer can publish multiple submissions within its response allowance. Coordinator chooses the next worker after the worker finishes.                                                      |
-| Verification order              | Source, correctness, requirements, then reconstruction.                                                                                                                                                                                                                     | Correctness extracts checked statements and external premises before source checking, followed by requirements and reconstruction.                                                                  |
-| Missing justification           | Correctness returns FAIL for unsupported inferences or unproved assertions, except omitted routine facts.                                                                                                                                                                   | Returns INCONCLUSIVE when missing justification is the only blocker. FAIL requires a concrete defect.                                                                                               |
-| Source checks without retrieval | The source model assesses invoked results and applicability from supplied texts and mathematical knowledge.                                                                                                                                                                 | With retrieval disabled, unresolved extracted premises receive INCONCLUSIVE locally, without a model call for source checking.                                                                      |
-| Batching                        | Drains Coordinator's ordered list in batches measured by note and support text length, always including the first entry. Reconstruction handles notes individually.                                                                                                         | Selects batches within each stage using model context and output estimates, including reconstruction batches.                                                                                       |
-| Blind proof input               | A selected note's extracted statement and full support texts. The note's own text is withheld.                                                                                                                                                                              | Checked statements and approved external premises across the dependency closure. Original proofs are withheld.                                                                                      |
-| Trust and acceptance            | Caller verification can establish support. Acceptance requires a note's source, correctness, requirements, and reconstruction PASS in one attempt over verified support. Generated support needs source and correctness PASS in one attempt, but need not be reconstructed. | Caller trust grants correctness and source checks. Acceptance requires reconstruction throughout the dependency closure, including externally trusted notes, and the candidate's requirements PASS. |
+| Area                            | Current policy                                                                                                                                                                                                                                                                     | 3.5                                                                                                                                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Note changes                    | Mathematical content is append-only. Corrections use new notes, and Coordinator files each summary once.                                                                                                                                                                           | Revision-checked edits preserve note IDs and invalidate affected checks. Explorer edits to mathematical content revoke external trust.                                                              |
+| Context                         | Coordinator receives full note texts through snapshots or compatible deltas. Explorer receives all note summaries and Coordinator-selected support texts.                                                                                                                          | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |
+| Explorer continuation           | A valid submission ends the call. The requested verification batches finish before the next Explorer turn.                                                                                                                                                                         | Native Explorer can publish multiple submissions within its response allowance. Coordinator chooses the next worker after the worker finishes.                                                      |
+| Verification order              | Source, correctness, requirements, then reconstruction.                                                                                                                                                                                                                            | Correctness extracts checked statements and external premises before source checking, followed by requirements and reconstruction.                                                                  |
+| Missing justification           | Correctness returns FAIL for unsupported inferences or unproved assertions, except omitted routine facts.                                                                                                                                                                          | Returns INCONCLUSIVE when missing justification is the only blocker. FAIL requires a concrete defect.                                                                                               |
+| Source checks without retrieval | The source model assesses invoked results and applicability from supplied texts and mathematical knowledge.                                                                                                                                                                        | With retrieval disabled, unresolved extracted premises receive INCONCLUSIVE locally, without a model call for source checking.                                                                      |
+| Batching                        | Drains Coordinator's ordered list in text-size batches, always including the first entry. Each reconstruction stage jointly handles eligible final roots and their generated dependency closure, deduplicated and sorted by note ID.                                               | Selects batches within each stage using model context and output estimates, including reconstruction batches.                                                                                       |
+| Blind proof input               | Extracted statements and declared support IDs for every target, plus admitted source premise texts. Original target texts, summaries, verdict reports, and earlier proofs are withheld.                                                                                            | Checked statements and approved external premises across the dependency closure. Original proofs are withheld.                                                                                      |
+| Trust and acceptance            | A final root needs all four PASS checks in one attempt, with generated ancestors' reconstruction PASS in that attempt. Earlier source/correctness checks may establish support. Admitted verified source dependencies are premise leaves. Selected roots are always reconstructed. | Caller trust grants correctness and source checks. Acceptance requires reconstruction throughout the dependency closure, including externally trusted notes, and the candidate's requirements PASS. |
 
-Extending reconstruction to every generated dependency while treating admitted
-source results as premises remains [planned work](TODO.md). Current acceptance
-does not require that stronger check.
+Each eligible verification batch uses a joint statement extraction, blind proof,
+and comparison. Reconstruction publishes the whole batch's verdicts atomically. A statement
+correction replaces the complete statement batch, publishes no verdicts, and
+triggers a new blind proof before comparison. Supporting lemmas need not satisfy
+the task's completion criteria. Pi's existing calls, checkpoints, and result
+records carry this work. [Implementation and regression tests](TODO.md) are
+complete, with live mathematical qualification still pending.
 
 ## Run a fresh campaign
 
@@ -148,12 +154,14 @@ bun run check
 bun run pack
 ```
 
-`check` runs TypeScript, formatting, and the parity tests. Historical fixtures
-compare supported role prompts, tool schemas, and source request fields against
-the archived v1.0.0 runtime. Native Pi tests cover workflow replay, provider-limit recovery, and persisted limits.
+`check` runs TypeScript, formatting, and tests. Historical fixtures compare
+ordinary verifier contracts and Codex source requests with the archived v1.0.0
+runtime. Regression tests cover joint reconstruction, hidden proof inputs, atomic
+verdicts, corrections, and acceptance within the same attempt. Native Pi tests
+cover workflow replay, provider-limit recovery, and persisted limits.
 `pack` installs a fresh source archive, checks its imports and CLI, runs the
 packaged tests, and writes
 `dist/xean-4.0.0.tgz`. These checks exercise scripted behavior. Live mathematical
-performance and full equivalence to historical runs require separate experiments.
+performance requires separate experiments under the stronger acceptance policy.
 The pinned Pi artifacts and patches are recorded in
 [vendor/pi/provenance.json](vendor/pi/provenance.json).

@@ -45,7 +45,7 @@ export const Notebook = defineDoc({
   }),
 });
 
-/** V1 acceptance groups verdicts by their verification attempt. */
+/** Acceptance requires reconstruction of generated support in the same attempt. */
 export function project(book: NotebookState): {
   notes: Note[];
   accepted: string[];
@@ -69,13 +69,14 @@ export function project(book: NotebookState): {
       passes.set(verdict.note, attempts);
     }
   const notes = new Map<string, Note>(),
+    reconstructed = new Map<string, Set<number>>(),
     accepted: string[] = [];
   for (const entry of [...book.notes].sort((a, b) => byId(a.id, b.id))) {
     const support = entry.support.map((id) => notes.get(id));
-    const attempts = [...(passes.get(entry.id)?.values() ?? [])];
+    const attempts = [...(passes.get(entry.id) ?? [])];
     const established =
       entry.verification !== undefined ||
-      attempts.some((p) => p.has("source") && p.has("correctness"));
+      attempts.some(([, p]) => p.has("source") && p.has("correctness"));
     const dead = failures.has(entry.id) || support.some((note) => note?.dead);
     const verified =
       established && !dead && support.every((note) => note?.verified);
@@ -87,9 +88,26 @@ export function project(book: NotebookState): {
       verified,
     });
     notes.set(note.id, note);
+    const complete = new Set<number>();
+    if (verified)
+      for (const [candidate, passed] of attempts)
+        if (
+          passed.has("reconstruction") &&
+          support.every(
+            (parent) =>
+              parent &&
+              (parent.verification !== undefined ||
+                reconstructed.get(parent.id)?.has(candidate)),
+          )
+        )
+          complete.add(candidate);
+    reconstructed.set(note.id, complete);
     if (
       verified &&
-      attempts.some((p) => verifierNames.every((name) => p.has(name)))
+      attempts.some(
+        ([candidate, p]) =>
+          complete.has(candidate) && verifierNames.every((name) => p.has(name)),
+      )
     )
       accepted.push(note.id);
   }

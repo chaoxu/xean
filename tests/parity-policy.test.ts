@@ -5,7 +5,6 @@ import {
   judgedBy,
   missingVerdicts,
   noteIdAfter,
-  reconstructionResultFor,
   verifierInput,
   verifierNames,
   type Note,
@@ -273,27 +272,5 @@ test("verification receives the complete ordered support closure and counts shar
         support: [{ ...notes[0], support: ["n3"] }, notes[1]],
       })
     ).success,
-  ).toBe(false);
-});
-
-test("a reconstruction statement correction cannot also issue a mathematical verdict", () => {
-  const schema = reconstructionResultFor("n1");
-  const result = { note: "n1", verdict: "PASS", report: "Checked." };
-  expect(
-    schema.safeParse({ statement: "Corrected exact statement.", verdicts: [] })
-      .success,
-  ).toBe(true);
-  expect(
-    schema.safeParse({
-      statement: "Corrected exact statement.",
-      verdicts: [result],
-    }).success,
-  ).toBe(false);
-  expect(schema.safeParse({ statement: null, verdicts: [] }).success).toBe(
-    false,
-  );
-  expect(
-    schema.safeParse({ statement: null, verdicts: [{ ...result, note: "n2" }] })
-      .success,
   ).toBe(false);
 });

@@ -1,4 +1,4 @@
-// Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
+// Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
 import { z } from "zod";
 import { byId, supportClosure } from "./support";
 
@@ -325,6 +325,10 @@ export const verifierInput = z
     }
   });
 export type VerifierInput = z.output<typeof verifierInput>;
+export type ReconstructionInput = Pick<
+  VerifierInput,
+  "task" | "notes" | "support"
+>;
 
 export function pick<T extends { readonly id: string }>(
   notes: readonly T[],
@@ -339,15 +343,9 @@ const verifierIndex = (name: VerifierName): number =>
   verifierNames.indexOf(name);
 
 /**
- * The notes one verifier judges in a verification, in the order listed,
- * given the verdicts recorded on its candidate: the notes that asked for it,
- * passed every verifier before it, and are not dead in the verification. A
- * note is dead in the verification when correctness, source, or
- * reconstruction failed it or a note in its support, listed or handed over in
- * full, is dead. The
- * verifiers that judge their notes in one call judge from the verdicts of the
- * verifiers before them; reconstruction judges one note at a time, also from
- * the reconstruction verdicts of the notes listed before it.
+ * Requested roots whose preceding checks and support permit the next verifier.
+ * Joint reconstruction expands these roots separately, so supporting lemmas
+ * need no requirements PASS or explicit reconstruction request.
  */
 export function judgedBy(
   input: Pick<VerifierInput, "verify" | "notes" | "support">,
@@ -368,8 +366,8 @@ export function judgedBy(
   let evidenceReady = false;
   for (const [index, entry] of input.verify.entries()) {
     if (!entry.verifiers.includes(verifier)) continue;
-    // Ordinary verifiers share one evidence view for the entire list.
-    // Reconstruction also sees earlier notes' reconstruction verdicts.
+    // Earlier reconstruction failures can block dependent roots. The joint
+    // batch is formed after this eligibility selection.
     if (!evidenceReady || verifier === "reconstruction") {
       passes.clear();
       failures.clear();
@@ -474,29 +472,52 @@ export function verdictsFor(judged: readonly string[]) {
   return verdictsOver(verdict.omit({ verifier: true }), judged);
 }
 
-/** A note verdict, or a corrected statement with no mathematical verdict. */
+const statementEntry = z.strictObject({ note: noteId, statement: nonblank });
+/** Exact claims to prove, with generated notes kept as obligations. */
+export const statement = z.strictObject({
+  statements: z.array(statementEntry).min(1),
+});
+export type Statement = z.output<typeof statement>;
+
+const listedIds = (entries: readonly { note: string }[]) =>
+  entries
+    .map(({ note }) => note)
+    .sort(byId)
+    .join(",");
+
+export function statementsFor(judged: readonly string[]) {
+  const expected = [...judged].sort(byId).join(",");
+  return statement.refine((value) => listedIds(value.statements) === expected, {
+    message: "one statement per note under reconstruction",
+    path: ["statements"],
+  });
+}
+
+/** Full-batch verdicts, or a complete replacement statement array without verdicts. */
 export const reconstructionResult = z
   .strictObject({
-    statement: nonblank.nullable(),
-    verdicts: z.array(verdict.omit({ verifier: true })).max(1),
+    statements: z.array(statementEntry),
+    verdicts: z.array(verdict.omit({ verifier: true })),
   })
   .refine(
-    (value) => value.verdicts.length === (value.statement === null ? 1 : 0),
-    "return either one verdict or a corrected statement",
+    (value) =>
+      value.statements.length > 0
+        ? value.verdicts.length === 0
+        : value.verdicts.length > 0,
+    "return either all verdicts or a complete statement correction",
   );
 
-export function reconstructionResultFor(noteId: string) {
+export function reconstructionResultFor(judged: readonly string[]) {
+  const expected = [...judged].sort(byId).join(",");
   return reconstructionResult.refine(
-    (value) => value.verdicts.every(({ note }) => note === noteId),
-    "verdict must name the note under verification",
+    (value) =>
+      listedIds(value.statements.length ? value.statements : value.verdicts) ===
+      expected,
+    "one entry per note under reconstruction",
   );
 }
 
-/** What a text establishes, with nothing of how: one or several propositions. */
-export const statement = z.strictObject({ statement: nonblank });
-export type Statement = z.output<typeof statement>;
-
-/** The proof the reconstruction verifier writes from the statement and the support notes alone. */
+/** Joint proof from the statement batch and admitted source premises. */
 export const proof = z.strictObject({ proof: nonblank });
 
 /** What the source verifier confirmed: one entry per external result the text invokes. */

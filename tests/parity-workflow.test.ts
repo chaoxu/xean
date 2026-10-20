@@ -45,13 +45,19 @@ const lemma: Verification["verifiers"] = ["source", "correctness"];
 const check = (note: string, verdict: Verdict["verdict"] = "PASS") => ({
   verdicts: [{ note, verdict, report: `Check ${verdict.toLowerCase()}.` }],
 });
-const pass = (id: string): JsonValue[] => [
-  check(id),
-  check(id),
-  check(id),
-  { statement: "P holds." },
+const reconstruction = (ids: string[]): JsonValue[] => [
+  { statements: ids.map((note) => ({ note, statement: `Claim ${note}.` })) },
   { proof: "Independent proof." },
-  { statement: null, ...check(id) },
+  {
+    statements: [],
+    verdicts: ids.flatMap((id) => check(id).verdicts),
+  },
+];
+const pass = (id: string, ancestors: string[] = []): JsonValue[] => [
+  check(id),
+  check(id),
+  check(id),
+  ...reconstruction([...ancestors, id]),
 ];
 const note = (text: string, support: string[] = []) => ({ text, support });
 const coordinate = (
@@ -150,7 +156,7 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
       check("n1"),
       check("n2"),
       check("n2"),
-      ...pass("n3"),
+      ...pass("n3", ["n1", "n2"]),
     ],
     { maxExplorerTurns: 1, window: 1 },
   );
@@ -176,7 +182,17 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
   ]);
   expect(
     report.notes.map((note) => note.verdicts.map((value) => value.verifier)),
-  ).toEqual([lemma, lemma, all, []]);
+  ).toEqual([
+    [...lemma, "reconstruction"],
+    [...lemma, "reconstruction"],
+    all,
+    [],
+  ]);
+  expect(
+    report.checks.filter((check) =>
+      check.values.some((value) => value.verifier === "reconstruction"),
+    ),
+  ).toHaveLength(1);
   expect(new Set(report.checks.map((check) => check.candidate)).size).toBe(3);
   const third = drive.calls[6];
   expect(third?.kind).toBe("verifier");
@@ -265,9 +281,7 @@ test("reconstruction sees evidence recorded earlier in the same verifier worker"
       check("n2"),
       check("n2"),
       check("n2"),
-      { statement: "P holds." },
-      { proof: "Independent proof from L." },
-      { statement: null, ...check("n2") },
+      ...reconstruction(["n1", "n2"]),
     ],
     { maxExplorerTurns: 1, window: 1 },
   );
@@ -278,8 +292,9 @@ test("reconstruction sees evidence recorded earlier in the same verifier worker"
   });
   const independent = drive.calls.find((call) => call.kind === "proof");
   if (independent?.kind !== "proof") throw new Error("Missing proof call");
-  const support = independent.input.support.find(({ id }) => id === "n1");
-  expect(support).toMatchObject({
+  expect(independent.input.support).toEqual([]);
+  expect(independent.input.notes.map(({ id }) => id)).toEqual(["n1", "n2"]);
+  expect(independent.input.notes[0]).toMatchObject({
     id: "n1",
     verified: true,
     dead: false,
@@ -288,6 +303,9 @@ test("reconstruction sees evidence recorded earlier in the same verifier worker"
       { verifier: "correctness", verdict: "PASS" },
     ],
   });
+  expect(
+    independent.input.notes[1]?.verdicts.map(({ verifier }) => verifier),
+  ).toEqual(["source", "correctness", "requirements"]);
 });
 
 test.each(["FAIL", "INCONCLUSIVE"] as const)(
@@ -355,7 +373,7 @@ test("persisted resume retries only the failed comparison on the original verifi
     "No accepted argument",
   );
   const boundary = drive.calls.length;
-  drive.replies.push({ statement: null, ...check("n1") });
+  drive.replies.push({ statements: [], ...check("n1") });
   const owner = await drive.reopen();
   await owner.root.waitForIdle(BACKGROUND_CONTEXT);
   expect(drive.calls).toHaveLength(boundary);
