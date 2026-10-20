@@ -1,6 +1,6 @@
 // Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
 import { z } from "zod";
-import { nonblank, type RoleName } from "./contracts";
+import { nonblank } from "./contracts";
 import { codexReasoning } from "./source";
 
 export const piReasoning = z.enum([
@@ -23,14 +23,6 @@ export const piRoleProfile = z.strictObject({
 });
 export type PiRoleProfile = z.output<typeof piRoleProfile>;
 
-/** The profiles that always execute through Pi. */
-export const piProfileNames = [
-  "explorer",
-  "coordinator",
-  "correctness",
-  "requirements",
-  "reconstruction",
-] as const;
 // The source verifier runs the Codex CLI on its native credential, the only
 // path that provides web search, so its profile names that provider.
 export const codexProfile = z.strictObject({
@@ -79,25 +71,3 @@ export const solveSettings = z.strictObject({
     .optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;
-
-/** The Pi providers a run or one role command needs a credential for. */
-export function piProviders(
-  settings: SolveSettings,
-  role?: RoleName,
-): string[] {
-  const names = piProfileNames.filter((name) =>
-    role === undefined
-      ? true
-      : role === "verifier"
-        ? name !== "explorer" && name !== "coordinator"
-        : name === role,
-  );
-  const providers = names.map((name) => settings[name].provider);
-  if (
-    (role === undefined || role === "verifier") &&
-    !codexSource(settings.source)
-  ) {
-    providers.push(settings.source.provider);
-  }
-  return [...new Set(providers)];
-}

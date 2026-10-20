@@ -11,7 +11,6 @@
         "@earendil-works/pi-durable": "file:vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-durable-1.2.0-c92e0838617b.tgz",
         "commander": "15.0.0",
         "execa": "10.0.1",
-        "typebox": "1.3.27",
         "zod": "4.5.4",
       },
       "devDependencies": {

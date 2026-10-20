@@ -48,13 +48,6 @@ export interface VerificationDependencies {
   refresh?(input: VerifierInput): Promise<VerifierInput>;
 }
 
-export class RoleCallError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RoleCallError";
-  }
-}
-
 async function reconstruct(
   input: VerifierInput,
   note: Note,
@@ -102,7 +95,7 @@ async function reconstruct(
       previous = result.call;
       // Replayed corrections remain available without spending the fresh-call allowance.
       if (result.fresh && corrections++ >= 1) {
-        throw new RoleCallError(
+        throw new Error(
           "reconstruction statement remains unresolved; resume verification to use its latest correction",
         );
       }
@@ -154,7 +147,7 @@ export async function verify(
     let values: z.output<ReturnType<typeof verdictsFor>>["verdicts"];
     if (name === "source" && codexSource(settings.source)) {
       if (!dependencies.source)
-        throw new RoleCallError("Codex source runtime is unavailable");
+        throw new Error("Codex source runtime is unavailable");
       const request = await sourceCall(settings.source, input, judged);
       const result = await dependencies.source(key, request.request);
       call = result.call;

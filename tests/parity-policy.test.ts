@@ -3,9 +3,9 @@ import {
   coordinatorResultFor,
   explorerResultFor,
   judgedBy,
+  missingVerdicts,
   noteIdAfter,
   reconstructionResultFor,
-  verificationComplete,
   verifierInput,
   verifierNames,
   type Note,
@@ -173,23 +173,33 @@ test("source then correctness then requirements then reconstruction gate reachab
   expect(judgedBy(input, correct, "requirements")).toEqual(["n2"]);
   expect(judgedBy(input, correct, "reconstruction")).toEqual([]);
   const required = [...correct, verdict("requirements", "n2")];
-  expect(judgedBy(input, required, "reconstruction")).toEqual(["n2"]);
-  expect(verificationComplete(input, required)).toBe(false);
+  const reachable = judgedBy(input, required, "reconstruction");
+  expect(reachable).toEqual(["n2"]);
+  expect(missingVerdicts(required, "reconstruction", reachable)).toEqual([
+    "n2",
+  ]);
+  const inconclusive = [
+    ...required,
+    verdict("reconstruction", "n2", "INCONCLUSIVE"),
+  ];
   expect(
-    verificationComplete(input, [
-      ...required,
-      verdict("reconstruction", "n2", "INCONCLUSIVE"),
-    ]),
-  ).toBe(true);
+    missingVerdicts(
+      inconclusive,
+      "reconstruction",
+      judgedBy(input, inconclusive, "reconstruction"),
+    ),
+  ).toEqual([]);
   expect(
-    verificationComplete(input, [
-      ...correct,
-      verdict("requirements", "n2", "FAIL"),
-    ]),
-  ).toBe(true);
+    judgedBy(
+      input,
+      [...correct, verdict("requirements", "n2", "FAIL")],
+      "reconstruction",
+    ),
+  ).toEqual([]);
   const failed = [verdict("source", "n1", "FAIL"), verdict("source", "n2")];
   expect(judgedBy(input, failed, "correctness")).toEqual([]);
-  expect(verificationComplete(input, failed)).toBe(true);
+  expect(judgedBy(input, failed, "requirements")).toEqual([]);
+  expect(judgedBy(input, failed, "reconstruction")).toEqual([]);
 });
 
 test("reconstruction failure blocks later consumers even when an intermediate support was verified", () => {
@@ -207,19 +217,10 @@ test("reconstruction failure blocks later consumers even when an intermediate su
     verdict("requirements", id),
   ]);
   expect(judgedBy(input, passed, "reconstruction")).toEqual(["n1", "n3"]);
-  expect(
-    judgedBy(
-      input,
-      [...passed, verdict("reconstruction", "n1", "FAIL")],
-      "reconstruction",
-    ),
-  ).toEqual(["n1"]);
-  expect(
-    verificationComplete(input, [
-      ...passed,
-      verdict("reconstruction", "n1", "FAIL"),
-    ]),
-  ).toBe(true);
+  const failed = [...passed, verdict("reconstruction", "n1", "FAIL")];
+  const reachable = judgedBy(input, failed, "reconstruction");
+  expect(reachable).toEqual(["n1"]);
+  expect(missingVerdicts(failed, "reconstruction", reachable)).toEqual([]);
 });
 
 test("verification receives the complete ordered support closure and counts shared texts once", async () => {

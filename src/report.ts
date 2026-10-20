@@ -10,18 +10,14 @@ import type { Note } from "./policy/contracts.ts";
 import { byId, supportClosure } from "./policy/support.ts";
 
 import {
-  campaignKind,
+  lastCampaign,
   type CampaignResult,
   type CampaignState,
 } from "./workflow.ts";
 
 /** Status comes from the latest native campaign task, not a second run table. */
 export async function readStatus(tx: Tx, root: ConversationId) {
-  const page = await tx.scanTasks(
-    { conversationId: root, kind: campaignKind, order: "descending" },
-    1,
-  );
-  const campaign = page.items[0];
+  const campaign = await lastCampaign(tx, root);
   if (!campaign) throw new Error("Campaign task is missing");
   const state = campaign.state;
   const result = state.outcome?.result as CampaignResult | undefined;

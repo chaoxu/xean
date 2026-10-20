@@ -97,8 +97,7 @@ export function openReadDatabase(path: string) {
   }
 }
 
-function recognize(path: string) {
-  using database = openReadDatabase(path);
+function recognize(database: Database) {
   const tables = database
     .query(
       "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
@@ -248,9 +247,10 @@ async function inspectSession<T>(
   read: (session: Session, root: ConversationId) => T | Promise<T>,
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
-  if (!recognize(path)) throw new Error("Not an initialized Xean 4 campaign");
   using database = openReadDatabase(path);
   database.exec("BEGIN");
+  if (!recognize(database))
+    throw new Error("Not an initialized Xean 4 campaign");
   const storage = await SqliteStorage.open(piDatabase(database, true), {
     readOnly: true,
   });

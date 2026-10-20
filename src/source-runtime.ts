@@ -78,15 +78,14 @@ const fileCredentials = 'cli_auth_credentials_store="file"';
 async function sourceEnvironment(
   directory: string,
   inherited: NodeJS.ProcessEnv,
-): Promise<{ readonly env: NodeJS.ProcessEnv; readonly hasAuth: boolean }> {
+): Promise<NodeJS.ProcessEnv> {
   const codexHome = join(directory, "codex-home");
   await mkdir(codexHome);
   const inheritedHome = resolve(
     inherited["CODEX_HOME"] ?? join(inherited["HOME"] ?? homedir(), ".codex"),
   );
   const inheritedAuth = join(inheritedHome, "auth.json");
-  const hasAuth = existsSync(inheritedAuth);
-  if (hasAuth) {
+  if (existsSync(inheritedAuth)) {
     await symlink(await realpath(inheritedAuth), join(codexHome, "auth.json"));
   } else {
     await writeFile(join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
@@ -103,7 +102,7 @@ async function sourceEnvironment(
       env[name] = inherited[name];
     }
   }
-  return { env, hasAuth };
+  return env;
 }
 
 export function codexExec(
@@ -125,7 +124,7 @@ export function codexExec(
     try {
       signal?.throwIfAborted();
       directory = await mkdtemp(join(tmpdir(), "xean-source-"));
-      const { env } = await sourceEnvironment(directory, inherited);
+      const env = await sourceEnvironment(directory, inherited);
       const schemaPath = join(directory, "verdict.schema.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));
       if (codexVersion === undefined) {

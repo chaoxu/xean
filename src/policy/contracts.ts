@@ -2,21 +2,12 @@
 import { z } from "zod";
 import { byId, supportClosure } from "./support";
 
-export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly Json[]
-  | { readonly [key: string]: Json };
-
 export const nonblank = z.string().refine((value) => value.trim().length > 0, {
   message: "must contain non-whitespace text",
 });
 const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 
 export const applicationId = "xean-solve";
-export const workflowProtocol = "workflow";
 
 export const roleNames = ["explorer", "coordinator", "verifier"] as const;
 export type RoleName = (typeof roleNames)[number];
@@ -55,23 +46,6 @@ export const roleTools = {
   coordinator: "submit_coordination",
   verifier: "submit_verdict",
 } as const satisfies Readonly<Record<RoleName, string>>;
-
-export function verifierFromLabel(label: string): VerifierName | undefined {
-  return verifierNames.find(
-    (name) =>
-      verifierLabels[name] === label ||
-      label.startsWith(`${verifierLabels[name]}/`),
-  );
-}
-
-export function roleFromLabel(label: string): RoleName | undefined {
-  if (verifierFromLabel(label) !== undefined) return "verifier";
-  return roleNames.find((name) => roleLabels[name] === label);
-}
-
-export function jsonSnapshot(value: unknown): Json {
-  return JSON.parse(JSON.stringify(value)) as Json;
-}
 
 export const task = z.strictObject({
   problem: nonblank,
@@ -459,18 +433,6 @@ export function judgedBy(
   return judged;
 }
 
-/** Whether every reachable check has a verdict, including INCONCLUSIVE. */
-export function verificationComplete(
-  input: Pick<VerifierInput, "verify" | "notes" | "support">,
-  recorded: readonly Verdict[],
-): boolean {
-  return verifierNames.every(
-    (name) =>
-      missingVerdicts(recorded, name, judgedBy(input, recorded, name))
-        .length === 0,
-  );
-}
-
 /** Checks without a verdict within one candidate. */
 export function missingVerdicts(
   recorded: readonly Verdict[],
@@ -508,10 +470,6 @@ function verdictsOver<T extends z.ZodRawShape>(
     );
 }
 
-/** The verdicts of one correctness or requirements call. */
-export const verdicts = z.strictObject({
-  verdicts: z.array(verdict.omit({ verifier: true })),
-});
 export function verdictsFor(judged: readonly string[]) {
   return verdictsOver(verdict.omit({ verifier: true }), judged);
 }
@@ -558,13 +516,4 @@ export const sourceVerdicts = z.strictObject({
 });
 export function sourceVerdictsFor(judged: readonly string[]) {
   return verdictsOver(sourceVerdict, judged);
-}
-
-export type VerifierResult = readonly Verdict[];
-
-export function candidateMaterial(input: VerifierInput): Uint8Array {
-  const text = [...input.notes, ...input.support]
-    .map(({ id, text }) => `--- ${id} ---\n\n${text}`)
-    .join("\n\n");
-  return new TextEncoder().encode(text);
 }

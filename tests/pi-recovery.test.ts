@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createModels,
+  Type,
   normalizeContext,
   type AssistantMessage,
   type Message,
@@ -25,7 +26,6 @@ import {
   type GenerationPolicy,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { Type } from "typebox";
 
 const policy: GenerationPolicy = {
   maxResponses: 32,

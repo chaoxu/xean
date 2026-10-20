@@ -150,9 +150,7 @@ async function receipt(
 }
 
 /** Native tools rebuild contextual Zod validation from durable call arguments. */
-export function createRoleRuntime(
-  resolve: (descriptor: CallDescriptor) => Promise<RoleCall> = resolveCall,
-) {
+export function createRoleRuntime() {
   const names = [
     ...Object.values(roleTools),
     reconstructionCalls.statement.tool,
@@ -166,10 +164,6 @@ export function createRoleRuntime(
       callers: ["model"],
       replay: "safe",
       executionMode: "sequential",
-      constrainedSampling:
-        name === roleTools.coordinator
-          ? false
-          : { type: "json_schema", strict: "prefer" },
       async execute(value, api, context) {
         const assignment = await api.snapshot(
           Assignment,
@@ -177,7 +171,7 @@ export function createRoleRuntime(
           context,
         );
         if (!assignment?.descriptor) throw new Error("Missing role assignment");
-        const call = await resolve(assignment.descriptor);
+        const call = await resolveCall(assignment.descriptor);
         if (call.tool !== name)
           throw new Error("Submission tool does not match the assignment");
         // A successful receipt exists only after contextual validation, including note references.
@@ -209,7 +203,7 @@ export function createRoleRuntime(
             context,
           );
           if (!assignment?.descriptor) return;
-          const call = await resolve(assignment.descriptor);
+          const call = await resolveCall(assignment.descriptor);
           const campaign =
             call.role === "coordinator"
               ? await api.snapshot(ProviderDoc, ROOT_CONVERSATION_ID, context)
@@ -306,7 +300,7 @@ export function createRoleRuntime(
     context: Context,
     previousTasks: readonly number[] = [],
   ): Promise<Receipt> {
-    const call = await resolve(descriptor);
+    const call = await resolveCall(descriptor);
     const tool = tools.find((tool) => tool.name === call.tool);
     if (!tool) throw new Error(`Unregistered role tool: ${call.tool}`);
     let conversationId!: ConversationId;

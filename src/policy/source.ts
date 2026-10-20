@@ -1,6 +1,7 @@
 // Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
+import type { JsonValue } from "@earendil-works/chord";
 import { z } from "zod";
-import { nonblank, type Json } from "./contracts";
+import { nonblank } from "./contracts";
 
 /** The reasoning levels the Codex CLI accepts for model_reasoning_effort. */
 export const codexReasoning = z.enum([
@@ -57,11 +58,11 @@ export const codexUsage = z.strictObject({
 });
 export type CodexUsage = z.output<typeof codexUsage>;
 
-function eventObject(value: Json): Record<string, Json> {
+function eventObject(value: JsonValue): Record<string, JsonValue> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Codex emitted a non-object JSONL event");
   }
-  return value as Record<string, Json>;
+  return value;
 }
 
 /** The final agent message, the searches made, and the usage of one Codex run. */

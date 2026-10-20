@@ -57,10 +57,9 @@ export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
   pending: Verification[];
   child?: number;
   request?: WorkerInput;
-  batchSize?: number;
 };
 export type CampaignResult = {
-  outcome: "accepted" | "turn-limit" | "call-failure" | "paused";
+  outcome: "accepted" | "turn-limit" | "call-failure";
   turns: number;
   accepted?: string;
   error?: string;
@@ -147,7 +146,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 );
                 if (!book) throw new Error("Campaign notebook is missing");
                 const current = new Map(
-                  project(copy(book)).notes.map((note) => [note.id, note]),
+                  project(book).notes.map((note) => [note.id, note]),
                 );
                 for (const note of [...refreshed.notes, ...refreshed.support]) {
                   const latest = current.get(note.id);
@@ -298,7 +297,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           ) as CampaignState;
           const config = await definition(tx, task.conversationId);
           const book = await tx.doc(Notebook, task.conversationId);
-          let { notes, accepted } = project(copy(book));
+          let { notes, accepted } = project(book);
           if (accepted.length)
             return {
               status: "terminal",
@@ -350,7 +349,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 input.consumed = true;
               }
               if (imported.length) {
-                notes = project(copy(book)).notes;
+                notes = project(book).notes;
                 if (state.step === "explorer") state.step = "coordinator";
               }
             }
@@ -409,7 +408,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   pick(notes, id),
                 ),
               });
-              state.batchSize = batch.length;
               state.request = {
                 kind: "verify",
                 input,
@@ -434,12 +432,12 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           const state: CampaignState = copy(
             task.state.checkpoint,
           ) as CampaignState;
+          const request = state.request!;
           const child = await tx.task(state.child! as TaskId);
           const outcome = child?.state.outcome;
           const result =
             outcome?.status === "completed" ? outcome.result : undefined;
           if (result === undefined) {
-            const request = state.request!;
             request.previousTasks = [
               ...(request.previousTasks ?? []),
               state.child!,
@@ -465,7 +463,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           }
           const book = await tx.doc(Notebook, task.conversationId);
           if (state.step === "explorer") {
-            const request = state.request!;
             if (
               request.kind !== "call" ||
               request.descriptor.kind !== "explorer"
@@ -482,7 +479,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             state.turns++;
             state.step = "coordinator";
           } else if (state.step === "coordinator") {
-            const request = state.request!;
             if (
               request.kind !== "call" ||
               request.descriptor.kind !== "coordinator"
@@ -498,11 +494,12 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             state.pending = value.verify;
             state.step = "verifier";
           } else {
-            state.pending = state.pending.slice(state.batchSize);
+            if (request.kind !== "verify")
+              throw new Error("Verifier request mismatch");
+            state.pending = state.pending.slice(request.input.verify.length);
           }
           delete state.child;
           delete state.request;
-          delete state.batchSize;
           return { status: "running", checkpoint: { ...state, phase: "next" } };
         }, context);
       },
@@ -527,7 +524,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
       const result = previous?.state.outcome?.result as
         CampaignResult | undefined;
       if (!result?.resume)
-        throw new Error("Campaign has no failed or paused work to resume");
+        throw new Error("Campaign has no failed work to resume");
       return tx.createTask(
         Campaign,
         { resume: result.resume },
