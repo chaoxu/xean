@@ -83,7 +83,7 @@ export async function acceptedArgument(
   return ids
     .map((id) => {
       const note = notes.find((item) => item.id === id)!;
-      return `## ${note.id}\n\n${note.summary ? note.summary + "\n\n" : ""}${note.text}\n`;
+      return `## ${note.id}\n\n${note.text}\n`;
     })
     .join("\n");
 }

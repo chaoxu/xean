@@ -24,9 +24,9 @@ import {
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { task as taskSchema } from "./policy/contracts.ts";
 import { solveSettings } from "./policy/settings.ts";
-import { DefinitionDoc, Notebook, type Definition } from "./state.ts";
+import { DefinitionDoc, Notebook, project, type Definition } from "./state.ts";
 import { createWorkflow, type SourceExecutor } from "./workflow.ts";
-import { acceptedArgument, readReport } from "./report.ts";
+import { acceptedArgument, readStatus } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
 import { roleGenerationPolicy } from "./role-runtime.ts";
 
@@ -276,13 +276,16 @@ export function inspect<T>(
 
 export function exportAccepted(path: string): Promise<string> {
   return inspect(path, async (tx, root) => {
-    const report = await readReport(tx, root);
+    const status = await readStatus(tx, root);
     if (
-      report.status.status !== "terminal" ||
-      report.status.outcome !== "accepted" ||
-      !report.status.accepted
+      status.status !== "terminal" ||
+      status.outcome !== "accepted" ||
+      !status.accepted
     )
       throw new Error("No accepted argument");
-    return acceptedArgument(report.notes, report.status.accepted);
+    return acceptedArgument(
+      project(await tx.doc(Notebook, root)).notes,
+      status.accepted,
+    );
   });
 }

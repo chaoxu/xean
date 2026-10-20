@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { $ } from "bun";
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { mkdtempDisposable } from "node:fs/promises";
@@ -65,15 +66,12 @@ if (command === "check" || command === "test") {
     env,
   );
   // Bun's npm-style packer omits its lockfile. Source releases retain it.
-  const files = await new Bun.Archive(await Bun.file(archive).bytes()).files();
+  const staging = resolve(directory.path, "staging");
+  await new Bun.Archive(await Bun.file(archive).bytes()).extract(staging);
   const lockfile = await Bun.file(resolve(root, "bun.lock")).text();
-  const bytes = await new Bun.Archive(
-    {
-      ...Object.fromEntries(files),
-      "package/bun.lock": lockfile,
-    },
-    { compress: "gzip" },
-  ).bytes();
+  await Bun.write(resolve(staging, "package/bun.lock"), lockfile);
+  await $`tar -czf ${archive} -C ${staging} package`;
+  const bytes = await Bun.file(archive).bytes();
   await new Bun.Archive(bytes).extract(directory.path);
   const source = resolve(directory.path, "package");
   assert.equal(await Bun.file(resolve(source, "bun.lock")).text(), lockfile);

@@ -18,7 +18,7 @@ import {
   type Verification,
 } from "../src/policy/contracts.ts";
 import type { CallDescriptor } from "../src/policy/prompts.ts";
-import { defineDoc } from "@earendil-works/pi-durable";
+import { defineDoc, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxModels } from "./faux-models.ts";
 
 const Assignment = defineDoc({
@@ -133,6 +133,16 @@ async function fixture(
 }
 
 test("v1 drains requested batches at the Explorer cap and stops at the first accepted argument", async () => {
+  const decision = coordinate(
+    ["n1", "n2", "n3", "n4"],
+    [
+      { note: "n1", verifiers: lemma },
+      { note: "n2", verifiers: lemma },
+      { note: "n3", verifiers: all },
+      { note: "n4", verifiers: all },
+    ],
+  );
+  decision.filings[2]!.summary = "Unverified claim: Q holds unconditionally.";
   const drive = await fixture(
     [
       {
@@ -143,15 +153,7 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
           note("Unrelated alternative."),
         ],
       },
-      coordinate(
-        ["n1", "n2", "n3", "n4"],
-        [
-          { note: "n1", verifiers: lemma },
-          { note: "n2", verifiers: lemma },
-          { note: "n3", verifiers: all },
-          { note: "n4", verifiers: all },
-        ],
-      ),
+      decision,
       check("n1"),
       check("n1"),
       check("n2"),
@@ -201,6 +203,8 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
   expect(third.input.support.map(({ id }) => id)).toEqual(["n1", "n2"]);
   expect(third.input.support.every(({ verified }) => verified)).toBe(true);
   const argument = await exportAccepted(drive.path);
+  expect(report.notes[2]?.summary).toBe(decision.filings[2]!.summary);
+  expect(argument).not.toContain(decision.filings[2]!.summary);
   for (const text of ["Lemma L.", "Lemma M from L.", "Complete P from M."])
     expect(argument).toContain(text);
   expect(argument).not.toContain("Unrelated alternative.");
@@ -457,6 +461,74 @@ test("persisted resume retries only the failed comparison on the original verifi
   );
   expect(report.notes[0]?.text).toBe("Original proof.");
 });
+
+test.each(
+  ["correctness", "requirements"].flatMap((stage) =>
+    ["assignment", "placed", "receipt", "done"].map((boundary) => ({
+      stage,
+      boundary,
+    })),
+  ),
+)(
+  "ordinary verifier recovers at $stage $boundary without repeating completed calls",
+  async ({ stage, boundary }) => {
+    const drive = await fixture([
+      { notes: [note("Proof of P.")] },
+      coordinate(["n1"], [{ note: "n1", verifiers: all }]),
+      ...pass("n1"),
+    ]);
+    const closed = Promise.withResolvers<void>();
+    let closing = false,
+      current = "";
+    drive.owner.harness.subscribeCommits(({ changes }) => {
+      for (const change of changes)
+        if (
+          change.type === "document" &&
+          change.record.kind === Assignment.definition.kind
+        ) {
+          const { descriptor } = change.value as {
+            descriptor?: CallDescriptor;
+          };
+          current = descriptor?.kind === "verifier" ? descriptor.name : "";
+        }
+      if (
+        !closing &&
+        current === stage &&
+        changes.some((change) =>
+          boundary === "assignment"
+            ? change.type === "document" &&
+              change.record.kind === Assignment.definition.kind
+            : boundary === "receipt"
+              ? change.type === "entry" && ToolResultEntry.is(change.value)
+              : change.type === "submission" &&
+                change.value.status === boundary,
+        )
+      ) {
+        closing = true;
+        void drive.owner.close().then(closed.resolve, closed.reject);
+      }
+    });
+    void drive.settle().catch(() => {});
+    await closed.promise;
+    await drive.reopen();
+    const report = await drive.settle();
+    expect(report.status).toMatchObject({
+      outcome: "accepted",
+      accepted: "n1",
+    });
+    expect(labels(drive.calls)).toEqual([
+      "explorer",
+      "coordinator",
+      "source",
+      "correctness",
+      "requirements",
+      "statement",
+      "proof",
+      "reconstruction",
+    ]);
+    expect(report.checks).toHaveLength(4);
+  },
+);
 
 test("completed reopening makes no calls and cannot change the frozen task or settings", async () => {
   const drive = await fixture(

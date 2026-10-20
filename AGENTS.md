@@ -7,6 +7,7 @@ Read README.md and the pinned Pi implementation before changing the design.
   in application behavior would let us use Pi directly.
 - Keep this a small Pi extension. Do not add a separate kernel, Store, scheduling
   loop, task cache, lifecycle APIs, provider runtime, or compatibility code.
+- Do not write custom parsers. Use native structured output and standard readers.
 - Prefer application integration and native configuration to Pi patches. Patch
   Pi only when the required behavior belongs inside Pi, such as an adapter
   discarding provider errors or usage before application code can observe them.

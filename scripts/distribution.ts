@@ -27,20 +27,11 @@ await using temporary = await mkdtempDisposable(
   join(tmpdir(), "xean-distribution-"),
 );
 async function cli(...args: string[]) {
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      "--no-install",
-      "--no-env-file",
-      join(root, manifest.bin.xean),
-      ...args,
-    ],
-    {
-      cwd: temporary.path,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
+  const child = Bun.spawn([join(root, manifest.bin.xean), ...args], {
+    cwd: temporary.path,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),

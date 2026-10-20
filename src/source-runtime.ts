@@ -126,6 +126,7 @@ export function codexExec(
       directory = await mkdtemp(join(tmpdir(), "xean-source-"));
       const env = await sourceEnvironment(directory, inherited);
       const schemaPath = join(directory, "verdict.schema.json");
+      const resultPath = join(directory, "verdict.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));
       if (codexVersion === undefined) {
         const version = await runCommand(command, ["--version"], {
@@ -170,6 +171,8 @@ export function codexExec(
           "never",
           "--output-schema",
           schemaPath,
+          "--output-last-message",
+          resultPath,
           "-c",
           fileCredentials,
           "-c",
@@ -232,7 +235,13 @@ export function codexExec(
             : `Codex exited with status ${run.exitCode}`,
         };
       }
-      return { state: "succeeded", codexVersion, stdout, stderr };
+      return {
+        state: "succeeded",
+        codexVersion,
+        output: await Bun.file(resultPath).json(),
+        stdout,
+        stderr,
+      };
     } catch (error) {
       return {
         state: signal?.aborted ? "cancelled" : "failed",

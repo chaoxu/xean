@@ -34,7 +34,7 @@ export interface VerificationDependencies {
     value: JsonValue;
     fresh: boolean;
   }>;
-  /** The source runtime validates search receipts before returning a submission. */
+  /** The source runtime validates the structured Codex result. */
   source?(
     key: string,
     request: CodexRequest,
@@ -112,12 +112,12 @@ export async function verify(
   let input = await verifierInput.parseAsync(inputValue);
   const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
+    input = await refresh(input);
     if (name === "reconstruction") {
       const have = await dependencies.recorded();
       // A comparison publishes its entire batch in one commit. Do not regroup
       // that frozen assignment from the outcomes it has already published.
       if (have.some((value) => value.verifier === name)) return;
-      input = await refresh(input);
       const roots = judgedBy(input, have, name);
       if (roots.length === 0) continue;
       const result = await reconstruct(
@@ -164,6 +164,5 @@ export async function verify(
         verifier: name,
       })),
     );
-    input = await refresh(input);
   }
 }

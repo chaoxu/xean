@@ -26,11 +26,7 @@ import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
 import { supportClosure, byId } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
-import {
-  codexTranscript,
-  type CodexRequest,
-  type CodexResult,
-} from "./policy/source.ts";
+import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import { verify } from "./verification.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
@@ -175,17 +171,13 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 const validate = (output: CodexResult) => {
                   if (output.state !== "succeeded")
                     throw new Error(`verifier failed: ${output.error}`);
-                  const parsed = codexTranscript(output.stdout);
-                  const value = sourceVerdictsFor(judged).parse(
-                    JSON.parse(parsed.message),
-                  );
+                  const value = sourceVerdictsFor(judged).parse(output.output);
                   if (
-                    (value.verdicts.some((v) => v.sources.length) &&
-                      parsed.searches === 0) ||
-                    (!request.search && parsed.searches !== 0)
+                    !request.search &&
+                    value.verdicts.some((v) => v.sources.length)
                   )
                     throw new Error(
-                      "Source claims do not match observed search activity",
+                      "Source citations require search to be enabled",
                     );
                   return value;
                 };

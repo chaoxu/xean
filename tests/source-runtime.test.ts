@@ -64,7 +64,11 @@ else if(mode==='cancel') {
   const child=spawn(process.execPath,['-e',
     'process.on("SIGTERM",()=>{});await Bun.write(process.env.HOME+"/child-ready","ready");setInterval(()=>{},1000)'],{stdio:'ignore'});
   process.on('SIGTERM',()=>process.exit(0));await writeFile(home+'/pids',JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000);
-} else {console.log('fixture-output');process.exitCode=mode==='fail'?17:0;}
+} else {
+  console.log('fixture-output');
+  if(mode!=='missing') await writeFile(args[args.indexOf('--output-last-message')+1],mode==='invalid'?'{':JSON.stringify({verdicts:[]}));
+  process.exitCode=mode==='fail'?17:0;
+}
 `,
   );
   await chmod(fake, 0o700);
@@ -95,6 +99,7 @@ test("source executor preserves the request, enforces search selection and remov
     expect(result).toEqual({
       state: "succeeded",
       codexVersion: "codex-cli fixture",
+      output: { verdicts: [] },
       stdout: "fixture-output\n",
       stderr: "fixture-stderr\n",
     });
@@ -122,6 +127,21 @@ test("source executor preserves the request, enforces search selection and remov
     expect(existsSync(join(f.root, ".codex/auth.json"))).toBe(true);
   }
 });
+
+test.each(["missing", "invalid"])(
+  "source rejects a %s final JSON file and retains logs",
+  async (mode) => {
+    const f = await fixture();
+    await f.mode(mode);
+    expect(await f.execute(request)).toMatchObject({
+      state: "failed",
+      exitCode: 0,
+      stdout: "fixture-output\n",
+      stderr: "fixture-stderr\n",
+    });
+    expect(existsSync((await f.capture()).home)).toBe(false);
+  },
+);
 
 test("source failure retains output and a producer exceeding the capture bound is stopped", async () => {
   const f = await fixture();

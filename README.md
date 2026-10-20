@@ -1,6 +1,6 @@
 # Xean
 
-Xean 4.1.0-rc.1 runs a mathematical research workflow on native Pi Durable. Explorer
+Xean 4.1.0 runs a mathematical research workflow on native Pi Durable. Explorer
 appends notes, Coordinator selects verification work, and Verifier checks source,
 correctness, task requirements, and blind reconstruction in that order. Joint
 reconstruction of generated dependencies strengthens the v1.0.0 acceptance policy.
@@ -15,7 +15,12 @@ Pi retains truncated tool calls as text for resubmission. Ordinary verifier
 contracts and Codex source requests retain their archived v1.0.0 fixtures. Explorer
 and Coordinator acceptance instructions and reconstruction contracts reflect the
 stronger policy. Native recovery and Coordinator history construction also differ
-from that runtime.
+from that runtime. Correctness instructions clarify that declared support may
+appear in the same verification batch.
+
+Long responses can disconnect near 15 minutes and trigger recovery
+([#24](https://github.com/chaoxu/xean/issues/24)). Retained progress and usage
+from failed responses remain incompletely measured.
 
 Coordinator treats supplied sources and generated notes uniformly. It forks Pi's
 history at the newest compatible input boundary from a successful Coordinator call
@@ -63,8 +68,13 @@ Each eligible verification batch uses a joint statement extraction, blind proof,
 and comparison. Reconstruction publishes the whole batch's verdicts atomically. A statement
 correction replaces the complete statement batch, publishes no verdicts, and
 triggers a new blind proof before comparison. Supporting lemmas need not satisfy
-the task's completion criteria. Joint reconstruction has scripted regression
-coverage. [Live mathematical qualification](TODO.md) is pending.
+the task's completion criteria. Scripted regressions cover joint reconstruction
+and interruption recovery. A fresh strict-cut campaign produced a self-contained
+counterexample to an already-disproved conjecture and passed independent
+`gpt-6-astra`/high review. It had no supporting notes. The separate Forni check
+below exercised an admitted source premise. Neither tests live reconstruction of
+generated dependencies. The P10 replay is prepared but has not run. Further
+[qualification work](TODO.md) remains.
 
 The earlier First Proof Batch 3 run tested `b9ee726` with curated source notes
 and source checking without web access, before joint reconstruction of generated
@@ -72,7 +82,7 @@ dependencies. All ten candidates were internally accepted.
 Independent review after source adjudication recorded nine PASS results and
 P08 INCONCLUSIVE. Recorded API-equivalent costs were at least $134.48 for the
 solver and $39.80 for independent review, excluding unreported usage. Those
-results do not qualify open-ended retrieval or this release candidate's stronger
+results do not qualify open-ended retrieval or this version's stronger
 acceptance policy.
 
 ## Run a fresh campaign
@@ -121,7 +131,8 @@ to off, keeps the Explorer turn allowance unchanged, and is frozen at `init`.
 `status` reads compact progress. `inspect` includes notes, verification
 evidence, and Pi's native per-conversation usage ledgers. These ledgers do not
 count every outbound request or include external Codex source usage. Both read a consistent SQLite snapshot without starting model calls.
-`export` writes an accepted candidate and its support as Markdown. Keep the
+`export` writes accepted note texts and their support as Markdown, excluding
+navigation summaries. Keep the
 campaign database as the record of the attempt.
 
 Supply caller notes or guidance while the campaign owner is closed:
@@ -183,9 +194,11 @@ Install the Codex CLI and authenticate with
 `search: false` disables search. Set `XEAN_CODEX_COMMAND` for another Codex executable. The source
 adapter uses a temporary configuration and the native Codex credential. It ignores
 user configuration and execpolicy rules, suppresses skill instructions, and
-disables plugins. Search has no historical date cutoff. Source-call receipts retain
-the reported citations and web-tool result metadata. Retrieved papers are not
-automatically imported as notebook notes.
+disables plugins. Search has no historical date cutoff. Codex writes its final
+JSON result directly, and Xean validates that verdict object. Receipts retain the
+result and raw stdout/stderr. Tool restrictions rely on Codex configuration.
+Xean does not interpret the event log or independently audit tool activity.
+Retrieved papers are not automatically imported as notebook notes.
 Explorer has no literature-gathering tool. The host adds no process isolation.
 
 Source verification checks invoked results, declared dependencies, and whether
@@ -246,9 +259,10 @@ ordinary verifier contracts and Codex source requests with the archived v1.0.0
 runtime. Regression tests cover joint reconstruction, hidden proof inputs, atomic
 verdicts, corrections, and acceptance within the same attempt. Native Pi tests
 cover workflow replay, provider-limit recovery, and persisted limits.
-`pack` installs a fresh source archive, checks its imports and CLI, runs the
+`pack` uses system tar to retain file permissions and the frozen lockfile,
+installs a fresh source archive, checks its imports and executable CLI, runs the
 packaged tests, and writes
-`dist/xean-4.1.0-rc.1.tgz`. These checks exercise scripted behavior. Live mathematical
+`dist/xean-4.1.0.tgz`. These checks exercise scripted behavior. Live mathematical
 performance requires separate experiments under the stronger acceptance policy.
 The pinned Pi artifacts and patches are recorded in
 [vendor/pi/provenance.json](vendor/pi/provenance.json).

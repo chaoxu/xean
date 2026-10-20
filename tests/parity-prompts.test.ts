@@ -459,7 +459,7 @@ test("correctness permits valid partial claims and reserves task completion for 
   );
 });
 
-test("unchanged verifier and Codex prompts retain their pre-batch baseline fingerprint", async () => {
+test("verifier and Codex prompts retain their baseline apart from the declared-support clarification", async () => {
   const second = {
     ...note,
     id: "n2",
@@ -488,8 +488,15 @@ test("unchanged verifier and Codex prompts retain their pre-batch baseline finge
     ["n2"],
   );
   const digest = createHash("sha256");
+  const clarified =
+    "Other notes in the verification batch are premises only when they belong to that note's declared support closure.";
+  expect(calls[1]!.prompt).toContain(clarified);
   for (const call of calls) {
-    digest.update(`${call.label}\n${call.system}\n${call.prompt}\n`);
+    const prompt = call.prompt.replace(
+      clarified,
+      "Other notes in the verification batch are not additional premises.",
+    );
+    digest.update(`${call.label}\n${call.system}\n${prompt}\n`);
   }
   const offline = await sourceCall(
     {
@@ -506,7 +513,7 @@ test("unchanged verifier and Codex prompts retain their pre-batch baseline finge
       `${call.label}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
     );
   }
-  // Captured from pre-batch port ae15a025 for these unchanged calls. The old
+  // Captured from pre-batch port ae15a025, normalizing only the clarification above. The old
   // aggregate archived fingerprint also included reconstruction, Explorer, and
   // Coordinator, whose instructions intentionally change with batch acceptance.
   expect(digest.digest("hex")).toBe(

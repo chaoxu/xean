@@ -36,43 +36,17 @@ const remaining: JsonValue[] = [
   { statements: [], verdicts: [verdict] },
 ];
 
-// The same event shape as v1.0.0's codex-stdout fixture, with no live execution.
-function sourceResult(cited = false, searched = false): CodexResult {
+function sourceResult(cited = false): CodexResult {
   const sources = cited
     ? [{ result: "P holds.", source: "Paper P", url: "https://example.org/p" }]
     : [];
-  const stdout = [
-    { type: "thread.started", thread_id: "fixture" },
-    { type: "turn.started" },
-    ...(searched
-      ? [
-          {
-            type: "item.completed",
-            item: { type: "web_search", query: "Paper P" },
-          },
-        ]
-      : []),
-    {
-      type: "item.completed",
-      item: {
-        type: "agent_message",
-        text: JSON.stringify({ verdicts: [{ ...verdict, sources }] }),
-      },
-    },
-    {
-      type: "turn.completed",
-      usage: {
-        input_tokens: 10,
-        cached_input_tokens: 2,
-        cache_write_input_tokens: 0,
-        output_tokens: 5,
-        reasoning_output_tokens: 1,
-      },
-    },
-  ]
-    .map((event) => JSON.stringify(event))
-    .join("\n");
-  return { state: "succeeded", codexVersion: "fixture-v1", stdout, stderr: "" };
+  return {
+    state: "succeeded",
+    codexVersion: "fixture-v1",
+    output: { verdicts: [{ ...verdict, sources }] },
+    stdout: "Opaque Codex log, including warnings and recovered errors.\n",
+    stderr: "",
+  };
 }
 
 const owners: Awaited<ReturnType<typeof open>>[] = [],
@@ -197,38 +171,33 @@ test("a simulated receipt-before-verdict interruption reuses the exact durable C
   expect(await drive.receipts()).toEqual([originalReceipt]);
 });
 
-test.each([
-  {
-    label: "a cited source without observed search",
-    search: true,
-    cited: true,
-    searched: false,
-  },
-  {
-    label: "observed search when search is disabled",
-    search: false,
-    cited: false,
-    searched: true,
-  },
-])(
-  "Codex source rejects $label and retains the raw result",
-  async ({ search, cited, searched }) => {
-    const output = sourceResult(cited, searched);
-    const drive = await fixture([output], [...initial], search);
-    const report = await drive.settle();
-    expect(report.status).toMatchObject({
-      outcome: "call-failure",
-      error: "Source claims do not match observed search activity",
-    });
-    expect(report.checks).toEqual([]);
-    expect(report.accepted).toEqual([]);
-    expect(drive.requests).toHaveLength(1);
-    expect(drive.requests[0]?.search).toBe(search);
-    expect((await drive.receipts()).map(({ data }) => data.value)).toEqual([
-      output,
-    ]);
-  },
-);
+test("Codex source rejects citations with search disabled and retains the result", async () => {
+  const output = sourceResult(true);
+  const drive = await fixture([output], [...initial], false);
+  const report = await drive.settle();
+  expect(report.status).toMatchObject({
+    outcome: "call-failure",
+    error: "Source citations require search to be enabled",
+  });
+  expect(report.checks).toEqual([]);
+  expect(report.accepted).toEqual([]);
+  expect(drive.requests).toHaveLength(1);
+  expect(drive.requests[0]?.search).toBe(false);
+  expect((await drive.receipts()).map(({ data }) => data.value)).toEqual([
+    output,
+  ]);
+});
+
+test("Codex output must contain exactly the requested verdict IDs", async () => {
+  const output = sourceResult();
+  if (output.state !== "succeeded") throw new Error("Expected fixture result");
+  output.output = { verdicts: [{ ...verdict, note: "n99", sources: [] }] };
+  const drive = await fixture([output], [...initial]);
+  const report = await drive.settle();
+  expect(report.status.outcome).toBe("call-failure");
+  expect(report.checks).toEqual([]);
+  expect((await drive.receipts())[0]?.data.value).toEqual(output);
+});
 
 test("a completed failed Codex execution remains evidence while resume makes a fresh source call", async () => {
   const failure: CodexResult = {
