@@ -187,7 +187,7 @@ test("solution-only verification changes Coordinator instructions without changi
   ).toBeDefined();
 });
 
-test("role prompts omit PASS reports without changing evidence or hiding failed checks", async () => {
+test("role prompts omit PASS reports without changing evidence or hiding failed checks", () => {
   const evidence = {
     ...note,
     verdicts: [
@@ -223,10 +223,10 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
       explorerGuidance: "",
     }),
     coordinatorCall({ task, notes: [evidence] }),
-    await verifierCall("source", input, ["n2"]),
-    await verifierCall("correctness", input, ["n2"]),
+    verifierCall("source", input, ["n2"]),
+    verifierCall("correctness", input, ["n2"]),
   ];
-  const native = await sourceCall(
+  const native = sourceCall(
     { provider: "codex", model: "test", reasoning: "low", search: false },
     input,
     ["n2"],
@@ -415,7 +415,7 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
   }
 });
 
-test("correctness permits valid partial claims and reserves task completion for requirements", async () => {
+test("correctness permits valid partial claims and reserves task completion for requirements", () => {
   const partial = {
     ...note,
     id: "n14",
@@ -433,11 +433,9 @@ test("correctness permits valid partial claims and reserves task completion for 
     notes: [partial],
     support: [],
   };
-  const correctness = await verifierCall("correctness", verification, ["n14"]);
-  const requirements = await verifierCall("requirements", verification, [
-    "n14",
-  ]);
-  const source = await verifierCall("source", verification, ["n14"]);
+  const correctness = verifierCall("correctness", verification, ["n14"]);
+  const requirements = verifierCall("requirements", verification, ["n14"]);
+  const source = verifierCall("source", verification, ["n14"]);
   for (const call of [correctness, requirements, source]) {
     expect(call.system).toContain(
       "Only the requirements verifier judges whether the note completes the task.",
@@ -459,7 +457,7 @@ test("correctness permits valid partial claims and reserves task completion for 
   );
 });
 
-test("verifier and Codex prompts retain their baseline apart from the declared-support clarification", async () => {
+test("verifier and Codex prompts retain their baseline apart from the declared-support clarification", () => {
   const second = {
     ...note,
     id: "n2",
@@ -473,16 +471,18 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
     notes: [second],
     support: [note],
   };
-  const calls: {
-    label: string;
-    system: string;
-    prompt: string;
-  }[] = [
-    await verifierCall("source", verification, ["n2"]),
-    await verifierCall("correctness", verification, ["n2"]),
-    await verifierCall("requirements", verification, ["n2"]),
+  // Retain the archived call labels only as part of its captured fingerprint.
+  const historicalLabels = [
+    "xean-solve/verifier/source",
+    "xean-solve/verifier/correctness",
+    "xean-solve/verifier/requirements",
   ];
-  const source = await sourceCall(
+  const calls = [
+    verifierCall("source", verification, ["n2"]),
+    verifierCall("correctness", verification, ["n2"]),
+    verifierCall("requirements", verification, ["n2"]),
+  ];
+  const source = sourceCall(
     { provider: "codex", model: "codex-model", reasoning: "low", search: true },
     verification,
     ["n2"],
@@ -491,14 +491,14 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
   const clarified =
     "Other notes in the verification batch are premises only when they belong to that note's declared support closure.";
   expect(calls[1]!.prompt).toContain(clarified);
-  for (const call of calls) {
+  for (const [index, call] of calls.entries()) {
     const prompt = call.prompt.replace(
       clarified,
       "Other notes in the verification batch are not additional premises.",
     );
-    digest.update(`${call.label}\n${call.system}\n${prompt}\n`);
+    digest.update(`${historicalLabels[index]}\n${call.system}\n${prompt}\n`);
   }
-  const offline = await sourceCall(
+  const offline = sourceCall(
     {
       provider: "codex",
       model: "codex-model",
@@ -510,7 +510,7 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
   );
   for (const call of [source, offline]) {
     digest.update(
-      `${call.label}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
+      `${historicalLabels[0]}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
     );
   }
   // Captured from pre-batch port ae15a025, normalizing only the clarification above. The old
@@ -521,7 +521,7 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
   );
 });
 
-test("initial and corrected blind calls contain only statements, dependency edges, and admitted source text", async () => {
+test("initial and corrected blind calls contain only statements, dependency edges, and admitted source text", () => {
   const source: Note = {
     ...note,
     text: "ADMITTED_SOURCE_BODY",
@@ -567,8 +567,8 @@ test("initial and corrected blind calls contain only statements, dependency edge
       statement: `Corrected exact claim ${id}.`,
     })),
   };
-  const extract = await statementCall(input);
-  const comparison = await reconstructionCall(
+  const extract = statementCall(input);
+  const comparison = reconstructionCall(
     input,
     initial,
     "INDEPENDENT_OLD_ARGUMENT",
@@ -582,7 +582,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
   }
   expect(extract.system).toContain("Preserve each note's asserted scope");
   for (const value of [initial, corrected]) {
-    const call = await proofCall(input, value);
+    const call = proofCall(input, value);
     expect(call.system).toContain(
       "Every listed statement is a proof obligation, not an axiom.",
     );

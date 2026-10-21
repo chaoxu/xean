@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { $ } from "bun";
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { mkdtempDisposable } from "node:fs/promises";
+import { cp, mkdtempDisposable } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import manifest from "../package.json";
 
@@ -60,16 +60,12 @@ if (command === "check" || command === "test") {
     PI_CODING_AGENT_DIR: resolve(directory.path, "pi"),
   };
   const archive = resolve(directory.path, "source.tgz");
-  await run(
-    ["pm", "pack", "--ignore-scripts", "--quiet", "--filename", archive],
-    root,
-    env,
-  );
-  // Bun's npm-style packer omits its lockfile. Source releases retain it.
   const staging = resolve(directory.path, "staging");
-  await new Bun.Archive(await Bun.file(archive).bytes()).extract(staging);
+  for (const file of ["package.json", ...manifest.files])
+    await cp(resolve(root, file), resolve(staging, "package", file), {
+      recursive: true,
+    });
   const lockfile = await Bun.file(resolve(root, "bun.lock")).text();
-  await Bun.write(resolve(staging, "package/bun.lock"), lockfile);
   await $`COPYFILE_DISABLE=1 tar -czf ${archive} -C ${staging} package`;
   const bytes = await Bun.file(archive).bytes();
   await new Bun.Archive(bytes).extract(directory.path);

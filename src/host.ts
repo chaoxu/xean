@@ -97,18 +97,6 @@ function openReadDatabase(path: string) {
   }
 }
 
-function recognize(database: Database) {
-  const tables = database
-    .query(
-      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .all() as { name: string }[];
-  const native = tables.some(({ name }) => name === "durable_schema");
-  if (!native && tables.length)
-    throw new Error("Not a Pi Durable research database");
-  return native;
-}
-
 async function openOwnedStorage(path: string) {
   const database = piDatabase(
     new Database(path, { create: true, strict: true }),
@@ -181,15 +169,7 @@ export async function open(path: string, options: OpenOptions = {}) {
     if (existing) assertSingleLink(existing.nlink);
     // Validate existing databases through a read-only transaction before opening a writer.
     const stored = existing?.size
-      ? await inspectSession(canonical, async (session) =>
-          validateDefinition(
-            await session.snapshot(
-              DefinitionDoc,
-              ROOT_CONVERSATION_ID,
-              context,
-            ),
-          ),
-        )
+      ? await inspectSession(canonical, (_session, _root, value) => value)
       : undefined;
     if (stored && requested && !isDeepStrictEqual(stored, requested))
       throw new Error("Research task and settings are frozen");
@@ -244,22 +224,24 @@ export async function open(path: string, options: OpenOptions = {}) {
 /** Read one SQLite transaction through Pi without recovering work or calling models. */
 async function inspectSession<T>(
   path: string,
-  read: (session: Session, root: ConversationId) => T | Promise<T>,
+  read: (
+    session: Session,
+    root: ConversationId,
+    definition: Definition,
+  ) => T | Promise<T>,
 ): Promise<T> {
   assertSingleLink((await stat(path)).nlink);
   using database = openReadDatabase(path);
   database.exec("BEGIN");
-  if (!recognize(database))
-    throw new Error("Not an initialized Xean 4 campaign");
   const storage = await SqliteStorage.open(piDatabase(database, true), {
     readOnly: true,
   });
   const session = createSession(storage, { documentRetentionMs: 0 });
   try {
-    validateDefinition(
+    const definition = validateDefinition(
       await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context),
     );
-    return await read(session, ROOT_CONVERSATION_ID);
+    return await read(session, ROOT_CONVERSATION_ID, definition);
   } finally {
     await session.close(context);
   }

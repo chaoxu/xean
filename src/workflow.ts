@@ -52,7 +52,6 @@ export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
   support: string[];
   pending: Verification[];
   child?: number;
-  request?: WorkerInput;
 };
 export type CampaignResult = {
   outcome: "accepted" | "turn-limit" | "call-failure";
@@ -164,10 +163,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                     });
                 }, context);
               },
-              source: async (key, request) => {
+              source: async (key, request, judged) => {
                 if (!options.source)
                   throw new Error("Codex source execution is not registered");
-                const judged = key.slice("source/".length).split(",");
                 const validate = (output: CodexResult) => {
                   if (output.state !== "succeeded")
                     throw new Error(`verifier failed: ${output.error}`);
@@ -302,7 +300,16 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 },
               },
             };
-          if (!state.request) {
+          let request: WorkerInput;
+          if (state.child !== undefined) {
+            const previous = (await tx.task(state.child as TaskId))!;
+            request = copy(previous.input) as WorkerInput;
+            request.previousTasks = [
+              ...(request.previousTasks ?? []),
+              state.child,
+            ];
+            if (request.kind === "verify") request.candidate ??= state.child;
+          } else {
             if (state.step === "verifier") {
               const available = new Set(
                 notes.filter((n) => n.verified).map((n) => n.id),
@@ -356,10 +363,10 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               const ids = [
                 ...new Set([
                   ...state.support,
-                  ...(await supportClosure(
+                  ...supportClosure(
                     state.support.map((id) => pick(notes, id)),
                     notes,
-                  )),
+                  ),
                 ]),
               ].sort(byId);
               const input = explorerInput.parse({
@@ -368,7 +375,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 notes: notes.map(({ text: _text, ...note }) => note),
                 support: ids.map((id) => pick(notes, id)),
               });
-              state.request = {
+              request = {
                 kind: "call",
                 profile: config.settings.explorer,
                 descriptor: {
@@ -377,7 +384,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 },
               };
             } else if (state.step === "coordinator") {
-              state.request = {
+              request = {
                 kind: "call",
                 profile: config.settings.coordinator,
                 descriptor: {
@@ -392,28 +399,28 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 },
               };
             } else {
-              const batch = await verificationPrefix(
+              const batch = verificationPrefix(
                 state.pending,
                 notes,
                 config.settings.window,
               );
               const listed = batch.map((entry) => pick(notes, entry.note));
-              const input = await verifierInput.parseAsync({
+              const input = verifierInput.parse({
                 task: config.task,
                 verify: batch,
                 notes: listed,
-                support: (await supportClosure(listed, notes)).map((id) =>
+                support: supportClosure(listed, notes).map((id) =>
                   pick(notes, id),
                 ),
               });
-              state.request = {
+              request = {
                 kind: "verify",
                 input,
                 settings: config.settings,
               };
             }
           }
-          const child = await tx.createTask(Worker, state.request, {
+          const child = await tx.createTask(Worker, request, {
             conversationId: task.conversationId,
             ownership: { kind: "task", taskId: task.id },
           });
@@ -430,18 +437,12 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           const state: CampaignState = copy(
             task.state.checkpoint,
           ) as CampaignState;
-          const request = state.request!;
-          const child = await tx.task(state.child! as TaskId);
-          const outcome = child?.state.outcome;
+          const child = (await tx.task(state.child! as TaskId))!;
+          const request = child.input as WorkerInput;
+          const outcome = child.state.outcome;
           const result =
             outcome?.status === "completed" ? outcome.result : undefined;
           if (result === undefined) {
-            request.previousTasks = [
-              ...(request.previousTasks ?? []),
-              state.child!,
-            ];
-            if (request.kind === "verify") request.candidate ??= state.child!;
-            delete state.child;
             state.phase = "next";
             return {
               status: "terminal",
@@ -453,7 +454,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   error:
                     outcome?.status === "failed"
                       ? outcome.error.message
-                      : `Worker ${child?.id} did not complete`,
+                      : `Worker ${child.id} did not complete`,
                   resume: state,
                 },
               },
@@ -482,9 +483,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               request.descriptor.kind !== "coordinator"
             )
               throw new Error("Coordinator request mismatch");
-            const value = await coordinatorResultFor(
+            const value = coordinatorResultFor(
               request.descriptor.input.notes,
-            ).parseAsync(result);
+            ).parse(result);
             for (const filing of value.filings)
               pick(book.notes, filing.note).summary = filing.summary;
             state.guidance = value.explorerGuidance;
@@ -497,7 +498,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 .map((entry) => pick(notes, entry.note));
               const selected = new Set([
                 ...roots.map((note) => note.id),
-                ...(await supportClosure(roots, notes)),
+                ...supportClosure(roots, notes),
               ]);
               state.pending = value.verify.filter((entry) =>
                 selected.has(entry.note),
@@ -510,7 +511,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             state.pending = state.pending.slice(request.input.verify.length);
           }
           delete state.child;
-          delete state.request;
           return { status: "running", checkpoint: { ...state, phase: "next" } };
         }, context);
       },

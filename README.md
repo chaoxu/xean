@@ -244,6 +244,10 @@ const report = await inspect("campaign.sqlite", readReport);
 `resume`. Library callers using saved Pi credentials supply authenticated
 `models`. Application data lives in Pi documents and task records.
 
+Pure graph and prompt helpers exported by `xean/policy` return synchronously.
+Existing `await` calls still work. Replace `.then(...)` chains with direct use of
+the returned value.
+
 Use fresh databases. Earlier Xean and Yean campaigns require their recorded
 runtimes. This port provides no database migration.
 
@@ -259,9 +263,9 @@ ordinary verifier contracts and Codex source requests with the archived v1.0.0
 runtime. Regression tests cover joint reconstruction, hidden proof inputs, atomic
 verdicts, corrections, and acceptance within the same attempt. Native Pi tests
 cover workflow replay, provider-limit recovery, and persisted limits.
-`pack` uses system tar to retain file permissions and the frozen lockfile,
-installs a fresh source archive, checks its imports and executable CLI, runs the
-packaged tests, and writes
+`pack` copies `package.json` and the paths in its `files` list into staging,
+creates an archive with system tar, and installs it with the frozen lockfile.
+It checks imports and the executable CLI, runs the packaged tests, and writes
 `dist/xean-4.1.0.tgz`. These checks exercise scripted behavior. Live mathematical
 performance requires separate experiments under the stronger acceptance policy.
 The pinned Pi artifacts and patches are recorded in

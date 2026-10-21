@@ -237,7 +237,7 @@ test.each(["source", "correctness"] as const)(
   },
 );
 
-test("verification receives the complete ordered support closure and counts shared texts once", async () => {
+test("verification receives the complete ordered support closure and counts shared texts once", () => {
   const notes = [
     note("n1", [], "a".repeat(100)),
     note("n2", ["n1"], "b".repeat(10)),
@@ -248,44 +248,35 @@ test("verification receives the complete ordered support closure and counts shar
     { note: "n3", verifiers: lemma },
     { note: "n4", verifiers: lemma },
   ];
-  expect(await supportClosure([notes[2]!, notes[3]!], notes)).toEqual([
-    "n1",
-    "n2",
-  ]);
+  expect(supportClosure([notes[2]!, notes[3]!], notes)).toEqual(["n1", "n2"]);
   const input = {
     task,
     verify,
     notes: notes.slice(2),
     support: notes.slice(0, 2),
   };
-  expect((await verifierInput.safeParseAsync(input)).success).toBe(true);
+  expect(verifierInput.safeParse(input).success).toBe(true);
   for (const support of [
     [notes[1]],
     [notes[1], notes[0]],
     [notes[0], notes[0], notes[1]],
   ])
-    expect(
-      (await verifierInput.safeParseAsync({ ...input, support })).success,
-    ).toBe(false);
+    expect(verifierInput.safeParse({ ...input, support }).success).toBe(false);
   for (const [window, selected] of [
     [125, ["n3"]],
     [130, ["n3", "n4"]],
     [1, ["n3"]],
   ] as const)
     expect(
-      (await verificationPrefix(verify, notes, window)).map(
-        (entry) => entry.note,
-      ),
+      verificationPrefix(verify, notes, window).map((entry) => entry.note),
     ).toEqual([...selected]);
-  await expect(supportClosure([notes[2]!], [notes[2]!])).rejects.toThrow(
+  expect(() => supportClosure([notes[2]!], [notes[2]!])).toThrow(
     "missing support",
   );
   expect(
-    (
-      await verifierInput.safeParseAsync({
-        ...input,
-        support: [{ ...notes[0], support: ["n3"] }, notes[1]],
-      })
-    ).success,
+    verifierInput.safeParse({
+      ...input,
+      support: [{ ...notes[0], support: ["n3"] }, notes[1]],
+    }).success,
   ).toBe(false);
 });

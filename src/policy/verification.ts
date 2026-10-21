@@ -7,11 +7,11 @@ import { byId, supportClosure } from "./support";
  * texts fit the window, and always its first entry. Texts shared by several
  * notes are read once, so they count once.
  */
-export async function verificationPrefix(
+export function verificationPrefix(
   verify: readonly Verification[],
   notes: readonly Note[],
   window: number,
-): Promise<Verification[]> {
+): Verification[] {
   const read = new Set<string>();
   let reading = 0;
   let taken = 0;
@@ -23,7 +23,7 @@ export async function verificationPrefix(
       note.support.every((id) => read.has(id) && byId(id, note.id) < 0);
     const added = [
       note.id,
-      ...(closed ? [] : await supportClosure([note], notes)),
+      ...(closed ? [] : supportClosure([note], notes)),
     ].filter((id) => !read.has(id));
     const cost = added.reduce(
       (sum, id) => sum + pick(notes, id).text.length,

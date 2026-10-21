@@ -117,9 +117,8 @@ test("unrelated SQLite databases remain byte-identical after rejection", async (
   );
   database.close();
   const before = await digest(path);
-  await expect(open(path, { create: { task, settings } })).rejects.toThrow(
-    "Not a Pi Durable",
-  );
+  await expect(inspect(path, readReport)).rejects.toThrow();
+  await expect(open(path, { create: { task, settings } })).rejects.toThrow();
   expect(await digest(path)).toBe(before);
 });
 

@@ -30,7 +30,7 @@ const profile = {
   reasoning: "low" as const,
 };
 
-async function calls() {
+function calls() {
   const { text, ...heading } = support;
   return {
     explorer: explorerCall({
@@ -40,14 +40,14 @@ async function calls() {
       support: [support],
     }),
     coordinator: coordinatorCall({ task, notes: [support, target] }),
-    source: await verifierCall("source", verification, [target.id]),
-    correctness: await verifierCall("correctness", verification, [target.id]),
-    requirements: await verifierCall("requirements", verification, [target.id]),
+    source: verifierCall("source", verification, [target.id]),
+    correctness: verifierCall("correctness", verification, [target.id]),
+    requirements: verifierCall("requirements", verification, [target.id]),
   };
 }
 
-test("ordinary roles retain the historical tool name, description and complete JSON Schema", async () => {
-  const current = await calls();
+test("ordinary roles retain the historical tool name, description and complete JSON Schema", () => {
+  const current = calls();
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const call = current[name],
       expected = historical.contracts[name];
@@ -66,14 +66,12 @@ test("ordinary roles retain the historical tool name, description and complete J
   }
 });
 
-test("Codex source retains the historical request fields and output schema with search on or off", async () => {
+test("Codex source retains the historical request fields and output schema with search on or off", () => {
   for (const [name, search] of [
     ["online", true],
     ["offline", false],
   ] as const) {
-    const call = await sourceCall({ ...profile, search }, verification, [
-      target.id,
-    ]);
+    const call = sourceCall({ ...profile, search }, verification, [target.id]);
     const { developerInstructions, prompt, ...contract } = call.request;
     expect<unknown>(contract, name).toEqual(historical.codex[name]);
     expect<unknown>(z.toJSONSchema(call.schema), name).toEqual(
@@ -82,12 +80,10 @@ test("Codex source retains the historical request fields and output schema with 
   }
 });
 
-test("ordinary historical submissions retain required fields and rejection of extra fields", async () => {
+test("ordinary historical submissions retain required fields and rejection of extra fields", () => {
   const current = {
-    ...(await calls()),
-    codex: await sourceCall({ ...profile, search: true }, verification, [
-      target.id,
-    ]),
+    ...calls(),
+    codex: sourceCall({ ...profile, search: true }, verification, [target.id]),
   };
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const schema = current[name].schema,
@@ -110,7 +106,7 @@ test("ordinary historical submissions retain required fields and rejection of ex
   }
 });
 
-test("batch reconstruction requires exact statement and verdict IDs and an atomic correction", async () => {
+test("batch reconstruction requires exact statement and verdict IDs and an atomic correction", () => {
   const input = { task, notes: [support, target], support: [] };
   const value = {
     statements: [
@@ -118,13 +114,9 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
       { note: target.id, statement: "The target claim holds." },
     ],
   };
-  const extract = await statementCall(input);
-  const prove = await proofCall(input, value);
-  const compare = await reconstructionCall(
-    input,
-    value,
-    "Independent joint proof.",
-  );
+  const extract = statementCall(input);
+  const prove = proofCall(input, value);
+  const compare = reconstructionCall(input, value, "Independent joint proof.");
   expect([extract.tool, prove.tool, compare.tool]).toEqual([
     "submit_statement",
     "submit_proof",
@@ -182,12 +174,12 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
   const otherStatements = {
     statements: [{ note: "n3", statement: "Q holds." }],
   };
-  expect(z.toJSONSchema((await statementCall(other)).schema)).toEqual(
+  expect(z.toJSONSchema(statementCall(other).schema)).toEqual(
     z.toJSONSchema(extract.schema),
   );
   expect(
     z.toJSONSchema(
-      (await reconstructionCall(other, otherStatements, "Q proof.")).schema,
+      reconstructionCall(other, otherStatements, "Q proof.").schema,
     ),
   ).toEqual(z.toJSONSchema(compare.schema));
 });

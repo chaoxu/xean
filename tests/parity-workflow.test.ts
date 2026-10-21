@@ -415,7 +415,7 @@ test.each(
   },
 );
 
-test("persisted resume retries only the failed comparison on the original verification candidate", async () => {
+test("persisted retries reuse earlier checks and preserve the original verification candidate", async () => {
   const drive = await fixture([
     { notes: [note("Original proof.")] },
     coordinate(["n1"], [{ note: "n1", verifiers: all }]),
@@ -443,19 +443,32 @@ test("persisted resume retries only the failed comparison on the original verifi
     "No accepted argument",
   );
   const boundary = drive.calls.length;
-  drive.replies.push({ statements: [], ...check("n1") });
-  const owner = await drive.reopen();
-  await owner.root.waitForIdle(BACKGROUND_CONTEXT);
-  expect(drive.calls).toHaveLength(boundary);
-  await owner.resume();
-  await owner.root.waitForIdle(BACKGROUND_CONTEXT);
+  for (const reply of [
+    new Error("provider disconnected again"),
+    { statements: [], ...check("n1") },
+  ]) {
+    drive.replies.push(reply);
+    const count = drive.calls.length;
+    const owner = await drive.reopen();
+    await owner.root.waitForIdle(BACKGROUND_CONTEXT);
+    expect(drive.calls).toHaveLength(count);
+    await owner.resume();
+    await owner.root.waitForIdle(BACKGROUND_CONTEXT);
+    if (reply instanceof Error)
+      expect((await inspect(drive.path, readReport)).checks).toEqual(
+        failed.checks,
+      );
+  }
   const report = await inspect(drive.path, readReport);
   expect(report.status).toMatchObject({
     outcome: "accepted",
     accepted: "n1",
     turns: 1,
   });
-  expect(labels(drive.calls.slice(boundary))).toEqual(["reconstruction"]);
+  expect(labels(drive.calls.slice(boundary))).toEqual([
+    "reconstruction",
+    "reconstruction",
+  ]);
   expect(new Set(report.checks.map((check) => check.candidate))).toEqual(
     new Set(failed.checks.map((check) => check.candidate)),
   );

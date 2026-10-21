@@ -171,7 +171,7 @@ export function createRoleRuntime() {
           context,
         );
         if (!assignment?.descriptor) throw new Error("Missing role assignment");
-        const call = await resolveCall(assignment.descriptor);
+        const call = resolveCall(assignment.descriptor);
         if (call.tool !== name)
           throw new Error("Submission tool does not match the assignment");
         // A successful receipt exists only after contextual validation, including note references.
@@ -203,7 +203,7 @@ export function createRoleRuntime() {
             context,
           );
           if (!assignment?.descriptor) return;
-          const call = await resolveCall(assignment.descriptor);
+          const call = resolveCall(assignment.descriptor);
           const campaign =
             call.role === "coordinator"
               ? await api.snapshot(ProviderDoc, ROOT_CONVERSATION_ID, context)
@@ -300,7 +300,7 @@ export function createRoleRuntime() {
     context: Context,
     previousTasks: readonly number[] = [],
   ): Promise<Receipt> {
-    const call = await resolveCall(descriptor);
+    const call = resolveCall(descriptor);
     const tool = tools.find((tool) => tool.name === call.tool);
     if (!tool) throw new Error(`Unregistered role tool: ${call.tool}`);
     let conversationId!: ConversationId;

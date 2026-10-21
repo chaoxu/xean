@@ -24,20 +24,12 @@ export const roleLabels = {
   coordinator: `${applicationId}/coordinator`,
   verifier: `${applicationId}/verifier`,
 } as const satisfies Readonly<Record<RoleName, string>>;
-export const verifierLabels = {
-  source: `${roleLabels.verifier}/source`,
-  correctness: `${roleLabels.verifier}/correctness`,
-  requirements: `${roleLabels.verifier}/requirements`,
-  reconstruction: `${roleLabels.verifier}/reconstruction`,
-} as const satisfies Readonly<Record<VerifierName, string>>;
-/** The reconstruction verifier's two calls before its verdict: their labels and submit tools. */
+/** Submit tools for the reconstruction verifier's two calls before its verdict. */
 export const reconstructionCalls = {
   statement: {
-    label: `${verifierLabels.reconstruction}/statement`,
     tool: "submit_statement",
   },
   proof: {
-    label: `${verifierLabels.reconstruction}/proof`,
     tool: "submit_proof",
   },
 } as const;
@@ -62,14 +54,11 @@ export const verdict = z.strictObject({
 });
 export type Verdict = z.output<typeof verdict>;
 
-const distinctSupport = [
-  (value: { readonly support: readonly string[] }) =>
-    new Set(value.support).size === value.support.length,
-  { message: "support ids must be distinct", path: ["support"] },
-] as [
-  (value: { readonly support: readonly string[] }) => boolean,
-  { message: string; path: string[] },
-];
+const supportIds = z
+  .array(noteId)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: "support ids must be distinct",
+  });
 // The projection derives the flags from verifier evidence, caller attestations,
 // and support edges. A note is verified after source and correctness pass or
 // external verification is supplied, over verified support, and is not dead.
@@ -84,13 +73,11 @@ export const externalVerification = z.strictObject({
 export const submittedNotes = z.strictObject({
   notes: z
     .array(
-      z
-        .strictObject({
-          text: nonblank,
-          support: z.array(noteId),
-          verification: externalVerification.optional(),
-        })
-        .refine(...distinctSupport),
+      z.strictObject({
+        text: nonblank,
+        support: supportIds,
+        verification: externalVerification.optional(),
+      }),
     )
     .min(1),
 });
@@ -99,13 +86,13 @@ const noteFields = z.strictObject({
   id: noteId,
   summary: nonblank.optional(),
   text: nonblank,
-  support: z.array(noteId),
+  support: supportIds,
   verdicts: z.array(verdict),
   verified: z.boolean(),
   dead: z.boolean(),
   verification: externalVerification.optional(),
 });
-export const note = noteFields.refine(...distinctSupport);
+export const note = noteFields;
 export type Note = z.output<typeof note>;
 
 function distinctKnown(
@@ -128,7 +115,7 @@ export const explorerInput = z
   .strictObject({
     task,
     explorerGuidance: z.string(),
-    notes: z.array(noteFields.omit({ text: true }).refine(...distinctSupport)),
+    notes: z.array(noteFields.omit({ text: true })),
     support: z.array(note),
   })
   .superRefine((value, ctx) => {
@@ -283,7 +270,7 @@ export const verifierInput = z
     notes: z.array(note),
     support: z.array(note),
   })
-  .superRefine(async (value, ctx) => {
+  .superRefine((value, ctx) => {
     const listed = value.verify.map(({ note }) => note);
     if (new Set(listed).size !== listed.length) {
       ctx.addIssue({
@@ -301,10 +288,7 @@ export const verifierInput = z
     }
     let closure: string[];
     try {
-      closure = await supportClosure(value.notes, [
-        ...value.notes,
-        ...value.support,
-      ]);
+      closure = supportClosure(value.notes, [...value.notes, ...value.support]);
     } catch (error) {
       ctx.addIssue({
         code: "custom",
@@ -413,12 +397,10 @@ function verdictsOver<T extends z.ZodRawShape>(
     .strictObject({ verdicts: z.array(entry.extend({ note: noteId })) })
     .refine(
       (value) =>
-        (
-          value as { readonly verdicts: readonly { readonly note: string }[] }
-        ).verdicts
-          .map(({ note }) => note)
-          .sort(byId)
-          .join(",") === expected,
+        listedIds(
+          (value as { readonly verdicts: readonly { readonly note: string }[] })
+            .verdicts,
+        ) === expected,
       {
         message: "one verdict per note under verification",
         path: ["verdicts"],

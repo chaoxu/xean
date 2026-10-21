@@ -38,6 +38,7 @@ export interface VerificationDependencies {
   source?(
     key: string,
     request: CodexRequest,
+    judged: readonly string[],
   ): Promise<{
     call: number;
     value: z.output<typeof sourceVerdicts>;
@@ -109,7 +110,7 @@ export async function verify(
   settings: SolveSettings,
   dependencies: VerificationDependencies,
 ): Promise<void> {
-  let input = await verifierInput.parseAsync(inputValue);
+  let input = verifierInput.parse(inputValue);
   const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
     input = await refresh(input);
@@ -140,8 +141,8 @@ export async function verify(
     if (name === "source" && codexSource(settings.source)) {
       if (!dependencies.source)
         throw new Error("Codex source runtime is unavailable");
-      const request = await sourceCall(settings.source, input, judged);
-      const result = await dependencies.source(key, request.request);
+      const request = sourceCall(settings.source, input, judged);
+      const result = await dependencies.source(key, request.request, judged);
       call = result.call;
       values = sourceVerdictsFor(judged).parse(result.value).verdicts;
     } else {
