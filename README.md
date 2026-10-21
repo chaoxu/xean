@@ -6,6 +6,11 @@ requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
 SQLite and manages execution and recovery.
 
+Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
+checking the resulting arguments. In the [reported trials](#qualification), that
+scope was sufficient for many tested problems, at recorded costs we found
+manageable.
+
 Xean provides citation checking, but no literature-discovery or paper-preparation
 workflow. To give Explorer a source packet, find relevant papers separately and
 convert their texts into notes with provenance, exact hypotheses, and conventions.
