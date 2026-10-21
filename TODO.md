@@ -1,8 +1,10 @@
 # Further qualification
 
+- [x] Independently review TSP and First Proof P05 outputs from `ad1f082`,
+      including generated dependency closures and complete original source
+      packets. Both received `gpt-6-astra`/high PASS assessments.
 - [ ] Run the prepared P10 dev3 replay for the unestablished classification in
-      n61. Scripted tests cover generated dependency reconstruction. Live
-      mathematical qualification of that closure remains pending.
+      n61. That specific dependency-reconstruction failure remains untested live.
 - [ ] Qualify source judgments across further results and retrieval failures,
       including exact hypotheses and conventions. The Forni discovery and
       applicability checks cover one source and hypothesis distinction.
