@@ -1,6 +1,6 @@
-# xean
+# `xean`
 
-xean 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
+`xean` 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
@@ -11,7 +11,7 @@ checking the resulting arguments. In the [reported trials](#qualification), that
 scope was sufficient for many tested problems, at recorded costs we found
 manageable.
 
-xean provides citation checking, but no literature-discovery or paper-preparation
+`xean` provides citation checking, but no literature-discovery or paper-preparation
 workflow. To give Explorer a source packet, find relevant papers separately and
 convert their texts into notes with provenance, exact hypotheses, and conventions.
 The optional Codex source verifier can retrieve cited results while checking
@@ -102,7 +102,7 @@ After `init`, while the campaign owner is closed:
 bun run xean submit .xean/demo.sqlite notes.json --id initial-notes
 ```
 
-`--id` identifies the submission. xean assigns note IDs at intake. A note's
+`--id` identifies the submission. `xean` assigns note IDs at intake. A note's
 `support` may name only existing notes that are not dead, not new notes in the
 same submission. Use `inspect` to read assigned IDs. Repeating the same submission
 ID and content is idempotent. Reusing an ID with different content fails.
@@ -180,7 +180,7 @@ The runtime does not match each reported URL and result against retrieved conten
 
 The Codex adapter uses temporary configuration, ignores user configuration and
 execpolicy rules, suppresses skill instructions, and disables plugins. Codex
-writes a final JSON verdict that xean validates. Receipts retain that result and
+writes a final JSON verdict that `xean` validates. Receipts retain that result and
 raw stdout/stderr. Tool restrictions rely on Codex configuration, without an
 independent event-log audit or host-added process isolation.
 
@@ -251,7 +251,7 @@ and external Codex source usage. Recorded costs can therefore be lower bounds.
 
 ## Policy and implementation
 
-The policy reference is xean 1.0.0 at `d4af872`, with transport repair `949a385`.
+The policy reference is `xean` 1.0.0 at `d4af872`, with transport repair `949a385`.
 A valid Explorer submission ends its call. Joint reconstruction strengthens the
 original acceptance policy. The 3.5 implementation is preserved separately as
 `yean-3.5` at `c546de8`, a rename-only fork of `148bb128`.
@@ -340,7 +340,7 @@ Pure graph and prompt helpers exported by `xean/policy` return synchronously.
 Existing `await` calls still work. Replace `.then(...)` chains with direct use of
 the returned value.
 
-Use fresh databases. Earlier xean and Yean campaigns require their recorded
+Use fresh databases. Earlier `xean` and Yean campaigns require their recorded
 runtimes. This port provides no database migration.
 
 ## Check and package
