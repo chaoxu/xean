@@ -122,6 +122,16 @@ test("Explorer receives the complete index and suggested IDs without preloading 
   expect(call.prompt).not.toContain(first.detailedSummary);
   expect(call.prompt).not.toContain(second.text);
   expect(call.prompt).toContain("Your first note is n4.");
+  expect(call.system).toContain(
+    "Use a summary to apply a verified result when it states the conclusion and all definitions, hypotheses, conventions, and limitations needed for your application.",
+  );
+  expect(call.system).toContain(
+    "Use read_notes for detailed statements and conditions, or full texts when you need a proof, construction, or missing detail.",
+  );
+  expect(call.system).toContain(
+    "A summary carries the note's verification state and does not establish an unverified result. Cite the note as support whenever you use its result.",
+  );
+  expect(call.system).not.toContain("read the full text before relying");
 });
 
 test("the coordinator gives fallible guidance while the original task and note flags remain authoritative", () => {
@@ -134,6 +144,12 @@ test("the coordinator gives fallible guidance while the original task and note f
   );
   expect(coordinator.system).toContain(
     "Your advice does not replace the original completion criteria.",
+  );
+  expect(coordinator.system).toContain(
+    "Filing does not change the note's verification state.",
+  );
+  expect(coordinator.system).toContain(
+    "choose its support: suggested notes whose results or proofs may help.",
   );
   const { text, ...heading } = note;
   const explorerGuidance = "Prove the remaining case using the bound in n1.";
@@ -177,7 +193,7 @@ test("solution-only verification changes Coordinator instructions without changi
         }),
       )
       .digest("hex"),
-  ).toBe("0c559999469a6dc0c663e0e2d8c4b3a0493f7d40f9d76f9d7c5e2ae63bfeb1b3");
+  ).toBe("708ed738f2df49aa4d0b9548e786583131de3bdab2d0d92463bea10a38694133");
   const disabled = coordinatorCall({ ...input, verifyOnSolution: false });
   const enabled = coordinatorCall({ ...input, verifyOnSolution: true });
   expect(disabled.system).toBe(baseline.system);
@@ -505,7 +521,7 @@ test("correctness permits valid partial claims and reserves task completion for 
   );
 });
 
-test("verifier and Codex prompts retain their baseline apart from the declared-support clarification", () => {
+test("verifier and Codex prompts retain their baseline apart from declared-support and summary-fidelity checks", () => {
   const second = {
     ...note,
     id: "n2",
@@ -538,12 +554,17 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
   const digest = createHash("sha256");
   const clarified =
     "Other notes in the verification batch are premises only when they belong to that note's declared support closure.";
+  const summaryFidelity =
+    "Check that any summary and detailedSummary preserve the hypotheses, conventions, limitations, and conditionality of the results they state without strengthening the text.";
   expect(calls[1]!.prompt).toContain(clarified);
+  expect(calls[1]!.prompt).toContain(summaryFidelity);
   for (const [index, call] of calls.entries()) {
-    const prompt = call.prompt.replace(
-      clarified,
-      "Other notes in the verification batch are not additional premises.",
-    );
+    const prompt = call.prompt
+      .replace(
+        clarified,
+        "Other notes in the verification batch are not additional premises.",
+      )
+      .replace(`${summaryFidelity} `, "");
     digest.update(`${historicalLabels[index]}\n${call.system}\n${prompt}\n`);
   }
   const offline = sourceCall(
@@ -561,7 +582,7 @@ test("verifier and Codex prompts retain their baseline apart from the declared-s
       `${historicalLabels[0]}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
     );
   }
-  // Captured from pre-batch port ae15a025, normalizing only the clarification above. The old
+  // Captured from pre-batch port ae15a025, normalizing only the two checks above. The old
   // aggregate archived fingerprint also included reconstruction, Explorer, and
   // Coordinator, whose instructions intentionally change with batch acceptance.
   expect(digest.digest("hex")).toBe(

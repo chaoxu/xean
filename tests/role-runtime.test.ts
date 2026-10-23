@@ -243,7 +243,7 @@ test("Explorer prompt, submission contract and notebook reader reach Pi; the fir
   }
 });
 
-test("Explorer reads indexed notes at both levels, repairs an unknown ID and preserves large batched texts", async () => {
+test("Explorer reads only indexed notes, repairs unavailable IDs and preserves large batched texts", async () => {
   const sources = [
     {
       id: "n1",
@@ -315,6 +315,18 @@ test("Explorer reads indexed notes at both levels, repairs an unknown ID and pre
           .filter((message) => message.role === "toolResult")
           .at(-1)!.isError,
       ).toBe(true);
+      return read(["n3"], "full");
+    },
+    (transcript) => {
+      expect(resultText(transcript)).toContain(
+        "Unknown or unavailable note: n3",
+      );
+      expect(
+        transcript.messages
+          .filter((message) => message.role === "toolResult")
+          .at(-1)!.isError,
+      ).toBe(true);
+      expect(JSON.stringify(transcript)).not.toContain("UNINDEXED_BODY");
       return read(["n1", "n2"], "detailed");
     },
     (transcript) => {
@@ -335,7 +347,7 @@ test("Explorer reads indexed notes at both levels, repairs an unknown ID and pre
       ).toEqual(sources.map(({ text }) => text));
       expect(
         transcript.messages.filter((message) => message.role === "toolResult"),
-      ).toHaveLength(3);
+      ).toHaveLength(4);
       expect(
         transcript.messages.filter((message) => message.role === "user"),
       ).toHaveLength(1);
@@ -346,7 +358,10 @@ test("Explorer reads indexed notes at both levels, repairs an unknown ID and pre
   try {
     const root = await harness.root(context);
     await root.commit(async (tx) => {
-      (await tx.doc(Notebook, ROOT_CONVERSATION_ID)).notes = sources;
+      (await tx.doc(Notebook, ROOT_CONVERSATION_ID)).notes = [
+        ...sources,
+        { id: "n3", text: "UNINDEXED_BODY", support: [] },
+      ];
     }, context);
     expect(
       (await harness.waitForTask(await invoke([], input), context)).state
@@ -355,7 +370,7 @@ test("Explorer reads indexed notes at both levels, repairs an unknown ID and pre
       status: "completed",
       result: { value: result, fresh: true },
     });
-    expect(fixture_.provider.state.callCount).toBe(4);
+    expect(fixture_.provider.state.callCount).toBe(5);
   } finally {
     await harness.close(context);
   }

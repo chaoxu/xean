@@ -70,7 +70,7 @@ export const externalVerification = z.strictObject({
   report: nonblank,
 });
 
-const navigation = {
+const summaries = {
   summary: nonblank.optional(),
   detailedSummary: nonblank.optional(),
 };
@@ -79,7 +79,7 @@ export const submittedNotes = z.strictObject({
   notes: z
     .array(
       z.strictObject({
-        ...navigation,
+        ...summaries,
         text: nonblank,
         support: supportIds,
         verification: externalVerification.optional(),
@@ -90,7 +90,7 @@ export const submittedNotes = z.strictObject({
 
 const noteFields = z.strictObject({
   id: noteId,
-  ...navigation,
+  ...summaries,
   text: nonblank,
   support: supportIds,
   verdicts: z.array(verdict),
@@ -138,7 +138,7 @@ export const explorerResult = z.strictObject({
   notes: z
     .array(
       z.strictObject({
-        ...navigation,
+        ...summaries,
         text: nonblank,
         support: z.array(noteId),
       }),

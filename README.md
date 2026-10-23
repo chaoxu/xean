@@ -1,28 +1,35 @@
-# Xean
+# `xean`
 
-## Note-access experiment
+## Reading notes
 
-This smoke branch tests v3.5's note-reading interface on the 4.1.0 workflow.
-Notes may carry a short `summary`, a `detailedSummary` of claims, conditions,
-methods, and gaps, and authoritative full `text`. Imported and generated notes
-use these fields alike. Summaries are navigation aids, never verified premises.
+This branch adds summary-based note access to the 4.1.0 workflow.
+
+Notes may carry a short `summary`, a `detailedSummary`, and authoritative full
+`text`. A detailed summary states the results with the definitions, hypotheses,
+conventions, bounds, and limitations needed to apply them without reading the
+proof. Summaries preserve explicit gaps and conditional claims. Imported and
+generated notes use these fields alike.
 
 Explorer starts with the summary index and Coordinator's suggested note IDs.
-It chooses detailed or full reads through `read_notes({ids, level})`, batching
-up to 20 IDs per call. A missing detailed summary is returned as `null`.
-Full reads retain the complete text, dependencies, provenance, and verdicts.
-Explorer is instructed to read the full text before relying on a result.
+It may apply a verified result from a sufficient summary and cite the note as
+support. It uses `read_notes({ids, level})` for detailed statements or full texts
+when it needs proofs, constructions, or missing details, batching up to 20 IDs
+per call. A missing detailed summary is returned as `null`. Full reads retain
+the complete text, dependencies, provenance, and verdicts.
 Pi continues the conversation after each read, and a valid `submit_notes`
 submission ends the Explorer turn.
 
-Coordinator receives the index and exact text only for notes lacking summaries.
-It is instructed to nominate claimed solutions from summaries for verification
-against the full texts.
-Supplied summaries avoid its initial corpus-wide filing pass. Include their
-preparation cost when comparing campaigns. Its submission rules and the
-verification and dependency-reconstruction requirements remain in place.
+Summaries carry the note's verification state. They do not establish unverified
+results. The correctness verifier checks summary fidelity against the full text,
+and verification and dependency reconstruction use full texts. Supplied summaries
+are the caller's responsibility. Source titles and chunk offsets alone cannot
+supply a theorem's statement or hypotheses.
 
-Xean 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
+Coordinator uses summaries to select work and nominate solutions for verification.
+It receives full texts only for notes lacking summaries. Supplied summaries avoid
+its initial filing pass. Include their preparation cost when comparing campaigns.
+
+`xean` 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
@@ -33,7 +40,7 @@ checking the resulting arguments. In the [reported trials](#qualification), that
 scope was sufficient for many tested problems, at recorded costs we found
 manageable.
 
-Xean provides citation checking, but no literature-discovery or paper-preparation
+`xean` provides citation checking, but no literature-discovery or paper-preparation
 workflow. To give Explorer a source packet, find relevant papers separately and
 convert their texts into notes with provenance, exact hypotheses, and conventions.
 The optional Codex source verifier can retrieve cited results while checking
@@ -124,7 +131,7 @@ After `init`, while the campaign owner is closed:
 bun run xean submit .xean/demo.sqlite notes.json --id initial-notes
 ```
 
-`--id` identifies the submission. Xean assigns note IDs at intake. A note's
+`--id` identifies the submission. `xean` assigns note IDs at intake. A note's
 `support` may name only existing notes that are not dead, not new notes in the
 same submission. Use `inspect` to read assigned IDs. Repeating the same submission
 ID and content is idempotent. Reusing an ID with different content fails.
@@ -202,7 +209,7 @@ The runtime does not match each reported URL and result against retrieved conten
 
 The Codex adapter uses temporary configuration, ignores user configuration and
 execpolicy rules, suppresses skill instructions, and disables plugins. Codex
-writes a final JSON verdict that Xean validates. Receipts retain that result and
+writes a final JSON verdict that `xean` validates. Receipts retain that result and
 raw stdout/stderr. Tool restrictions rely on Codex configuration, without an
 independent event-log audit or host-added process isolation.
 
@@ -274,7 +281,7 @@ and external Codex source usage. Recorded costs can therefore be lower bounds.
 
 ## Policy and implementation
 
-The policy reference is Xean 1.0.0 at `d4af872`, with transport repair `949a385`.
+The policy reference is `xean` 1.0.0 at `d4af872`, with transport repair `949a385`.
 A valid Explorer submission ends its call. Joint reconstruction strengthens the
 original acceptance policy. The 3.5 implementation is preserved separately as
 `yean-3.5` at `c546de8`, a rename-only fork of `148bb128`.
@@ -364,7 +371,7 @@ Pure graph and prompt helpers exported by `xean/policy` return synchronously.
 Existing `await` calls still work. Replace `.then(...)` chains with direct use of
 the returned value.
 
-Use fresh databases. Earlier Xean and Yean campaigns require their recorded
+Use fresh databases. Earlier `xean` and Yean campaigns require their recorded
 runtimes. This port provides no database migration.
 
 ## Check and package

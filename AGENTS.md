@@ -1,6 +1,10 @@
-# Working on Xean
+# Working on `xean`
 
 Read README.md and the pinned Pi implementation before changing the design.
+
+Write the project name in lowercase monospace: `xean` in Markdown or
+`\texttt{xean}` in LaTeX. In headings and at sentence starts, capitalization is
+allowed only when the format cannot render monospace.
 
 - Start from Pi's Tasks, Conversations, Entries, Documents, outcomes, and commits.
   Before implementing behavior, check whether Pi supplies it or a small change

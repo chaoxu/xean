@@ -155,7 +155,7 @@ export function createRoleRuntime() {
   const reader = defineTool({
     name: "read_notes",
     description:
-      "Read detailed summaries or authoritative full texts of indexed notes. Batch independent IDs. Summaries are navigation; dead notes are diagnostic only.",
+      "Read statements and conditions from detailed summaries, or full texts for proofs and missing details. Batch independent IDs. Dead notes are diagnostic only.",
     parameters: Type.Object(
       {
         ids: Type.Array(Type.String(), {
@@ -184,38 +184,30 @@ export function createRoleRuntime() {
         throw new Error("Notebook reads require an Explorer assignment");
       const input = assignment.descriptor.input;
       const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
-      const notes = new Map(
-        (book ? project(book).notes : input.support).map((note) => [
-          note.id,
-          note,
-        ]),
+      const notes = book ? project(book).notes : input.support;
+      const selected = ids.map((id) =>
+        input.notes.some((note) => note.id === id)
+          ? notes.find((note) => note.id === id)
+          : undefined,
       );
-      const known = new Set(input.notes.map((note) => note.id));
-      const missing = ids.find((id) => !known.has(id) || !notes.has(id));
-      if (missing)
-        return {
-          isError: true,
-          output: [
-            { type: "text", text: `Unknown or unavailable note: ${missing}` },
-          ],
-        };
-      return {
-        output: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              ids.map((id) => {
-                const { text, detailedSummary, ...index } = notes.get(id)!;
-                return {
-                  ...index,
-                  detailedSummary: detailedSummary ?? null,
-                  ...(level === "full" ? { text } : {}),
-                };
-              }),
-            ),
-          },
-        ],
-      };
+      const missing = selected.indexOf(undefined);
+      if (missing !== -1) {
+        api.output(`Unknown or unavailable note: ${ids[missing]}`);
+        return { isError: true };
+      }
+      api.output(
+        JSON.stringify(
+          selected.map((note) => {
+            const { text, detailedSummary, ...index } = note!;
+            return {
+              ...index,
+              detailedSummary: detailedSummary ?? null,
+              ...(level === "full" ? { text } : {}),
+            };
+          }),
+        ),
+      );
+      return {};
     },
   });
   const names = [
