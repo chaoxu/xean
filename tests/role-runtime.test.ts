@@ -23,6 +23,7 @@ import {
   Harness,
   MemoryStorage,
   ToolResultEntry,
+  ROOT_CONVERSATION_ID,
   type EntryId,
   type TaskId,
 } from "@earendil-works/pi-durable";
@@ -48,6 +49,7 @@ import { open, inspect } from "../src/host.ts";
 import { readReport } from "../src/report.ts";
 import { solveSettings, type PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
+import { Notebook, project } from "../src/state.ts";
 import provenance from "../vendor/pi/provenance.json";
 import historical from "./fixtures/v100-contracts.json";
 
@@ -193,7 +195,7 @@ function fixture(
   };
 }
 
-test("v1 prompt and contextual schema reach Pi; the first submission hands off", async () => {
+test("Explorer prompt, submission contract and notebook reader reach Pi; the first submission hands off", async () => {
   let input: TranscriptContext | undefined;
   const fixture_ = fixture([
     (transcript) => {
@@ -215,7 +217,9 @@ test("v1 prompt and contextual schema reach Pi; the first submission hands off",
     expect(
       input!.messages.filter((message) => message.role === "user")[0]?.content,
     ).toBe(call.prompt);
-    expect<unknown>(getCurrentTools(input!.messages)).toEqual([
+    const tools = getCurrentTools(input!.messages);
+    expect(tools.map(({ name }) => name)).toEqual([call.tool, "read_notes"]);
+    expect<unknown>(tools.filter(({ name }) => name === call.tool)).toEqual([
       {
         name: call.tool,
         description: call.description,
@@ -234,6 +238,139 @@ test("v1 prompt and contextual schema reach Pi; the first submission hands off",
       isError: false,
       details: value,
     });
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("Explorer reads only indexed notes, repairs unavailable IDs and preserves large batched texts", async () => {
+  const sources = [
+    {
+      id: "n1",
+      summary: "First claim.",
+      detailedSummary: "First exact conditions.",
+      text: "A".repeat(60_000) + " FIRST_END_α",
+      support: [],
+    },
+    {
+      id: "n2",
+      summary: "Second claim.",
+      text: "B".repeat(60_000) + " SECOND_END_β",
+      support: [],
+    },
+  ];
+  const notes = project({
+    notes: sources,
+    checks: [],
+    guidance: [],
+    inputs: [],
+  }).notes;
+  const input: CallDescriptor = {
+    kind: "explorer",
+    input: {
+      ...descriptor.input,
+      notes: notes.map(({ text, detailedSummary, ...index }) => index),
+      support: [notes[0]!],
+    },
+  };
+  const read = (ids: string[], level: "detailed" | "full") =>
+    fauxAssistantMessage([fauxToolCall("read_notes", { ids, level })], {
+      stopReason: "toolUse",
+    });
+  const resultText = (transcript: TranscriptContext) => {
+    const result = transcript.messages
+      .filter((message) => message.role === "toolResult")
+      .at(-1)!;
+    expect(result.toolName).toBe("read_notes");
+    return result.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("");
+  };
+  const result = {
+    notes: [
+      {
+        text: "Combined proof.",
+        summary: "Combined claim.",
+        detailedSummary: "Both conditions apply.",
+        support: ["n1", "n2"],
+      },
+    ],
+  };
+  const fixture_ = fixture([
+    (transcript) => {
+      const prompt = transcript.messages.find(
+        (message) => message.role === "user",
+      )!.content;
+      expect(prompt).toContain("Second claim.");
+      expect(prompt).not.toContain("First exact conditions.");
+      expect(prompt).not.toContain(sources[0]!.text);
+      return read(["n99"], "full");
+    },
+    (transcript) => {
+      expect(resultText(transcript)).toContain(
+        "Unknown or unavailable note: n99",
+      );
+      expect(
+        transcript.messages
+          .filter((message) => message.role === "toolResult")
+          .at(-1)!.isError,
+      ).toBe(true);
+      return read(["n3"], "full");
+    },
+    (transcript) => {
+      expect(resultText(transcript)).toContain(
+        "Unknown or unavailable note: n3",
+      );
+      expect(
+        transcript.messages
+          .filter((message) => message.role === "toolResult")
+          .at(-1)!.isError,
+      ).toBe(true);
+      expect(JSON.stringify(transcript)).not.toContain("UNINDEXED_BODY");
+      return read(["n1", "n2"], "detailed");
+    },
+    (transcript) => {
+      const readNotes = JSON.parse(resultText(transcript));
+      expect(
+        readNotes.map(
+          (entry: { detailedSummary: unknown }) => entry.detailedSummary,
+        ),
+      ).toEqual(["First exact conditions.", null]);
+      expect(readNotes.every((entry: object) => !("text" in entry))).toBe(true);
+      return read(["n1", "n2"], "full");
+    },
+    (transcript) => {
+      expect(
+        JSON.parse(resultText(transcript)).map(
+          (entry: { text: string }) => entry.text,
+        ),
+      ).toEqual(sources.map(({ text }) => text));
+      expect(
+        transcript.messages.filter((message) => message.role === "toolResult"),
+      ).toHaveLength(4);
+      expect(
+        transcript.messages.filter((message) => message.role === "user"),
+      ).toHaveLength(1);
+      return submitted(result);
+    },
+  ]);
+  const { harness, invoke } = await fixture_.open();
+  try {
+    const root = await harness.root(context);
+    await root.commit(async (tx) => {
+      (await tx.doc(Notebook, ROOT_CONVERSATION_ID)).notes = [
+        ...sources,
+        { id: "n3", text: "UNINDEXED_BODY", support: [] },
+      ];
+    }, context);
+    expect(
+      (await harness.waitForTask(await invoke([], input), context)).state
+        .outcome,
+    ).toMatchObject({
+      status: "completed",
+      result: { value: result, fresh: true },
+    });
+    expect(fixture_.provider.state.callCount).toBe(5);
   } finally {
     await harness.close(context);
   }
@@ -360,11 +497,11 @@ test("Coordinator rewinds whole input messages for corrections and size while pr
   const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
     kind: "coordinator",
     input: {
-      task: descriptor.input.task,
+      task: { ...descriptor.input.task, problem: "Prove 1 = 1. ".repeat(50) },
       notes: [
         {
           id: "n1",
-          text: "Reflexivity: x = x. ".repeat(30),
+          text: "Reflexivity: x = x.",
           support: [],
           verdicts: [],
           verified: true,
@@ -978,11 +1115,11 @@ test.each(["explorer", "coordinator"] as const)(
     const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
       kind: "coordinator",
       input: {
-        task: descriptor.input.task,
+        task: { ...descriptor.input.task, problem: "Prove 1 = 1. ".repeat(50) },
         notes: [
           {
             id: "n1",
-            text: "Reflexivity: x = x. ".repeat(30),
+            text: "Reflexivity: x = x.",
             support: [],
             verdicts: [],
             verified: false,

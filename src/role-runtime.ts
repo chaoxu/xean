@@ -39,6 +39,7 @@ import {
   type RoleCall,
 } from "./policy/prompts.ts";
 import type { PiRoleProfile } from "./policy/settings.ts";
+import { Notebook, project } from "./state.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
 export const roleGenerationPolicy = {
@@ -151,6 +152,64 @@ async function receipt(
 
 /** Native tools rebuild contextual Zod validation from durable call arguments. */
 export function createRoleRuntime() {
+  const reader = defineTool({
+    name: "read_notes",
+    description:
+      "Read statements and conditions from detailed summaries, or full texts for proofs and missing details. Batch independent IDs. Dead notes are diagnostic only.",
+    parameters: Type.Object(
+      {
+        ids: Type.Array(Type.String(), {
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+        }),
+        level: Type.Union([Type.Literal("detailed"), Type.Literal("full")]),
+      },
+      { additionalProperties: false },
+    ),
+    callers: ["model"],
+    replay: "safe",
+    executionMode: "sequential",
+    outputLimits: {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxLines: Number.MAX_SAFE_INTEGER,
+    },
+    async execute({ ids, level }, api, context) {
+      const assignment = await api.snapshot(
+        Assignment,
+        api.conversationId,
+        context,
+      );
+      if (assignment?.descriptor?.kind !== "explorer")
+        throw new Error("Notebook reads require an Explorer assignment");
+      const input = assignment.descriptor.input;
+      const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
+      const notes = book ? project(book).notes : input.support;
+      const selected = ids.map((id) =>
+        input.notes.some((note) => note.id === id)
+          ? notes.find((note) => note.id === id)
+          : undefined,
+      );
+      const missing = selected.indexOf(undefined);
+      if (missing !== -1) {
+        api.output(`Unknown or unavailable note: ${ids[missing]}`);
+        return { isError: true };
+      }
+      api.output(
+        JSON.stringify(
+          selected.map((note) => {
+            const { text, detailedSummary, ...index } = note!;
+            return {
+              ...index,
+              detailedSummary: detailedSummary ?? null,
+              ...(level === "full" ? { text } : {}),
+            };
+          }),
+        ),
+      );
+      return {};
+    },
+  });
   const names = [
     ...Object.values(roleTools),
     reconstructionCalls.statement.tool,
@@ -193,7 +252,7 @@ export function createRoleRuntime() {
   );
   const extension = defineExtension({
     name: "xean.roles",
-    tools,
+    tools: [...tools, reader],
     hooks: [
       hook(GenerationTask, {
         async beforeRequest({ messages, stream }, api, context) {
@@ -231,7 +290,18 @@ export function createRoleRuntime() {
               {
                 role: "system" as const,
                 content: call.system,
-                toolsAdded: [declaration],
+                toolsAdded: [
+                  declaration,
+                  ...(call.role === "explorer"
+                    ? [
+                        {
+                          name: reader.name,
+                          description: reader.description,
+                          parameters: reader.parameters,
+                        },
+                      ]
+                    : []),
+                ],
                 timestamp: 0,
               },
               ...messages.filter((message) => message.role !== "system"),
@@ -397,7 +467,7 @@ export function createRoleRuntime() {
             model: { provider: profile.provider, modelId: profile.model },
             thinkingLevel: profile.reasoning,
             extensions: [extension],
-            tools: [tool],
+            tools: [tool, ...(call.role === "explorer" ? [reader] : [])],
             instructions: call.system,
           });
           progress.conversation = conversationId;

@@ -1,6 +1,6 @@
 # `xean`
 
-`xean` 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
+`xean` 4.2.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
@@ -118,6 +118,33 @@ These commands queue input without starting models or reopening a terminal
 result. To add input to an interrupted CLI campaign, close its owner, submit,
 then run again. Cross-process admission to an active owner is not implemented.
 
+## Reading notes
+
+Every note has authoritative full `text` and may also carry a short `summary`
+and a `detailedSummary`. A detailed summary states the results with the definitions, hypotheses,
+conventions, bounds, and limitations needed to apply them without reading the
+proof. Summaries preserve explicit gaps and conditional claims. Imported and
+generated notes use these fields alike.
+
+Explorer starts with the summary index and Coordinator's suggested note IDs.
+It may apply a verified result from a sufficient summary and cite the note as
+support. It uses `read_notes({ids, level})` for detailed statements or full texts
+when it needs proofs, constructions, or missing details, batching up to 20 IDs
+per call. A missing detailed summary is returned as `null`. Full reads retain
+the complete text, dependencies, provenance, and verdicts.
+Pi continues the conversation after each read, and a valid `submit_notes`
+submission ends the Explorer turn.
+
+Summaries carry the note's verification state. They do not establish unverified
+results. The correctness verifier checks summary fidelity against the full text,
+and verification and dependency reconstruction use full texts. Supplied summaries
+are the caller's responsibility. Source titles and chunk offsets alone cannot
+supply a theorem's statement or hypotheses.
+
+Coordinator uses summaries to select work and nominate solutions for verification.
+It receives full texts only for notes lacking summaries. Supplied summaries avoid
+its initial filing pass. Include their preparation cost when comparing campaigns.
+
 ## Models and verification
 
 [Settings](examples/settings.json) contain profiles for `explorer`, `coordinator`,
@@ -199,7 +226,7 @@ neither assessment is a formal proof certificate.
 
 Notes can retain partial results and failed approaches. Read them with `inspect`.
 `export` writes only accepted note texts and their support as Markdown, excluding
-navigation summaries. It does not produce a finished research paper.
+summaries. It does not produce a finished research paper.
 For a better bound or generalization, state the exact improvement in the task's
 completion criteria. Acceptance ends the campaign. A further target needs a new
 campaign.
@@ -216,7 +243,8 @@ bun run xean guide .xean/demo.sqlite guidance.txt --id try-construction
 Close the CLI owner before adding guidance, as for `submit`. Guidance preserves
 the frozen task and does not interrupt a running call. Mathematical note text is
 append-only, so corrections use new notes. Coordinator files summaries once.
-Explorer sees all summaries and the full texts of Coordinator-selected support.
+Explorer sees the summary index and requests detailed summaries or full texts
+through the notebook reader.
 
 ### Can Explorer browse or execute code?
 
@@ -256,14 +284,14 @@ A valid Explorer submission ends its call. Joint reconstruction strengthens the
 original acceptance policy. The 3.5 implementation is preserved separately as
 `yean-3.5` at `c546de8`, a rename-only fork of `148bb128`.
 
-### Default policy compared with 3.5
+### Version 4.2.0 compared with 3.5
 
-The comparison uses 3.5 at `148bb12`, including its native Explorer.
+The comparison uses 4.2.0 and 3.5 at `148bb12`, including its native Explorer.
 
-| Area                            | Current policy                                                                                                                                                                                                                                                                     | 3.5                                                                                                                                                                                                 |
+| Area                            | 4.2.0 policy                                                                                                                                                                                                                                                                       | 3.5                                                                                                                                                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Note changes                    | Mathematical content is append-only. Corrections use new notes, and Coordinator files each summary once.                                                                                                                                                                           | Revision-checked edits preserve note IDs and invalidate affected checks. Explorer edits to mathematical content revoke external trust.                                                              |
-| Context                         | Coordinator receives full note texts through snapshots or compatible deltas. Explorer receives all note summaries and Coordinator-selected support texts.                                                                                                                          | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |
+| Context                         | Coordinator receives a compact note index, with full texts for notes lacking summaries. Explorer receives the index and suggested IDs, then requests detailed summaries or full texts as needed.                                                                                   | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |
 | Explorer continuation           | A valid submission ends the call. The requested verification batches finish before the next Explorer turn.                                                                                                                                                                         | Native Explorer can publish multiple submissions within its response allowance. Coordinator chooses the next worker after the worker finishes.                                                      |
 | Verification order              | Source, correctness, requirements, then reconstruction.                                                                                                                                                                                                                            | Correctness extracts checked statements and external premises before source checking, followed by requirements and reconstruction.                                                                  |
 | Missing justification           | Correctness returns FAIL for unsupported inferences or unproved assertions, except omitted routine facts.                                                                                                                                                                          | Returns INCONCLUSIVE when missing justification is the only blocker. FAIL requires a concrete defect.                                                                                               |
@@ -290,6 +318,29 @@ Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime.
 
 ## Qualification
+
+### Version 4.2.0
+
+The note-access experiment at `96aa0d5` ran two campaigns per First Proof Batch 3
+problem with prepared source packets and `gpt-6-astra`/max. At the release
+checkpoint, 18 of 20 campaigns had passed fresh independent review. Both P08
+campaigns were still running.
+
+Among the 16 pairs with independent PASS results for both this experiment and
+4.1.0 controls, recorded solver cost fell from $254.19 to $166.10. Coordinator
+cost fell from $81.29 to $7.77. These are observed API-equivalent costs, excluding
+packet preparation, independent review, and unreported failed responses. The
+comparison combines note access with prepared summary metadata, so it does not
+isolate either change. Seven pairs finished faster, and median paired elapsed
+time increased by 4.5%.
+
+The final summary-reading change at `ad4541a` passed two live `gpt-6-luna`/high
+role checks: Explorer applied a verified result using only its detailed summary,
+and the correctness verifier rejected a summary that omitted a necessary
+hypothesis. These narrow checks do not establish full-campaign performance for
+the final prompt change.
+
+### Earlier qualification
 
 A fresh strict-cut control produced a self-contained counterexample to an
 already-disproved conjecture and passed independent `gpt-6-astra`/high review.
@@ -355,4 +406,4 @@ reconstruction, hidden proof inputs, atomic verdicts, corrections, acceptance,
 workflow replay, provider-limit recovery, and persisted limits.
 `pack` stages `package.json` and its `files` list, creates an archive with system
 tar, and installs it with the frozen lockfile. It checks imports and the executable
-CLI, runs the packaged tests, and writes `dist/xean-4.1.0.tgz`.
+CLI, runs the packaged tests, and writes `dist/xean-4.2.0.tgz`.

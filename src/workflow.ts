@@ -372,7 +372,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               const input = explorerInput.parse({
                 task: config.task,
                 explorerGuidance: guidance,
-                notes: notes.map(({ text: _text, ...note }) => note),
+                notes: notes.map(
+                  ({ text: _text, detailedSummary: _detail, ...note }) => note,
+                ),
                 support: ids.map((id) => pick(notes, id)),
               });
               request = {

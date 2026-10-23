@@ -272,9 +272,13 @@ test("solution-only verification waits for a nomination, then checks its depende
   expect(reconstructed?.input.notes.map(({ id }) => id)).toEqual(["n1", "n3"]);
 });
 
-test("all partial batches settle before Explorer receives selected full support and appends new notes", async () => {
+test("partial batches settle before Explorer receives the index and suggested support, preserving authored summaries", async () => {
   const originals = [
-    note("Lemma L."),
+    {
+      ...note("Lemma L."),
+      summary: "L holds.",
+      detailedSummary: "L under its exact conditions.",
+    },
     note("Lemma M.", ["n1"]),
     note("Unselected text."),
   ];
@@ -282,7 +286,7 @@ test("all partial batches settle before Explorer receives selected full support 
     [
       { notes: originals },
       coordinate(
-        ["n1", "n2", "n3"],
+        ["n2", "n3"],
         [
           { note: "n1", verifiers: lemma },
           { note: "n2", verifiers: lemma },
@@ -314,7 +318,11 @@ test("all partial batches settle before Explorer receives selected full support 
   if (second?.kind !== "explorer") throw new Error("Missing second Explorer");
   expect(second.input.task).toEqual(task);
   expect(second.input.notes.map(({ id }) => id)).toEqual(["n1", "n2", "n3"]);
-  expect(second.input.notes.every((note) => !("text" in note))).toBe(true);
+  expect(
+    second.input.notes.every(
+      (note) => !("text" in note) && !("detailedSummary" in note),
+    ),
+  ).toBe(true);
   expect(
     second.input.support.map(({ id, text, verified }) => [id, text, verified]),
   ).toEqual([
@@ -325,7 +333,8 @@ test("all partial batches settle before Explorer receives selected full support 
   expect(report.notes.map(({ id }) => id)).toEqual(["n1", "n2", "n3", "n4"]);
   expect(
     report.notes.slice(0, 3).map(({ text, support }) => ({ text, support })),
-  ).toEqual(originals);
+  ).toEqual(originals.map(({ text, support }) => ({ text, support })));
+  expect(report.notes[0]).toMatchObject(originals[0]!);
   expect(report.accepted).toEqual([]);
 });
 

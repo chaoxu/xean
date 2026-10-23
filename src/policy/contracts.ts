@@ -70,10 +70,16 @@ export const externalVerification = z.strictObject({
   report: nonblank,
 });
 
+const summaries = {
+  summary: nonblank.optional(),
+  detailedSummary: nonblank.optional(),
+};
+
 export const submittedNotes = z.strictObject({
   notes: z
     .array(
       z.strictObject({
+        ...summaries,
         text: nonblank,
         support: supportIds,
         verification: externalVerification.optional(),
@@ -84,7 +90,7 @@ export const submittedNotes = z.strictObject({
 
 const noteFields = z.strictObject({
   id: noteId,
-  summary: nonblank.optional(),
+  ...summaries,
   text: nonblank,
   support: supportIds,
   verdicts: z.array(verdict),
@@ -115,7 +121,7 @@ export const explorerInput = z
   .strictObject({
     task,
     explorerGuidance: z.string(),
-    notes: z.array(noteFields.omit({ text: true })),
+    notes: z.array(noteFields.omit({ text: true, detailedSummary: true })),
     support: z.array(note),
   })
   .superRefine((value, ctx) => {
@@ -130,7 +136,13 @@ export type ExplorerInput = z.output<typeof explorerInput>;
 
 export const explorerResult = z.strictObject({
   notes: z
-    .array(z.strictObject({ text: nonblank, support: z.array(noteId) }))
+    .array(
+      z.strictObject({
+        ...summaries,
+        text: nonblank,
+        support: z.array(noteId),
+      }),
+    )
     .min(1),
 });
 
