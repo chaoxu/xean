@@ -177,7 +177,7 @@ test("solution-only verification changes Coordinator instructions without changi
         }),
       )
       .digest("hex"),
-  ).toBe("fd882eb1c658f3ffbf93408e08cc5849dce6cf80813df20c79241c643cf91d2a");
+  ).toBe("0c559999469a6dc0c663e0e2d8c4b3a0493f7d40f9d76f9d7c5e2ae63bfeb1b3");
   const disabled = coordinatorCall({ ...input, verifyOnSolution: false });
   const enabled = coordinatorCall({ ...input, verifyOnSolution: true });
   expect(disabled.system).toBe(baseline.system);

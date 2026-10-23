@@ -16,6 +16,8 @@ Pi continues the conversation after each read, and a valid `submit_notes`
 submission ends the Explorer turn.
 
 Coordinator receives the index and exact text only for notes lacking summaries.
+It is instructed to nominate claimed solutions from summaries for verification
+against the full texts.
 Supplied summaries avoid its initial corpus-wide filing pass. Include their
 preparation cost when comparing campaigns. Its submission rules and the
 verification and dependency-reconstruction requirements remain in place.
