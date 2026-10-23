@@ -46,16 +46,27 @@ function calls() {
   };
 }
 
-test("ordinary roles retain the historical tool name, description and complete JSON Schema", () => {
+test("ordinary contracts retain the historical schema apart from optional Explorer navigation", () => {
   const current = calls();
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const call = current[name],
       expected = historical.contracts[name];
+    const parameters = z.toJSONSchema(call.schema);
+    if (name === "explorer") {
+      const item = (
+        parameters.properties!.notes as z.core.JSONSchema.JSONSchema
+      ).items as z.core.JSONSchema.JSONSchema;
+      expect(item.required).toEqual(["text", "support"]);
+      for (const field of ["summary", "detailedSummary"]) {
+        expect(item.properties![field]).toEqual({ type: "string" });
+        delete item.properties![field];
+      }
+    }
     expect<unknown>(
       {
         name: call.tool,
         description: call.description,
-        parameters: z.toJSONSchema(call.schema),
+        parameters,
       },
       name,
     ).toEqual({

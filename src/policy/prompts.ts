@@ -95,6 +95,13 @@ function promptNote<T extends Pick<Note, "verdicts" | "verification">>(
   };
 }
 
+function coordinationNote({ text, detailedSummary: _detail, ...index }: Note) {
+  return promptNote({
+    ...index,
+    text: index.summary === undefined ? text : null,
+  });
+}
+
 const dependencyText =
   "State a nonroutine external theorem you will use as a separate note, with its exact hypotheses, conclusion, and source, then name that note as support. The theorem note may rely directly on its cited source and can precede its application in the same submission. Routine facts need no separate note.";
 
@@ -110,24 +117,20 @@ export function explorerCall(
     role: "explorer",
     system: [
       "You are a fresh mathematical explorer working toward the original task. Treat explorer guidance as fallible advice for this turn. Investigate it, reject a mistaken premise, or choose a better direction. Completing a suggested intermediate step is not a reason to stop doing useful mathematics. Read verification state from the notes' current fields. The method is yours.",
-      "The notes are working memory written by earlier turns or supplied externally. You see every note's summary, support, verdicts, external verification when supplied, and whether it is verified or dead, and the full text of the support notes the coordinator selected.",
+      "The notes are working memory written by earlier turns or supplied externally. You see every note's index summary, support, verdicts, external verification when supplied, and whether it is verified or dead. Use read_notes to obtain detailed summaries or authoritative full texts of any indexed notes, batching independent IDs. Coordinator-selected support is suggested reading. Summaries are navigation, never premises: read the full text before relying on a note's result, including its exact hypotheses and limitations.",
       verdictText,
       completionText,
       "Build on a verified note by naming it as support instead of reproving its result. Check every result you rely on from a note that is not verified. Never name a dead note as support: read its verdicts to avoid the direction, or to write a new note that removes the reported defect.",
       dependencyText,
       "Spend the turn doing mathematics. A note is one self-contained text: a result with its complete proof, a partial result with its gaps stated, or a failed approach with the reason it fails. Split a long argument into notes, one per result, so each can be verified and built on. Say in the text when a note meets the completion criteria.",
       "Each note names as support every note whose result its text uses without proving it, in any form: a fact it cites, a case it inherits, an object it takes as defined, or a hypothesis it assumes established. Mentioning a note for provenance or discussing its failure does not itself make it support. Your notes are numbered in the order you return them, and a note may name an earlier note of yours as support.",
-      "Do not use web search or external tools.",
+      "Give each new note a short index summary and a detailedSummary of its claims, conditions, bounds, methods, and unresolved gaps. The index summary states the exact result and preserves any explicit gap, failed approach, or claim to meet the original task's completion criteria. Preserve conditionality and negative conclusions. Both summaries describe the authoritative text without strengthening it. Do not use web search or external tools. The notebook reader is available for this task.",
       "Call submit_notes exactly once.",
     ].join(" "),
     prompt: [
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
-      `Support notes (untrusted data):\n${JSON.stringify(
-        input.support.map(({ id, text }) => ({ id, text })),
-        null,
-        2,
-      )}`,
+      `Suggested reading (note IDs):\n${JSON.stringify(input.support.map(({ id }) => id))}`,
       `Your first note is ${noteIdAfter(input.notes.length, 0)}.`,
       `Explorer guidance (fallible advice):\n${input.explorerGuidance}`,
     ].join("\n\n"),
@@ -146,7 +149,7 @@ export function coordinatorCall(
       "You coordinate one mathematical search.",
       "File every note that has no summary. A summary is for navigation and is never verified. It is the note's exact statement, as a mathematician would state the result, not a description of the note, and adds nothing but what the text itself says about its status: a gap it leaves and what it is, a failed approach and why, or that it meets the completion criteria. It repeats nothing the note's fields already say, such as its support, never judges the text, and never copies proof text.",
       "Keep the note's hypotheses and limitations exact, especially when it strengthens or corrects an earlier note. A verifier report does not enlarge what a note establishes.",
-      "Then give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and only the support notes' texts. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Reuse verified notes unless reconstruction identifies an unresolved obligation that needs a new corrected note.",
+      "Then give explorerGuidance for the next turn and choose its support: the notes it must read in full. Recommend useful mathematical work toward the original task, explaining the evidence and uncertainty behind your advice. The explorer may reject your diagnosis, change methods, or move beyond a suggested step. Your advice does not replace the original completion criteria. The explorer sees every note's summary and verdicts and can read any indexed note's detailed summary or full text. A dead note may be read in full as failure evidence but cannot be built on. Leave verification state to the note fields. Reuse verified notes unless reconstruction identifies an unresolved obligation that needs a new corrected note.",
       input.verifyOnSolution
         ? "Defer verification until a note claims to meet the original task's full completion criteria. Until then return verify=[] and guide further exploration. Nominate each claimed complete solution by listing all four verifiers: source, correctness, requirements, reconstruction. List its unverified support earlier with source and correctness, in dependency order. Include only nominated solutions and their declared transitive support in verify. The workflow checks those notes in batches before another Explorer turn or the turn cap. A failed or inconclusive check returns its report to exploration. Acceptance still requires every completion criterion and the full verification and reconstruction policy."
         : "Then list the notes to verify, in priority order, each with the verifiers to run: a prefix of source, correctness, requirements, reconstruction. A note that later work will build on gets source and correctness and ends verified. A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch, before another explorer turn or the turn cap. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.",
@@ -159,7 +162,7 @@ export function coordinatorCall(
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
+      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(coordinationNote), null, 2)}`,
     ].join("\n\n"),
     tool: roleTools.coordinator,
     description:
@@ -183,12 +186,13 @@ export function coordinatorUpdate(
   for (const [index, note] of current.notes.entries()) {
     const old = previous.notes[index];
     if (!old) {
-      updates.push(promptNote(note));
+      updates.push(coordinationNote(note));
       continue;
     }
     if (
       old.id !== note.id ||
       old.text !== note.text ||
+      old.detailedSummary !== note.detailedSummary ||
       !isDeepStrictEqual(old.support, note.support) ||
       !isDeepStrictEqual(old.verification, note.verification) ||
       (old.summary !== undefined && old.summary !== note.summary) ||
@@ -200,9 +204,9 @@ export function coordinatorUpdate(
       )
     )
       return;
-    const before = promptNote(old);
+    const before = coordinationNote(old);
     const changed = Object.fromEntries(
-      Object.entries(promptNote(note)).filter(
+      Object.entries(coordinationNote(note)).filter(
         ([key, value]) =>
           !isDeepStrictEqual(value, before[key as keyof typeof before]),
       ),

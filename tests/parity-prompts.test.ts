@@ -60,8 +60,12 @@ test("guidance is per-turn advice without changing the task or fixed role instru
   expect(coordinator.system).not.toContain(guidance);
 });
 
-test("selected support contributes its metadata once and its full proof once", () => {
-  const first = { ...note, summary: "First navigation statement." };
+test("Explorer receives the complete index and suggested IDs without preloading note bodies", () => {
+  const first = {
+    ...note,
+    summary: "First navigation statement.",
+    detailedSummary: "Full conditions and bounds.",
+  };
   const second = {
     ...note,
     id: "n2",
@@ -87,8 +91,8 @@ test("selected support contributes its metadata once and its full proof once", (
       },
     ],
   };
-  const headings = [first, second, third].map(
-    ({ text, ...heading }) => heading,
+  const headings = ([first, second, third] as Note[]).map(
+    ({ text, detailedSummary: _detail, ...heading }) => heading,
   );
   const call = explorerCall({
     task,
@@ -96,9 +100,9 @@ test("selected support contributes its metadata once and its full proof once", (
     notes: headings,
     support: [first, third],
   });
-  const [metadata, texts] = call.prompt
+  const [metadata, suggestions] = call.prompt
     .split("Notes (untrusted data):\n")[1]!
-    .split("\n\nSupport notes (untrusted data):\n");
+    .split("\n\nSuggested reading (note IDs):\n");
   expect(JSON.parse(metadata!)).toEqual(
     headings.map((heading) => ({
       ...heading,
@@ -107,14 +111,15 @@ test("selected support contributes its metadata once and its full proof once", (
       ),
     })),
   );
-  expect(JSON.parse(texts!.split("\n\nYour first note")[0]!)).toEqual([
-    { id: "n1", text: first.text },
-    { id: "n3", text: third.text },
+  expect(JSON.parse(suggestions!.split("\n\nYour first note")[0]!)).toEqual([
+    "n1",
+    "n3",
   ]);
   for (const selected of [first, third]) {
     expect(call.prompt.split(selected.summary)).toHaveLength(2);
-    expect(call.prompt.split(selected.text)).toHaveLength(2);
+    expect(call.prompt).not.toContain(selected.text);
   }
+  expect(call.prompt).not.toContain(first.detailedSummary);
   expect(call.prompt).not.toContain(second.text);
   expect(call.prompt).toContain("Your first note is n4.");
 });
@@ -163,7 +168,13 @@ test("solution-only verification changes Coordinator instructions without changi
   expect(
     createHash("sha256")
       .update(
-        JSON.stringify({ system: baseline.system, prompt: baseline.prompt }),
+        JSON.stringify({
+          system: baseline.system.replace(
+            "can read any indexed note's detailed summary or full text",
+            "only the support notes' texts",
+          ),
+          prompt: baseline.prompt,
+        }),
       )
       .digest("hex"),
   ).toBe("fd882eb1c658f3ffbf93408e08cc5849dce6cf80813df20c79241c643cf91d2a");
@@ -231,19 +242,26 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     input,
     ["n2"],
   );
-  for (const prompt of [...calls.map((c) => c.prompt), native.request.prompt]) {
+  for (const [index, prompt] of [
+    ...calls.map((c) => c.prompt),
+    native.request.prompt,
+  ].entries()) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
     expect(prompt).toContain('"verdict": "PASS"');
     expect(prompt).toContain(evidence.verdicts[1]!.report);
     expect(prompt).toContain(evidence.verdicts[2]!.report);
     expect(prompt).toContain(evidence.summary);
-    expect(prompt).toContain(evidence.text);
+    if (index < 2) expect(prompt).not.toContain(evidence.text);
+    else expect(prompt).toContain(evidence.text);
   }
   expect(evidence).toEqual(before);
 });
 
 test("Coordinator deltas preserve the projected notebook and reset unsafe changes", () => {
-  const { summary: _summary, ...seed } = note;
+  const { summary: _summary, ...seed } = {
+    ...note,
+    detailedSummary: "PRIVATE_DETAILED_ARGUMENT",
+  };
   const initial: CoordinatorInput = {
     task,
     notes: [
@@ -293,7 +311,10 @@ test("Coordinator deltas preserve the projected notebook and reset unsafe change
     next = coordinatorCall(current);
   const update = coordinatorUpdate(initial, current)!;
   const records = (prompt: string) =>
-    JSON.parse(prompt.split("Notes (untrusted data):\n")[1]!) as Note[];
+    JSON.parse(prompt.split("Notes (untrusted data):\n")[1]!) as (Omit<
+      Note,
+      "text"
+    > & { text: string | null })[];
   const merged = new Map(
     records(first.prompt).map((record) => [record.id, record]),
   );
@@ -308,6 +329,31 @@ test("Coordinator deltas preserve the projected notebook and reset unsafe change
     expect(update).not.toContain(JSON.stringify(old.text));
   expect(update).toContain("New partial argument.");
   expect(update).toContain("Missing case.");
+  expect(records(first.prompt).map(({ text }) => text)).toEqual(
+    initial.notes.map(({ text }) => text),
+  );
+  expect(
+    records(next.prompt)
+      .slice(0, 2)
+      .map(({ text }) => text),
+  ).toEqual([null, null]);
+  expect(first.prompt + update + next.prompt).not.toContain(
+    seed.detailedSummary,
+  );
+  const appended = coordinatorUpdate(current, {
+    ...current,
+    notes: [
+      ...current.notes,
+      {
+        ...note,
+        id: "n4",
+        text: "APPENDED_HIDDEN_PROOF",
+        detailedSummary: "APPENDED_HIDDEN_DETAIL",
+      },
+    ],
+  })!;
+  expect(appended).toContain('"id": "n4"');
+  expect(appended).not.toContain("APPENDED_HIDDEN");
   expect(first.prompt + update).not.toContain("PRIVATE ATTESTATION");
   expect(first.prompt + update).not.toContain('"report": "Sound."');
   expect([initial, current]).toEqual(before);
@@ -369,7 +415,7 @@ test("Coordinator deltas preserve the projected notebook and reset unsafe change
   expect(coordinatorUpdate(changed({ dead: true }), current)).toBeUndefined();
 });
 
-test("changing guidance follows all selected mathematics", () => {
+test("changing guidance follows the complete index and suggested reading", () => {
   const { text, ...heading } = note;
   const first = explorerCall({
     task,
@@ -384,7 +430,9 @@ test("changing guidance follows all selected mathematics", () => {
     explorerGuidance: "Try B.",
   });
   const boundary = first.prompt.indexOf("Explorer guidance (fallible advice):");
-  expect(boundary).toBeGreaterThan(first.prompt.indexOf(note.text));
+  expect(boundary).toBeGreaterThan(
+    first.prompt.indexOf("Suggested reading (note IDs):"),
+  );
   expect(first.prompt.slice(0, boundary)).toBe(
     second.prompt.slice(0, boundary),
   );
@@ -526,6 +574,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
     ...note,
     text: "ADMITTED_SOURCE_BODY",
     summary: "PRIVATE_SOURCE_SUMMARY",
+    detailedSummary: "PRIVATE_SOURCE_DETAIL",
     verdicts: [],
     verification: {
       source: "Trusted theorem",
@@ -537,6 +586,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
     id,
     text: `ORIGINAL_GENERATED_BODY_${id}`,
     summary: `GENERATED_SUMMARY_${id}`,
+    detailedSummary: `GENERATED_DETAIL_${id}`,
     support: [index === 0 ? "n1" : "n2"],
     verdicts: [
       {
@@ -588,6 +638,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
     );
     expect(call.prompt).toContain(source.text);
     expect(call.prompt).not.toContain(source.summary);
+    expect(call.prompt).not.toContain(source.detailedSummary!);
     expect(call.prompt).not.toContain(source.verification!.report);
     expect(call.prompt).not.toContain("INDEPENDENT_OLD_ARGUMENT");
     expect(call.prompt).toContain('"support"');
@@ -596,6 +647,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
     for (const generatedNote of generated) {
       expect(call.prompt).not.toContain(generatedNote.text);
       expect(call.prompt).not.toContain(generatedNote.summary);
+      expect(call.prompt).not.toContain(generatedNote.detailedSummary!);
       for (const verdict of generatedNote.verdicts)
         expect(call.prompt).not.toContain(verdict.report);
     }

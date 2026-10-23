@@ -39,6 +39,7 @@ import {
   type RoleCall,
 } from "./policy/prompts.ts";
 import type { PiRoleProfile } from "./policy/settings.ts";
+import { Notebook, project } from "./state.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
 export const roleGenerationPolicy = {
@@ -151,6 +152,72 @@ async function receipt(
 
 /** Native tools rebuild contextual Zod validation from durable call arguments. */
 export function createRoleRuntime() {
+  const reader = defineTool({
+    name: "read_notes",
+    description:
+      "Read detailed summaries or authoritative full texts of indexed notes. Batch independent IDs. Summaries are navigation; dead notes are diagnostic only.",
+    parameters: Type.Object(
+      {
+        ids: Type.Array(Type.String(), {
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+        }),
+        level: Type.Union([Type.Literal("detailed"), Type.Literal("full")]),
+      },
+      { additionalProperties: false },
+    ),
+    callers: ["model"],
+    replay: "safe",
+    executionMode: "sequential",
+    outputLimits: {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxLines: Number.MAX_SAFE_INTEGER,
+    },
+    async execute({ ids, level }, api, context) {
+      const assignment = await api.snapshot(
+        Assignment,
+        api.conversationId,
+        context,
+      );
+      if (assignment?.descriptor?.kind !== "explorer")
+        throw new Error("Notebook reads require an Explorer assignment");
+      const input = assignment.descriptor.input;
+      const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
+      const notes = new Map(
+        (book ? project(book).notes : input.support).map((note) => [
+          note.id,
+          note,
+        ]),
+      );
+      const known = new Set(input.notes.map((note) => note.id));
+      const missing = ids.find((id) => !known.has(id) || !notes.has(id));
+      if (missing)
+        return {
+          isError: true,
+          output: [
+            { type: "text", text: `Unknown or unavailable note: ${missing}` },
+          ],
+        };
+      return {
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              ids.map((id) => {
+                const { text, detailedSummary, ...index } = notes.get(id)!;
+                return {
+                  ...index,
+                  detailedSummary: detailedSummary ?? null,
+                  ...(level === "full" ? { text } : {}),
+                };
+              }),
+            ),
+          },
+        ],
+      };
+    },
+  });
   const names = [
     ...Object.values(roleTools),
     reconstructionCalls.statement.tool,
@@ -193,7 +260,7 @@ export function createRoleRuntime() {
   );
   const extension = defineExtension({
     name: "xean.roles",
-    tools,
+    tools: [...tools, reader],
     hooks: [
       hook(GenerationTask, {
         async beforeRequest({ messages, stream }, api, context) {
@@ -231,7 +298,18 @@ export function createRoleRuntime() {
               {
                 role: "system" as const,
                 content: call.system,
-                toolsAdded: [declaration],
+                toolsAdded: [
+                  declaration,
+                  ...(call.role === "explorer"
+                    ? [
+                        {
+                          name: reader.name,
+                          description: reader.description,
+                          parameters: reader.parameters,
+                        },
+                      ]
+                    : []),
+                ],
                 timestamp: 0,
               },
               ...messages.filter((message) => message.role !== "system"),
@@ -397,7 +475,7 @@ export function createRoleRuntime() {
             model: { provider: profile.provider, modelId: profile.model },
             thinkingLevel: profile.reasoning,
             extensions: [extension],
-            tools: [tool],
+            tools: [tool, ...(call.role === "explorer" ? [reader] : [])],
             instructions: call.system,
           });
           progress.conversation = conversationId;

@@ -1,5 +1,25 @@
 # Xean
 
+## Note-access experiment
+
+This smoke branch tests v3.5's note-reading interface on the 4.1.0 workflow.
+Notes may carry a short `summary`, a `detailedSummary` of claims, conditions,
+methods, and gaps, and authoritative full `text`. Imported and generated notes
+use these fields alike. Summaries are navigation aids, never verified premises.
+
+Explorer starts with the summary index and Coordinator's suggested note IDs.
+It chooses detailed or full reads through `read_notes({ids, level})`, batching
+up to 20 IDs per call. A missing detailed summary is returned as `null`.
+Full reads retain the complete text, dependencies, provenance, and verdicts.
+Explorer is instructed to read the full text before relying on a result.
+Pi continues the conversation after each read, and a valid `submit_notes`
+submission ends the Explorer turn.
+
+Coordinator receives the index and exact text only for notes lacking summaries.
+Supplied summaries avoid its initial corpus-wide filing pass. Include their
+preparation cost when comparing campaigns. Its submission rules and the
+verification and dependency-reconstruction requirements remain in place.
+
 Xean 4.1.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
@@ -216,7 +236,8 @@ bun run xean guide .xean/demo.sqlite guidance.txt --id try-construction
 Close the CLI owner before adding guidance, as for `submit`. Guidance preserves
 the frozen task and does not interrupt a running call. Mathematical note text is
 append-only, so corrections use new notes. Coordinator files summaries once.
-Explorer sees all summaries and the full texts of Coordinator-selected support.
+Explorer sees the summary index and requests detailed summaries or full texts
+through the notebook reader.
 
 ### Can Explorer browse or execute code?
 
@@ -256,11 +277,12 @@ A valid Explorer submission ends its call. Joint reconstruction strengthens the
 original acceptance policy. The 3.5 implementation is preserved separately as
 `yean-3.5` at `c546de8`, a rename-only fork of `148bb128`.
 
-### Default policy compared with 3.5
+### Released 4.1.0 compared with 3.5
 
-The comparison uses 3.5 at `148bb12`, including its native Explorer.
+The comparison uses released 4.1.0 and 3.5 at `148bb12`, including its native
+Explorer. This branch's changes are described under Note-access experiment.
 
-| Area                            | Current policy                                                                                                                                                                                                                                                                     | 3.5                                                                                                                                                                                                 |
+| Area                            | Released 4.1.0 policy                                                                                                                                                                                                                                                              | 3.5                                                                                                                                                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Note changes                    | Mathematical content is append-only. Corrections use new notes, and Coordinator files each summary once.                                                                                                                                                                           | Revision-checked edits preserve note IDs and invalidate affected checks. Explorer edits to mathematical content revoke external trust.                                                              |
 | Context                         | Coordinator receives full note texts through snapshots or compatible deltas. Explorer receives all note summaries and Coordinator-selected support texts.                                                                                                                          | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |

@@ -22,7 +22,7 @@ export const DefinitionDoc = defineDoc({
 });
 export type StoredNote = Pick<
   Note,
-  "id" | "text" | "support" | "verification" | "summary"
+  "id" | "text" | "support" | "verification" | "summary" | "detailedSummary"
 >;
 export type Check = { candidate: number; call: number; values: Verdict[] };
 export type NotebookState = {
