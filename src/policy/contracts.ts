@@ -24,20 +24,14 @@ export const roleLabels = {
   coordinator: `${applicationId}/coordinator`,
   verifier: `${applicationId}/verifier`,
 } as const satisfies Readonly<Record<RoleName, string>>;
-/** Submit tools for the reconstruction verifier's two calls before its verdict. */
-export const reconstructionCalls = {
-  statement: {
-    tool: "submit_statement",
-  },
-  proof: {
-    tool: "submit_proof",
-  },
-} as const;
-export const roleTools = {
+/** The submit tool for each mathematical assignment. */
+export const submissionTools = {
   explorer: "submit_notes",
   coordinator: "submit_coordination",
   verifier: "submit_verdict",
-} as const satisfies Readonly<Record<RoleName, string>>;
+  statement: "submit_statement",
+  proof: "submit_proof",
+} as const satisfies Readonly<Record<RoleName | "statement" | "proof", string>>;
 
 export const task = z.strictObject({
   problem: nonblank,

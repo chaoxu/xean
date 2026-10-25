@@ -27,11 +27,7 @@ import {
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import {
-  reconstructionCalls,
-  roleLabels,
-  roleTools,
-} from "./policy/contracts.ts";
+import { roleLabels, submissionTools } from "./policy/contracts.ts";
 import {
   coordinatorUpdate,
   resolveCall,
@@ -210,12 +206,7 @@ export function createRoleRuntime() {
       return {};
     },
   });
-  const names = [
-    ...Object.values(roleTools),
-    reconstructionCalls.statement.tool,
-    reconstructionCalls.proof.tool,
-  ];
-  const tools = names.map((name) =>
+  const tools = Object.values(submissionTools).map((name) =>
     defineTool({
       name,
       description: "Submit the result for the current mathematical assignment.",
