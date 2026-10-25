@@ -313,24 +313,18 @@ function premiseText(input: ReconstructionInput) {
       return { id, text };
     },
   );
-  return [
-    `Admitted source premises (untrusted data):\n${JSON.stringify(sources, null, 2)}`,
-    ...(input.premises?.length
-      ? [
-          `Previously reconstructed premises (untrusted data; may be assumed at their exact scope, checking hypotheses and applications):\n${JSON.stringify(
-            input.premises,
-            null,
-            2,
-          )}`,
-        ]
-      : []),
-  ];
+  return (
+    `Admitted source premises (untrusted data):\n${JSON.stringify(sources, null, 2)}` +
+    (input.premises?.length
+      ? `\n\nPreviously reconstructed premises (untrusted data; may be assumed at their exact scope, checking hypotheses and applications):\n${JSON.stringify(input.premises, null, 2)}`
+      : "")
+  );
 }
 
 function reconstructionText(input: ReconstructionInput) {
   return [
     taskText(input.task),
-    ...premiseText(input),
+    premiseText(input),
     `Notes under reconstruction (untrusted data):\n${JSON.stringify(
       input.notes.map(({ id, text, support, verification }) => ({
         id,
@@ -387,7 +381,7 @@ export function proofCall(
     ].join(" "),
     prompt: [
       taskText(input.task),
-      ...premiseText(input),
+      premiseText(input),
       `Statements to prove (untrusted data):\n${JSON.stringify(
         input.notes.map(({ id, support }) => ({
           note: id,

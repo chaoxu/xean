@@ -221,10 +221,11 @@ independent event-log audit or host-added process isolation.
 
 The candidate passed source, correctness, requirements, and reconstruction in one
 attempt. Its generated dependencies passed reconstruction earlier in the same
-campaign or in that batch. Reuse reads the checked statements and declared
-support IDs from Pi's recorded comparison. Pi's frozen worker input retains the
-receipt references across recovery. Earlier generated proofs and verifier
-reports stay out of the blind proof input. Failed dependencies remain unusable.
+campaign or in that batch. Reuse reads the checked statements from Pi's recorded
+comparison and keeps the notes' declared dependencies. Pi's frozen worker input
+retains the receipt references across recovery. Earlier generated proofs and
+verifier reports stay out of the blind proof input. Failed dependencies remain
+unusable.
 An admitted source dependency is a premise leaf. `verified` is weaker:
 it establishes source and correctness over verified support, not task completion.
 Models can make mistakes. Independent review is external to this campaign, and

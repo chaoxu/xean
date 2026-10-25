@@ -39,7 +39,7 @@ export function supportClosure(
 export function reconstructionInput(
   input: ReconstructionInput,
   roots: readonly string[],
-  reusable: readonly ReconstructionPremise[] = [],
+  reusable: Readonly<Record<string, string>> = {},
 ): ReconstructionInput {
   const needed = new Set(roots),
     notes: Note[] = [],
@@ -52,7 +52,6 @@ export function reconstructionInput(
   const fresh = new Set(roots);
   for (const note of known)
     if (note.support.some((id) => fresh.has(id))) fresh.add(note.id);
-  const prior = new Map(reusable.map((value) => [value.note, value]));
   // Validated dependencies have earlier IDs, so visit consumers first.
   for (const note of known.reverse()) {
     if (!needed.has(note.id)) continue;
@@ -62,9 +61,9 @@ export function reconstructionInput(
         throw new Error(`unverified source premise ${note.id}`);
       support.push(note);
     } else {
-      const premise = prior.get(note.id);
-      if (premise && note.verified && !fresh.has(note.id))
-        premises.push(premise);
+      const statement = reusable[note.id];
+      if (statement !== undefined && note.verified && !fresh.has(note.id))
+        premises.push({ note: note.id, statement, support: note.support });
       else notes.push(note);
       for (const id of note.support) needed.add(id);
     }

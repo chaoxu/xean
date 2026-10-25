@@ -319,11 +319,8 @@ export const verifierInput = z
     }
   });
 export type VerifierInput = z.output<typeof verifierInput>;
-export type ReconstructionPremise = {
-  note: string;
-  statement: string;
-  support: string[];
-};
+export type ReconstructionPremise = Statement["statements"][number] &
+  Pick<Note, "support">;
 export type ReconstructionInput = Pick<
   VerifierInput,
   "task" | "notes" | "support"

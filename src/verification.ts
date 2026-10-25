@@ -12,7 +12,6 @@ import {
   verifierInput,
   verifierNames,
   type ReconstructionInput,
-  type ReconstructionPremise,
   type Verdict,
   type VerifierInput,
 } from "./policy/contracts.ts";
@@ -26,7 +25,7 @@ import {
 import type { CodexRequest } from "./policy/source.ts";
 
 export interface VerificationDependencies {
-  premises?: ReconstructionPremise[];
+  premises?: Readonly<Record<string, string>>;
   call(
     key: string,
     descriptor: CallDescriptor,

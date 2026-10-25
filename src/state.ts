@@ -51,23 +51,18 @@ export function project(book: NotebookState): {
   accepted: string[];
   reconstructed: Record<string, number>;
 } {
-  const reports = new Map<string, Verdict[]>();
-  const passes = new Map<string, Map<number, Map<string, number>>>();
+  const reports: Record<string, Verdict[]> = {};
+  const passes: Record<string, Record<number, Map<string, number>>> = {};
   const failures = new Set<string>();
   for (const [index, check] of book.checks.entries())
     for (const verdict of check.values) {
-      const history = reports.get(verdict.note) ?? [];
-      history.push(verdict);
-      reports.set(verdict.note, history);
+      (reports[verdict.note] ??= []).push(verdict);
       if (verdict.verdict === "FAIL" && verdict.verifier !== "requirements")
         failures.add(verdict.note);
       if (verdict.verdict !== "PASS") continue;
-      const attempts =
-        passes.get(verdict.note) ?? new Map<number, Map<string, number>>();
-      const passed = attempts.get(check.candidate) ?? new Map<string, number>();
+      const attempts = (passes[verdict.note] ??= {});
+      const passed = (attempts[check.candidate] ??= new Map());
       passed.set(verdict.verifier, index);
-      attempts.set(check.candidate, passed);
-      passes.set(verdict.note, attempts);
     }
   const notes = new Map<string, Note>(),
     accepted: string[] = [];
@@ -75,24 +70,24 @@ export function project(book: NotebookState): {
   const reconstructed: Record<string, number> = {};
   for (const entry of [...book.notes].sort((a, b) => byId(a.id, b.id))) {
     const support = entry.support.map((id) => notes.get(id));
-    const attempts = [...(passes.get(entry.id) ?? [])];
+    const attempts = Object.values(passes[entry.id] ?? {});
     const established =
       entry.verification !== undefined ||
-      attempts.some(([, p]) => p.has("source") && p.has("correctness"));
+      attempts.some((p) => p.has("source") && p.has("correctness"));
     const dead = failures.has(entry.id) || support.some((note) => note?.dead);
     const verified =
       established && !dead && support.every((note) => note?.verified);
     const note = noteSchema.parse({
       ...entry,
       support: [...entry.support].sort(byId),
-      verdicts: reports.get(entry.id) ?? [],
+      verdicts: reports[entry.id] ?? [],
       dead,
       verified,
     });
     notes.set(note.id, note);
     // Each candidate records one joint reconstruction batch. Parents must pass
     // before that batch or within it; later evidence cannot repair its verdict.
-    for (const [, passed] of attempts)
+    for (const passed of attempts)
       if (
         !verified ||
         !support.every(
@@ -104,7 +99,7 @@ export function project(book: NotebookState): {
         )
       )
         passed.delete("reconstruction");
-    const receipts = attempts.flatMap(([, p]) =>
+    const receipts = attempts.flatMap((p) =>
       p.has("reconstruction") ? [p.get("reconstruction")!] : [],
     );
     if (receipts.length) {
@@ -113,7 +108,7 @@ export function project(book: NotebookState): {
     }
     if (
       verified &&
-      attempts.some(([, p]) => verifierNames.every((name) => p.has(name)))
+      attempts.some((p) => verifierNames.every((name) => p.has(name)))
     )
       accepted.push(note.id);
   }

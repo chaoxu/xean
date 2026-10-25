@@ -22,7 +22,6 @@ import {
   type Verification,
   type VerifierInput,
   type Verdict,
-  type ReconstructionPremise,
 } from "./policy/contracts.ts";
 import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
@@ -124,7 +123,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   .flatMap((c) => c.values),
               );
             };
-            const premises: ReconstructionPremise[] = [];
+            const premises: Record<string, string> = {};
             await runtime.commit(async (tx) => {
               for (const ref of input.reconstruction ?? []) {
                 const entry = await tx.entry(ref.call as EntryId);
@@ -134,13 +133,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 );
                 if (descriptor?.kind !== "reconstruction")
                   throw new Error("Missing reconstruction assignment");
-                const statement = descriptor.statement.statements.find(
+                premises[ref.note] = descriptor.statement.statements.find(
                   (value) => value.note === ref.note,
-                )!;
-                premises.push({
-                  ...statement,
-                  support: [...pick(descriptor.input.notes, ref.note).support],
-                });
+                )!.statement;
               }
             }, context);
             await verify(input.input, input.settings, {

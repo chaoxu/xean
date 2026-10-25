@@ -104,11 +104,9 @@ test("reuse retains ancestor statements and source definitions, but never assume
     notes: [notes[3]!],
     support: [source, ...notes.slice(1, 3)],
   };
-  const reusable = notes.slice(1).map((value) => ({
-    note: value.id,
-    support: value.support,
-    statement: `DEFINITION_AND_CLAIM_${value.id}`,
-  }));
+  const reusable = Object.fromEntries(
+    notes.slice(1).map(({ id }) => [id, `DEFINITION_AND_CLAIM_${id}`]),
+  );
   const reused = reconstructionInput(original, ["n4"], reusable);
   expect(reused.notes.map(({ id }) => id)).toEqual(["n4"]);
   expect(reused.premises?.map(({ note }) => note)).toEqual(["n2", "n3"]);
