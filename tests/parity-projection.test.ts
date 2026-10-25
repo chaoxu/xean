@@ -30,18 +30,13 @@ const book = (notes: StoredNote[], checks: Check[] = []): NotebookState => ({
   inputs: [],
 });
 const verification = { source: "caller", report: "Checked proof." };
-const reconstructed = (
-  candidate: number,
-  ids: string[],
-  reused?: Check["reused"],
-): Check => ({
+const reconstructed = (candidate: number, ids: string[]): Check => ({
   candidate,
   call: candidate,
   values: ids.map((id) => checked(candidate, id, "reconstruction").values[0]!),
-  ...(reused ? { reused } : {}),
 });
 
-test("generated support needs an earlier cited receipt or the same reconstruction batch, not task completion", () => {
+test("generated support needs an earlier successful reconstruction or the same batch, not task completion", () => {
   const value = book(
     [note("n1"), note("n2", ["n1"])],
     [
@@ -58,7 +53,6 @@ test("generated support needs an earlier cited receipt or the same reconstructio
   expect(project(value).accepted).toEqual([]);
   value.checks.push(checked(30, "n1", "reconstruction", "INCONCLUSIVE"));
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 40 }]));
   value.checks.push(checked(40, "n1", "reconstruction"));
   expect(project(value).accepted).toEqual([]);
   // Later evidence cannot retroactively justify the earlier descendant PASS.
@@ -70,7 +64,7 @@ test("generated support needs an earlier cited receipt or the same reconstructio
   });
 });
 
-test("an older dependency reconstruction PASS needs its exact receipt cited by the new batch", () => {
+test("an older dependency PASS survives INCONCLUSIVE and requirements FAIL, while the root still needs reconstruction", () => {
   const value = book(
     [note("n1"), note("n2", ["n1"])],
     [
@@ -79,14 +73,12 @@ test("an older dependency reconstruction PASS needs its exact receipt cited by t
       checked(10, "n1", "reconstruction"),
       checked(10, "n1", "requirements", "FAIL"),
       checked(20, "n1", "reconstruction", "INCONCLUSIVE"),
-      ...verifierNames.map((name) => checked(20, "n2", name)),
+      ...verifierNames.slice(0, 3).map((name) => checked(20, "n2", name)),
     ],
   );
   expect(project(value).notes.every(({ verified }) => verified)).toBe(true);
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 9 }]));
-  expect(project(value).accepted).toEqual([]);
-  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 10 }]));
+  value.checks.push(reconstructed(20, ["n2"]));
   expect(project(value).accepted).toEqual(["n2"]);
   expect(project(value).reconstructed).toEqual({ n1: 10, n2: 20 });
 });
@@ -113,20 +105,9 @@ test("multihop reuse is dependency closed and later failures still block accepta
   value.checks.push(checked(40, "n1", "reconstruction"));
   expect(project(value).accepted).toEqual([]);
   expect(project(value).reconstructed).toEqual({ n1: 40 });
-  value.checks.push(
-    reconstructed(41, ["n3", "n2"], [{ note: "n1", call: 40 }]),
-  );
+  value.checks.push(reconstructed(41, ["n3", "n2"]));
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(
-    reconstructed(
-      20,
-      ["n4"],
-      [
-        { note: "n2", call: 41 },
-        { note: "n3", call: 41 },
-      ],
-    ),
-  );
+  value.checks.push(reconstructed(20, ["n4"]));
   expect(project(value).accepted).toEqual(["n4"]);
   expect(project(value).reconstructed).toEqual({
     n1: 40,
@@ -218,9 +199,9 @@ test.each(["source", "correctness", "reconstruction"] as const)(
           checked(10, id, "correctness"),
         ]),
         reconstructed(10, ["n1"]),
-        reconstructed(20, ["n2"], [{ note: "n1", call: 10 }]),
+        reconstructed(20, ["n2"]),
         ...verifierNames.slice(0, 3).map((name) => checked(30, "n3", name)),
-        reconstructed(30, ["n3"], [{ note: "n2", call: 20 }]),
+        reconstructed(30, ["n3"]),
       ],
     );
     expect(project(value).accepted).toEqual(["n3"]);

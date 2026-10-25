@@ -569,7 +569,7 @@ test("a later candidate reuses the corrected lemma statement by durable receipt,
       throw new Error("Missing reconstruction stage");
     expect(call.input.notes.map(({ id }) => id)).toEqual(["n3"]);
     expect(call.input.premises).toEqual([
-      { note: "n1", call: prior.call, statement: exact, support: [] },
+      { note: "n1", statement: exact, support: [] },
     ]);
     const { prompt } = await resolveCall(call);
     expect(prompt).toContain(exact);
@@ -588,9 +588,21 @@ test("a later candidate reuses the corrected lemma statement by durable receipt,
   });
   expect(labels(drive.calls.slice(boundary))).toEqual(["reconstruction"]);
   expect(report.checks.at(-1)).toMatchObject({
-    reused: [{ note: "n1", call: prior.call }],
     values: [{ note: "n3", verifier: "reconstruction", verdict: "PASS" }],
   });
+  const attempts = await inspect(
+    drive.path,
+    async (tx) =>
+      (await tx.scanTasks({ kind: "xean.worker", order: "descending" }, 2))
+        .items,
+  );
+  expect(attempts).toHaveLength(2);
+  for (const attempt of attempts)
+    expect(attempt.input).toMatchObject({
+      kind: "verify",
+      input: { verify: [{ note: "n3", verifiers: all }] },
+      reconstruction: [{ note: "n1", call: prior.call }],
+    });
   expect(
     report.notes[0]?.verdicts.filter(
       (value) => value.verifier === "reconstruction",

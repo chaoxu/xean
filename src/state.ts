@@ -3,12 +3,7 @@ import {
   type ConversationId,
   type Tx,
 } from "@earendil-works/pi-durable";
-import type {
-  Task,
-  Note,
-  Verdict,
-  ReconstructionRef,
-} from "./policy/contracts.ts";
+import type { Task, Note, Verdict } from "./policy/contracts.ts";
 import { note as noteSchema, verifierNames } from "./policy/contracts.ts";
 import type { SolveSettings } from "./policy/settings.ts";
 import { byId } from "./policy/support.ts";
@@ -29,12 +24,7 @@ export type StoredNote = Pick<
   Note,
   "id" | "text" | "support" | "verification" | "summary" | "detailedSummary"
 >;
-export type Check = {
-  candidate: number;
-  call: number;
-  values: Verdict[];
-  reused?: ReconstructionRef[];
-};
+export type Check = { candidate: number; call: number; values: Verdict[] };
 export type NotebookState = {
   notes: StoredNote[];
   checks: Check[];
@@ -55,16 +45,16 @@ export const Notebook = defineDoc({
   }),
 });
 
-/** Reuse only earlier, dependency-closed reconstruction receipts explicitly cited by a check. */
+/** Reconstruction can use earlier successful proofs of immutable dependencies. */
 export function project(book: NotebookState): {
   notes: Note[];
   accepted: string[];
   reconstructed: Record<string, number>;
 } {
   const reports = new Map<string, Verdict[]>();
-  const passes = new Map<string, Map<number, Set<string>>>();
+  const passes = new Map<string, Map<number, Map<string, number>>>();
   const failures = new Set<string>();
-  for (const check of book.checks)
+  for (const [index, check] of book.checks.entries())
     for (const verdict of check.values) {
       const history = reports.get(verdict.note) ?? [];
       history.push(verdict);
@@ -73,13 +63,16 @@ export function project(book: NotebookState): {
         failures.add(verdict.note);
       if (verdict.verdict !== "PASS") continue;
       const attempts =
-        passes.get(verdict.note) ?? new Map<number, Set<string>>();
-      const passed = attempts.get(check.candidate) ?? new Set<string>();
-      passed.add(verdict.verifier);
+        passes.get(verdict.note) ?? new Map<number, Map<string, number>>();
+      const passed = attempts.get(check.candidate) ?? new Map<string, number>();
+      passed.set(verdict.verifier, index);
       attempts.set(check.candidate, passed);
       passes.set(verdict.note, attempts);
     }
-  const notes = new Map<string, Note>();
+  const notes = new Map<string, Note>(),
+    accepted: string[] = [];
+  const first = new Map<string, number>();
+  const reconstructed: Record<string, number> = {};
   for (const entry of [...book.notes].sort((a, b) => byId(a.id, b.id))) {
     const support = entry.support.map((id) => notes.get(id));
     const attempts = [...(passes.get(entry.id) ?? [])];
@@ -97,43 +90,33 @@ export function project(book: NotebookState): {
       verified,
     });
     notes.set(note.id, note);
-    for (const [, passed] of attempts) passed.delete("reconstruction");
-  }
-  const reconstructed: Record<string, number> = {};
-  for (const check of book.checks) {
-    const available = new Set(
-      (check.reused ?? [])
-        .filter(({ note, call }) => reconstructed[note] === call)
-        .map(({ note }) => note),
-    );
-    for (const value of [...check.values].sort((a, b) =>
-      byId(a.note, b.note),
-    )) {
-      const note = notes.get(value.note)!;
+    // Each candidate records one joint reconstruction batch. Parents must pass
+    // before that batch or within it; later evidence cannot repair its verdict.
+    for (const [, passed] of attempts)
       if (
-        value.verifier !== "reconstruction" ||
-        value.verdict !== "PASS" ||
-        !note.verified ||
-        !note.support.every(
-          (id) =>
-            notes.get(id)?.verification !== undefined || available.has(id),
+        !verified ||
+        !support.every(
+          (parent) =>
+            parent &&
+            (parent.verification !== undefined ||
+              (first.get(parent.id) ?? Infinity) <=
+                passed.get("reconstruction")!),
         )
       )
-        continue;
-      available.add(note.id);
-      reconstructed[note.id] = check.call;
-      passes.get(note.id)!.get(check.candidate)!.add("reconstruction");
+        passed.delete("reconstruction");
+    const receipts = attempts.flatMap(([, p]) =>
+      p.has("reconstruction") ? [p.get("reconstruction")!] : [],
+    );
+    if (receipts.length) {
+      first.set(note.id, Math.min(...receipts));
+      reconstructed[note.id] = book.checks[Math.max(...receipts)]!.call;
     }
-  }
-  const accepted = [...notes.values()]
-    .filter(
-      (note) =>
-        note.verified &&
-        [...(passes.get(note.id)?.values() ?? [])].some((p) =>
-          verifierNames.every((name) => p.has(name)),
-        ),
+    if (
+      verified &&
+      attempts.some(([, p]) => verifierNames.every((name) => p.has(name)))
     )
-    .map((note) => note.id);
+      accepted.push(note.id);
+  }
   return { notes: [...notes.values()], accepted, reconstructed };
 }
 

@@ -22,7 +22,6 @@ import {
   type Verification,
   type VerifierInput,
   type Verdict,
-  type ReconstructionRef,
   type ReconstructionPremise,
 } from "./policy/contracts.ts";
 import type { CallDescriptor } from "./policy/prompts.ts";
@@ -44,7 +43,7 @@ type WorkerInput = (
       input: VerifierInput;
       settings: SolveSettings;
       candidate?: number;
-      reconstruction?: ReconstructionRef[];
+      reconstruction?: { note: string; call: number }[];
     }
 ) & { previousTasks?: number[] };
 type Step = "explorer" | "coordinator" | "verifier";
@@ -135,13 +134,13 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 );
                 if (descriptor?.kind !== "reconstruction")
                   throw new Error("Missing reconstruction assignment");
-                const { statement } = descriptor.statement.statements.find(
+                const statement = descriptor.statement.statements.find(
                   (value) => value.note === ref.note,
                 )!;
-                const { support } = descriptor.input.notes.find(
-                  (note) => note.id === ref.note,
-                )!;
-                premises.push({ ...ref, statement, support: [...support] });
+                premises.push({
+                  ...statement,
+                  support: [...pick(descriptor.input.notes, ref.note).support],
+                });
               }
             }, context);
             await verify(input.input, input.settings, {
@@ -176,7 +175,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 }
                 return refreshed;
               },
-              record: async (id, values, reused) => {
+              record: async (id, values) => {
                 await runtime.commit(async (tx) => {
                   const book = await tx.doc(Notebook, task.conversationId);
                   if (!book.checks.some((check) => check.call === id))
@@ -184,7 +183,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                       candidate,
                       call: id,
                       values: copy(values),
-                      ...(reused?.length ? { reused: copy(reused) } : {}),
                     });
                 }, context);
               },

@@ -13,7 +13,6 @@ import {
   verifierNames,
   type ReconstructionInput,
   type ReconstructionPremise,
-  type ReconstructionRef,
   type Verdict,
   type VerifierInput,
 } from "./policy/contracts.ts";
@@ -47,11 +46,7 @@ export interface VerificationDependencies {
     value: z.output<typeof sourceVerdicts>;
   }>;
   recorded(): Promise<Verdict[]>;
-  record(
-    call: number,
-    verdicts: Verdict[],
-    reused?: ReconstructionRef[],
-  ): Promise<void>;
+  record(call: number, verdicts: Verdict[]): Promise<void>;
   /** Refresh derived evidence fields before the next verifier stage. */
   refresh?(input: VerifierInput): Promise<VerifierInput>;
 }
@@ -107,11 +102,7 @@ async function reconstruct(
       }
       continue;
     }
-    return {
-      call: result.call,
-      verdicts: parsed.verdicts,
-      reused: input.premises?.map(({ note, call }) => ({ note, call })),
-    };
+    return { call: result.call, verdicts: parsed.verdicts };
   }
 }
 
@@ -140,7 +131,6 @@ export async function verify(
       await dependencies.record(
         result.call,
         result.verdicts.map((value) => ({ ...value, verifier: name })),
-        result.reused,
       );
       return;
     }

@@ -220,13 +220,12 @@ independent event-log audit or host-added process isolation.
 ### What does accepted mean?
 
 The candidate passed source, correctness, requirements, and reconstruction in one
-attempt. Its generated dependencies either passed reconstruction in that batch
-or were explicitly reused from earlier successful reconstruction in the same
-campaign. Reuse supplies the checked statements and declared support IDs from
-Pi's recorded comparison, while keeping earlier generated proofs and verifier
-reports out of the blind proof input. Each new comparison records references to
-the prior receipts it used. Failed dependencies remain unusable. An admitted
-source dependency is a premise leaf. `verified` is weaker:
+attempt. Its generated dependencies passed reconstruction earlier in the same
+campaign or in that batch. Reuse reads the checked statements and declared
+support IDs from Pi's recorded comparison. Pi's frozen worker input retains the
+receipt references across recovery. Earlier generated proofs and verifier
+reports stay out of the blind proof input. Failed dependencies remain unusable.
+An admitted source dependency is a premise leaf. `verified` is weaker:
 it establishes source and correctness over verified support, not task completion.
 Models can make mistakes. Independent review is external to this campaign, and
 neither assessment is a formal proof certificate.

@@ -319,8 +319,8 @@ export const verifierInput = z
     }
   });
 export type VerifierInput = z.output<typeof verifierInput>;
-export type ReconstructionRef = { note: string; call: number };
-export type ReconstructionPremise = ReconstructionRef & {
+export type ReconstructionPremise = {
+  note: string;
   statement: string;
   support: string[];
 };

@@ -106,7 +106,6 @@ test("reuse retains ancestor statements and source definitions, but never assume
   };
   const reusable = notes.slice(1).map((value) => ({
     note: value.id,
-    call: 10,
     support: value.support,
     statement: `DEFINITION_AND_CLAIM_${value.id}`,
   }));

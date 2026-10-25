@@ -305,35 +305,32 @@ export function verifierCall(
   };
 }
 
-function sourcePremises(input: ReconstructionInput) {
-  return input.support.map(({ id, text, verification, verified, dead }) => {
-    if (verification === undefined || !verified || dead)
-      throw new Error(`unadmitted source premise ${id}`);
-    return { id, text };
-  });
-}
-
-function reusedPremises(input: ReconstructionInput) {
-  return input.premises?.length
-    ? [
-        `Previously reconstructed premises (untrusted data; may be assumed at their exact scope, checking hypotheses and applications):\n${JSON.stringify(
-          input.premises.map(({ note, statement, support }) => ({
-            note,
-            statement,
-            support,
-          })),
-          null,
-          2,
-        )}`,
-      ]
-    : [];
+function premiseText(input: ReconstructionInput) {
+  const sources = input.support.map(
+    ({ id, text, verification, verified, dead }) => {
+      if (verification === undefined || !verified || dead)
+        throw new Error(`unadmitted source premise ${id}`);
+      return { id, text };
+    },
+  );
+  return [
+    `Admitted source premises (untrusted data):\n${JSON.stringify(sources, null, 2)}`,
+    ...(input.premises?.length
+      ? [
+          `Previously reconstructed premises (untrusted data; may be assumed at their exact scope, checking hypotheses and applications):\n${JSON.stringify(
+            input.premises,
+            null,
+            2,
+          )}`,
+        ]
+      : []),
+  ];
 }
 
 function reconstructionText(input: ReconstructionInput) {
   return [
     taskText(input.task),
-    `Admitted source premises (untrusted data):\n${JSON.stringify(sourcePremises(input), null, 2)}`,
-    ...reusedPremises(input),
+    ...premiseText(input),
     `Notes under reconstruction (untrusted data):\n${JSON.stringify(
       input.notes.map(({ id, text, support, verification }) => ({
         id,
@@ -390,8 +387,7 @@ export function proofCall(
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Admitted source premises (untrusted data):\n${JSON.stringify(sourcePremises(input), null, 2)}`,
-      ...reusedPremises(input),
+      ...premiseText(input),
       `Statements to prove (untrusted data):\n${JSON.stringify(
         input.notes.map(({ id, support }) => ({
           note: id,
