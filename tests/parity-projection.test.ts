@@ -30,8 +30,18 @@ const book = (notes: StoredNote[], checks: Check[] = []): NotebookState => ({
   inputs: [],
 });
 const verification = { source: "caller", report: "Checked proof." };
+const reconstructed = (
+  candidate: number,
+  ids: string[],
+  reused?: Check["reused"],
+): Check => ({
+  candidate,
+  call: candidate,
+  values: ids.map((id) => checked(candidate, id, "reconstruction").values[0]!),
+  ...(reused ? { reused } : {}),
+});
 
-test("generated support must reconstruct in the accepting attempt, but need not meet task requirements", () => {
+test("generated support needs an earlier cited receipt or the same reconstruction batch, not task completion", () => {
   const value = book(
     [note("n1"), note("n2", ["n1"])],
     [
@@ -48,9 +58,11 @@ test("generated support must reconstruct in the accepting attempt, but need not 
   expect(project(value).accepted).toEqual([]);
   value.checks.push(checked(30, "n1", "reconstruction", "INCONCLUSIVE"));
   expect(project(value).accepted).toEqual([]);
+  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 40 }]));
   value.checks.push(checked(40, "n1", "reconstruction"));
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(checked(20, "n1", "reconstruction"));
+  // Later evidence cannot retroactively justify the earlier descendant PASS.
+  value.checks.push(reconstructed(20, ["n2", "n1"]));
   expect(project(value).accepted).toEqual(["n2"]);
   expect(project(value).notes[0]).toMatchObject({
     verified: true,
@@ -58,22 +70,28 @@ test("generated support must reconstruct in the accepting attempt, but need not 
   });
 });
 
-test("an older dependency reconstruction PASS cannot mask this attempt's INCONCLUSIVE", () => {
+test("an older dependency reconstruction PASS needs its exact receipt cited by the new batch", () => {
   const value = book(
     [note("n1"), note("n2", ["n1"])],
     [
       checked(10, "n1", "source"),
       checked(10, "n1", "correctness"),
       checked(10, "n1", "reconstruction"),
+      checked(10, "n1", "requirements", "FAIL"),
       checked(20, "n1", "reconstruction", "INCONCLUSIVE"),
       ...verifierNames.map((name) => checked(20, "n2", name)),
     ],
   );
   expect(project(value).notes.every(({ verified }) => verified)).toBe(true);
   expect(project(value).accepted).toEqual([]);
+  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 9 }]));
+  expect(project(value).accepted).toEqual([]);
+  value.checks.push(reconstructed(20, ["n2"], [{ note: "n1", call: 10 }]));
+  expect(project(value).accepted).toEqual(["n2"]);
+  expect(project(value).reconstructed).toEqual({ n1: 10, n2: 20 });
 });
 
-test("shared multihop support must all reconstruct, and a later failure still blocks acceptance", () => {
+test("multihop reuse is dependency closed and later failures still block acceptance", () => {
   const value = book(
     [
       note("n1"),
@@ -94,8 +112,28 @@ test("shared multihop support must all reconstruct, and a later failure still bl
   expect(project(value).accepted).toEqual([]);
   value.checks.push(checked(40, "n1", "reconstruction"));
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(checked(20, "n1", "reconstruction"));
+  expect(project(value).reconstructed).toEqual({ n1: 40 });
+  value.checks.push(
+    reconstructed(41, ["n3", "n2"], [{ note: "n1", call: 40 }]),
+  );
+  expect(project(value).accepted).toEqual([]);
+  value.checks.push(
+    reconstructed(
+      20,
+      ["n4"],
+      [
+        { note: "n2", call: 41 },
+        { note: "n3", call: 41 },
+      ],
+    ),
+  );
   expect(project(value).accepted).toEqual(["n4"]);
+  expect(project(value).reconstructed).toEqual({
+    n1: 40,
+    n2: 41,
+    n3: 41,
+    n4: 20,
+  });
   value.checks.push(
     checked(50, "n2", "reconstruction", "FAIL"),
     checked(60, "n2", "reconstruction"),
@@ -165,7 +203,7 @@ test("a caller-verified acceptance root still needs its generated support recons
   expect(project(value).accepted).toEqual([]);
   value.checks.push(...verifierNames.map((name) => checked(20, "n2", name)));
   expect(project(value).accepted).toEqual([]);
-  value.checks.push(checked(20, "n1", "reconstruction"));
+  value.checks.push(reconstructed(20, ["n2", "n1"]));
   expect(project(value).accepted).toEqual(["n2"]);
 });
 
@@ -173,15 +211,20 @@ test.each(["source", "correctness", "reconstruction"] as const)(
   "historical %s FAIL stays authoritative after a later PASS and kills descendants",
   (name) => {
     const value = book(
+      [note("n1"), note("n2", ["n1"]), note("n3", ["n2"])],
       [
-        { ...note("n1"), verification },
-        { ...note("n2", ["n1"]), verification },
-        { ...note("n3", ["n2"]), verification },
+        ...["n1", "n2"].flatMap((id) => [
+          checked(10, id, "source"),
+          checked(10, id, "correctness"),
+        ]),
+        reconstructed(10, ["n1"]),
+        reconstructed(20, ["n2"], [{ note: "n1", call: 10 }]),
+        ...verifierNames.slice(0, 3).map((name) => checked(30, "n3", name)),
+        reconstructed(30, ["n3"], [{ note: "n2", call: 20 }]),
       ],
-      verifierNames.map((name) => checked(10, "n1", name)),
     );
-    expect(project(value).accepted).toEqual(["n1"]);
-    value.checks.push(checked(20, "n1", name, "FAIL"), checked(30, "n1", name));
+    expect(project(value).accepted).toEqual(["n3"]);
+    value.checks.push(checked(40, "n1", name, "FAIL"), checked(50, "n1", name));
     expect(
       project(value).notes.map(({ verified, dead }) => ({ verified, dead })),
     ).toEqual([
@@ -190,5 +233,6 @@ test.each(["source", "correctness", "reconstruction"] as const)(
       { verified: false, dead: true },
     ]);
     expect(project(value).accepted).toEqual([]);
+    expect(project(value).reconstructed).toEqual({});
   },
 );

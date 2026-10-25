@@ -4,11 +4,12 @@ import {
   defineExtension,
   defineTask,
   type ConversationId,
+  type EntryId,
   type TaskId,
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { createRoleRuntime } from "./role-runtime.ts";
+import { createRoleRuntime, Assignment } from "./role-runtime.ts";
 import { Notebook, definition, project } from "./state.ts";
 import {
   coordinatorResultFor,
@@ -21,6 +22,8 @@ import {
   type Verification,
   type VerifierInput,
   type Verdict,
+  type ReconstructionRef,
+  type ReconstructionPremise,
 } from "./policy/contracts.ts";
 import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
@@ -41,6 +44,7 @@ type WorkerInput = (
       input: VerifierInput;
       settings: SolveSettings;
       candidate?: number;
+      reconstruction?: ReconstructionRef[];
     }
 ) & { previousTasks?: number[] };
 type Step = "explorer" | "coordinator" | "verifier";
@@ -121,7 +125,27 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   .flatMap((c) => c.values),
               );
             };
+            const premises: ReconstructionPremise[] = [];
+            await runtime.commit(async (tx) => {
+              for (const ref of input.reconstruction ?? []) {
+                const entry = await tx.entry(ref.call as EntryId);
+                const { descriptor } = await tx.doc(
+                  Assignment,
+                  entry!.conversationId,
+                );
+                if (descriptor?.kind !== "reconstruction")
+                  throw new Error("Missing reconstruction assignment");
+                const { statement } = descriptor.statement.statements.find(
+                  (value) => value.note === ref.note,
+                )!;
+                const { support } = descriptor.input.notes.find(
+                  (note) => note.id === ref.note,
+                )!;
+                premises.push({ ...ref, statement, support: [...support] });
+              }
+            }, context);
             await verify(input.input, input.settings, {
+              premises,
               call: (key, descriptor, profile) =>
                 roles.run(
                   runtime,
@@ -152,7 +176,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 }
                 return refreshed;
               },
-              record: async (id, values) => {
+              record: async (id, values, reused) => {
                 await runtime.commit(async (tx) => {
                   const book = await tx.doc(Notebook, task.conversationId);
                   if (!book.checks.some((check) => check.call === id))
@@ -160,6 +184,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                       candidate,
                       call: id,
                       values: copy(values),
+                      ...(reused?.length ? { reused: copy(reused) } : {}),
                     });
                 }, context);
               },
@@ -287,7 +312,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           ) as CampaignState;
           const config = await definition(tx, task.conversationId);
           const book = await tx.doc(Notebook, task.conversationId);
-          let { notes, accepted } = project(book);
+          let { notes, accepted, reconstructed } = project(book);
           if (accepted.length)
             return {
               status: "terminal",
@@ -419,6 +444,12 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 kind: "verify",
                 input,
                 settings: config.settings,
+                reconstruction: [...input.notes, ...input.support].flatMap(
+                  (note) =>
+                    reconstructed[note.id] === undefined
+                      ? []
+                      : [{ note: note.id, call: reconstructed[note.id]! }],
+                ),
               };
             }
           }

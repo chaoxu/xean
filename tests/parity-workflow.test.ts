@@ -17,7 +17,7 @@ import {
   type Verdict,
   type Verification,
 } from "../src/policy/contracts.ts";
-import type { CallDescriptor } from "../src/policy/prompts.ts";
+import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
 import { defineDoc, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxModels } from "./faux-models.ts";
 
@@ -482,6 +482,120 @@ test("persisted retries reuse earlier checks and preserve the original verificat
     new Set(failed.checks.map((check) => check.candidate)),
   );
   expect(report.notes[0]?.text).toBe("Original proof.");
+});
+
+test("a later candidate reuses the corrected lemma statement by durable receipt, including after recovery", async () => {
+  const exact = "Exact lemma with its corrected hypotheses.";
+  const drive = await fixture(
+    [
+      {
+        notes: [
+          {
+            ...note("PRIVATE_ORIGINAL_PROOF"),
+            summary: "PRIVATE_SUMMARY",
+            detailedSummary: "PRIVATE_DETAIL",
+          },
+          note("First candidate.", ["n1"]),
+        ],
+      },
+      coordinate(
+        ["n2"],
+        [
+          { note: "n1", verifiers: lemma },
+          { note: "n2", verifiers: all },
+        ],
+      ),
+      check("n1"),
+      check("n1"),
+      check("n2"),
+      check("n2"),
+      check("n2"),
+      {
+        statements: [
+          { note: "n1", statement: "INITIAL_WRONG_SCOPE" },
+          { note: "n2", statement: "P." },
+        ],
+      },
+      { proof: "PRIVATE_INITIAL_ARGUMENT" },
+      {
+        statements: [
+          { note: "n1", statement: exact },
+          { note: "n2", statement: "P." },
+        ],
+        verdicts: [],
+      },
+      { proof: "PRIVATE_CORRECTED_ARGUMENT" },
+      {
+        statements: [],
+        verdicts: [
+          { note: "n1", verdict: "PASS", report: "PRIVATE_LEMMA_REPORT" },
+          ...check("n2", "INCONCLUSIVE").verdicts,
+        ],
+      },
+      { notes: [note("Repaired candidate.", ["n1"])] },
+      coordinate(["n3"], [{ note: "n3", verifiers: all }]),
+      ...pass("n3").slice(0, -1),
+      new Error("comparison disconnected"),
+    ],
+    { maxExplorerTurns: 2, window: 1 },
+  );
+  const failed = await drive.settle();
+  expect(failed.status).toMatchObject({ outcome: "call-failure", turns: 2 });
+  expect(failed.accepted).toEqual([]);
+  const prior = failed.checks.find((check) =>
+    check.values.some((value) => value.verifier === "reconstruction"),
+  )!;
+  const second = drive.calls.slice(
+    drive.calls.findIndex(
+      (call) => call.kind === "explorer" && call.input.notes.length > 0,
+    ),
+  );
+  expect(labels(second)).toEqual([
+    "explorer",
+    "coordinator",
+    "source",
+    "correctness",
+    "requirements",
+    "statement",
+    "proof",
+    "reconstruction",
+  ]);
+  for (const call of second.slice(5)) {
+    if (
+      call.kind !== "statement" &&
+      call.kind !== "proof" &&
+      call.kind !== "reconstruction"
+    )
+      throw new Error("Missing reconstruction stage");
+    expect(call.input.notes.map(({ id }) => id)).toEqual(["n3"]);
+    expect(call.input.premises).toEqual([
+      { note: "n1", call: prior.call, statement: exact, support: [] },
+    ]);
+    const { prompt } = await resolveCall(call);
+    expect(prompt).toContain(exact);
+    expect(prompt).not.toContain("PRIVATE_");
+    expect(prompt).not.toContain("INITIAL_WRONG_SCOPE");
+  }
+  drive.replies.push({ statements: [], ...check("n3") });
+  const boundary = drive.calls.length;
+  const owner = await drive.reopen();
+  await owner.resume();
+  const report = await drive.settle();
+  expect(report.status).toMatchObject({
+    outcome: "accepted",
+    accepted: "n3",
+    turns: 2,
+  });
+  expect(labels(drive.calls.slice(boundary))).toEqual(["reconstruction"]);
+  expect(report.checks.at(-1)).toMatchObject({
+    reused: [{ note: "n1", call: prior.call }],
+    values: [{ note: "n3", verifier: "reconstruction", verdict: "PASS" }],
+  });
+  expect(
+    report.notes[0]?.verdicts.filter(
+      (value) => value.verifier === "reconstruction",
+    ),
+  ).toHaveLength(1);
 });
 
 test.each(

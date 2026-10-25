@@ -12,6 +12,8 @@ import {
   verifierInput,
   verifierNames,
   type ReconstructionInput,
+  type ReconstructionPremise,
+  type ReconstructionRef,
   type Verdict,
   type VerifierInput,
 } from "./policy/contracts.ts";
@@ -25,6 +27,7 @@ import {
 import type { CodexRequest } from "./policy/source.ts";
 
 export interface VerificationDependencies {
+  premises?: ReconstructionPremise[];
   call(
     key: string,
     descriptor: CallDescriptor,
@@ -44,7 +47,11 @@ export interface VerificationDependencies {
     value: z.output<typeof sourceVerdicts>;
   }>;
   recorded(): Promise<Verdict[]>;
-  record(call: number, verdicts: Verdict[]): Promise<void>;
+  record(
+    call: number,
+    verdicts: Verdict[],
+    reused?: ReconstructionRef[],
+  ): Promise<void>;
   /** Refresh derived evidence fields before the next verifier stage. */
   refresh?(input: VerifierInput): Promise<VerifierInput>;
 }
@@ -100,7 +107,11 @@ async function reconstruct(
       }
       continue;
     }
-    return { call: result.call, verdicts: parsed.verdicts };
+    return {
+      call: result.call,
+      verdicts: parsed.verdicts,
+      reused: input.premises?.map(({ note, call }) => ({ note, call })),
+    };
   }
 }
 
@@ -122,13 +133,14 @@ export async function verify(
       const roots = judgedBy(input, have, name);
       if (roots.length === 0) continue;
       const result = await reconstruct(
-        reconstructionInput(input, roots),
+        reconstructionInput(input, roots, dependencies.premises),
         settings.reconstruction,
         dependencies,
       );
       await dependencies.record(
         result.call,
         result.verdicts.map((value) => ({ ...value, verifier: name })),
+        result.reused,
       );
       return;
     }

@@ -8,6 +8,7 @@ import {
 } from "../src/policy/contracts.ts";
 import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
 import { solveSettings } from "../src/policy/settings.ts";
+import { reconstructionInput } from "../src/policy/support.ts";
 import { verify, type VerificationDependencies } from "../src/verification.ts";
 
 const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
@@ -85,6 +86,51 @@ function scripted(replies: (JsonValue | Error)[]) {
 }
 const labels = (calls: CallDescriptor[]) =>
   calls.map((call) => (call.kind === "verifier" ? call.name : call.kind));
+
+test("reuse retains ancestor statements and source definitions, but never assumes selected roots or their descendants", async () => {
+  const notes = [
+    note("n1"),
+    note("n2", ["n1"]),
+    note("n3", ["n2"]),
+    note("n4", ["n3"]),
+  ].map((value) => ({ ...value, verified: true }));
+  const source = {
+    ...notes[0]!,
+    text: "SOURCE_DEFINITION",
+    verification: { source: "Supplied theorem", report: "Granted." },
+  };
+  const original = {
+    task,
+    notes: [notes[3]!],
+    support: [source, ...notes.slice(1, 3)],
+  };
+  const reusable = notes.slice(1).map((value) => ({
+    note: value.id,
+    call: 10,
+    support: value.support,
+    statement: `DEFINITION_AND_CLAIM_${value.id}`,
+  }));
+  const reused = reconstructionInput(original, ["n4"], reusable);
+  expect(reused.notes.map(({ id }) => id)).toEqual(["n4"]);
+  expect(reused.premises?.map(({ note }) => note)).toEqual(["n2", "n3"]);
+  expect(reused.support).toEqual([source]);
+  const { prompt } = await resolveCall({
+    kind: "proof",
+    input: reused,
+    statement: statements("n4"),
+  });
+  for (const text of [
+    "SOURCE_DEFINITION",
+    "DEFINITION_AND_CLAIM_n2",
+    "DEFINITION_AND_CLAIM_n3",
+  ])
+    expect(prompt).toContain(text);
+  expect(prompt).not.toContain("ORIGINAL_PROOF");
+  const selected = reconstructionInput(original, ["n2", "n4"], reusable);
+  expect(selected.notes.map(({ id }) => id)).toEqual(["n2", "n3", "n4"]);
+  expect(selected.premises).toBeUndefined();
+  expect(selected.support).toEqual([source]);
+});
 
 test("a lemma without requirements and its root share exactly three reconstruction calls and one verdict batch", async () => {
   const batch = checks(verdict("n1"), verdict("n2"));

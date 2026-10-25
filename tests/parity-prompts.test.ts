@@ -185,10 +185,15 @@ test("solution-only verification changes Coordinator instructions without changi
     createHash("sha256")
       .update(
         JSON.stringify({
-          system: baseline.system.replace(
-            "can read any indexed note's detailed summary or full text",
-            "only the support notes' texts",
-          ),
+          system: baseline.system
+            .replace(
+              "can read any indexed note's detailed summary or full text",
+              "only the support notes' texts",
+            )
+            .replace(
+              "every generated note in its support closure to have passed reconstruction. Earlier reconstructed dependencies may be reused as explicit premises.",
+              "every generated note in its support closure to pass reconstruction in that same attempt.",
+            ),
           prompt: baseline.prompt,
         }),
       )
@@ -655,7 +660,7 @@ test("initial and corrected blind calls contain only statements, dependency edge
   for (const value of [initial, corrected]) {
     const call = proofCall(input, value);
     expect(call.system).toContain(
-      "Every listed statement is a proof obligation, not an axiom.",
+      "Every target statement is a proof obligation, not an axiom.",
     );
     expect(call.prompt).toContain(source.text);
     expect(call.prompt).not.toContain(source.summary);

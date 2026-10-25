@@ -52,7 +52,7 @@ export const roleGenerationPolicy = {
   retryContent: "completed-reasoning" as const,
 };
 type Assignment = { descriptor?: CallDescriptor; profile?: PiRoleProfile };
-const Assignment = defineDoc({
+export const Assignment = defineDoc({
   kind: "xean.role.assignment",
   version: 1,
   scope: "conversation",

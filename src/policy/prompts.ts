@@ -108,7 +108,7 @@ const dependencyText =
 const verdictText =
   "Source, correctness, and requirements run in that order on requested notes and stop at a note's first verdict that is not PASS. Reconstruction then checks eligible candidates and their generated dependencies, without requiring supporting lemmas to pass requirements. A note is verified over verified support when one verification passed source and correctness or its submitting system supplied external verification, so its result can be built on. The verification field identifies that external source, whose attestation is distinct from Xean's verifier verdicts. A note is dead when correctness, source, or reconstruction failed it or a note in its support is dead: it can never be verified, and its verdicts say what went wrong. A requirements FAIL leaves a note verified but not accepted. INCONCLUSIVE means a check could not reach a conclusion and identifies the missing evidence. It ends that note's verification attempt without marking the note defective. Unresolved reconstruction blocks acceptance even when source and correctness leave the note verified. The next explorer turn receives the report and can address the uncertainty in new notes.";
 const completionText =
-  "The requirements verifier decides whether a note meets the completion criteria. Acceptance requires the note to pass all four verifiers in one attempt and every generated note in its support closure to pass reconstruction in that same attempt. Admitted source results may be used as premises. Supporting lemmas need not meet the task's completion criteria.";
+  "The requirements verifier decides whether a note meets the completion criteria. Acceptance requires the note to pass all four verifiers in one attempt and every generated note in its support closure to have passed reconstruction. Earlier reconstructed dependencies may be reused as explicit premises. Admitted source results may be used as premises. Supporting lemmas need not meet the task's completion criteria.";
 
 export function explorerCall(
   input: ExplorerInput,
@@ -313,10 +313,27 @@ function sourcePremises(input: ReconstructionInput) {
   });
 }
 
+function reusedPremises(input: ReconstructionInput) {
+  return input.premises?.length
+    ? [
+        `Previously reconstructed premises (untrusted data; may be assumed at their exact scope, checking hypotheses and applications):\n${JSON.stringify(
+          input.premises.map(({ note, statement, support }) => ({
+            note,
+            statement,
+            support,
+          })),
+          null,
+          2,
+        )}`,
+      ]
+    : [];
+}
+
 function reconstructionText(input: ReconstructionInput) {
   return [
     taskText(input.task),
     `Admitted source premises (untrusted data):\n${JSON.stringify(sourcePremises(input), null, 2)}`,
+    ...reusedPremises(input),
     `Notes under reconstruction (untrusted data):\n${JSON.stringify(
       input.notes.map(({ id, text, support, verification }) => ({
         id,
@@ -331,7 +348,7 @@ function reconstructionText(input: ReconstructionInput) {
 }
 
 const reconstructionRules =
-  "Every listed statement is a proof obligation, not an axiom. Reconstruct every target, including supporting lemmas and directly selected externally verified notes. A target may use only its declared support and transitive ancestors, never unrelated notes or descendants. Prove generated ancestors before using their results. Admitted source premises may be assumed only at their exact scope, with their hypotheses and applications checked. Supporting lemmas need not meet the task's completion criteria.";
+  "Every target statement is a proof obligation, not an axiom. Reconstruct every target, including supporting lemmas and directly selected externally verified notes. A target may use only its declared support and transitive ancestors, never unrelated notes or descendants. Prove generated ancestors before using their results, except for explicitly listed previously reconstructed premises. Admitted source premises may be assumed only at their exact scope, with their hypotheses and applications checked. Supporting lemmas need not meet the task's completion criteria.";
 const statementScope =
   "Preserve each note's asserted scope: definitions, hypotheses, quantifiers, parameters, side conditions, conclusions, and explicit conditionality. Do not weaken an unproved unconditional claim into a conditional statement or omit an asserted classification. Exclude proof recipes, methods, and intermediate proof steps. Definitions and constructions that are themselves part of the asserted result belong in the statement.";
 
@@ -374,6 +391,7 @@ export function proofCall(
     prompt: [
       taskText(input.task),
       `Admitted source premises (untrusted data):\n${JSON.stringify(sourcePremises(input), null, 2)}`,
+      ...reusedPremises(input),
       `Statements to prove (untrusted data):\n${JSON.stringify(
         input.notes.map(({ id, support }) => ({
           note: id,

@@ -319,10 +319,15 @@ export const verifierInput = z
     }
   });
 export type VerifierInput = z.output<typeof verifierInput>;
+export type ReconstructionRef = { note: string; call: number };
+export type ReconstructionPremise = ReconstructionRef & {
+  statement: string;
+  support: string[];
+};
 export type ReconstructionInput = Pick<
   VerifierInput,
   "task" | "notes" | "support"
->;
+> & { premises?: ReconstructionPremise[] };
 
 export function pick<T extends { readonly id: string }>(
   notes: readonly T[],

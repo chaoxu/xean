@@ -1,5 +1,9 @@
 // Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
-import type { Note, ReconstructionInput } from "./contracts";
+import type {
+  Note,
+  ReconstructionInput,
+  ReconstructionPremise,
+} from "./contracts";
 
 /** Note ids in numeric order. */
 export const byId = (left: string, right: string): number =>
@@ -31,18 +35,26 @@ export function supportClosure(
   return [...seen].filter((id) => !roots.has(id)).sort(byId);
 }
 
-/** Expand validated input, stopping only at admitted source dependencies. */
+/** Reconstruct roots and unproved support; retain earlier certified statements as premises. */
 export function reconstructionInput(
   input: ReconstructionInput,
   roots: readonly string[],
+  reusable: readonly ReconstructionPremise[] = [],
 ): ReconstructionInput {
   const needed = new Set(roots),
     notes: Note[] = [],
-    support: Note[] = [];
+    support: Note[] = [],
+    premises: ReconstructionPremise[] = [];
+  const known = [...input.notes, ...input.support].sort((a, b) =>
+    byId(a.id, b.id),
+  );
+  // A selected root cannot return as an assumption inside a reused descendant.
+  const fresh = new Set(roots);
+  for (const note of known)
+    if (note.support.some((id) => fresh.has(id))) fresh.add(note.id);
+  const prior = new Map(reusable.map((value) => [value.note, value]));
   // Validated dependencies have earlier IDs, so visit consumers first.
-  for (const note of [...input.notes, ...input.support].sort((a, b) =>
-    byId(b.id, a.id),
-  )) {
+  for (const note of known.reverse()) {
     if (!needed.has(note.id)) continue;
     if (note.dead) throw new Error(`dead reconstruction note ${note.id}`);
     if (!roots.includes(note.id) && note.verification !== undefined) {
@@ -50,7 +62,10 @@ export function reconstructionInput(
         throw new Error(`unverified source premise ${note.id}`);
       support.push(note);
     } else {
-      notes.push(note);
+      const premise = prior.get(note.id);
+      if (premise && note.verified && !fresh.has(note.id))
+        premises.push(premise);
+      else notes.push(note);
       for (const id of note.support) needed.add(id);
     }
   }
@@ -58,5 +73,6 @@ export function reconstructionInput(
     task: input.task,
     notes: notes.reverse(),
     support: support.reverse(),
+    ...(premises.length ? { premises: premises.reverse() } : {}),
   };
 }

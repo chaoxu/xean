@@ -1,10 +1,13 @@
 # `xean`
 
-`xean` 4.2.0 runs mathematical research on native Pi Durable. Explorer appends notes,
+`xean` runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
 SQLite and manages execution and recovery.
+
+This development version reuses previously reconstructed supporting notes from
+the same campaign. Selected candidates still receive fresh reconstruction.
 
 Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
 checking the resulting arguments. In the [reported trials](#qualification), that
@@ -137,7 +140,8 @@ submission ends the Explorer turn.
 
 Summaries carry the note's verification state. They do not establish unverified
 results. The correctness verifier checks summary fidelity against the full text,
-and verification and dependency reconstruction use full texts. Supplied summaries
+and verification reads full texts. Reconstruction uses full texts for new targets
+and previously checked statements for reused dependencies. Supplied summaries
 are the caller's responsibility. Source titles and chunk offsets alone cannot
 supply a theorem's statement or hypotheses.
 
@@ -216,8 +220,13 @@ independent event-log audit or host-added process isolation.
 ### What does accepted mean?
 
 The candidate passed source, correctness, requirements, and reconstruction in one
-attempt, and its generated dependency closure passed reconstruction in that
-attempt. An admitted source dependency is a premise leaf. `verified` is weaker:
+attempt. Its generated dependencies either passed reconstruction in that batch
+or were explicitly reused from earlier successful reconstruction in the same
+campaign. Reuse supplies the checked statements and declared support IDs from
+Pi's recorded comparison, while keeping earlier generated proofs and verifier
+reports out of the blind proof input. Each new comparison records references to
+the prior receipts it used. Failed dependencies remain unusable. An admitted
+source dependency is a premise leaf. `verified` is weaker:
 it establishes source and correctness over verified support, not task completion.
 Models can make mistakes. Independent review is external to this campaign, and
 neither assessment is a formal proof certificate.
@@ -286,7 +295,8 @@ original acceptance policy. The 3.5 implementation is preserved separately as
 
 ### Version 4.2.0 compared with 3.5
 
-The comparison uses 4.2.0 and 3.5 at `148bb12`, including its native Explorer.
+The comparison describes released 4.2.0, before reconstruction reuse, and 3.5 at
+`148bb12`, including its native Explorer.
 
 | Area                            | 4.2.0 policy                                                                                                                                                                                                                                                                       | 3.5                                                                                                                                                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
