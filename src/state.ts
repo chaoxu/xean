@@ -53,12 +53,9 @@ export function project(book: NotebookState): {
 } {
   const reports: Record<string, Verdict[]> = {};
   const passes: Record<string, Record<number, Map<string, number>>> = {};
-  const failures = new Set<string>();
   for (const [index, check] of book.checks.entries())
     for (const verdict of check.values) {
       (reports[verdict.note] ??= []).push(verdict);
-      if (verdict.verdict === "FAIL" && verdict.verifier !== "requirements")
-        failures.add(verdict.note);
       if (verdict.verdict !== "PASS") continue;
       const attempts = (passes[verdict.note] ??= {});
       const passed = (attempts[check.candidate] ??= new Map());
@@ -74,7 +71,11 @@ export function project(book: NotebookState): {
     const established =
       entry.verification !== undefined ||
       attempts.some((p) => p.has("source") && p.has("correctness"));
-    const dead = failures.has(entry.id) || support.some((note) => note?.dead);
+    const dead =
+      reports[entry.id]?.some(
+        ({ verdict, verifier }) =>
+          verdict === "FAIL" && verifier !== "requirements",
+      ) || support.some((note) => note?.dead);
     const verified =
       established && !dead && support.every((note) => note?.verified);
     const note = noteSchema.parse({

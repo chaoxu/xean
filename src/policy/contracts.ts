@@ -19,11 +19,6 @@ export const verifierNames = [
   "reconstruction",
 ] as const;
 export type VerifierName = (typeof verifierNames)[number];
-export const roleLabels = {
-  explorer: `${applicationId}/explorer`,
-  coordinator: `${applicationId}/coordinator`,
-  verifier: `${applicationId}/verifier`,
-} as const satisfies Readonly<Record<RoleName, string>>;
 /** The submit tool for each mathematical assignment. */
 export const submissionTools = {
   explorer: "submit_notes",
@@ -394,26 +389,19 @@ export function missingVerdicts(
 }
 
 /** Binds a verdict list to the notes one call judges: one verdict per note under verification. */
-function verdictsOver<T extends z.ZodRawShape>(
-  entry: z.ZodObject<T>,
+function verdictsOver<T extends z.ZodType<{ note: string }>>(
+  entry: T,
   judged: readonly string[],
 ) {
   const expected = [...judged].sort(byId).join(",");
   // Keep the provider schema stable across candidates. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
   return z
-    .strictObject({ verdicts: z.array(entry.extend({ note: noteId })) })
-    .refine(
-      (value) =>
-        listedIds(
-          (value as { readonly verdicts: readonly { readonly note: string }[] })
-            .verdicts,
-        ) === expected,
-      {
-        message: "one verdict per note under verification",
-        path: ["verdicts"],
-      },
-    );
+    .strictObject({ verdicts: z.array(entry) })
+    .refine((value) => listedIds(value.verdicts) === expected, {
+      message: "one verdict per note under verification",
+      path: ["verdicts"],
+    });
 }
 
 export function verdictsFor(judged: readonly string[]) {

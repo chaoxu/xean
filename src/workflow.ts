@@ -117,11 +117,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 context,
               );
               if (!book) throw new Error("Campaign notebook is missing");
-              return copy(
-                book.checks
-                  .filter((c) => c.candidate === candidate)
-                  .flatMap((c) => c.values),
-              );
+              return book.checks
+                .filter((c) => c.candidate === candidate)
+                .flatMap((c) => c.values);
             };
             const premises: Record<string, string> = {};
             await runtime.commit(async (tx) => {
@@ -164,7 +162,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 for (const note of [...refreshed.notes, ...refreshed.support]) {
                   const latest = current.get(note.id);
                   if (latest === undefined) continue;
-                  note.verdicts = copy(latest.verdicts);
+                  note.verdicts = latest.verdicts;
                   note.verified = latest.verified;
                   note.dead = latest.dead;
                 }

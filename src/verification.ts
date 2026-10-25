@@ -112,9 +112,8 @@ export async function verify(
   dependencies: VerificationDependencies,
 ): Promise<void> {
   let input = verifierInput.parse(inputValue);
-  const refresh = dependencies.refresh ?? ((value: VerifierInput) => value);
   for (const name of verifierNames) {
-    input = await refresh(input);
+    input = (await dependencies.refresh?.(input)) ?? input;
     if (name === "reconstruction") {
       const have = await dependencies.recorded();
       // A comparison publishes its entire batch in one commit. Do not regroup

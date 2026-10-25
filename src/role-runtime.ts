@@ -27,7 +27,7 @@ import {
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { roleLabels, submissionTools } from "./policy/contracts.ts";
+import { applicationId, submissionTools } from "./policy/contracts.ts";
 import {
   coordinatorUpdate,
   resolveCall,
@@ -342,7 +342,7 @@ export function createRoleRuntime() {
                   }
                   if ("prompt_cache_key" in request)
                     request.prompt_cache_key = createHash("sha256")
-                      .update(`${roleLabels[call.role]}\n${call.system}`)
+                      .update(`${applicationId}/${call.role}\n${call.system}`)
                       .digest("hex");
                   return request;
                 },
