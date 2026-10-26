@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -36,6 +36,7 @@ import {
 import { convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { streamSimple as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import { z } from "zod";
+import * as prompts from "../src/policy/prompts.ts";
 import {
   createRoleRuntime,
   roleGenerationPolicy,
@@ -194,6 +195,196 @@ function fixture(
     },
   };
 }
+
+/** Capture the real Responses declaration, then execute the synthetic wire arguments. */
+function wireReply(
+  args: Record<string, JsonValue>,
+  inspect?: (tool: Record<string, any>, transcript: TranscriptContext) => void,
+): FauxResponseStep {
+  return async (transcript, options, _state, model) => {
+    let name = "";
+    const response = await responsesStream(
+      {
+        ...model,
+        api: "openai-responses",
+        compat: { supportsStrictMode: true },
+      },
+      normalizeContext(transcript),
+      {
+        ...options,
+        apiKey: "fixture-not-a-credential",
+        onPayload(payload) {
+          const tool = (payload as { tools: Record<string, any>[] }).tools[0]!;
+          name = tool.name;
+          expect(tool.strict).toBe(true);
+          inspect?.(tool, transcript);
+          throw new Error("captured before HTTP");
+        },
+      },
+    ).result();
+    expect(response.errorMessage).toContain("captured before HTTP");
+    return fauxAssistantMessage([fauxToolCall(name, args)], {
+      stopReason: "toolUse",
+    });
+  };
+}
+
+test("Responses optional Explorer nulls normalize before execution while raw evidence survives", async () => {
+  const raw = {
+    notes: [
+      {
+        text: "Reflexivity gives 1 = 1.",
+        support: [],
+        summary: null,
+        detailedSummary: null,
+      },
+    ],
+  };
+  const expected = { notes: [{ text: raw.notes[0]!.text, support: [] }] };
+  const fixture_ = fixture([
+    wireReply(raw, (tool) => {
+      const item = tool.parameters.properties.notes.items;
+      expect(item.required).toContain("summary");
+      expect(item.required).toContain("detailedSummary");
+      expect(item.properties.summary.anyOf).toContainEqual({ type: "null" });
+    }),
+  ]);
+  const { harness, invoke } = await fixture_.open();
+  try {
+    expect(
+      (await harness.waitForTask(await invoke(), context)).state.outcome,
+    ).toMatchObject({ status: "completed", result: { value: expected } });
+    expect(fixture_.provider.state.callCount).toBe(1);
+    await harness.commit(async (tx) => {
+      const conversations = await tx.scanConversations({}, 128);
+      const entries = (
+        await Promise.all(
+          conversations.items.map((c) =>
+            tx.scanEntries({ conversationId: c.id }, 128),
+          ),
+        )
+      ).flatMap((page) => page.items);
+      const message = entries
+        .flatMap((entry) => entry.model ?? [])
+        .find((m) => m.role === "assistant");
+      expect(
+        message?.role === "assistant" &&
+          message.content.find((part) => part.type === "toolCall")?.arguments,
+      ).toEqual(raw);
+      const receipt = entries.find((entry) => ToolResultEntry.is(entry));
+      expect(receipt?.model?.[0]).toMatchObject({
+        role: "toolResult",
+        details: expected,
+        isError: false,
+      });
+    }, context);
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("Responses optional object nulls preserve mixed verdicts and contextual refinements", async () => {
+  // This control branch has no summary-correction policy. Supply only its schema
+  // as a fixture, leaving the real role adapter and native tool execution intact.
+  const correction = z.strictObject({
+    summary: z.string().refine((s) => s.trim().length > 0),
+    detailedSummary: z.string(),
+  });
+  const schema = z.strictObject({
+    verdicts: z.array(
+      z
+        .strictObject({
+          note: z.string(),
+          verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
+          report: z.string(),
+          summaryCorrection: correction.optional(),
+        })
+        .refine(
+          (v) => !v.summaryCorrection || v.verdict === "PASS",
+          "correction requires PASS",
+        ),
+    ),
+  });
+  const original = prompts.resolveCall;
+  const override = spyOn(prompts, "resolveCall").mockImplementation(
+    (input) => ({ ...original(input), schema }),
+  );
+  const corrected = {
+    summary: "Exact claim.",
+    detailedSummary: "All hypotheses retained.",
+  };
+  const raw = {
+    verdicts: ["PASS", "FAIL", "INCONCLUSIVE", "PASS"].map((verdict, i) => ({
+      note: `n${i + 1}`,
+      verdict,
+      report: "Fixture assessment.",
+      summaryCorrection: i === 3 ? corrected : null,
+    })),
+  };
+  const rejected = (summaryCorrection: JsonValue, verdict: string) => ({
+    verdicts: [{ note: "n1", verdict, report: "Fixture.", summaryCorrection }],
+  });
+  const fixture_ = fixture([
+    wireReply(rejected(corrected, "FAIL")),
+    wireReply(rejected({ ...corrected, summary: " " }, "PASS")),
+    wireReply(raw, (tool, transcript) => {
+      const item = tool.parameters.properties.verdicts.items;
+      expect(item.required).toContain("summaryCorrection");
+      expect(item.properties.summaryCorrection.anyOf).toContainEqual({
+        type: "null",
+      });
+      const errors = transcript.messages.filter((m) => m.role === "toolResult");
+      expect(errors).toHaveLength(2);
+      expect(errors.every((m) => m.isError)).toBe(true);
+    }),
+  ]);
+  let harness: Harness | undefined;
+  try {
+    const current = await fixture_.open();
+    harness = current.harness;
+    const notes = project({
+      notes: raw.verdicts.map((v) => ({
+        id: v.note,
+        text: v.report,
+        support: [],
+      })),
+      checks: [],
+      guidance: [],
+      inputs: [],
+    }).notes;
+    const input: CallDescriptor = {
+      kind: "verifier",
+      name: "correctness",
+      judged: notes.map((n) => n.id),
+      input: {
+        task: descriptor.input.task,
+        notes,
+        support: [],
+        verify: notes.map((n) => ({
+          note: n.id,
+          verifiers: ["source", "correctness"],
+        })),
+      },
+    };
+    expect(
+      (await harness.waitForTask(await current.invoke([], input), context))
+        .state.outcome,
+    ).toMatchObject({
+      status: "completed",
+      result: {
+        value: {
+          verdicts: raw.verdicts.map(({ summaryCorrection, ...v }) =>
+            summaryCorrection ? { ...v, summaryCorrection } : v,
+          ),
+        },
+      },
+    });
+    expect(fixture_.provider.state.callCount).toBe(3);
+  } finally {
+    await harness?.close(context);
+    override.mockRestore();
+  }
+});
 
 test("Explorer prompt, submission contract and notebook reader reach Pi; the first submission hands off", async () => {
   let input: TranscriptContext | undefined;

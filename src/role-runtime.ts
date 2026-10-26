@@ -5,6 +5,7 @@ import {
   Type,
   type TSchema,
 } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import {
   configure,
   defineDoc,
@@ -225,7 +226,21 @@ export function createRoleRuntime() {
         if (call.tool !== name)
           throw new Error("Submission tool does not match the assignment");
         // A successful receipt exists only after contextual validation, including note references.
-        const parsed = call.schema.safeParse(value);
+        const parsed = call.schema.safeParse(
+          validateToolArguments(
+            {
+              name,
+              description: call.description,
+              parameters: z.toJSONSchema(call.schema) as TSchema,
+            },
+            {
+              type: "toolCall",
+              id: api.callId,
+              name,
+              arguments: value as Record<string, JsonValue>,
+            },
+          ),
+        );
         if (!parsed.success)
           return {
             output: [{ type: "text", text: parsed.error.message }],
