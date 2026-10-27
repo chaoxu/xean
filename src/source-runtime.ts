@@ -213,26 +213,18 @@ export function codexExec(
       stdout = run.stdout;
       stderr = run.stderr;
       exitCode = run.exitCode;
-      if (run.cancelled) {
+      if (run.cancelled || run.failed) {
         return {
-          state: "cancelled",
+          state: run.cancelled ? "cancelled" : "failed",
           codexVersion,
           stdout,
           stderr,
           exitCode,
-          error: "source verification cancelled",
-        };
-      }
-      if (run.failed) {
-        return {
-          state: "failed",
-          codexVersion,
-          stdout,
-          stderr,
-          exitCode,
-          error: run.isMaxBuffer
-            ? "Codex output exceeded the capture limit"
-            : `Codex exited with status ${run.exitCode}`,
+          error: run.cancelled
+            ? "source verification cancelled"
+            : run.isMaxBuffer
+              ? "Codex output exceeded the capture limit"
+              : `Codex exited with status ${run.exitCode}`,
         };
       }
       return {

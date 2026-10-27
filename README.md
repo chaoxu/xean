@@ -1,12 +1,12 @@
 # `xean`
 
-`xean` runs mathematical research on native Pi Durable. Explorer appends notes,
+`xean` 4.3.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi stores the campaign in
 SQLite and manages execution and recovery.
 
-This development version reuses previously reconstructed supporting notes from
+Reconstruction reuses previously reconstructed supporting notes from
 the same campaign. Selected candidates still receive fresh reconstruction.
 
 Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
@@ -36,7 +36,8 @@ The example settings use `openai/gpt-6-astra` with `max` reasoning. Set
 `OPENAI_API_KEY` before running. For a supported subscription, use `bun run pi`
 and `/login`, then select the matching Pi provider and model in settings.
 The CLI reads Pi credentials from `~/.pi/agent/auth.json`.
-`PI_CODING_AGENT_DIR` selects another credential directory.
+It also loads custom providers and model overrides from `~/.pi/agent/models.json`.
+`PI_CODING_AGENT_DIR` selects another Pi configuration directory.
 
 Edit `task.json` to state the exact problem and what counts as completion:
 
@@ -321,13 +322,25 @@ sends an exact snapshot when no boundary qualifies. Recovery retains the recorde
 parent. Stable OpenAI routing headers and preserved prefixes can support caching,
 subject to provider support and availability.
 
-Pi 1.2.0 at `b45e0eb` owns tasks, conversations, checkpoints, storage, and recovery.
+Pi 1.4.0 at `4a080252` owns tasks, conversations, checkpoints, storage, and recovery.
 Retained patches are listed in [provenance](vendor/pi/provenance.json). Ordinary
 verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime.
 
+Create fresh campaigns with 4.3.0. Existing campaigns require their pinned
+runtime: Pi's earlier SQLite schema is rejected without migrating the campaign database.
+
 ## Qualification
+
+### Version 4.3.0
+
+This release adds reconstruction reuse and native Pi tool-argument validation,
+and upgrades Pi to 1.4.0. The tests cover dependency invalidation, fresh
+reconstruction of selected candidates, recovery with frozen receipt references,
+provider-generated optional fields, and read-only rejection of older databases.
+The mathematical prompts and settings match the tested reconstruction-reuse
+baseline. The ongoing INCONCLUSIVE and recheck-policy experiments remain separate.
 
 ### Version 4.2.0
 
@@ -416,4 +429,4 @@ reconstruction, hidden proof inputs, atomic verdicts, corrections, acceptance,
 workflow replay, provider-limit recovery, and persisted limits.
 `pack` stages `package.json` and its `files` list, creates an archive with system
 tar, and installs it with the frozen lockfile. It checks imports and the executable
-CLI, runs the packaged tests, and writes `dist/xean-4.2.0.tgz`.
+CLI, runs the packaged tests, and writes `dist/xean-4.3.0.tgz`.

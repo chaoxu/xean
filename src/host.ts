@@ -95,7 +95,7 @@ function openReadDatabase(path: string) {
 }
 
 async function openOwnedStorage(path: string) {
-  const database = piDatabase(
+  const database = new NodeSqliteDatabase(
     new Database(path, { create: true, strict: true }),
   );
   try {
@@ -107,11 +107,6 @@ async function openOwnedStorage(path: string) {
     await database.close().catch(() => {});
     throw error;
   }
-}
-
-/** Keep Pi's queue and transactions, with Bun's deterministic statement cleanup. */
-function piDatabase(database: Database, readOnly = false) {
-  return new NodeSqliteDatabase(database, { readOnly });
 }
 
 /** Own one native Harness. Closing suspends work; reopening recovers its checkpoints. */
@@ -212,9 +207,12 @@ async function inspectSession<T>(
   assertSingleLink((await stat(path)).nlink);
   using database = openReadDatabase(path);
   database.exec("BEGIN");
-  const storage = await SqliteStorage.open(piDatabase(database, true), {
-    readOnly: true,
-  });
+  const storage = await SqliteStorage.open(
+    new NodeSqliteDatabase(database, { readOnly: true }),
+    {
+      readOnly: true,
+    },
+  );
   const session = createSession(storage, { documentRetentionMs: 0 });
   try {
     const definition = validateDefinition(
