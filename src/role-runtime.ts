@@ -52,6 +52,7 @@ type Assignment = { descriptor?: CallDescriptor; profile?: PiRoleProfile };
 export const Assignment = defineDoc({
   kind: "xean.role.assignment",
   version: 1,
+  checkpointWhen: () => false,
   scope: "conversation",
   history: "latest",
   fork: "initial",
@@ -60,6 +61,7 @@ export const Assignment = defineDoc({
 const Progress = defineDocFamily({
   kind: "xean.role.progress",
   version: 1,
+  checkpointWhen: () => false,
   scope: "task",
   family: true,
   initial: (): { conversation?: ConversationId } => ({}),
@@ -68,6 +70,7 @@ type InputBoundary = { conversationId: ConversationId; at: EntryId };
 const CoordinatorPrefix = defineDoc({
   kind: "xean.coordinator.prefix",
   version: 1,
+  checkpointWhen: () => false,
   scope: "conversation",
   history: "latest",
   fork: "initial",

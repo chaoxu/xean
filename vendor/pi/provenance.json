@@ -1,135 +1,149 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb",
+  "commit": "4a080252f06caf63a525d7873c5d94d3c23887e0",
   "distribution": {
-    "source": "upstream-build",
-    "version": "1.2.0",
-    "released": false,
-    "artifactManifestSha256": "a6d37a3ea52d8c3f91fe765a83ced0c219154985eb06d95aa4fc5bb786a355fe",
-    "command": "npm run pack:packages -- --out ARTIFACT_DIRECTORY --offline-model-data"
+    "source": "npm-registry",
+    "version": "1.4.0",
+    "released": true
   },
   "modelData": {
-    "generatedAt": "2026-10-14T16:30:32.871Z",
-    "manifestSha256": "9a94e0d1bd4008d4f070b243c3d41aa89d3478c4beea5be3399ae21b564979bb",
+    "generatedAt": "2026-10-21T22:33:24.994Z",
+    "manifestSha256": "e55f0153d8e477e6d9bfff9197ed062d8cbc79d7c569cd552e7f99750fc448de",
     "frozenIn": "@earendil-works/pi-ai:package/dist/providers/data",
-    "upstreamManifestSha256": "a9cdaf9e5ce5b784cda0a2d7b4e9f72672a758cca7a9e40ff9c817a6696b4d18"
+    "upstreamManifestSha256": "cc48ce3d6fe8d1a6919782b0b0bf5239a750a7880d7c075de3c1966d879f9ff6"
   },
   "artifacts": [
     {
       "name": "@earendil-works/chord",
-      "version": "1.2.0",
-      "bytes": 439325,
-      "sha256": "1c4ac76c163f81e2c32237944fe55d584dbc6c1c360359d2d58fe3a59266bd1b",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-chord-1.2.0-dc690ecb4d1a.tgz",
-      "integrity": "sha512-3GkOy00abhtsEgBc6tPzQcVxZpb1vE4ESGqQZUipIRfIOybnp8HMZXyrCl4ruFYeyzqj1cLELCXBxi7NQDz9+Q=="
+      "version": "1.4.0",
+      "bytes": 487169,
+      "sha256": "3ebe2e11f66c2416268dfc78a36fa9fa3c0889aae62696a582cf53d15a1b1a73",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-chord-1.4.0-3ebe2e11f66c.tgz",
+      "integrity": "sha512-dTbgyz4xgDS5KAUFx1bFENqj0Cr1N3tYxJJOYStc6g6HS78FSBZydyoCwLoddiQRF+VgRS0fpgAi+iKxjZ3BQA==",
+      "url": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-telemetry",
-      "version": "1.2.0",
-      "bytes": 27276,
-      "sha256": "da13980f2c29705dc3a423d045df2f4b07215d406778790b368a65f46cf6368b",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-telemetry-1.2.0-c3830d1e6f98.tgz",
-      "integrity": "sha512-w4MNHm+Y9WXUCOUbOuOSe1aemuiErHZB6hOyZ3Xjo3a3bp3k6R+NeFAXG7Z5QL4oac5DdKQjeIMUgc+ujHev4Q=="
+      "version": "1.4.0",
+      "bytes": 49115,
+      "sha256": "28b832f393921d8303db5200463a0b0c7143cd753286cd8a814cd1dfc548d9c8",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-telemetry-1.4.0-28b832f39392.tgz",
+      "integrity": "sha512-MLIfowwUYIY65jSjMX82paZOrX/NTvLk6D08h+3Jq42a99RzUOewzuCR0zOlPul3D6UBfddat76VT6LvsHEs1w==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-ai",
-      "version": "1.2.0",
-      "bytes": 797744,
-      "sha256": "3085995607b65f06d7b9ed906a91c2de730bfd2b5801f5901dc6ddfc27670df0",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-ai-1.2.0-03773bb559b5.tgz",
-      "integrity": "sha512-A3c7tVm1wd3oBSW5nkaHCNEvRt1ZOTwNa1KNCaqRNyo4jVstodt5D2k3L/4+VGUWBxsQMLQYxMG2I8rFMt4idw=="
+      "version": "1.4.0",
+      "bytes": 836597,
+      "sha256": "b40e2ba8bb6fc332908f8b96e837dc2d1fdfb45eb9cd382f5aed111462981e3c",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-ai-1.4.0-b40e2ba8bb6f.tgz",
+      "integrity": "sha512-hQM/C4+1w8rHYACzDDf+0vQMnEnpzIop1tptIERVgR3ZeT/hHSzBNG8PaWPgxWQjqSeKCyBZSyp8uTT6eKK1pQ==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-durable",
-      "version": "1.2.0",
-      "bytes": 738143,
-      "sha256": "cb156f3d33fc6c30c7d325757160d033fc67a0548abe1b43a575894761579e6d",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-durable-1.2.0-c92e0838617b.tgz",
-      "integrity": "sha512-yS4IOGF7om6IuxkdcrYigHRxQ8BwbeCE/qvm1vgaeLWVcbP6tOBCiw03tjrrDddUEzxGbKwrQCBk7pmVD96bUw=="
+      "version": "1.4.0",
+      "bytes": 801973,
+      "sha256": "6d4dedd7a342151bca8b962f35a6231312cb10e5226796734e6644ad02f48224",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-durable-1.4.0-6d4dedd7a342.tgz",
+      "integrity": "sha512-EtIyXH1MBSXdJSkodmy+CYXuwfve3gPrD4GNCZ0XmuRWLPupwRlNQ7fdaXjRcLoKb6SWkT/yEzK+sMmrqvYK+Q==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-durable/-/pi-durable-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "version": "1.2.0",
-      "bytes": 7547215,
-      "sha256": "8599ba0679ad26894c87f3cce2157d953fd656cc2da7bb8a41877cb041b775a7",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-coding-agent-1.2.0-e8ce0e25da63.tgz",
-      "integrity": "sha512-6M4OJdpjqTeeEO7kc85lA2TehNeAPaJerz76qHVn0qJfm6gqPvAgX+bDDOgFdtaZ0a9Aq0mXG3s77ao8L8eSZg=="
+      "version": "1.4.0",
+      "bytes": 7612554,
+      "sha256": "d155c16ef6fa00960fbf58b2911536e80b05f33700e0b14fbd08967ede0c7428",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-coding-agent-1.4.0-d155c16ef6fa.tgz",
+      "integrity": "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-mcp",
-      "version": "1.2.0",
-      "bytes": 93459,
-      "sha256": "44032914989bce2148d569c7027edcaf6529e275732581ba189c8eff949a1189",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-mcp-1.2.0-b7817ac87fb3.tgz",
-      "integrity": "sha512-t4F6yH+zhB17lB9X+gAI5DucupiSJPA4FQfJ+YJRkn9wydAYXBEIhb8Id0uJimdsVEMHUJt3t5aotblup5DVhQ=="
+      "version": "1.4.0",
+      "bytes": 93722,
+      "sha256": "ce2633c482aed9733d6a863a156da2b504426f0056fd2c3495f9e744d7e56726",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-mcp-1.4.0-ce2633c482ae.tgz",
+      "integrity": "sha512-92aZmmGsUpHHknYuKXZHRINQfahntw5hU9If0I0ZM49GojOaFHpkl5/GF3/aatqpt7v7GjZbBfpfSygGKW+pnw==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-tui",
-      "version": "1.2.0",
-      "bytes": 521241,
-      "sha256": "aad229729a1af28f8582a6467022a527e7861f3d73984c14c5e2e79a8f46dffe",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-tui-1.2.0-85f9c893fa6d.tgz",
-      "integrity": "sha512-hfnIk/ptHafkdDaQW+vJMbz3i9cDry0VXHyy6RJm4wZeU3T7JIxzEL20uCtR2WMPCLC/xoan3q7/HOBwvkkoGQ=="
+      "version": "1.4.0",
+      "bytes": 527191,
+      "sha256": "b112d44a1835f30c189ba5df9ceb8db33cdbe8c542ba6cddceb0cf731e4216ce",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-tui-1.4.0-b112d44a1835.tgz",
+      "integrity": "sha512-4obPOjgOD7g4mGSlngIvxyujC1UPdmyI9zdVthbr8GufacFEX+Ce0+scPgHg++k2xj5+QjESM2d5TxvIuzCVmg==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-codemode",
-      "version": "1.2.0",
-      "bytes": 106063,
-      "sha256": "1cc58107c814273d3d03851c83da58318530f83798f823045c1ba4d267817dad",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-codemode-1.2.0-051395f2813b.tgz",
-      "integrity": "sha512-BROV8oE7I9VX9EOsFGr7hkVpR60noWUepA0ey5I26M9NCNTruB15YmWkByDrLRUN99xFT54/ZO1xME73KQNJlg=="
+      "version": "1.4.0",
+      "bytes": 106267,
+      "sha256": "497845355c494b11b779923c988f88412074182bbd59c7f704d8af40b3a46ada",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-codemode-1.4.0-497845355c49.tgz",
+      "integrity": "sha512-23CNAXpS9DuLzPMyYuvrXVVio46x4YhffCgCqaWmF7F5H8PooqjrQvX4ucF6M0BhUd+x2tV6r1J0dv8cCME4Cg==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.4.0.tgz"
     },
     {
       "name": "@earendil-works/pi-agent-core",
-      "version": "1.2.0",
-      "bytes": 61311,
-      "sha256": "c0d7f0678fa46cf5e2ef155236ad331438f4697feb5da4dfdf2eecb51381949c",
-      "path": "vendor/pi/b45e0ebcc5ae2fc42a6f2f23104d10e656e6bedb/earendil-works-pi-agent-core-1.2.0-5518991764c0.tgz",
-      "integrity": "sha512-VRiZF2TAUYQsC/72cgcdB8KkZgFj/Uv5Rc1NrkmcdZdK6AOzah1EzbdbhIfb7P1LfmalYd01KugEAu+YVR/T/g=="
+      "version": "1.4.0",
+      "bytes": 62440,
+      "sha256": "2de67828f90c5b2aa16ff80288d23069b67c4a82cbcf9cc49ac3d031f2aeacda",
+      "path": "vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-agent-core-1.4.0-2de67828f90c.tgz",
+      "integrity": "sha512-PoKY84SKUwnt7S5QBZaGUqfNO1kjP3KHpHUA9QpFTj4cOjaVWMYIcBPJ6FDRCdE8Zen9OSECQUd0uUfVgtSmgA==",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.4.0.tgz"
     }
   ],
   "patches": [
     {
-      "package": "@earendil-works/pi-ai",
-      "path": "patches/@earendil-works%2Fpi-ai@1.2.0.patch",
-      "sha256": "c4aed906c617975de6161481d99295d0f248c6e1281f7f5464c05f6347c9ffba",
+      "package": "@earendil-works/chord",
+      "path": "patches/@earendil-works%2Fchord@1.4.0.patch",
+      "sha256": "7b99935bae5b03fff731f76be07541126ec558c56698de098786b4bb0b0dfe36",
       "files": {
-        "dist/api/anthropic-messages.js": "422bcaa52271351b87487189ca374f0bb72dc4eca1be5327539d617d71731522",
-        "dist/api/google-generative-ai.js": "bbf2b3d2bfea2e2c017675c721e727c0b1c772ab91dc344a386a741f7ccc93b0",
-        "dist/api/openai-codex-responses.js": "5fae7ce7ddd700e2159953b54763a6d32829d3ab811d3073e7f6dba6d710a9a6",
-        "dist/api/openai-responses-shared.js": "5bafa2226e1c1bc34f3232c48c5880273ee769474f11f6e65e7b26c323547659",
-        "dist/api/openai-responses.js": "08e2957f91929af8f85cccc314971f4551ef29660a306180e7af2fe57f805f8d",
-        "dist/providers/data/.manifest.json": "9a94e0d1bd4008d4f070b243c3d41aa89d3478c4beea5be3399ae21b564979bb",
-        "dist/providers/data/azure.json": "461094e4a9cd73242887bcdd20ea06269efebcbd1d191d58fbf103bfb08e0484",
-        "dist/providers/data/openai.json": "424021682a20a14646b38d48da4f742476bcddd53f68075d82b38c8f42bf2e5f",
-        "dist/types.d.ts": "d2a4a18c5bf1e2f6eadda32981c8f7127b8af9875dc7efd30f2875a426423430",
-        "dist/utils/retry.js": "2757997359c46f4c2f0fd0329a98cdeb73991ef4e2639849de7ace801067a747"
+        "dist/sqlite/node.d.ts": "05eea8f6fbab258089876c980fd648d78e285d65694fbf3a68f9804bdaf9d61e",
+        "dist/sqlite/node.js": "ed97336784bd2fb1e234b41d7f46fe2b518cd9ce1ac4e229de8137a351b61270"
       },
-      "reason": "Preserve provider errors and usage, classify resumable provider limits, correct direct Codex failure and SSE handling, and separate the documented 1,050,000-token OpenAI/Azure context capacity from the 272,000-token pricing tier. Retain v1 transient gateway codes and diagnostic recovery while leaving authentication, quota, request and schema failures terminal. Send the native Codex output cap only when its model compatibility explicitly opts in."
+      "reason": "Support Bun synchronous SQLite bindings, database-owned statement cleanup, and read-only snapshot closure without WAL writes."
+    },
+    {
+      "package": "@earendil-works/pi-ai",
+      "path": "patches/@earendil-works%2Fpi-ai@1.4.0.patch",
+      "sha256": "3249535e312db44d8bddf223e0da522d59df1ec0d68fc6ae4cc4f2a2ab215df0",
+      "files": {
+        "dist/api/anthropic-messages.js": "69049e24fe5d2000a3a3f64285e0bbbb9b5ffedd9b20e2aca3434017a774873b",
+        "dist/api/google-generative-ai.js": "493fb3198d013455a27d6aadf27edaeb0d64b25701fe60ebcd4cdede98791ee5",
+        "dist/api/openai-codex-responses.js": "8128852a845384f9bc27e44d09e8d288b8d5bb33fcd38b4e93de0b85a92d6e33",
+        "dist/api/openai-responses-shared.js": "0cfb370695dd145706888e464af5bf358de231cdb5415edcd2a3b1c14ef58513",
+        "dist/api/openai-responses.js": "ce7213d22b6a583ae530210e31a1296c664d2402fdeeb46324d7d99e8eb038bc",
+        "dist/providers/data/.manifest.json": "e55f0153d8e477e6d9bfff9197ed062d8cbc79d7c569cd552e7f99750fc448de",
+        "dist/providers/data/azure.json": "3c70e3c0ab9372a26803c139e0989de2bcf46930fde7c08c6918e8defe1254bd",
+        "dist/providers/data/openai.json": "9747d294dae2339e73faf798e699f992d235f0843cfa6a55fabd48f3d8263047",
+        "dist/types.d.ts": "8dba1a57c0a4c51840a754325ab4287250d06b7b61c10fff06bf5b78c12c265d",
+        "dist/utils/retry.js": "42d74d1a9863835bacf65e808fea2ddd70522912ecf1920311ac4f4757c8d8a3"
+      },
+      "reason": "Preserve provider errors and usage, resumable provider limits, direct Codex failure and SSE handling, output-cap opt-in, gateway recovery classification, and the existing OpenAI/Azure context-capacity corrections."
     },
     {
       "package": "@earendil-works/pi-durable",
-      "path": "patches/@earendil-works%2Fpi-durable@1.2.0.patch",
-      "sha256": "b53275ec7ffda2ad0cc7bf847681c36faee8924e5eb8e0925fe9c624f41d7393",
+      "path": "patches/@earendil-works%2Fpi-durable@1.4.0.patch",
+      "sha256": "33de75cf35c7e9f4cf863f86378b4f1cd0d4a73d664607328a5957810af462e0",
       "files": {
-        "dist/harness/agent.js": "ef029723e6a247deb937f7480daa2fb8550948b9670373fa11bfe75b56ba610d",
-        "dist/harness/context.d.ts": "390486e6a195c10a7910e3a287159f81d9faf3a021af75f0f3fb60d427485a25",
-        "dist/harness/context.js": "550849ff840f85bff91e1e995212d17e8f206608bd556bba83fc92e1608bbbeb",
-        "dist/harness/generation.js": "3366d18ddc42ec728ef5a38fd5cc6c4961354038c5f8e2aeb991c781012e02ad",
-        "dist/harness/harness.js": "38eb74d07802b589adce28f0e28a05aaf201f8a4896d179c77f986cd7311d44c",
+        "dist/harness/agent.js": "82a6264f7c3803fc729e5f8d3ead1d79c7a135f2de31c0590c0d0404ffc70eaf",
+        "dist/harness/context.d.ts": "75d48e0d5110abcb2d7543d5196e01567097fd931b029193b087b61445b6799b",
+        "dist/harness/context.js": "b2fce51954d13a7179be3626f136b30de4930a81f4970bdb6a2b6f1af05d32c4",
+        "dist/harness/generation.js": "251a17c8227472c6f9be4d7bc6a7ac270639a7e1da80525be3f0299d68963f29",
+        "dist/harness/harness.js": "4cc050f8b7661b9ef8956561b721093ad177fb6678201fb252657d8abea98a20",
         "dist/harness/live.d.ts": "c458c6fbc7eebefa11db5367887383967bc4bd73e9ddcf79b6000b9714ec3981",
-        "dist/harness/scheduler.js": "fff95e10cb83e81062cfe4a236a07922ed26869071a1f8a949a53f09c57ecb67",
-        "dist/harness/types.d.ts": "8733ca05820cb8f672e8dcca1162fbc8582c093db562712063d2e0e3226f2ff9",
-        "dist/index.d.ts": "ce5cb47d08f6b122bd38669421802af1b7c14f3061d1bc0acfe863d095cd3a11",
-        "dist/index.js": "a8f912867382e5778912df2439ce569102422e905afe37e2bba8f0a1d8dba421",
-        "dist/session/session.js": "c89d7cadd04dfae353e616071c3ba3c12aa52070e045aeb0eb24d9c4af206b42",
-        "dist/storage/sqlite/node.d.ts": "8a16cbc753f4f18e623c072adf13a36fb30d0200425cd79fc0064e69d416eada",
-        "dist/storage/sqlite/node.js": "6fd67e0e4e9b91adaa949372e33f673ed9a445536be08ca1dbbbcaaa5860399f",
-        "dist/storage/sqlite/storage.d.ts": "60ccb3c57f3847f37cdcc891df8950f00c4e6b4e6383aa60995226264f7fecfd",
-        "dist/storage/sqlite/storage.js": "704a85b9b3223df00147bec672196565f24af91288bf77ca1d1f094fb877dca2",
-        "dist/types.d.ts": "0140f335b116f5e5d71c8595a955cf99f66a390882757215a3873e89cda60372"
+        "dist/harness/scheduler.js": "e19bbb4d02445f0a7683f6ae8c7b21c2d4a8a184454fa855e900a1dcf799386e",
+        "dist/harness/types.d.ts": "3c9ad0b448f9bd51b52b1844eb2b27b3e95268e6f98d8de5d9de6bdf31bc6cb9",
+        "dist/index.d.ts": "8db6488e6f190e94cc0b53a6d1555fe322368ce49863c8dc390d2350fbf12ec2",
+        "dist/session/session.js": "ffe40e4383476e15f405f28ca493dfe7da5cbd674743c96aa46073340103f890",
+        "dist/storage/sqlite/storage.d.ts": "4a0faf8779d5c7ad9cc4c64e756797e7622d369a447263cce9f5b6ee36ab593f",
+        "dist/storage/sqlite/storage.js": "63a38c68d3c09449ad93dd83ed6027f9668251326b008333091732133c63e0df",
+        "dist/types.d.ts": "7acc99832b6b1e1642a7e74c28acf3e306d7e2936d3016bb60a2ac3be2644fc6"
       },
-      "reason": "Expose native request and context hooks, continue resumable provider limits, release obsolete observers, and support read-only SQLite inspection. Add optional durable run response, truncation and recovery budgets, configurable continuation text, and model-matched completed-reasoning retry projection while preserving raw responses and usage."
+      "reason": "Preserve stream and context hooks, bounded response and recovery policies, completed-reasoning retry projection, observer cleanup, and read-only SQLite inspection on the native schema."
     }
   ]
 }

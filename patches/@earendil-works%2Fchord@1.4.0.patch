@@ -1,0 +1,101 @@
+diff --git a/dist/sqlite/node.d.ts b/dist/sqlite/node.d.ts
+index ddd8cd7..78330d9 100644
+--- a/dist/sqlite/node.d.ts
++++ b/dist/sqlite/node.d.ts
+@@ -1,6 +1,17 @@
+-import type { StatementSync } from "node:sqlite";
+-import { DatabaseSync } from "node:sqlite";
+ import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "./database.ts";
++interface SyncStatement {
++    run(...params: SqliteValue[]): unknown;
++    get(...params: SqliteValue[]): unknown;
++    all(...params: SqliteValue[]): unknown[];
++}
++interface SyncDatabase {
++    exec(sql: string): unknown;
++    prepare(sql: string): SyncStatement;
++    query?(sql: string): SyncStatement;
++    close(): void;
++    readonly isTransaction?: boolean;
++    readonly inTransaction?: boolean;
++}
+ /** Node SQLite connection settings for a database file. */
+ export type NodeSqliteDatabaseOptions = {
+     /** SQLite WAL auto-checkpoint threshold. SQLite and this adapter default to 1,000 pages; 0 disables it. */
+@@ -13,9 +24,9 @@ export type NodeSqliteDatabaseOptions = {
+  * database and its transaction handles share them across transactions.
+  */
+ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+-    protected readonly database: DatabaseSync;
+-    protected readonly statements: Map<string, StatementSync>;
+-    constructor(database: DatabaseSync, statements: Map<string, StatementSync>);
++    protected readonly database: SyncDatabase;
++    protected readonly statements: Map<string, SyncStatement>;
++    constructor(database: SyncDatabase, statements: Map<string, SyncStatement>);
+     exec(sql: string): Promise<void>;
+     run(sql: string, ...params: SqliteValue[]): Promise<void>;
+     get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined>;
+@@ -23,11 +34,12 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+     protected abstract runOperation<T>(operation: () => T): Promise<T>;
+     private statement;
+ }
+-/** `SqliteDatabase` adapter backed by Node's built-in `node:sqlite`. */
++/** `SqliteDatabase` adapter backed by Node or Bun's synchronous SQLite driver. */
+ export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
+     private readonly access;
+     private closed;
+-    constructor(database: DatabaseSync);
++    private readonly readOnly;
++    constructor(database: SyncDatabase, options?: { readOnly?: boolean });
+     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
+     close(): Promise<void>;
+     protected runOperation<T>(operation: () => T): Promise<T>;
+diff --git a/dist/sqlite/node.js b/dist/sqlite/node.js
+index 777475a..5a1c6a9 100644
+--- a/dist/sqlite/node.js
++++ b/dist/sqlite/node.js
+@@ -74,7 +74,7 @@ class NodeSqliteExecutor {
+         });
+     }
+     get(sql, ...params) {
+-        return this.runOperation(() => this.statement(sql).get(...params));
++        return this.runOperation(() => this.statement(sql).get(...params) ?? undefined);
+     }
+     all(sql, ...params) {
+         return this.runOperation(() => this.statement(sql).all(...params));
+@@ -82,7 +82,8 @@ class NodeSqliteExecutor {
+     statement(sql) {
+         let statement = this.statements.get(sql);
+         if (statement === undefined) {
+-            statement = this.database.prepare(sql);
++            // Bun owns query() statements and finalizes them when the database closes.
++            statement = this.database.query?.(sql) ?? this.database.prepare(sql);
+             this.statements.set(sql, statement);
+         }
+         return statement;
+@@ -100,12 +101,13 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
+         return operation();
+     }
+ }
+-/** `SqliteDatabase` adapter backed by Node's built-in `node:sqlite`. */
++/** `SqliteDatabase` adapter backed by Node or Bun's synchronous SQLite driver. */
+ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+     access = new SerialOperationQueue();
+     closed = false;
+-    constructor(database) {
++    constructor(database, { readOnly = false } = {}) {
+         super(database, new Map());
++        this.readOnly = readOnly;
+     }
+     transaction(callback) {
+         return this.access.runAsync(async () => {
+@@ -136,7 +138,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+             this.closed = true;
+             this.statements.clear();
+             try {
+-                this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
++                if (!this.readOnly || (this.database.isTransaction ?? this.database.inTransaction))
++                    this.database.exec(this.readOnly ? "ROLLBACK" : "PRAGMA wal_checkpoint(TRUNCATE)");
+             }
+             finally {
+                 this.database.close();

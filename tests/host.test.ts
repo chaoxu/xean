@@ -91,6 +91,7 @@ test("old native Pi campaigns are rejected before any database rewrite", async (
   const OldDefinition = defineDoc({
     kind: "xean.definition",
     version: 1,
+    checkpointWhen: () => false,
     scope: "conversation",
     history: "latest",
     fork: "current",
@@ -106,6 +107,26 @@ test("old native Pi campaigns are rejected before any database rewrite", async (
   await expect(inspect(path, readReport)).rejects.toThrow();
   await expect(open(path)).rejects.toThrow();
   await expect(open(path, { create: { task, settings } })).rejects.toThrow();
+  expect(await digest(path)).toBe(before);
+});
+
+test("prior Pi SQLite schemas are rejected without migration", async () => {
+  const { path } = await fixture();
+  const database = new Database(path);
+  database.exec(
+    "CREATE TABLE durable_schema(singleton INTEGER PRIMARY KEY, version INTEGER); INSERT INTO durable_schema VALUES (1, 1)",
+  );
+  database.close();
+  const before = await digest(path);
+  await expect(inspect(path, readReport)).rejects.toThrow(
+    "Unsupported durable SQLite schema version",
+  );
+  await expect(open(path)).rejects.toThrow(
+    "Unsupported durable SQLite schema version",
+  );
+  await expect(open(path, { create: { task, settings } })).rejects.toThrow(
+    "Unsupported durable SQLite schema version",
+  );
   expect(await digest(path)).toBe(before);
 });
 

@@ -17,10 +17,7 @@ import {
   type Session,
   type Tx,
 } from "@earendil-works/pi-durable";
-import {
-  SqliteStorage,
-  type SqliteValue,
-} from "@earendil-works/pi-durable/storage/sqlite";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { task as taskSchema } from "./policy/contracts.ts";
 import { solveSettings } from "./policy/settings.ts";
@@ -114,26 +111,7 @@ async function openOwnedStorage(path: string) {
 
 /** Keep Pi's queue and transactions, with Bun's deterministic statement cleanup. */
 function piDatabase(database: Database, readOnly = false) {
-  const driver = {
-    exec: (sql: string) => database.exec(sql),
-    prepare: (sql: string) => {
-      // query() gives Bun ownership so close() finalizes retained statements.
-      const statement = database.query(sql);
-      return {
-        run: statement.run.bind(statement),
-        all: statement.all.bind(statement),
-        get: (...args: SqliteValue[]) => statement.get(...args) ?? undefined,
-      };
-    },
-    get isTransaction() {
-      return database.inTransaction;
-    },
-    close: () => database.close(true),
-  };
-  // Pi uses this subset of DatabaseSync; Bun returns null for absent rows.
-  return new NodeSqliteDatabase(driver as unknown as DatabaseSync, {
-    readOnly,
-  });
+  return new NodeSqliteDatabase(database, { readOnly });
 }
 
 /** Own one native Harness. Closing suspends work; reopening recovers its checkpoints. */
@@ -189,6 +167,7 @@ export async function open(path: string, options: OpenOptions = {}) {
         settings: {
           compaction: { enabled: false },
           retry: { enabled: true, maxRetries: 8 },
+          restartLimit: Infinity,
           generation: roleGenerationPolicy,
           toolExecution: "sequential",
           contextRetentionMs: 0,

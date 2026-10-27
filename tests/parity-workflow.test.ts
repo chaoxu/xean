@@ -24,6 +24,7 @@ import { fauxModels } from "./faux-models.ts";
 const Assignment = defineDoc({
   kind: "xean.role.assignment",
   version: 1,
+  checkpointWhen: () => false,
   scope: "conversation",
   history: "latest",
   fork: "initial",

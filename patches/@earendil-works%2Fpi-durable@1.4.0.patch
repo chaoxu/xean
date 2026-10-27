@@ -1,8 +1,8 @@
 diff --git a/dist/harness/agent.js b/dist/harness/agent.js
-index d71a7a9..cea9681 100644
+index 29cfac7..99df43d 100644
 --- a/dist/harness/agent.js
 +++ b/dist/harness/agent.js
-@@ -38,6 +38,7 @@ export function resolveSettings(settings) {
+@@ -44,6 +44,7 @@ export function resolveSettings(settings) {
          ...(extensions === undefined ? {} : { extensions }),
          stream: { ...settings?.stream },
          retry: { ...DEFAULT_RETRY_POLICY, ...settings?.retry },
@@ -11,10 +11,10 @@ index d71a7a9..cea9681 100644
          // Field by field, so an explicitly undefined interval keeps its default.
          progress: {
 diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
-index c87d2f1..5aad4e6 100644
+index c87d2f1..83096de 100644
 --- a/dist/harness/context.d.ts
 +++ b/dist/harness/context.d.ts
-@@ -1,8 +1,13 @@
+@@ -1,8 +1,11 @@
  import type { Context } from "@earendil-works/chord";
 -import type { Message } from "@earendil-works/pi-ai";
 +import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
@@ -24,13 +24,11 @@ index c87d2f1..5aad4e6 100644
 +import type { ContextView, ContextProjection } from "./types.ts";
 +/** Reusable output from an interrupted response; tool drafts are text, never executable calls. */
 +export declare function continuationContent(message: AssistantMessage): AssistantMessage["content"];
-+/** Identity of a completed, replayable OpenAI Responses reasoning item. */
-+export declare function responsesReasoningId(part: AssistantMessage["content"][number]): string | undefined;
 +export declare function isIncompleteResponse(message: AssistantMessage): boolean;
  /** Head marker and newest visible entry that fix one committed context range. */
  export type ContextBounds = {
      readonly head: (EntryRecord & {
-@@ -44,19 +49,19 @@ type Baseline = Message | null | undefined;
+@@ -44,19 +47,19 @@ type Baseline = Message | null | undefined;
   * entries after its tail are scanned. Returns the view and the range to pass to the next read. A range outlives the
   * read, so its entries are frozen like `MemoryStorage` records, and the returned view has its own arrays.
   */
@@ -54,7 +52,7 @@ index c87d2f1..5aad4e6 100644
  export declare function activeEntries(storage: Storage, conversationId: ConversationId, bounds: ContextBounds | undefined, context: Context): Promise<readonly EntryRecord[]>;
  /**
 diff --git a/dist/harness/context.js b/dist/harness/context.js
-index 1e208d2..a39ef45 100644
+index 1e208d2..82a79ac 100644
 --- a/dist/harness/context.js
 +++ b/dist/harness/context.js
 @@ -1,5 +1,9 @@
@@ -175,7 +173,7 @@ index 1e208d2..a39ef45 100644
 +    summary: Type.Array(Type.Object({ type: Type.Literal("summary_text"), text: Type.String() })),
 +});
 +/** Identity of a completed, replayable OpenAI Responses reasoning item. */
-+export function responsesReasoningId(part) {
++function responsesReasoningId(part) {
 +    if (part.type === "thinking" && part.thinkingSignature) {
 +        try {
 +            const item = JSON.parse(part.thinkingSignature);
@@ -201,20 +199,20 @@ index 1e208d2..a39ef45 100644
  /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
  const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 136bed4..8157db6 100644
+index d046232..78d96eb 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
  import { defineTask } from "../tasks.js";
- import { addTools } from "./agent.js";
- import { createCompaction, estimateContext, selectCut } from "./compaction.js";
+ import { addTools, sectionExtension } from "./agent.js";
+ import { compactionPolicy, createCompaction, estimateContext, selectCut } from "./compaction.js";
 +import { continuationContent, isIncompleteResponse } from "./context.js";
- import { applyBoundary, prepareBoundary } from "./inbox.js";
+ import { applyBoundary, prepareBoundary, withdrawQueuedInputs } from "./inbox.js";
  import { assignJson } from "./json.js";
  import { endRun, LiveDoc } from "./live.js";
-@@ -14,6 +15,11 @@ import { ensureProviderSessionId } from "./provider.js";
- import { appendToolResult, harnessError, ToolTask } from "./tool.js";
+@@ -15,6 +16,11 @@ import { appendToolResult, harnessError, ToolTask } from "./tool.js";
  import { recordUsage } from "./usage.js";
+ import { optionalExtension } from "./util.js";
  const DEFAULT_POLL_AFTER_MS = 5000;
 +function contextProjection(settings, model) {
 +    return settings.generation.retryContent === "completed-reasoning" && model ? {
@@ -224,7 +222,7 @@ index 136bed4..8157db6 100644
  /**
   * Built-in generation task: prepares the positional system prompt and tool loadout, requests or polls the model,
   * retries, and classifies the response. The run's inputs live in `pi.live.run`.
-@@ -52,7 +58,10 @@ export const GenerationTask = defineTask({
+@@ -53,7 +59,10 @@ export const GenerationTask = defineTask({
                      return failModelError(runtime, compactionFailure(outcome), context);
                  }
              }
@@ -234,9 +232,9 @@ index 136bed4..8157db6 100644
 +                return failModelError(runtime, `Model run exhausted ${settings.generation.maxResponses} responses`, context);
 +            const view = await runtime.context(conversationId, context, { projection: contextProjection(settings, resolved) });
              const shown = replaySections(view.messages);
-             const report = (error) => runtime.report(error);
              let env;
-@@ -112,12 +121,13 @@ export const GenerationTask = defineTask({
+             try {
+@@ -115,12 +124,13 @@ export const GenerationTask = defineTask({
              const model = runtime.models.getModel(ref.provider, ref.modelId);
              if (model === undefined)
                  return failNoModel(runtime, ref, context);
@@ -248,13 +246,13 @@ index 136bed4..8157db6 100644
 -                const replaced = await hook({ messages }, runtime, context);
 -                if (replaced !== undefined)
 -                    messages = replaced.messages;
-+                const replaced = await hook({ messages, stream, entries: view.entries }, runtime, context);
++                const replaced = await hook({ messages, stream }, runtime, context);
 +                messages = replaced?.messages ?? messages;
 +                stream = replaced?.stream ?? stream;
              });
              const options = {
                  ...streamOptions,
-@@ -125,7 +135,7 @@ export const GenerationTask = defineTask({
+@@ -129,7 +139,7 @@ export const GenerationTask = defineTask({
                  sessionId: await ensureProviderSessionId(runtime, context),
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
              };
@@ -263,7 +261,7 @@ index 136bed4..8157db6 100644
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -278,7 +288,7 @@ export async function convertPartial(tx, live, conversationId) {
+@@ -316,7 +326,7 @@ export async function convertPartial(tx, live, conversationId) {
   * `progress.partialIntervalMs` (default 100 ms) with one commit in flight; `finally` stops the throttle and awaits that
   * commit, so no stale partial lands after the outcome.
   */
@@ -272,7 +270,7 @@ index 136bed4..8157db6 100644
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
      let timer;
-@@ -312,7 +322,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
+@@ -350,7 +360,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
          });
      };
      try {
@@ -281,7 +279,7 @@ index 136bed4..8157db6 100644
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -355,19 +365,30 @@ async function classify(runtime, request, message, context) {
+@@ -393,19 +403,30 @@ async function classify(runtime, request, message, context) {
          return;
      }
      await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
@@ -308,14 +306,14 @@ index 136bed4..8157db6 100644
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
      const settings = runtime.settings;
      const overflow = message.stopReason === "error" && isContextOverflow(message);
-     if (overflow && compacted === undefined && settings.compaction.enabled) {
-         const policy = settings.compaction;
+     const compaction = compactionPolicy(settings, ref);
+     if (overflow && compacted === undefined && compaction.enabled) {
 -        const view = await runtime.context(conversationId, context, { at: cutoff });
 +        const view = await runtime.context(conversationId, context, { at: cutoff, projection: contextProjection(runtime.settings, runtime.models.getModel(ref.provider, ref.modelId)) });
-         if (selectCut(view, policy.keepRecentTokens) !== undefined) {
+         if (selectCut(view, compaction.keepRecentTokens) !== undefined) {
              const text = message.errorMessage ?? "Context overflow";
              await runtime.commit(async (tx) => {
-@@ -386,7 +407,7 @@ async function classify(runtime, request, message, context) {
+@@ -424,7 +445,7 @@ async function classify(runtime, request, message, context) {
      const retry = message.stopReason === "error" &&
          !overflow &&
          isRetryableAssistantError(message) &&
@@ -324,9 +322,9 @@ index 136bed4..8157db6 100644
          attempt <= policy.maxRetries;
      const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
      await runtime.commit(async (tx) => {
-@@ -402,7 +423,15 @@ async function classify(runtime, request, message, context) {
+@@ -442,7 +463,15 @@ async function classify(runtime, request, message, context) {
              };
-             return { status: "running", checkpoint };
+             return { status: "sleeping", checkpoint, until };
          }
 -        const text = message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
 +        const text = !canContinue
@@ -338,10 +336,10 @@ index 136bed4..8157db6 100644
 +                    : message.stopReason === "length"
 +                        ? "Model response reached its output limit without resumable text or reasoning"
 +                        : message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`;
-         endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "model_error", detail: text });
+         await endFailedRun(tx, runtime, live, failure, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -411,12 +440,14 @@ async function classify(runtime, request, message, context) {
+@@ -451,12 +480,14 @@ async function classify(runtime, request, message, context) {
      }, context);
  }
  /**
@@ -361,7 +359,7 @@ index 136bed4..8157db6 100644
      await runtime.hooks.each("onYield", async (hook) => {
          if (continuation !== undefined)
              return;
-@@ -429,15 +460,19 @@ async function answer(runtime, message, context) {
+@@ -469,15 +500,19 @@ async function answer(runtime, message, context) {
          const live = await tx.doc(LiveDoc, conversationId);
          const entry = await appendAssistant(tx, conversationId, message);
          const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
@@ -384,7 +382,7 @@ index 136bed4..8157db6 100644
          if (users.length > 0)
              await startRun(tx, conversationId, live, users);
          return result;
-@@ -547,6 +582,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
+@@ -587,6 +622,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
   * REMINDER: every built-in writer of assistant entries goes through here, so the usage ledger stays complete.
   */
  async function appendAssistant(tx, conversationId, message) {
@@ -399,10 +397,10 @@ index 136bed4..8157db6 100644
      return tx.appendEntry(AssistantEntry, conversationId, { model: [message] });
  }
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index d228c4c..a9bf92d 100644
+index 29ef22e..e64539a 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
-@@ -50,7 +50,7 @@ class ConversationImpl {
+@@ -54,7 +54,7 @@ class ConversationImpl {
          return this.#host.harness.commitWith(change, context, { conversationId: this.id });
      }
      context(context, options) {
@@ -426,10 +424,10 @@ index 4694cf9..ba23077 100644
      /** Presentation of the current generation attempt. */
      generation?: {
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index e40b597..38fe30e 100644
+index ba7a016..c1e3947 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
-@@ -1611,7 +1611,7 @@ export class TaskScheduler {
+@@ -2077,7 +2077,7 @@ export class TaskScheduler {
                  });
              }),
              context: (conversationId, context, options) => this.#read(invocation, async () => {
@@ -439,10 +437,10 @@ index e40b597..38fe30e 100644
                  const kept = this.#contexts.get(conversationId);
                  if (range !== undefined &&
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index ea3adc9..31dc50f 100644
+index 192a9cc..f3a2ecd 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -472,12 +472,27 @@ export type CompactionResult = {
+@@ -483,12 +483,27 @@ export type CompactionResult = {
      entryId?: EntryId;
      submissionId?: SubmissionId;
  };
@@ -467,18 +465,18 @@ index ea3adc9..31dc50f 100644
      readonly stream?: ConversationStreamOptions;
      readonly retry?: Partial<ConversationRetryPolicy>;
 +    readonly generation?: GenerationPolicy;
-     readonly compaction?: Partial<CompactionPolicy>;
+     readonly compaction?: CompactionSettings;
      readonly progress?: Partial<ProgressPolicy>;
      readonly toolExecution?: ToolExecutionMode;
-@@ -501,6 +516,7 @@ export type Settings = {
+@@ -526,6 +541,7 @@ export type Settings = {
      readonly extensions?: readonly Extension[];
      readonly stream: ConversationStreamOptions;
      readonly retry: ConversationRetryPolicy;
 +    readonly generation: GenerationPolicy;
-     readonly compaction: CompactionPolicy;
+     /** Harness-wide policy over the defaults; per-model overrides apply where the model is known. */
+     readonly compaction: CompactionPolicy & Pick<CompactionSettings, "modelOverrides">;
      readonly progress: ProgressPolicy;
-     readonly toolExecution: ToolExecutionMode;
-@@ -616,6 +632,7 @@ export interface Conversation {
+@@ -699,6 +715,7 @@ export interface Conversation {
       */
      context(context: Context, options?: {
          readonly at?: EntryId;
@@ -486,18 +484,7 @@ index ea3adc9..31dc50f 100644
      }): Promise<ContextView>;
      /** Fork-aware history of this conversation, newest first unless `query.order` is `ascending`. */
      entries(query: Omit<EntryQuery, "conversationId">, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<EntryRecord, Cursor>>;
-@@ -680,17 +697,26 @@ export interface HookApi extends DocumentReader {
-     readonly conversationId: ConversationId;
-     /** `HarnessOptions.models`. */
-     readonly models: Models;
-+    /** Committed raw active transcript and model context, optionally cut off at a visible entry. */
-+    context(conversationId: ConversationId, context: Context, options?: {
-+        readonly at?: EntryId;
-+        readonly projection?: ContextProjection;
-+    }): Promise<ContextView>;
-     memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
-     memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
- }
+@@ -781,11 +798,13 @@ export interface HookApi extends DocumentReader {
  export type HookResult<T> = T | undefined | Promise<T | undefined>;
  /** Hooks of the built-in generation task. */
  export interface GenerationHooks {
@@ -506,8 +493,6 @@ index ea3adc9..31dc50f 100644
      beforeRequest(request: {
          readonly messages: readonly Message[];
 +        readonly stream: Models["streamSimple"];
-+        /** Raw active entries at this request's cutoff, before model filtering. */
-+        readonly entries: readonly EntryRecord[];
      }, api: HookApi, context: Context): HookResult<{
 -        readonly messages: readonly Message[];
 +        readonly messages?: readonly Message[];
@@ -516,43 +501,23 @@ index ea3adc9..31dc50f 100644
      /** Every terminal provider message, before classification. */
      afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 47a494d..8fde7ac 100644
+index 43fd494..b6d3560 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
- export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.ts";
- export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.ts";
- export { type CompactionCheckpoint, type CompactionInput, CompactionTask, type SummaryRequest, } from "./harness/compaction.ts";
-+export { continuationContent, responsesReasoningId } from "./harness/context.ts";
- export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.ts";
- export { type AgentEvent, type AgentEventStream, type MessageChange, type SnapshotEvent, type ToolEventCall, watchEvents, } from "./harness/events.ts";
- export { type GenerationCheckpoint, type GenerationInput, type GenerationResult, GenerationTask, } from "./harness/generation.ts";
-@@ -13,7 +14,7 @@ export { ProviderDoc, type ProviderState } from "./harness/provider.ts";
- export { createRegistry } from "./harness/registry.ts";
+@@ -15,7 +15,7 @@ export type { BlockedReason } from "./harness/scheduler.ts";
  export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from "./harness/task-graph.ts";
+ export { DURABLE_TELEMETRY_SCHEMA } from "./harness/telemetry.ts";
  export { NestedCallDoc, type NestedCallState, ToolTask, type ToolTaskCheckpoint, type ToolTaskInput, type ToolTaskResult, } from "./harness/tool.ts";
--export type { Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, ContextView, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wrap, } from "./harness/types.ts";
-+export type { Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, ContextView, ContextProjection, GenerationPolicy, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wrap, } from "./harness/types.ts";
+-export type { AfterFailedRun, Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, CompactionSettings, ContextView, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wake, Wrap, } from "./harness/types.ts";
++export type { AfterFailedRun, Agent, AgentChange, AgentState, AnyTask, CompactionHooks, CompactionPolicy, CompactionReason, CompactionResult, CompactionSettings, ContextView, ContextProjection, GenerationPolicy, Conversation, ConversationAbortOptions, ConversationCreateOptions, ConversationHandle, ConversationInit, ConversationRetryPolicy, ConversationStreamOptions, ConversationWatch, EnvTarget, Extension, GenerationHooks, HarnessInspection, HarnessOptions, HarnessSettings, HookApi, HookRegistration, HookResult, HooksOf, InputEntry, InputSubmissionDraft, ModelRef, NestedToolExecutionResult, ProgressPolicy, PromptInput, PromptSection, QueueMode, Registry, RegistryReader, RegistrySnapshot, Settings, SettledSubmissionRecord, SettledTask, Submission, SubmissionDraft, TaskInspection, ToolControl, ToolDiagnostic, ToolExecutionApi, ToolExecutionMode, ToolExecutionResult, ToolHookCall, ToolHooks, ToolRegistration, UserInput, Wake, Wrap, } from "./harness/types.ts";
  export { UsageDoc, type UsageState } from "./harness/usage.ts";
  export type { ConversationView } from "./harness/view.ts";
  export { createSession } from "./session/session.ts";
-diff --git a/dist/index.js b/dist/index.js
-index aed8e9d..4c165bd 100644
---- a/dist/index.js
-+++ b/dist/index.js
-@@ -3,6 +3,7 @@ export { AssistantEntry, CompactionEntry, defineEntry, ResetEntry, SystemEntry,
- export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.js";
- export { AgentDoc, configure, DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RETRY_POLICY, } from "./harness/agent.js";
- export { CompactionTask, } from "./harness/compaction.js";
-+export { continuationContent, responsesReasoningId } from "./harness/context.js";
- export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.js";
- export { watchEvents, } from "./harness/events.js";
- export { GenerationTask, } from "./harness/generation.js";
 diff --git a/dist/session/session.js b/dist/session/session.js
-index 7b7c028..89a6658 100644
+index 220d7db..54950c6 100644
 --- a/dist/session/session.js
 +++ b/dist/session/session.js
-@@ -603,9 +603,10 @@ export class SessionImpl {
+@@ -635,9 +635,10 @@ export class SessionImpl {
              throw error;
          }
          const observed = { version: loaded.valueVersion };
@@ -564,105 +529,74 @@ index 7b7c028..89a6658 100644
                      continue;
                  // A document state's frames carry no caller cancellation; a watch observes its own cancellation.
                  const frameContext = observer instanceof CommittedStateSource ? withoutAbortSignal(context) : context;
-diff --git a/dist/storage/sqlite/node.d.ts b/dist/storage/sqlite/node.d.ts
-index 45c897f..922a09e 100644
---- a/dist/storage/sqlite/node.d.ts
-+++ b/dist/storage/sqlite/node.d.ts
-@@ -28,7 +28,8 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
- export declare class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
-     private readonly access;
-     private closed;
--    constructor(database: DatabaseSync);
-+    private readonly readOnly;
-+    constructor(database: DatabaseSync, options?: { readOnly?: boolean });
-     transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
-     close(): Promise<void>;
-     protected runOperation<T>(operation: () => T): Promise<T>;
-diff --git a/dist/storage/sqlite/node.js b/dist/storage/sqlite/node.js
-index 7770888..e9d9f31 100644
---- a/dist/storage/sqlite/node.js
-+++ b/dist/storage/sqlite/node.js
-@@ -105,8 +105,9 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
- export class NodeSqliteDatabase extends NodeSqliteExecutor {
-     access = new SerialOperationQueue();
-     closed = false;
--    constructor(database) {
-+    constructor(database, { readOnly = false } = {}) {
-         super(database, new Map());
-+        this.readOnly = readOnly;
-     }
-     transaction(callback) {
-         return this.access.runAsync(async () => {
-@@ -137,7 +138,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
-             this.closed = true;
-             this.statements.clear();
-             try {
--                this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-+                if (!this.readOnly || this.database.isTransaction)
-+                    this.database.exec(this.readOnly ? "ROLLBACK" : "PRAGMA wal_checkpoint(TRUNCATE)");
-             }
-             finally {
-                 this.database.close();
 diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
-index 8c323ba..f99bd92 100644
+index 8253783..e9a2ff7 100644
 --- a/dist/storage/sqlite/storage.d.ts
 +++ b/dist/storage/sqlite/storage.d.ts
-@@ -10,9 +10,10 @@ export declare class SqliteStorage implements Storage {
+@@ -3,6 +3,8 @@ import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
+ import type { ConversationId, ConversationQuery, ConversationRecord, Cursor, DocumentAddress, DocumentId, DocumentPoint, DocumentQuery, DocumentRecord, EntryId, EntryQuery, EntryRecord, Id, Page, Seq, Storage, StorageWrite, StoredDocument, SubmissionId, SubmissionQuery, SubmissionRecord, TaskId, TaskQuery, TaskRecord } from "../../types.ts";
+ type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
+ export type SqliteStorageOptions = {
++    /** Requires the caller to hold a SQLite read transaction until close; performs no migrations or writes. */
++    readonly readOnly?: boolean;
+     /**
+      * Prefix for every table and index in the durable schema. It must be a SQLite identifier and must not use
+      * SQLite's reserved `sqlite_` prefix. Existing data is not migrated when this changes.
+@@ -18,8 +20,9 @@ export declare class SqliteStorage implements Storage {
      private closing;
      private admittedReads;
      private readsDrained;
 +    private readonly readOnly;
      private constructor();
 -    /** Initialize storage over an owned SQLite database facade. */
--    static open(db: SqliteDatabase): Promise<SqliteStorage>;
 +    /** readOnly requires the caller to hold a SQLite read transaction until close. */
-+    static open(db: SqliteDatabase, options?: { readOnly?: boolean }): Promise<SqliteStorage>;
+     static open(db: SqliteDatabase, options?: SqliteStorageOptions): Promise<SqliteStorage>;
      commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq>;
      mintId<I extends Id<string>>(): Promise<I>;
-     conversation(id: ConversationId, _context: Context): Promise<ConversationRecord | undefined>;
 diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
-index 86b5fe4..10a12ea 100644
+index e063ce4..7d71da2 100644
 --- a/dist/storage/sqlite/storage.js
 +++ b/dist/storage/sqlite/storage.js
 @@ -2,7 +2,7 @@ import { apply } from "@earendil-works/chord/delta";
  import { StorageRequestError } from "../../errors.js";
  import { idFromNumber, seqFromNumber } from "../../ids.js";
  import { nextCursor, scanStart } from "../scan.js";
--import { applySqliteMigrations } from "./migrations.js";
-+import { applySqliteMigrations, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
+-import { applySqliteMigrationsForSchema } from "./migrations.js";
++import { applySqliteMigrationsForSchema, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
+ import { createSqliteSchema } from "./schema.js";
  const parseJson = (value) => JSON.parse(value);
  const encodeJson = (value) => JSON.stringify(value);
- // Some SQLite bindings replace lone UTF-16 surrogates. JSON encoding keeps indexed identities lossless.
-@@ -77,18 +77,23 @@ export class SqliteStorage {
+@@ -79,20 +79,25 @@ export class SqliteStorage {
      closing;
      admittedReads = 0;
      readsDrained;
--    constructor(db, nextId) {
-+    constructor(db, nextId, readOnly) {
+-    constructor(db, schema, nextId) {
++    constructor(db, schema, nextId, readOnly) {
 +        this.readOnly = readOnly;
          this.db = db;
+         this.schema = schema;
          this.nextId = nextId;
      }
 -    /** Initialize storage over an owned SQLite database facade. */
--    static async open(db) {
 +    /** readOnly requires the caller to hold a SQLite read transaction until close. */
-+    static async open(db, { readOnly = false } = {}) {
+     static async open(db, options = {}) {
          try {
--            await applySqliteMigrations(db);
-+            if (readOnly) {
-+                const schema = await db.get("SELECT version FROM durable_schema WHERE singleton = 1");
-+                if (schema?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
+             const schema = createSqliteSchema(options.prefix);
+-            await applySqliteMigrationsForSchema(db, schema);
++            if (options.readOnly) {
++                const version = await db.get(`SELECT version FROM ${schema.tables.durableSchema} WHERE singleton = 1`);
++                if (version?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
 +                    throw new Error("Unsupported durable SQLite schema version");
-+            } else await applySqliteMigrations(db);
-             const metadata = await db.get("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1");
++            } else await applySqliteMigrationsForSchema(db, schema);
+             const metadata = await db.get(`SELECT next_id, next_seq FROM ${schema.tables.durableMetadata} WHERE singleton = 1`);
              if (metadata === undefined)
                  throw new Error("Durable SQLite metadata is missing");
--            return new SqliteStorage(db, Number(metadata.next_id));
-+            return new SqliteStorage(db, Number(metadata.next_id), readOnly);
+-            return new SqliteStorage(db, schema, Number(metadata.next_id));
++            return new SqliteStorage(db, schema, Number(metadata.next_id), options.readOnly ?? false);
          }
          catch (error) {
              try {
-@@ -101,7 +106,7 @@ export class SqliteStorage {
+@@ -105,7 +110,7 @@ export class SqliteStorage {
          }
      }
      async commit(writes, _context) {
@@ -671,7 +605,7 @@ index 86b5fe4..10a12ea 100644
          const documentActions = this.prepareDocumentActions(writes);
          const candidateNextId = this.candidateNextId(writes);
          const seq = await this.db.transaction(async (transaction) => {
-@@ -121,7 +126,7 @@ export class SqliteStorage {
+@@ -125,7 +130,7 @@ export class SqliteStorage {
          return seq;
      }
      async mintId() {
@@ -680,7 +614,7 @@ index 86b5fe4..10a12ea 100644
          if (!Number.isSafeInteger(this.nextId))
              throw new Error("ID space is exhausted");
          return idFromNumber(this.nextId++);
-@@ -362,6 +367,8 @@ export class SqliteStorage {
+@@ -366,6 +371,8 @@ export class SqliteStorage {
      }
      async document(id, at, _context) {
          this.assertOpen();
@@ -689,7 +623,7 @@ index 86b5fe4..10a12ea 100644
          // The record and revision queries must observe one committed state; a commit between them can replace the base.
          return this.db.transaction((transaction) => this.materializeDocument(transaction, id, at));
      }
-@@ -662,9 +669,11 @@ export class SqliteStorage {
+@@ -665,9 +672,11 @@ export class SqliteStorage {
              }
          }
      }
@@ -704,19 +638,19 @@ index 86b5fe4..10a12ea 100644
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 54c217f..32d3cea 100644
+index 746fd25..5a6a8b1 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -2,7 +2,7 @@ import type { AttachedReplicatedState, Context, Draft, JsonValue } from "@earend
- import type { Op } from "@earendil-works/chord/delta";
+@@ -3,7 +3,7 @@ import type { Op } from "@earendil-works/chord/delta";
  import type { Message, Models } from "@earendil-works/pi-ai";
+ import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
  import type { ExecutionEnv } from "./env/index.ts";
 -import type { Agent, ContextView, ConversationHandle, RegistrySnapshot, Settings, SettledTask } from "./harness/types.ts";
 +import type { Agent, ContextView, ContextProjection, ConversationHandle, RegistrySnapshot, Settings, SettledTask } from "./harness/types.ts";
  /** JSON object used as the root of every durable document. */
  export type JsonObject = {
      [key: string]: JsonValue;
-@@ -187,6 +187,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
+@@ -268,6 +268,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
      /** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
      context(conversationId: ConversationId, context: Context, options?: {
          readonly at?: EntryId;

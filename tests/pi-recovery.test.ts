@@ -24,6 +24,7 @@ import {
   Harness,
   MemoryStorage,
   type GenerationPolicy,
+  type HarnessOptions,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 
@@ -50,6 +51,7 @@ const finish = (done: boolean | string = true) =>
 function fixture(
   responses: FauxResponseStep[],
   generation: GenerationPolicy | undefined = policy,
+  clock: Pick<HarnessOptions, "now" | "onWake"> & { baseDelayMs?: number } = {},
 ) {
   const provider = fauxProvider({
     api: "openai-responses",
@@ -91,9 +93,15 @@ function fixture(
         {
           models,
           registry,
+          now: clock.now,
+          onWake: clock.onWake,
           settings: {
             generation,
-            retry: { enabled: true, maxRetries: 99, baseDelayMs: 0 },
+            retry: {
+              enabled: true,
+              maxRetries: 99,
+              baseDelayMs: clock.baseDelayMs ?? 0,
+            },
             compaction: { enabled: false },
           },
         },
@@ -317,6 +325,58 @@ test("native length budget survives closing and reopening during the next reques
       detail: "Model run exhausted 1 output-length continuations",
     });
     expect(run.provider.state.callCount).toBe(3);
+  } finally {
+    await opened.harness.close(context);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a retry sleep survives close and reopen, and idle waits until its original deadline", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-native-retry-sleep-"));
+  let now = 1_000;
+  let sleeping = Promise.withResolvers<number>();
+  const run = fixture([failure(), finish()], policy, {
+    now: () => now,
+    baseDelayMs: 1_000,
+    onWake: ({ active, at }) => {
+      if (!active && at !== undefined) sleeping.resolve(at);
+    },
+  });
+  let opened = await run.open(directory);
+  try {
+    const submitted = await opened.conversation.submit(
+      { type: "input", content: "Begin." },
+      context,
+    );
+    const until = await sleeping.promise;
+    expect(until).toBeGreaterThan(now);
+    expect(run.provider.state.callCount).toBe(1);
+    await opened.harness.close(context);
+    sleeping = Promise.withResolvers<number>();
+    opened = await run.open(directory);
+    expect(await sleeping.promise).toBe(until);
+    let idle = false;
+    const settled = opened.conversation.waitForIdle(context).then(() => {
+      idle = true;
+    });
+    void settled.catch(() => {});
+    now = until - 1;
+    opened.harness.resume();
+    const inspection = await opened.harness.inspect(context);
+    expect(
+      inspection.tasks.some(({ state }) => state.kind === "sleeping"),
+    ).toBe(true);
+    expect(idle).toBe(false);
+    expect(run.provider.state.callCount).toBe(1);
+    now = until;
+    opened.harness.resume();
+    await settled;
+    expect(
+      await (await opened.harness.submission(submitted.id, context))!.wait(
+        context,
+      ),
+    ).toMatchObject({ status: "done" });
+    expect(run.provider.state.callCount).toBe(2);
   } finally {
     await opened.harness.close(context);
     await rm(directory, { recursive: true, force: true });

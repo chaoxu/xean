@@ -12,6 +12,7 @@ export type Definition = { task: Task; settings: SolveSettings };
 export const DefinitionDoc = defineDoc({
   kind: "xean.v4.definition",
   version: 1,
+  checkpointWhen: () => false,
   scope: "conversation",
   history: "latest",
   fork: "current",
@@ -34,6 +35,7 @@ export type NotebookState = {
 export const Notebook = defineDoc({
   kind: "xean.notebook",
   version: 1,
+  checkpointWhen: () => false,
   scope: "conversation",
   history: "latest",
   fork: "current",
