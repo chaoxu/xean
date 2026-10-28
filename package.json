@@ -1,6 +1,6 @@
 {
   "name": "xean",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "description": "Mathematical research on native Pi Durable with joint dependency reconstruction",
   "license": "MIT",
   "private": true,

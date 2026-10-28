@@ -117,7 +117,8 @@ test("caller admission keeps exact text, assigns no IDs and is idempotent and at
 test("support must already exist and be live; pending, same-batch and dead references cannot partially append", async () => {
   const { root, snapshot } = await fixture();
   await root.commit(async (tx) => {
-    const book = readNotebook(await tx.doc(Notebook, root.id));
+    const ref = await tx.doc(Notebook, root.id);
+    const book = readNotebook(ref);
     book.notes.push(
       { id: "n1", text: "Live", support: [] },
       { id: "n2", text: "Dead", support: [] },
@@ -135,7 +136,7 @@ test("support must already exist and be live; pending, same-batch and dead refer
         },
       ],
     });
-    await saveNotebook(tx, root.id, book);
+    saveNotebook(tx, ref, book);
   }, context);
   await root.commit(
     (tx) => submitNotes(tx, root.id, "pending", supplied),

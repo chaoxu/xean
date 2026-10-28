@@ -67,8 +67,9 @@ export async function initializeNotebook(
     throw new Error("Cannot initialize a read-only notebook");
   const ref = await tx.doc(Notebook, root);
   using store = new NoteStore(path);
+  if (store.snapshot() !== 0)
+    throw new Error("New campaigns require an empty notebook");
   ref.path = path;
-  ref.version = store.snapshot();
 }
 
 export function readNotebook(ref: NotebookReference) {
@@ -86,13 +87,12 @@ export function readNotebook(ref: NotebookReference) {
 }
 
 /** Store receipts survive Pi rollback; replay uses the same pinned base and changes. */
-export async function saveNotebook(
+export function saveNotebook(
   tx: Tx,
-  root: ConversationId,
+  ref: NotebookReference,
   book: ReturnType<typeof readNotebook>,
 ) {
   if (readOnly.has(tx)) throw new Error("Cannot change a read-only notebook");
-  const ref = await tx.doc(Notebook, root);
   if (ref.version !== book.version) throw new Error("Stale notebook snapshot");
   const before = readNotebook(ref).notes;
   const changes = Object.fromEntries(

@@ -60,9 +60,10 @@ test("publication survives Pi rollback and replays after reopening and an extern
   using store = new NoteStore(`${file}.notes.sqlite`);
   const publish = async (fail: boolean) =>
     owner.root.commit(async (tx) => {
-      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
+      const ref = await tx.doc(Notebook, owner.root.id);
+      const book = readNotebook(ref);
       book.notes.push(note);
-      await saveNotebook(tx, owner.root.id, book);
+      saveNotebook(tx, ref, book);
       if (fail) throw new Error("after external commit");
     }, context);
   await expect(publish(true)).rejects.toThrow("after external commit");
@@ -71,9 +72,10 @@ test("publication survives Pi rollback and replays after reopening and an extern
   expect((await inspect(file, readReport)).notes).toEqual([]);
   await expect(
     owner.root.commit(async (tx) => {
-      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
+      const ref = await tx.doc(Notebook, owner.root.id);
+      const book = readNotebook(ref);
       book.notes.push({ ...note, text: "Different retry." });
-      await saveNotebook(tx, owner.root.id, book);
+      saveNotebook(tx, ref, book);
     }, context),
   ).rejects.toBeInstanceOf(ConflictError);
   expect(store.read(1).notes).toEqual({ n1: note });
@@ -97,9 +99,10 @@ test("publication survives Pi rollback and replays after reopening and an extern
   expect(store.read().notes.n1!.text).toBe("External revision.");
   await expect(
     owner.root.commit(async (tx) => {
-      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
+      const ref = await tx.doc(Notebook, owner.root.id);
+      const book = readNotebook(ref);
       book.notes.push({ id: "n2", text: "Another note.", support: ["n1"] });
-      await saveNotebook(tx, owner.root.id, book);
+      saveNotebook(tx, ref, book);
     }, context),
   ).rejects.toBeInstanceOf(ConflictError);
   expect(await inspect(file, readReport)).toEqual(report);
@@ -124,10 +127,11 @@ test("new input cannot change a pending publication before exact recovery", asyn
   const first = await submit("first");
   const publish = (fail: boolean) =>
     owner.root.commit(async (tx) => {
-      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
+      const ref = await tx.doc(Notebook, owner.root.id);
+      const book = readNotebook(ref);
       book.notes.push({ ...book.inputs[0]!.notes[0]!, id: "n1" });
       book.inputs[0]!.consumed = true;
-      await saveNotebook(tx, owner.root.id, book);
+      saveNotebook(tx, ref, book);
       if (fail) throw new Error("after intake publication");
     }, context);
   await expect(publish(true)).rejects.toThrow("after intake publication");
@@ -170,13 +174,14 @@ test("read-only inspection rejects external publication before writing either da
   const stored = rows();
   await expect(
     inspect(file, async (tx, root) => {
-      const book = readNotebook(await tx.doc(Notebook, root));
+      const ref = await tx.doc(Notebook, root);
+      const book = readNotebook(ref);
       book.notes.push({
         id: "n1",
         text: "Forbidden external write.",
         support: [],
       });
-      await saveNotebook(tx, root, book);
+      saveNotebook(tx, ref, book);
     }),
   ).rejects.toThrow("read-only");
   const other = `${file}.other.sqlite`;
@@ -238,6 +243,17 @@ test("external changes cannot retarget accepted proof text, support, or verdicts
     (await owner.harness.snapshot(Notebook, owner.root.id, context))!.notes,
   ).toEqual(["n1"]);
   expect(native.provider.state.callCount).toBe(8);
+});
+
+test("initialization preserves an existing nonempty notebook", async () => {
+  const file = await path();
+  using store = new NoteStore(`${file}.notes.sqlite`);
+  store.commit(0, { n1: { text: "Existing knowledge." } }, "independent");
+  const before = store.read();
+  await expect(
+    open(file, { create: { task, settings }, models: fauxModels().models }),
+  ).rejects.toThrow("empty notebook");
+  expect(store.read()).toEqual(before);
 });
 
 test("closed-store 4.3 campaigns are rejected without mutation or automatic migration", async () => {

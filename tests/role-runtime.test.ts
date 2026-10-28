@@ -565,12 +565,13 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
   try {
     const root = await harness.root(context);
     await root.commit(async (tx) => {
-      const book = readNotebook(await tx.doc(Notebook, ROOT_CONVERSATION_ID));
+      const ref = await tx.doc(Notebook, ROOT_CONVERSATION_ID);
+      const book = readNotebook(ref);
       book.notes = [
         ...sources,
         { id: "n3", text: "UNINDEXED_BODY", support: [] },
       ];
-      await saveNotebook(tx, ROOT_CONVERSATION_ID, book);
+      saveNotebook(tx, ref, book);
     }, context);
     expect(
       (await harness.waitForTask(await invoke([], input), context)).state

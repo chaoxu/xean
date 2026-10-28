@@ -311,9 +311,8 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             task.state.checkpoint,
           ) as CampaignState;
           const config = await definition(tx, task.conversationId);
-          const book = readNotebook(
-            await tx.doc(Notebook, task.conversationId),
-          );
+          const ref = await tx.doc(Notebook, task.conversationId);
+          const book = readNotebook(ref);
           let { notes, accepted, reconstructed } = project(book);
           if (accepted.length)
             return {
@@ -455,7 +454,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               };
             }
           }
-          await saveNotebook(tx, task.conversationId, book);
+          saveNotebook(tx, ref, book);
           const child = await tx.createTask(Worker, request, {
             conversationId: task.conversationId,
             ownership: { kind: "task", taskId: task.id },
@@ -496,9 +495,8 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               },
             };
           }
-          const book = readNotebook(
-            await tx.doc(Notebook, task.conversationId),
-          );
+          const ref = await tx.doc(Notebook, task.conversationId);
+          const book = readNotebook(ref);
           if (state.step === "explorer") {
             if (
               request.kind !== "call" ||
@@ -549,7 +547,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             state.pending = state.pending.slice(request.input.verify.length);
           }
           delete state.child;
-          await saveNotebook(tx, task.conversationId, book);
+          saveNotebook(tx, ref, book);
           return { status: "running", checkpoint: { ...state, phase: "next" } };
         }, context);
       },

@@ -1,11 +1,11 @@
 # `xean`
 
-`xean` 4.3.0 runs mathematical research on native Pi Durable. Explorer appends notes,
+`xean` 4.4.0 is a release candidate for mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
 both the candidate and its generated dependencies. Pi manages execution and
-recovery. This experimental branch stores admitted notes in a separate SQLite
-notebook and retains their snapshot reference in Pi.
+recovery. Admitted notes live in a separate SQLite notebook. Pi retains their
+snapshot reference.
 
 Reconstruction reuses previously reconstructed supporting notes from
 the same campaign. Selected candidates still receive fresh reconstruction.
@@ -13,13 +13,13 @@ the same campaign. Selected candidates still receive fresh reconstruction.
 The bundled `@chaoxu/notebook-store` package has no dependency on Pi or `xean`.
 Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
 creates `campaign.sqlite.notes.sqlite` for its notes. Both databases are needed
-for recovery. This branch requires fresh campaigns and retains their original
-paths. Back up both databases after closing all writers.
+for recovery. New campaigns require an empty notebook. Campaigns retain their
+original paths. Back up both databases after closing all writers.
 
 Other programs can read the notebook and publish new revisions through its API.
 Campaign reads stay pinned to admitted content. External edits do not replace
 checked notes or change accepted exports. An external commit makes the campaign's
-next fresh note publication fail with a version conflict. This branch does not rebase
+next fresh note publication fail with a version conflict. The campaign does not rebase
 or automatically admit external changes.
 
 Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
@@ -342,10 +342,24 @@ verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime.
 
-Create fresh campaigns with 4.3.0. Existing campaigns require their pinned
-runtime: Pi's earlier SQLite schema is rejected without migrating the campaign database.
+Create fresh campaigns with 4.4.0. Existing campaigns require their pinned
+runtime. This version provides no database migration.
 
 ## Qualification
+
+### Version 4.4.0 candidate
+
+The notebook package installs with `xean` and remains usable independently of
+Pi. Campaigns pin admitted note snapshots. Tests cover publication replay after
+Pi rollback, changed retry content, external edits, read-only inspection, and
+intake during recovery. The mathematical prompts, verification policy, and
+sequential workflow remain unchanged.
+
+Full `read_notes` results now contain only the requested text strings, in request
+order. A deterministic comparison against `139ae55`, which already included that
+reader change, preserved model inputs, tool results, reconstruction reuse,
+recovery, and accepted output. Lazy-summary generation remains experimental
+and is excluded from this candidate.
 
 ### Version 4.3.0
 
@@ -426,6 +440,12 @@ const report = await inspect("campaign.sqlite", readReport);
 documents, task records, and frozen call inputs and results. `readReport` reads
 the campaign's admitted snapshot.
 
+The exported `Notebook` Pi document now holds note IDs and a snapshot reference.
+Code that previously read note bodies through `tx.doc(Notebook)` should use
+`readReport`. Independent notebook writers publish revisions through the store
+API. A running campaign keeps its admitted snapshot. Fresh publication after an
+external edit fails with a version conflict.
+
 Pure graph and prompt helpers exported by `xean/policy` return synchronously.
 Existing `await` calls still work. Replace `.then(...)` chains with direct use of
 the returned value.
@@ -445,4 +465,4 @@ reconstruction, hidden proof inputs, atomic verdicts, corrections, acceptance,
 workflow replay, provider-limit recovery, and persisted limits.
 `pack` stages `package.json` and its `files` list, creates an archive with system
 tar, and installs it with the frozen lockfile. It checks imports and the executable
-CLI, runs the packaged tests, and writes `dist/xean-4.3.0.tgz`.
+CLI, runs the packaged tests, and writes `dist/xean-4.4.0.tgz`.
