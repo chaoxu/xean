@@ -51,6 +51,7 @@ import { readReport } from "../src/report.ts";
 import { solveSettings, type PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 import {
+  Notebook,
   initializeNotebook,
   readNotebook,
   saveNotebook,
@@ -564,7 +565,7 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
   try {
     const root = await harness.root(context);
     await root.commit(async (tx) => {
-      const book = await readNotebook(tx, ROOT_CONVERSATION_ID);
+      const book = readNotebook(await tx.doc(Notebook, ROOT_CONVERSATION_ID));
       book.notes = [
         ...sources,
         { id: "n3", text: "UNINDEXED_BODY", support: [] },

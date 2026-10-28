@@ -65,7 +65,10 @@ async function fixture(initialized = true) {
   });
   const snapshot = () =>
     root.commit(
-      async (tx) => JSON.parse(JSON.stringify(await readNotebook(tx, root.id))),
+      async (tx) =>
+        JSON.parse(
+          JSON.stringify(readNotebook(await tx.doc(Notebook, root.id))),
+        ),
       context,
     );
   return { root, snapshot };
@@ -114,7 +117,7 @@ test("caller admission keeps exact text, assigns no IDs and is idempotent and at
 test("support must already exist and be live; pending, same-batch and dead references cannot partially append", async () => {
   const { root, snapshot } = await fixture();
   await root.commit(async (tx) => {
-    const book = await readNotebook(tx, root.id);
+    const book = readNotebook(await tx.doc(Notebook, root.id));
     book.notes.push(
       { id: "n1", text: "Live", support: [] },
       { id: "n2", text: "Dead", support: [] },

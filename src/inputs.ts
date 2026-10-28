@@ -15,14 +15,14 @@ export async function submitNotes(
   const id = nonblank.parse(idValue),
     { notes } = submittedNotes.parse(input);
   await definition(tx, root);
-  const book = await readNotebook(tx, root);
+  const ref = await tx.doc(Notebook, root);
+  const book = readNotebook(ref);
   const existing = book.inputs.find((value) => value.id === id);
   if (existing) {
     if (!isDeepStrictEqual(existing.notes, notes))
       throw new Error(`notes id already has a different submission: ${id}`);
     return { id, notes };
   }
-  const ref = await tx.doc(Notebook, root);
   using store = new NoteStore(ref.path, { readonly: true });
   if (store.snapshot() !== ref.version)
     throw new ConflictError(

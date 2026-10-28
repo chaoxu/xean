@@ -5,7 +5,7 @@ import {
   type Tx,
   type UsageState,
 } from "@earendil-works/pi-durable";
-import { definition, project, readNotebook } from "./state.ts";
+import { definition, Notebook, project, readNotebook } from "./state.ts";
 import type { Note } from "./policy/contracts.ts";
 import { byId, supportClosure } from "./policy/support.ts";
 
@@ -56,7 +56,7 @@ export async function readUsage(tx: Tx) {
 export async function readReport(tx: Tx, root: ConversationId) {
   const value = await definition(tx, root);
   const status = await readStatus(tx, root);
-  const notebook = await readNotebook(tx, root);
+  const notebook = readNotebook(await tx.doc(Notebook, root));
   // Detach Pi's transaction overlays before the read-only Session closes.
   const result = {
     ...value,

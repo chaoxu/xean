@@ -14,7 +14,6 @@ import {
   Notebook,
   definition,
   project,
-  notebookSnapshot,
   readNotebook,
   saveNotebook,
 } from "./state.ts";
@@ -164,7 +163,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 );
                 if (!book) throw new Error("Campaign notebook is missing");
                 const current = new Map(
-                  project(notebookSnapshot(book)).notes.map((note) => [
+                  project(readNotebook(book)).notes.map((note) => [
                     note.id,
                     note,
                   ]),
@@ -312,7 +311,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             task.state.checkpoint,
           ) as CampaignState;
           const config = await definition(tx, task.conversationId);
-          const book = await readNotebook(tx, task.conversationId);
+          const book = readNotebook(
+            await tx.doc(Notebook, task.conversationId),
+          );
           let { notes, accepted, reconstructed } = project(book);
           if (accepted.length)
             return {
@@ -495,7 +496,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               },
             };
           }
-          const book = await readNotebook(tx, task.conversationId);
+          const book = readNotebook(
+            await tx.doc(Notebook, task.conversationId),
+          );
           if (state.step === "explorer") {
             if (
               request.kind !== "call" ||

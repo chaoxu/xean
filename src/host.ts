@@ -26,7 +26,6 @@ import {
   Notebook,
   project,
   initializeNotebook,
-  notebookSnapshot,
   readNotebook,
   readonlyNotebook,
   type Definition,
@@ -239,7 +238,7 @@ async function inspectSession<T>(
       );
     if (notebook.path !== `${path}.notes.sqlite`)
       throw new Error("Notebook path does not match campaign");
-    notebookSnapshot({ ...notebook, notes: [] });
+    readNotebook({ ...notebook, notes: [] });
     return await read(session, ROOT_CONVERSATION_ID, definition);
   } finally {
     await session.close(context);
@@ -268,7 +267,7 @@ export function exportAccepted(path: string): Promise<string> {
     )
       throw new Error("No accepted argument");
     return acceptedArgument(
-      project(await readNotebook(tx, root)).notes,
+      project(readNotebook(await tx.doc(Notebook, root))).notes,
       status.accepted,
     );
   });

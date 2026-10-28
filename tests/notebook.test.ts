@@ -56,25 +56,32 @@ test("publication survives Pi rollback and replays after reopening and an extern
     models: native.models,
   });
   owners.push(owner);
-  const ref = await owner.harness.snapshot(Notebook, owner.root.id, context);
-  const key = `${ref!.namespace}/n1`;
   const note = { id: "n1", text: "Exact original body.\n", support: [] };
   using store = new NoteStore(`${file}.notes.sqlite`);
   const publish = async (fail: boolean) =>
     owner.root.commit(async (tx) => {
-      const book = await readNotebook(tx, owner.root.id);
+      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
       book.notes.push(note);
       await saveNotebook(tx, owner.root.id, book);
       if (fail) throw new Error("after external commit");
     }, context);
   await expect(publish(true)).rejects.toThrow("after external commit");
   expect(store.snapshot()).toBe(1);
-  expect(store.read(1).notes).toEqual({ [key]: note });
+  expect(store.read(1).notes).toEqual({ n1: note });
+  expect((await inspect(file, readReport)).notes).toEqual([]);
+  await expect(
+    owner.root.commit(async (tx) => {
+      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
+      book.notes.push({ ...note, text: "Different retry." });
+      await saveNotebook(tx, owner.root.id, book);
+    }, context),
+  ).rejects.toBeInstanceOf(ConflictError);
+  expect(store.read(1).notes).toEqual({ n1: note });
   expect((await inspect(file, readReport)).notes).toEqual([]);
   await owner.close();
   store.commit(
     1,
-    { [key]: { ...note, text: "External revision." } },
+    { n1: { ...note, text: "External revision." } },
     "human-edit",
   );
   owner = await open(file, { models: native.models });
@@ -87,10 +94,10 @@ test("publication survives Pi rollback and replays after reopening and an extern
   const report = await inspect(relative(process.cwd(), file), readReport);
   expect(report.notes[0]!.text).toBe(note.text);
   expect(report.notes[0]!.verified).toBe(false);
-  expect(store.read().notes[key]!.text).toBe("External revision.");
+  expect(store.read().notes.n1!.text).toBe("External revision.");
   await expect(
     owner.root.commit(async (tx) => {
-      const book = await readNotebook(tx, owner.root.id);
+      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
       book.notes.push({ id: "n2", text: "Another note.", support: ["n1"] });
       await saveNotebook(tx, owner.root.id, book);
     }, context),
@@ -117,7 +124,7 @@ test("new input cannot change a pending publication before exact recovery", asyn
   const first = await submit("first");
   const publish = (fail: boolean) =>
     owner.root.commit(async (tx) => {
-      const book = await readNotebook(tx, owner.root.id);
+      const book = readNotebook(await tx.doc(Notebook, owner.root.id));
       book.notes.push({ ...book.inputs[0]!.notes[0]!, id: "n1" });
       book.inputs[0]!.consumed = true;
       await saveNotebook(tx, owner.root.id, book);
@@ -163,7 +170,7 @@ test("read-only inspection rejects external publication before writing either da
   const stored = rows();
   await expect(
     inspect(file, async (tx, root) => {
-      const book = await readNotebook(tx, root);
+      const book = readNotebook(await tx.doc(Notebook, root));
       book.notes.push({
         id: "n1",
         text: "Forbidden external write.",
@@ -217,11 +224,10 @@ test("external changes cannot retarget accepted proof text, support, or verdicts
   const proof = await exportAccepted(file);
   const ref = (await owner.harness.snapshot(Notebook, owner.root.id, context))!;
   using store = new NoteStore(ref.path);
-  const key = `${ref.namespace}/n1`;
   store.commit(
     ref.version,
     {
-      [key]: { id: "n1", text: "Different false claim.", support: ["n999"] },
+      n1: { id: "n1", text: "Different false claim.", support: ["n999"] },
       external: { text: "Not admitted." },
     },
     "outside",

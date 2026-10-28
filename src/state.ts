@@ -1,14 +1,9 @@
 import {
   defineDoc,
-  ProviderDoc,
   type ConversationId,
   type Tx,
 } from "@earendil-works/pi-durable";
-import {
-  Notebook as NoteStore,
-  type Note as StoredObject,
-} from "@chaoxu/notebook-store";
-import { createHash } from "node:crypto";
+import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import { isDeepStrictEqual } from "node:util";
 import type { Task, Note, Verdict } from "./policy/contracts.ts";
 import { note as noteSchema, verifierNames } from "./policy/contracts.ts";
@@ -41,7 +36,6 @@ export type NotebookState = {
 };
 type NotebookReference = Omit<NotebookState, "notes"> & {
   path: string;
-  namespace: string;
   version: number;
   notes: string[];
 };
@@ -54,7 +48,6 @@ export const Notebook = defineDoc({
   fork: "current",
   initial: (): NotebookReference => ({
     path: "",
-    namespace: "",
     version: 0,
     notes: [],
     checks: [],
@@ -62,8 +55,6 @@ export const Notebook = defineDoc({
     inputs: [],
   }),
 });
-const pinnedVersion = Symbol("notebook version");
-type NotebookSnapshot = NotebookState & { [pinnedVersion]: number };
 const readOnly = new WeakSet<Tx>();
 export const readonlyNotebook = (tx: Tx) => readOnly.add(tx);
 
@@ -77,62 +68,43 @@ export async function initializeNotebook(
   const ref = await tx.doc(Notebook, root);
   using store = new NoteStore(path);
   ref.path = path;
-  ref.namespace = (await tx.doc(ProviderDoc, root)).sessionId;
   ref.version = store.snapshot();
 }
 
-export function notebookSnapshot(ref: NotebookReference): NotebookSnapshot {
-  if (!ref.path || !ref.namespace)
-    throw new Error("External notebook is not initialized");
+export function readNotebook(ref: NotebookReference) {
+  if (!ref.path) throw new Error("External notebook is not initialized");
   using store = new NoteStore(ref.path, { readonly: true });
-  const keys = ref.notes.map((id) => `${ref.namespace}/${id}`);
-  const records = store.read(ref.version, keys).notes;
+  const records = store.read(ref.version, ref.notes).notes;
   return {
-    notes: keys.map((key) => {
-      const note = records[key];
-      if (!note) throw new Error(`Missing pinned note: ${key}`);
+    ...ref,
+    notes: ref.notes.map((id) => {
+      const note = records[id];
+      if (!note) throw new Error(`Missing pinned note: ${id}`);
       return note as StoredNote;
     }),
-    checks: ref.checks,
-    guidance: ref.guidance,
-    inputs: ref.inputs,
-    [pinnedVersion]: ref.version,
   };
-}
-
-export async function readNotebook(tx: Tx, root: ConversationId) {
-  return notebookSnapshot(await tx.doc(Notebook, root));
 }
 
 /** Store receipts survive Pi rollback; replay uses the same pinned base and changes. */
 export async function saveNotebook(
   tx: Tx,
   root: ConversationId,
-  book: NotebookSnapshot,
+  book: ReturnType<typeof readNotebook>,
 ) {
   if (readOnly.has(tx)) throw new Error("Cannot change a read-only notebook");
   const ref = await tx.doc(Notebook, root);
-  if (ref.version !== book[pinnedVersion])
-    throw new Error("Stale notebook snapshot");
-  const before = new Map(
-    notebookSnapshot(ref).notes.map((note) => [note.id, note]),
-  );
+  if (ref.version !== book.version) throw new Error("Stale notebook snapshot");
+  const before = readNotebook(ref).notes;
   const changes = Object.fromEntries(
     book.notes
-      .filter((note) => !isDeepStrictEqual(before.get(note.id), note))
-      .map((note) => [`${ref.namespace}/${note.id}`, note as StoredObject]),
+      .filter((note, index) => !isDeepStrictEqual(before[index], note))
+      .map((note) => [note.id, note]),
   );
   if (Object.keys(changes).length) {
-    const request = createHash("sha256")
-      .update(JSON.stringify([ref.namespace, ref.version, changes]))
-      .digest("hex");
     using store = new NoteStore(ref.path);
-    ref.version = store.commit(ref.version, changes, request);
+    ref.version = store.commit(ref.version, changes, `xean/${ref.version}`);
   }
   ref.notes = book.notes.map((note) => note.id);
-  ref.checks = book.checks;
-  ref.guidance = book.guidance;
-  ref.inputs = book.inputs;
 }
 
 /** Reconstruction can use earlier successful proofs of immutable dependencies. */
