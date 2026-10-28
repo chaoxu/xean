@@ -38,6 +38,7 @@
     "pi": "bun node_modules/.bin/pi"
   },
   "dependencies": {
+    "@chaoxu/notebook-store": "file:vendor/notebook-store/chaoxu-notebook-store-0.1.0-0617c8d.tgz",
     "@earendil-works/chord": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-chord-1.4.0-3ebe2e11f66c.tgz",
     "@earendil-works/pi-ai": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-ai-1.4.0-b40e2ba8bb6f.tgz",
     "@earendil-works/pi-coding-agent": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-coding-agent-1.4.0-d155c16ef6fa.tgz",

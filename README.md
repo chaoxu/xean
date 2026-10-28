@@ -3,11 +3,24 @@
 `xean` 4.3.0 runs mathematical research on native Pi Durable. Explorer appends notes,
 Coordinator selects work, and Verifier checks source, correctness, task
 requirements, and blind reconstruction. Acceptance requires reconstruction of
-both the candidate and its generated dependencies. Pi stores the campaign in
-SQLite and manages execution and recovery.
+both the candidate and its generated dependencies. Pi manages execution and
+recovery. This experimental branch stores admitted notes in a separate SQLite
+notebook and retains their snapshot reference in Pi.
 
 Reconstruction reuses previously reconstructed supporting notes from
 the same campaign. Selected candidates still receive fresh reconstruction.
+
+The bundled `@chaoxu/notebook-store` package has no dependency on Pi or `xean`.
+Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
+creates `campaign.sqlite.notes.sqlite` for its notes. Both databases are needed
+for recovery. This branch requires fresh campaigns and retains their original
+paths. Back up both databases after closing all writers.
+
+Other programs can read the notebook and publish new revisions through its API.
+Campaign reads stay pinned to admitted content. External edits do not replace
+checked notes or change accepted exports. An external commit makes the campaign's
+next fresh note publication fail with a version conflict. This branch does not rebase
+or automatically admit external changes.
 
 Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
 checking the resulting arguments. In the [reported trials](#qualification), that
@@ -76,7 +89,7 @@ exit alone does not establish acceptance. After `accepted`, save the argument:
 bun run xean export .xean/demo.sqlite > accepted.md
 ```
 
-Keep the database as the record of the attempt. Acceptance is an internal model
+Keep both databases as the record of the attempt. Acceptance is an internal model
 judgment. [Independent review](#what-does-accepted-mean) remains separate.
 
 ## Supply papers and notes
@@ -110,6 +123,7 @@ bun run xean submit .xean/demo.sqlite notes.json --id initial-notes
 `support` may name only existing notes that are not dead, not new notes in the
 same submission. Use `inspect` to read assigned IDs. Repeating the same submission
 ID and content is idempotent. Reusing an ID with different content fails.
+New submissions require the notebook head to match the campaign's pinned version.
 
 The optional `verification` attestation grants source and correctness trust when
 the note serves as support. A directly nominated candidate still receives its
@@ -408,7 +422,9 @@ const report = await inspect("campaign.sqlite", readReport);
 
 `open` accepts injected Pi `models` and a `source` executor. It returns the native `harness`, root conversation, `close`, and
 `resume`. Library callers using saved Pi credentials supply authenticated
-`models`. Application data lives in Pi documents and task records.
+`models`. Note records live in the external notebook. Pi retains execution
+documents, task records, and frozen call inputs and results. `readReport` reads
+the campaign's admitted snapshot.
 
 Pure graph and prompt helpers exported by `xean/policy` return synchronously.
 Existing `await` calls still work. Replace `.then(...)` chains with direct use of

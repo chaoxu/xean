@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -50,11 +50,21 @@ import { open, inspect } from "../src/host.ts";
 import { readReport } from "../src/report.ts";
 import { solveSettings, type PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
-import { Notebook, project } from "../src/state.ts";
+import {
+  initializeNotebook,
+  readNotebook,
+  saveNotebook,
+  project,
+} from "../src/state.ts";
 import provenance from "../vendor/pi/provenance.json";
 import historical from "./fixtures/v100-contracts.json";
 
 const context = BACKGROUND_CONTEXT;
+const notebookDirectories: string[] = [];
+afterEach(async () => {
+  for (const directory of notebookDirectories.splice(0))
+    await rm(directory, { recursive: true, force: true });
+});
 const descriptor: CallDescriptor = {
   kind: "explorer",
   input: {
@@ -149,6 +159,9 @@ function fixture(
   return {
     provider,
     async open(directory?: string) {
+      const notebookDirectory =
+        directory ?? (await mkdtemp(join(tmpdir(), "xean-role-notes-")));
+      if (!directory) notebookDirectories.push(notebookDirectory);
       const registry = createRegistry();
       registry.install(role.extension);
       registry.install(defineExtension({ name: "test", tasks: [Invoke] }));
@@ -169,7 +182,10 @@ function fixture(
         },
         context,
       );
-      const root = await harness.root(context);
+      const root = await harness.root(context, {
+        init: (tx, id) =>
+          initializeNotebook(tx, id, join(notebookDirectory, "notes.sqlite")),
+      });
       return {
         harness,
         async invoke(
@@ -548,10 +564,12 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
   try {
     const root = await harness.root(context);
     await root.commit(async (tx) => {
-      (await tx.doc(Notebook, ROOT_CONVERSATION_ID)).notes = [
+      const book = await readNotebook(tx, ROOT_CONVERSATION_ID);
+      book.notes = [
         ...sources,
         { id: "n3", text: "UNINDEXED_BODY", support: [] },
       ];
+      await saveNotebook(tx, ROOT_CONVERSATION_ID, book);
     }, context);
     expect(
       (await harness.waitForTask(await invoke([], input), context)).state

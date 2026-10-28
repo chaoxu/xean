@@ -7,7 +7,13 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { guide, submitNotes } from "../src/inputs.ts";
-import { DefinitionDoc, Notebook } from "../src/state.ts";
+import {
+  DefinitionDoc,
+  Notebook,
+  initializeNotebook,
+  readNotebook,
+  saveNotebook,
+} from "../src/state.ts";
 import { solveSettings } from "../src/policy/settings.ts";
 import { open, inspect, readReport } from "../src/index.ts";
 import { fauxModels } from "./faux-models.ts";
@@ -40,8 +46,9 @@ async function path() {
   return join(directory, "research.sqlite");
 }
 async function fixture(initialized = true) {
+  const file = await path();
   const harness = await Harness.open(
-    await openNodeSqliteStorage(await path()),
+    await openNodeSqliteStorage(file),
     {
       registry: createRegistry(),
       models: builtinModels(),
@@ -53,12 +60,12 @@ async function fixture(initialized = true) {
     init: async (tx, id) => {
       if (initialized)
         Object.assign(await tx.doc(DefinitionDoc, id), { task, settings });
-      await tx.doc(Notebook, id);
+      await initializeNotebook(tx, id, `${file}.notes.sqlite`);
     },
   });
   const snapshot = () =>
     root.commit(
-      async (tx) => JSON.parse(JSON.stringify(await tx.doc(Notebook, root.id))),
+      async (tx) => JSON.parse(JSON.stringify(await readNotebook(tx, root.id))),
       context,
     );
   return { root, snapshot };
@@ -107,7 +114,7 @@ test("caller admission keeps exact text, assigns no IDs and is idempotent and at
 test("support must already exist and be live; pending, same-batch and dead references cannot partially append", async () => {
   const { root, snapshot } = await fixture();
   await root.commit(async (tx) => {
-    const book = await tx.doc(Notebook, root.id);
+    const book = await readNotebook(tx, root.id);
     book.notes.push(
       { id: "n1", text: "Live", support: [] },
       { id: "n2", text: "Dead", support: [] },
@@ -125,6 +132,7 @@ test("support must already exist and be live; pending, same-batch and dead refer
         },
       ],
     });
+    await saveNotebook(tx, root.id, book);
   }, context);
   await root.commit(
     (tx) => submitNotes(tx, root.id, "pending", supplied),

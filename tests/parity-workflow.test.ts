@@ -803,7 +803,7 @@ test("caller input arriving during verification waits for every batch and reache
           verifier: descriptor.name,
           judged: [...descriptor.judged],
           consumed: book.inputs[0]!.consumed,
-          notes: book.notes.map(({ id }) => id),
+          notes: [...book.notes],
         });
       }, BACKGROUND_CONTEXT);
     },

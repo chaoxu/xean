@@ -36,7 +36,7 @@ import {
   type RoleCall,
 } from "./policy/prompts.ts";
 import type { PiRoleProfile } from "./policy/settings.ts";
-import { Notebook, project } from "./state.ts";
+import { Notebook, project, notebookSnapshot } from "./state.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
 export const roleGenerationPolicy = {
@@ -184,7 +184,9 @@ export function createRoleRuntime() {
         throw new Error("Notebook reads require an Explorer assignment");
       const input = assignment.descriptor.input;
       const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
-      const notes = book ? project(book).notes : input.support;
+      const notes = book
+        ? project(notebookSnapshot(book)).notes
+        : input.support;
       const selected = ids.map((id) =>
         input.notes.some((note) => note.id === id)
           ? notes.find((note) => note.id === id)

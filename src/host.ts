@@ -21,7 +21,16 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { task as taskSchema } from "./policy/contracts.ts";
 import { solveSettings } from "./policy/settings.ts";
-import { DefinitionDoc, Notebook, project, type Definition } from "./state.ts";
+import {
+  DefinitionDoc,
+  Notebook,
+  project,
+  initializeNotebook,
+  notebookSnapshot,
+  readNotebook,
+  readonlyNotebook,
+  type Definition,
+} from "./state.ts";
 import { createWorkflow, type SourceExecutor } from "./workflow.ts";
 import { acceptedArgument, readStatus } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
@@ -176,7 +185,7 @@ export async function open(path: string, options: OpenOptions = {}) {
     const root = await harness.root(context, {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
-        await tx.doc(Notebook, root);
+        await initializeNotebook(tx, root, `${canonical}.notes.sqlite`);
         await workflow.initialize(tx, root);
       },
     });
@@ -204,6 +213,7 @@ async function inspectSession<T>(
     definition: Definition,
   ) => T | Promise<T>,
 ): Promise<T> {
+  path = await canonicalPath(path, false);
   assertSingleLink((await stat(path)).nlink);
   using database = openReadDatabase(path);
   database.exec("BEGIN");
@@ -218,6 +228,18 @@ async function inspectSession<T>(
     const definition = validateDefinition(
       await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context),
     );
+    const notebook = await session.snapshot(
+      Notebook,
+      ROOT_CONVERSATION_ID,
+      context,
+    );
+    if (!notebook?.path)
+      throw new Error(
+        "Campaign requires an external notebook; fresh campaigns only",
+      );
+    if (notebook.path !== `${path}.notes.sqlite`)
+      throw new Error("Notebook path does not match campaign");
+    notebookSnapshot({ ...notebook, notes: [] });
     return await read(session, ROOT_CONVERSATION_ID, definition);
   } finally {
     await session.close(context);
@@ -229,7 +251,10 @@ export function inspect<T>(
   read: (tx: Tx, root: ConversationId) => T | Promise<T>,
 ): Promise<T> {
   return inspectSession(path, (session, root) =>
-    session.commit((tx) => read(tx, root), context),
+    session.commit((tx) => {
+      readonlyNotebook(tx);
+      return read(tx, root);
+    }, context),
   );
 }
 
@@ -243,7 +268,7 @@ export function exportAccepted(path: string): Promise<string> {
     )
       throw new Error("No accepted argument");
     return acceptedArgument(
-      project(await tx.doc(Notebook, root)).notes,
+      project(await readNotebook(tx, root)).notes,
       status.accepted,
     );
   });

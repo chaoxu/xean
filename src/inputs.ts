@@ -1,8 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { Notebook as NoteStore, ConflictError } from "@chaoxu/notebook-store";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import { nonblank, submittedNotes } from "./policy/contracts.ts";
-import { definition, Notebook, project } from "./state.ts";
+import { definition, Notebook, project, readNotebook } from "./state.ts";
 
 /** Queue caller notes; the workflow assigns IDs only at its next intake boundary. */
 export async function submitNotes(
@@ -14,13 +15,19 @@ export async function submitNotes(
   const id = nonblank.parse(idValue),
     { notes } = submittedNotes.parse(input);
   await definition(tx, root);
-  const book = await tx.doc(Notebook, root);
+  const book = await readNotebook(tx, root);
   const existing = book.inputs.find((value) => value.id === id);
   if (existing) {
     if (!isDeepStrictEqual(existing.notes, notes))
       throw new Error(`notes id already has a different submission: ${id}`);
     return { id, notes };
   }
+  const ref = await tx.doc(Notebook, root);
+  using store = new NoteStore(ref.path, { readonly: true });
+  if (store.snapshot() !== ref.version)
+    throw new ConflictError(
+      "Notebook changed. Recover pending publication or resolve the external conflict before adding input",
+    );
   const live = new Set(
     project(book)
       .notes.filter((note) => !note.dead)
