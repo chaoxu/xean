@@ -155,7 +155,7 @@ export function createRoleRuntime() {
   const reader = defineTool({
     name: "read_notes",
     description:
-      "Read statements and conditions from detailed summaries, or full texts for proofs and missing details. Batch independent IDs. Dead notes are diagnostic only.",
+      "Read statements and conditions from detailed summaries, or full texts for proofs and missing details. Full reads return an array of texts in requested ID order. Batch independent IDs. Dead notes are diagnostic only.",
     parameters: Type.Object(
       {
         ids: Type.Array(Type.String(), {
@@ -198,11 +198,11 @@ export function createRoleRuntime() {
       api.output(
         JSON.stringify(
           selected.map((note) => {
+            if (level === "full") return note!.text;
             const { text, detailedSummary, ...index } = note!;
             return {
               ...index,
               detailedSummary: detailedSummary ?? null,
-              ...(level === "full" ? { text } : {}),
             };
           }),
         ),

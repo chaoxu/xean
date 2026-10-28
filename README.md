@@ -134,8 +134,8 @@ Explorer starts with the summary index and Coordinator's suggested note IDs.
 It may apply a verified result from a sufficient summary and cite the note as
 support. It uses `read_notes({ids, level})` for detailed statements or full texts
 when it needs proofs, constructions, or missing details, batching up to 20 IDs
-per call. A missing detailed summary is returned as `null`. Full reads retain
-the complete text, dependencies, provenance, and verdicts.
+per call. A missing detailed summary is returned as `null`. Full reads return
+only the complete text strings in a JSON array, in the requested ID order.
 Pi continues the conversation after each read, and a valid `submit_notes`
 submission ends the Explorer turn.
 

@@ -528,14 +528,13 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
         ),
       ).toEqual(["First exact conditions.", null]);
       expect(readNotes.every((entry: object) => !("text" in entry))).toBe(true);
-      return read(["n1", "n2"], "full");
+      return read(["n2", "n1"], "full");
     },
     (transcript) => {
-      expect(
-        JSON.parse(resultText(transcript)).map(
-          (entry: { text: string }) => entry.text,
-        ),
-      ).toEqual(sources.map(({ text }) => text));
+      expect(JSON.parse(resultText(transcript))).toEqual([
+        sources[1]!.text,
+        sources[0]!.text,
+      ]);
       expect(
         transcript.messages.filter((message) => message.role === "toolResult"),
       ).toHaveLength(4);
