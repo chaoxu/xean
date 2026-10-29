@@ -184,7 +184,8 @@ export function createRoleRuntime() {
         throw new Error("Notebook reads require an Explorer assignment");
       const input = assignment.descriptor.input;
       const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
-      const notes = book ? project(readNotebook(book)).notes : input.support;
+      if (!book) throw new Error("Campaign notebook is missing");
+      const notes = project(readNotebook(book)).notes;
       const selected = ids.map((id) =>
         input.notes.some((note) => note.id === id)
           ? notes.find((note) => note.id === id)

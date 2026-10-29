@@ -64,7 +64,6 @@ test("Explorer continuation is rejected and ordinary submissions have no solutio
       ]),
     ),
   };
-  expect(solveSettings.parse(settings).explorerContinuation).toBeUndefined();
   expect(solveSettings.parse(settings).verifyOnSolution).toBeUndefined();
   for (const verifyOnSolution of [false, true])
     expect(
@@ -73,13 +72,10 @@ test("Explorer continuation is rejected and ordinary submissions have no solutio
   expect(
     solveSettings.safeParse({ ...settings, verifyOnSolution: "true" }).success,
   ).toBe(false);
-  expect(
-    solveSettings.parse({ ...settings, explorerContinuation: false })
-      .explorerContinuation,
-  ).toBe(false);
-  expect(() =>
-    solveSettings.parse({ ...settings, explorerContinuation: true }),
-  ).toThrow("requires Explorer continuation to be off");
+  for (const explorerContinuation of [false, true])
+    expect(() =>
+      solveSettings.parse({ ...settings, explorerContinuation }),
+    ).toThrow("explorerContinuation");
   expect(
     solveSettings.safeParse({
       ...settings,

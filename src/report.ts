@@ -71,15 +71,10 @@ export async function readReport(tx: Tx, root: ConversationId) {
 }
 
 /** Append-only support makes the accepted argument stable after its terminal result. */
-export async function acceptedArgument(
-  notes: Note[],
-  candidateId: string,
-): Promise<string> {
+export function acceptedArgument(notes: Note[], candidateId: string): string {
   const candidate = notes.find((note) => note.id === candidateId);
   if (!candidate) throw new Error("Accepted candidate is missing");
-  const ids = [...(await supportClosure([candidate], notes)), candidateId].sort(
-    byId,
-  );
+  const ids = [...supportClosure([candidate], notes), candidateId].sort(byId);
   return ids
     .map((id) => {
       const note = notes.find((item) => item.id === id)!;

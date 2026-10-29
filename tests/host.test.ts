@@ -169,6 +169,6 @@ test("continuation-on rejects before creating a campaign database", async () => 
         settings: { ...settings, explorerContinuation: true },
       },
     }),
-  ).rejects.toThrow("requires Explorer continuation to be off");
+  ).rejects.toThrow("explorerContinuation");
   expect(await Bun.file(path).exists()).toBe(false);
 });
