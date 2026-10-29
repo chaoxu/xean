@@ -10,7 +10,11 @@ import { join, resolve } from "node:path";
 import manifest from "../package.json";
 
 const root = resolve(import.meta.dir, "..");
-for (const file of ["LICENSE", "vendor/pi/LICENSE"])
+for (const file of [
+  "LICENSE",
+  "vendor/pi/LICENSE",
+  "node_modules/@chaoxu/notebook-store/LICENSE",
+])
   assert.match(
     await readFile(join(root, file), "utf8"),
     /MIT License[\s\S]*Permission is hereby granted/,

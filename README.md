@@ -1,20 +1,24 @@
 # `xean`
 
-`xean` 4.4.0 is a release candidate for mathematical research on native Pi Durable. Explorer appends notes,
-Coordinator selects work, and Verifier checks source, correctness, task
-requirements, and blind reconstruction. Acceptance requires reconstruction of
-both the candidate and its generated dependencies. Pi manages execution and
-recovery. Admitted notes live in a separate SQLite notebook. Pi retains their
-snapshot reference.
+`xean` 4.4.0 explores mathematical problems and checks proposed solutions on
+native Pi Durable. Explorer appends notes, Coordinator selects work, and Verifier
+checks source, correctness, task requirements, and blind reconstruction.
+Acceptance requires reconstruction of both the candidate and its generated
+dependencies. Pi manages execution and recovery, records checks, and pins the
+admitted note snapshot. Admitted notes live in a separate SQLite notebook.
 
-Reconstruction reuses previously reconstructed supporting notes from
-the same campaign. Selected candidates still receive fresh reconstruction.
+Campaign isolation is deliberate. `xean` never transfers notes, verification
+trust, or reconstructed proofs between campaigns. Reconstruction reuses
+previously reconstructed supporting notes from the same campaign. Selected
+candidates still receive fresh reconstruction.
 
 The bundled `@chaoxu/notebook-store` package has no dependency on Pi or `xean`.
 Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
-creates `campaign.sqlite.notes.sqlite` for its notes. Both databases are needed
-for recovery. New campaigns require an empty notebook. Campaigns retain their
-original paths. Back up both databases after closing all writers.
+creates `campaign.sqlite.notes.sqlite` for its notes. New campaigns require an
+empty notebook. Both databases are needed for recovery. Close all writers before
+backing up both databases, and restore them to their original canonical paths.
+Start 4.4.0 campaigns with fresh databases. Historical campaigns require their
+pinned runtimes and are not migrated.
 
 Other programs can read the notebook and publish new revisions through its API.
 Campaign reads stay pinned to admitted content. External edits do not replace
@@ -336,39 +340,33 @@ sends an exact snapshot when no boundary qualifies. Recovery retains the recorde
 parent. Stable OpenAI routing headers and preserved prefixes can support caching,
 subject to provider support and availability.
 
-Pi 1.4.0 at `4a080252` owns tasks, conversations, checkpoints, storage, and recovery.
+Pi 1.4.0 at `4a080252` owns tasks, conversations, checkpoints, and execution recovery.
 Retained patches are listed in [provenance](vendor/pi/provenance.json). Ordinary
 verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime.
 
-Create fresh campaigns with 4.4.0. Existing campaigns require their pinned
-runtime. This version provides no database migration.
-
 ## Qualification
 
-### Version 4.4.0 candidate
+### Version 4.4.0
 
-The notebook package installs with `xean` and remains usable independently of
-Pi. Campaigns pin admitted note snapshots. Tests cover publication replay after
-Pi rollback, changed retry content, external edits, read-only inspection, and
-intake during recovery. The mathematical prompts, verification policy, and
-sequential workflow remain unchanged.
+Tests cover notebook publication replay after Pi rollback, changed retry content,
+external commits, read-only inspection, and intake during recovery.
 
-Full `read_notes` results now contain only the requested text strings, in request
+Full `read_notes` results contain only the requested text strings, in request
 order. A deterministic comparison against `139ae55`, which already included that
 reader change, preserved model inputs, tool results, reconstruction reuse,
-recovery, and accepted output. Lazy-summary generation remains experimental
-and is excluded from this candidate.
+recovery, and accepted output. Relative to that baseline, the notebook integration
+preserves the mathematical prompts, verification policy, and sequential workflow.
 
 ### Version 4.3.0
 
-This release adds reconstruction reuse and native Pi tool-argument validation,
-and upgrades Pi to 1.4.0. The tests cover dependency invalidation, fresh
+Version 4.3.0 added reconstruction reuse and native Pi tool-argument validation,
+and upgraded Pi to 1.4.0. The tests cover dependency invalidation, fresh
 reconstruction of selected candidates, recovery with frozen receipt references,
 provider-generated optional fields, and read-only rejection of older databases.
 The mathematical prompts and settings match the tested reconstruction-reuse
-baseline. The ongoing INCONCLUSIVE and recheck-policy experiments remain separate.
+baseline.
 
 ### Version 4.2.0
 
@@ -437,21 +435,13 @@ const report = await inspect("campaign.sqlite", readReport);
 `open` accepts injected Pi `models` and a `source` executor. It returns the native `harness`, root conversation, `close`, and
 `resume`. Library callers using saved Pi credentials supply authenticated
 `models`. Note records live in the external notebook. Pi retains execution
-documents, task records, and frozen call inputs and results. `readReport` reads
-the campaign's admitted snapshot.
+documents, task records, checks, and frozen call inputs and results. `readReport`
+reads the campaign's admitted snapshot.
 
-The exported `Notebook` Pi document now holds note IDs and a snapshot reference.
-Code that previously read note bodies through `tx.doc(Notebook)` should use
-`readReport`. Independent notebook writers publish revisions through the store
-API. A running campaign keeps its admitted snapshot. Fresh publication after an
-external edit fails with a version conflict.
+The exported `Notebook` Pi document holds note IDs and a snapshot reference.
+Use `readReport` for note bodies from the campaign's admitted snapshot.
 
 Pure graph and prompt helpers exported by `xean/policy` return synchronously.
-Existing `await` calls still work. Replace `.then(...)` chains with direct use of
-the returned value.
-
-Use fresh databases. Earlier `xean` and Yean campaigns require their recorded
-runtimes. This port provides no database migration.
 
 ## Check and package
 

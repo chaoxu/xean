@@ -5,7 +5,7 @@
     "": {
       "name": "xean",
       "dependencies": {
-        "@chaoxu/notebook-store": "file:vendor/notebook-store/chaoxu-notebook-store-0.1.0-0617c8d.tgz",
+        "@chaoxu/notebook-store": "file:vendor/notebook-store/chaoxu-notebook-store-0.1.0-c5c314b.tgz",
         "@earendil-works/chord": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-chord-1.4.0-3ebe2e11f66c.tgz",
         "@earendil-works/pi-ai": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-ai-1.4.0-b40e2ba8bb6f.tgz",
         "@earendil-works/pi-coding-agent": "file:vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-pi-coding-agent-1.4.0-d155c16ef6fa.tgz",
@@ -80,7 +80,7 @@
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
-    "@chaoxu/notebook-store": ["@chaoxu/notebook-store@vendor/notebook-store/chaoxu-notebook-store-0.1.0-0617c8d.tgz", { "bin": { "notebook-store": "./src/cli.ts" } }, "sha512-mDPTfsXkB+K7bY4WtLmKtFv8WEyFYEFBS2ti3BywPIrHqXYc64a2uAykh5zF9m3r1g+l4Hms+ccyUFSzjdYW8Q=="],
+    "@chaoxu/notebook-store": ["@chaoxu/notebook-store@vendor/notebook-store/chaoxu-notebook-store-0.1.0-c5c314b.tgz", { "bin": { "notebook-store": "./src/cli.ts" } }, "sha512-v6xEWjROUoD7MSZ6hg2WcK3/sg5AjKqDsDbZeUtM2s9IkT0u9C3BZpNQ1eAKlKjfJV1q7nH/jefzS4+ISG9Jmg=="],
 
     "@earendil-works/chord": ["@earendil-works/chord@vendor/pi/4a080252f06caf63a525d7873c5d94d3c23887e0/earendil-works-chord-1.4.0-3ebe2e11f66c.tgz", { "dependencies": { "@earendil-works/pi-telemetry": "1.4.0", "typebox": "1.3.27" } }, "sha512-dTbgyz4xgDS5KAUFx1bFENqj0Cr1N3tYxJJOYStc6g6HS78FSBZydyoCwLoddiQRF+VgRS0fpgAi+iKxjZ3BQA=="],
 

@@ -42,5 +42,8 @@ allowed only when the format cannot render monospace.
   Keep monitoring storage bounded instead of archiving cumulative snapshots.
 - Preserve historical runs and their pinned runtimes. No compatibility,
   migrations, remote publication, or production cutover is implied.
+  Simplifications do not need to preserve backward compatibility.
 - Apply the prose-writing skill to documentation and obtain separate verifier
   review. Keep documentation here short and describe only implemented behavior.
+  Before every release, check the README, examples, and shared `xean` skill
+  against the final CLI and implementation, and update stale instructions.
