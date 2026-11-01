@@ -1,10 +1,7 @@
 import { copyJson, type Context, type JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import {
-  cleanupSessionResources,
-  Type,
-  type TSchema,
-} from "@earendil-works/pi-ai";
+import { cleanupSessionResources } from "@earendil-works/pi-ai";
+import { arr, lit, obj, str, union } from "@earendil-works/pi-schema";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import {
   configure,
@@ -141,7 +138,7 @@ async function receipt(
   } while (cursor);
   if (found && call.role === "coordinator") {
     const submission = await tx.submissionByRequest(conversationId, key);
-    if (submission?.status === "done")
+    if (submission?.type === "input" && submission.status === "done")
       (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID)).latest = {
         conversationId,
         at: submission.entry,
@@ -156,17 +153,14 @@ export function createRoleRuntime() {
     name: "read_notes",
     description:
       "Read statements and conditions from detailed summaries, or full texts for proofs and missing details. Full reads return an array of texts in requested ID order. Batch independent IDs. Dead notes are diagnostic only.",
-    parameters: Type.Object(
-      {
-        ids: Type.Array(Type.String(), {
-          minItems: 1,
-          maxItems: 20,
-          uniqueItems: true,
-        }),
-        level: Type.Union([Type.Literal("detailed"), Type.Literal("full")]),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: obj({
+      ids: arr(str(), {
+        minItems: 1,
+        maxItems: 20,
+        uniqueItems: true,
+      }),
+      level: union([lit("detailed"), lit("full")]),
+    }),
     callers: ["model"],
     replay: "safe",
     executionMode: "sequential",
@@ -215,7 +209,7 @@ export function createRoleRuntime() {
     defineTool({
       name,
       description: "Submit the result for the current mathematical assignment.",
-      parameters: Type.Object({}, { additionalProperties: true }),
+      parameters: obj({}, { open: true }),
       callers: ["model"],
       replay: "safe",
       executionMode: "sequential",
@@ -235,7 +229,7 @@ export function createRoleRuntime() {
             {
               name,
               description: call.description,
-              parameters: z.toJSONSchema(call.schema) as TSchema,
+              parameters: z.toJSONSchema(call.schema),
             },
             {
               type: "toolCall",
@@ -285,7 +279,7 @@ export function createRoleRuntime() {
           const declaration = {
             name: call.tool,
             description: call.description,
-            parameters: z.toJSONSchema(call.schema) as TSchema,
+            parameters: z.toJSONSchema(call.schema),
             constrainedSampling:
               call.role === "coordinator"
                 ? (false as const)
@@ -330,43 +324,45 @@ export function createRoleRuntime() {
                   : {}),
                 transport:
                   model.api === "openai-codex-responses" ? "auto" : "sse",
-                onPayload: async (payload, requestModel) => {
-                  const original =
-                    (await options?.onPayload?.(payload, requestModel)) ??
-                    payload;
-                  if (
-                    !original ||
-                    typeof original !== "object" ||
-                    !["openai-responses", "openai-codex-responses"].includes(
-                      model.api,
-                    )
-                  )
-                    return original;
-                  const request = { ...original } as Record<string, unknown>;
-                  request.parallel_tool_calls = false;
-                  request.tool_choice = "required";
-                  if (
-                    model.api === "openai-responses" &&
-                    !request.instructions &&
-                    Array.isArray(request.input)
-                  ) {
-                    const [head, ...rest] = request.input;
-                    if (
-                      head?.role === "developer" &&
-                      typeof head.content === "string"
-                    ) {
-                      request.instructions = head.content;
-                      request.input = rest;
-                    }
-                  }
-                  if ("prompt_cache_key" in request)
-                    request.prompt_cache_key = createHash("sha256")
-                      .update(`${applicationId}/${call.role}\n${call.system}`)
-                      .digest("hex");
-                  return request;
-                },
               }),
           };
+        },
+        async beforeProviderRequest({ model, payload }, api, context) {
+          if (
+            !payload ||
+            typeof payload !== "object" ||
+            !["openai-responses", "openai-codex-responses"].includes(model.api)
+          )
+            return;
+          const assignment = await api.snapshot(
+            Assignment,
+            api.conversationId,
+            context,
+          );
+          if (!assignment?.descriptor) return;
+          const call = resolveCall(assignment.descriptor);
+          const request = { ...payload } as Record<string, unknown>;
+          request.parallel_tool_calls = false;
+          request.tool_choice = "required";
+          if (
+            model.api === "openai-responses" &&
+            !request.instructions &&
+            Array.isArray(request.input)
+          ) {
+            const [head, ...rest] = request.input;
+            if (
+              head?.role === "developer" &&
+              typeof head.content === "string"
+            ) {
+              request.instructions = head.content;
+              request.input = rest;
+            }
+          }
+          if ("prompt_cache_key" in request)
+            request.prompt_cache_key = createHash("sha256")
+              .update(`${applicationId}/${call.role}\n${call.system}`)
+              .digest("hex");
+          return { payload: request };
         },
       }),
     ],

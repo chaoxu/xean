@@ -1,5 +1,5 @@
 diff --git a/dist/sqlite/node.d.ts b/dist/sqlite/node.d.ts
-index ddd8cd7..78330d9 100644
+index b9f8322..93855f1 100644
 --- a/dist/sqlite/node.d.ts
 +++ b/dist/sqlite/node.d.ts
 @@ -1,6 +1,17 @@
@@ -22,8 +22,8 @@ index ddd8cd7..78330d9 100644
  /** Node SQLite connection settings for a database file. */
  export type NodeSqliteDatabaseOptions = {
      /** SQLite WAL auto-checkpoint threshold. SQLite and this adapter default to 1,000 pages; 0 disables it. */
-@@ -13,9 +24,9 @@ export type NodeSqliteDatabaseOptions = {
-  * database and its transaction handles share them across transactions.
+@@ -15,9 +26,9 @@ export type NodeSqliteDatabaseOptions = {
+  * cannot grow it without bound.
   */
  declare abstract class NodeSqliteExecutor implements SqliteExecutor {
 -    protected readonly database: DatabaseSync;
@@ -34,8 +34,8 @@ index ddd8cd7..78330d9 100644
 +    constructor(database: SyncDatabase, statements: Map<string, SyncStatement>);
      exec(sql: string): Promise<void>;
      run(sql: string, ...params: SqliteValue[]): Promise<void>;
-     get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined>;
-@@ -23,11 +34,12 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+     runCounted(sql: string, ...params: SqliteValue[]): Promise<number>;
+@@ -26,11 +37,12 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
      protected abstract runOperation<T>(operation: () => T): Promise<T>;
      private statement;
  }
@@ -51,11 +51,11 @@ index ddd8cd7..78330d9 100644
      close(): Promise<void>;
      protected runOperation<T>(operation: () => T): Promise<T>;
 diff --git a/dist/sqlite/node.js b/dist/sqlite/node.js
-index 777475a..5a1c6a9 100644
+index 4c031cf..d8c215c 100644
 --- a/dist/sqlite/node.js
 +++ b/dist/sqlite/node.js
-@@ -74,7 +74,7 @@ class NodeSqliteExecutor {
-         });
+@@ -81,7 +81,7 @@ class NodeSqliteExecutor {
+         return this.runOperation(() => Number(this.statement(sql).run(...params).changes));
      }
      get(sql, ...params) {
 -        return this.runOperation(() => this.statement(sql).get(...params));
@@ -63,17 +63,17 @@ index 777475a..5a1c6a9 100644
      }
      all(sql, ...params) {
          return this.runOperation(() => this.statement(sql).all(...params));
-@@ -82,7 +82,8 @@ class NodeSqliteExecutor {
-     statement(sql) {
-         let statement = this.statements.get(sql);
-         if (statement === undefined) {
--            statement = this.database.prepare(sql);
-+            // Bun owns query() statements and finalizes them when the database closes.
-+            statement = this.database.query?.(sql) ?? this.database.prepare(sql);
-             this.statements.set(sql, statement);
+@@ -97,7 +97,8 @@ class NodeSqliteExecutor {
+             }
+             return statement;
          }
-         return statement;
-@@ -100,12 +101,13 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
+-        statement = this.database.prepare(sql);
++        // Bun owns query() statements and finalizes them when the database closes.
++        statement = this.database.query?.(sql) ?? this.database.prepare(sql);
+         statements.set(sql, statement);
+         // A Map iterates in insertion order: its first key is the least recently used statement.
+         if (statements.size > STATEMENT_CACHE_LIMIT)
+@@ -117,12 +118,13 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
          return operation();
      }
  }
@@ -89,7 +89,7 @@ index 777475a..5a1c6a9 100644
      }
      transaction(callback) {
          return this.access.runAsync(async () => {
-@@ -136,7 +138,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+@@ -153,7 +155,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
              this.closed = true;
              this.statements.clear();
              try {

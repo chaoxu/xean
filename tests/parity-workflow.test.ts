@@ -657,33 +657,42 @@ test.each(
     const closed = Promise.withResolvers<void>();
     let closing = false,
       current = "";
-    drive.owner.harness.subscribeCommits(({ changes }) => {
-      for (const change of changes)
+    drive.owner.harness.observeCommits({
+      advance: ({ changes }) => {
+        for (const change of changes)
+          if (
+            change.type === "document" &&
+            change.kind === "change" &&
+            change.record.kind === Assignment.definition.kind
+          ) {
+            const { descriptor } = change.value as {
+              descriptor?: CallDescriptor;
+            };
+            current = descriptor?.kind === "verifier" ? descriptor.name : "";
+          }
         if (
-          change.type === "document" &&
-          change.record.kind === Assignment.definition.kind
+          !closing &&
+          current === stage &&
+          changes.some((change) =>
+            boundary === "assignment"
+              ? change.type === "document" &&
+                change.kind === "change" &&
+                change.record.kind === Assignment.definition.kind
+              : boundary === "receipt"
+                ? change.type === "entry" && ToolResultEntry.is(change.value)
+                : change.type === "submission" &&
+                  change.value.status === boundary,
+          )
         ) {
-          const { descriptor } = change.value as {
-            descriptor?: CallDescriptor;
-          };
-          current = descriptor?.kind === "verifier" ? descriptor.name : "";
+          closing = true;
+          void Promise.resolve()
+            .then(() => drive.owner.close())
+            .then(closed.resolve, closed.reject);
         }
-      if (
-        !closing &&
-        current === stage &&
-        changes.some((change) =>
-          boundary === "assignment"
-            ? change.type === "document" &&
-              change.record.kind === Assignment.definition.kind
-            : boundary === "receipt"
-              ? change.type === "entry" && ToolResultEntry.is(change.value)
-              : change.type === "submission" &&
-                change.value.status === boundary,
-        )
-      ) {
-        closing = true;
-        void drive.owner.close().then(closed.resolve, closed.reject);
-      }
+      },
+      end: (end) => {
+        if (end.kind === "listener_error") closed.reject(end.error);
+      },
     });
     void drive.settle().catch(() => {});
     await closed.promise;

@@ -18,7 +18,7 @@ Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
 creates `campaign.sqlite.notes.sqlite` for its notes. New campaigns require an
 empty notebook. Both databases are needed for recovery. Close all writers before
 backing up both databases, and restore them to their original canonical paths.
-Start 4.4.0 campaigns with fresh databases. Historical campaigns require their
+Start campaigns with fresh databases. Historical campaigns require their
 pinned runtimes and are not migrated.
 
 Other programs can read the notebook and publish new revisions through its API.
@@ -341,8 +341,10 @@ sends an exact snapshot when no boundary qualifies. Recovery retains the recorde
 parent. Stable OpenAI routing headers and preserved prefixes can support caching,
 subject to provider support and availability.
 
-Pi 1.4.0 at `4a080252` owns tasks, conversations, checkpoints, and execution recovery.
-Retained patches are listed in [provenance](vendor/pi/provenance.json). Ordinary
+Pi is pinned to upstream commit `b556cfe5b0300a91f39c7bc5369a65a25fb7fcd5`, an
+unreleased snapshot after 1.4.0. It owns tasks, conversations, checkpoints, and
+execution recovery. Compiled packages are bundled locally, with hashes and
+retained patches listed in [provenance](vendor/pi/provenance.json). Ordinary
 verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime. In the
@@ -351,6 +353,14 @@ Coordinator returns only missing summaries and verification requests. Operator
 guidance through `guide` reaches the next fresh Explorer call.
 
 ## Qualification
+
+### Current development revision
+
+The upstream Pi upgrade preserves the mathematical prompts and verification
+policy. Request bodies use Pi's native provider hook. Progress has a zero storage
+delay setting, while Pi still publishes partial progress asynchronously.
+Recovery, accounting, note access, and packaged installation have contract tests.
+The upgrade has not been evaluated on mathematical campaigns.
 
 ### Version 4.4.0
 

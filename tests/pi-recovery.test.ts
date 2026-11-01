@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createModels,
-  Type,
   normalizeContext,
   type AssistantMessage,
   type Message,
 } from "@earendil-works/pi-ai";
+import { bool, obj } from "@earendil-works/pi-schema";
+import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { stream as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import {
   fauxAssistantMessage,
@@ -70,7 +71,7 @@ function fixture(
   const tool = defineTool({
     name: "finish",
     description: "Finish when done.",
-    parameters: Type.Object({ done: Type.Boolean() }),
+    parameters: obj({ done: bool() }, { open: true }),
     replay: "safe",
     async execute({ done }) {
       return {
@@ -381,4 +382,72 @@ test("a retry sleep survives close and reopen, and idle waits until its original
     await opened.harness.close(context);
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("Anthropic disconnect keeps completed and redacted signatures, drops unfinished signatures, and retains usage", async () => {
+  // Provider indices deliberately differ from content-array positions.
+  const body = `event: message_start
+data: {"type":"message_start","message":{"id":"fixture","usage":{"input_tokens":13,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":3,"content_block":{"type":"thinking","thinking":"Complete","signature":"signed-complete"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":3}
+
+event: content_block_start
+data: {"type":"content_block_start","index":7,"content_block":{"type":"redacted_thinking","data":"opaque-redacted"}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":11,"content_block":{"type":"thinking","thinking":"Unfinished","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":11,"delta":{"type":"signature_delta","signature":"incomplete-signature"}}
+
+`;
+  const model = {
+    ...fauxProvider().getModel(),
+    api: "anthropic-messages" as const,
+    provider: "anthropic",
+    baseUrl: "https://fixture.invalid",
+  };
+  let requests = 0;
+  const result = await anthropicStream(
+    model,
+    normalizeContext({ messages: [] }),
+    {
+      apiKey: "fixture",
+      maxRetries: 0,
+      fetch: Object.assign(
+        async () => {
+          requests++;
+          return new Response(body, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    },
+  ).result();
+  expect(requests).toBe(1);
+  expect(result).toMatchObject({
+    stopReason: "error",
+    usageReported: true,
+    usage: { input: 13, output: 0 },
+  });
+  expect(result.errorMessage).toContain("before message_stop");
+  expect(result.content).toEqual([
+    {
+      type: "thinking",
+      thinking: "Complete",
+      thinkingSignature: "signed-complete",
+    },
+    {
+      type: "thinking",
+      thinking: "[Reasoning redacted]",
+      thinkingSignature: "opaque-redacted",
+      redacted: true,
+    },
+    { type: "thinking", thinking: "Unfinished" },
+  ]);
 });

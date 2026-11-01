@@ -1388,20 +1388,28 @@ test.each(["explorer", "coordinator"] as const)(
           ).toBe("completed");
       const closed = Promise.withResolvers<void>();
       let closing = false;
-      harness.subscribeCommits(({ changes }) => {
-        if (
-          !closing &&
-          changes.some((change) =>
-            role === "coordinator"
-              ? change.type === "document" &&
-                change.record.kind === "xean.coordinator.prefix" &&
-                change.value?.latest !== undefined
-              : change.type === "entry" && ToolResultEntry.is(change.value),
-          )
-        ) {
-          closing = true;
-          void first.harness.close(context).then(closed.resolve, closed.reject);
-        }
+      harness.observeCommits({
+        advance: ({ changes }) => {
+          if (
+            !closing &&
+            changes.some((change) =>
+              role === "coordinator"
+                ? change.type === "document" &&
+                  change.kind === "change" &&
+                  change.record.kind === "xean.coordinator.prefix" &&
+                  change.value?.latest !== undefined
+                : change.type === "entry" && ToolResultEntry.is(change.value),
+            )
+          ) {
+            closing = true;
+            void Promise.resolve()
+              .then(() => first.harness.close(context))
+              .then(closed.resolve, closed.reject);
+          }
+        },
+        end: (end) => {
+          if (end.kind === "listener_error") closed.reject(end.error);
+        },
       });
       const id = await first.invoke(
         [],
@@ -1594,29 +1602,39 @@ test.each(["comparison failure", "comparison receipt"] as const)(
       if (interruption === "comparison receipt") {
         const closed = Promise.withResolvers<void>();
         let closing = false;
-        owner.harness.subscribeCommits(({ changes }) => {
-          if (
-            !closing &&
-            changes.some((change) => {
-              if (change.type !== "entry" || !ToolResultEntry.is(change.value))
-                return false;
-              const message = change.value.model?.[0];
-              return (
-                message?.role === "toolResult" &&
-                message.toolName === "submit_verdict" &&
-                !message.isError &&
-                typeof message.details === "object" &&
-                message.details !== null &&
-                !Array.isArray(message.details) &&
-                "statements" in message.details &&
-                Array.isArray(message.details.statements) &&
-                message.details.statements.length === 0
-              );
-            })
-          ) {
-            closing = true;
-            void owner.close().then(closed.resolve, closed.reject);
-          }
+        owner.harness.observeCommits({
+          advance: ({ changes }) => {
+            if (
+              !closing &&
+              changes.some((change) => {
+                if (
+                  change.type !== "entry" ||
+                  !ToolResultEntry.is(change.value)
+                )
+                  return false;
+                const message = change.value.model?.[0];
+                return (
+                  message?.role === "toolResult" &&
+                  message.toolName === "submit_verdict" &&
+                  !message.isError &&
+                  typeof message.details === "object" &&
+                  message.details !== null &&
+                  !Array.isArray(message.details) &&
+                  "statements" in message.details &&
+                  Array.isArray(message.details.statements) &&
+                  message.details.statements.length === 0
+                );
+              })
+            ) {
+              closing = true;
+              void Promise.resolve()
+                .then(() => owner.close())
+                .then(closed.resolve, closed.reject);
+            }
+          },
+          end: (end) => {
+            if (end.kind === "listener_error") closed.reject(end.error);
+          },
         });
         void owner.root.waitForIdle(context).catch(() => {});
         await closed.promise;

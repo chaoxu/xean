@@ -133,7 +133,7 @@ export async function open(path: string, options: OpenOptions = {}) {
             await harness.close(context);
           } finally {
             const end = await harness.closed;
-            if (end.reason === "failed") throw end.error;
+            if (end.kind === "failed") throw end.error;
           }
         } else await storage?.close(context);
       } finally {
@@ -172,6 +172,7 @@ export async function open(path: string, options: OpenOptions = {}) {
           retry: { enabled: true, maxRetries: 8 },
           restartLimit: Infinity,
           generation: roleGenerationPolicy,
+          progress: { persistWithinMs: 0 },
           toolExecution: "sequential",
           contextRetentionMs: 0,
           documentRetentionMs: 0,
