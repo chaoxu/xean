@@ -106,21 +106,11 @@ function distinctKnown(
   }
 }
 
-export const explorerInput = z
-  .strictObject({
-    task,
-    explorerGuidance: z.string(),
-    notes: z.array(noteFields.omit({ text: true, detailedSummary: true })),
-    support: z.array(note),
-  })
-  .superRefine((value, ctx) => {
-    distinctKnown(
-      new Set(value.notes.map(({ id }) => id)),
-      value.support.map(({ id }) => id),
-      ctx,
-      ["support"],
-    );
-  });
+export const explorerInput = z.strictObject({
+  task,
+  explorerGuidance: z.string(),
+  notes: z.array(noteFields.omit({ text: true, detailedSummary: true })),
+});
 export type ExplorerInput = z.output<typeof explorerInput>;
 
 export const explorerResult = z.strictObject({
@@ -187,8 +177,6 @@ export type Verification = z.output<typeof verification>;
 
 export const coordinatorResult = z.strictObject({
   filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
-  explorerGuidance: nonblank,
-  support: z.array(noteId),
   verify: z.array(verification),
 });
 
@@ -224,7 +212,6 @@ export function coordinatorResultFor(
         path: ["filings"],
       });
     }
-    distinctKnown(known, value.support, ctx, ["support"]);
     distinctKnown(
       known,
       value.verify.map(({ note }) => note),

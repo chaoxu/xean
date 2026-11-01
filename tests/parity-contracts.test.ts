@@ -14,7 +14,8 @@ import historical from "./fixtures/v100-contracts.json";
 
 // These expected declarations and validation outcomes were captured by the
 // archived 949a385 runtime with its own frozen dependencies, never by the port.
-// Reconstruction has an intentionally different batch contract below.
+// Coordinator advice/reading fields are deliberately retired; reconstruction
+// has an intentionally different batch contract below.
 const { task, explorerGuidance } = historical.input;
 const support = note.parse(historical.input.support);
 const target = note.parse(historical.input.target);
@@ -37,7 +38,6 @@ function calls() {
       task,
       explorerGuidance,
       notes: [heading],
-      support: [support],
     }),
     coordinator: coordinatorCall({ task, notes: [support, target] }),
     source: verifierCall("source", verification, [target.id]),
@@ -46,7 +46,7 @@ function calls() {
   };
 }
 
-test("ordinary contracts retain the historical schema apart from optional Explorer navigation", () => {
+test("contracts retain historical verification schemas while retiring Coordinator advice and adding optional Explorer summaries", () => {
   const current = calls();
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const call = current[name],
@@ -62,18 +62,21 @@ test("ordinary contracts retain the historical schema apart from optional Explor
         delete item.properties![field];
       }
     }
-    expect<unknown>(
-      {
-        name: call.tool,
-        description: call.description,
-        parameters,
-      },
-      name,
-    ).toEqual({
-      name: expected.name,
-      description: expected.description,
-      parameters: expected.parameters,
-    });
+    const expectedParameters = structuredClone(
+      expected.parameters,
+    ) as z.core.JSONSchema.JSONSchema;
+    if (name === "coordinator") {
+      expect(call.description).toBe(
+        "File missing summaries and list the notes to verify with their verifiers",
+      );
+      delete expectedParameters.properties!.explorerGuidance;
+      delete expectedParameters.properties!.support;
+      expectedParameters.required = ["filings", "verify"];
+    } else {
+      expect(call.description, name).toBe(expected.description);
+    }
+    expect(call.tool, name).toBe(expected.name);
+    expect<unknown>(parameters, name).toEqual(expectedParameters);
   }
 });
 
@@ -91,7 +94,7 @@ test("Codex source retains the historical request fields and output schema with 
   }
 });
 
-test("ordinary historical submissions retain required fields and rejection of extra fields", () => {
+test("historical submissions retain required fields apart from retired Coordinator advice and reading selections", () => {
   const current = {
     ...calls(),
     codex: sourceCall({ ...profile, search: true }, verification, [target.id]),
@@ -99,18 +102,25 @@ test("ordinary historical submissions retain required fields and rejection of ex
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const schema = current[name].schema,
       expected = historical.validation[name];
-    expect(schema.safeParse(expected.value).success, name).toBe(
+    const currentValue: Record<string, unknown> = { ...expected.value };
+    const retired =
+      name === "coordinator" ? ["explorerGuidance", "support"] : [];
+    for (const field of retired) delete currentValue[field];
+    expect(schema.safeParse(currentValue).success, name).toBe(
       expected.accepted,
     );
+    if (retired.length)
+      expect(schema.safeParse(expected.value).success).toBe(false);
     for (const [field, accepted] of Object.entries(expected.missingFields)) {
-      const value: Record<string, unknown> = { ...expected.value };
+      if (retired.includes(field)) continue;
+      const value: Record<string, unknown> = { ...currentValue };
       delete value[field];
       expect(schema.safeParse(value).success, `${name} without ${field}`).toBe(
         accepted,
       );
     }
     expect(
-      schema.safeParse({ ...expected.value, extra: "not part of the contract" })
+      schema.safeParse({ ...currentValue, extra: "not part of the contract" })
         .success,
       `${name} with extra field`,
     ).toBe(expected.extraField);

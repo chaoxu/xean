@@ -71,7 +71,6 @@ const descriptor: CallDescriptor = {
   input: {
     task: { problem: "Prove 1 = 1.", completionCriteria: "Give a proof." },
     notes: [],
-    support: [],
     explorerGuidance: "Prove the claim.",
   },
 };
@@ -478,7 +477,6 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
     input: {
       ...descriptor.input,
       notes: notes.map(({ text, detailedSummary, ...index }) => index),
-      support: [notes[0]!],
     },
   };
   const read = (ids: string[], level: "detailed" | "full") =>
@@ -631,8 +629,6 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
   const call = await resolveCall(input);
   const coordination = {
     filings: [],
-    explorerGuidance: "Prove the claim.",
-    support: [],
     verify: [],
   };
   const assignmentMessages = [call.prompt];
@@ -653,7 +649,12 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
         strict: false,
       });
       return fauxAssistantMessage(
-        [fauxToolCall(call.tool, { ...coordination, support: ["n99"] })],
+        [
+          fauxToolCall(call.tool, {
+            ...coordination,
+            verify: [{ note: "n99", verifiers: ["source"] }],
+          }),
+        ],
         { stopReason: "toolUse" },
       );
     },
@@ -909,9 +910,6 @@ test("Coordinator rewinds whole input messages for corrections and size while pr
                     summary:
                       note.id === "n1" ? "Reflexivity holds." : "New claim.",
                   })),
-                explorerGuidance:
-                  "Prior Coordinator output must not become future context.",
-                support: [],
                 verify: [],
               }
             : value,
@@ -1025,8 +1023,6 @@ test("a failed Coordinator call never advances the notebook input boundary", asy
         [
           fauxToolCall(call.tool, {
             filings: [],
-            explorerGuidance: "Try the proof.",
-            support: [],
             verify: [],
           }),
         ],
@@ -1354,8 +1350,6 @@ test.each(["explorer", "coordinator"] as const)(
     };
     const coordination = {
       filings: [],
-      explorerGuidance: "Try the proof.",
-      support: [],
       verify: [],
     };
     const answer = (filings: { note: string; summary: string }[]) =>
@@ -1519,8 +1513,6 @@ test.each(["comparison failure", "comparison receipt"] as const)(
       },
       {
         filings: batch.map((note) => ({ note, summary: `Claim ${note}.` })),
-        explorerGuidance: "Verify the proof.",
-        support: [],
         verify: [
           { note: "n1", verifiers: ["source", "correctness"] },
           { note: "n2", verifiers: [...verifierNames] },

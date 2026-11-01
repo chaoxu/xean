@@ -207,8 +207,6 @@ test("external changes cannot retarget accepted proof text, support, or verdicts
     },
     {
       filings: [],
-      explorerGuidance: "Verify the claim.",
-      support: [],
       verify: [{ note: "n1", verifiers: [...verifierNames] }],
     },
     checked,

@@ -31,7 +31,7 @@ import {
 } from "./policy/contracts.ts";
 import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
-import { supportClosure, byId } from "./policy/support.ts";
+import { supportClosure } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
 import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import { verify } from "./verification.ts";
@@ -55,9 +55,7 @@ type Step = "explorer" | "coordinator" | "verifier";
 export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
   step: Step;
   turns: number;
-  guidance: string;
   guidanceThrough: number;
-  support: string[];
   pending: Verification[];
   child?: number;
 };
@@ -298,9 +296,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
         phase: "next",
         step: "explorer",
         turns: 0,
-        guidance: "",
         guidanceThrough: 0,
-        support: [],
         pending: [],
       },
     abort,
@@ -379,29 +375,17 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               }
             }
             if (state.step === "explorer") {
-              const freshGuidance = book.guidance
+              const guidance = book.guidance
                 .slice(state.guidanceThrough)
-                .map((v) => v.text);
-              state.guidanceThrough = book.guidance.length;
-              const guidance = [state.guidance, ...freshGuidance]
-                .filter(Boolean)
+                .map((v) => v.text)
                 .join("\n\n");
-              const ids = [
-                ...new Set([
-                  ...state.support,
-                  ...supportClosure(
-                    state.support.map((id) => pick(notes, id)),
-                    notes,
-                  ),
-                ]),
-              ].sort(byId);
+              state.guidanceThrough = book.guidance.length;
               const input = explorerInput.parse({
                 task: config.task,
                 explorerGuidance: guidance,
                 notes: notes.map(
                   ({ text: _text, detailedSummary: _detail, ...note }) => note,
                 ),
-                support: ids.map((id) => pick(notes, id)),
               });
               request = {
                 kind: "call",
@@ -524,8 +508,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             ).parse(result);
             for (const filing of value.filings)
               pick(book.notes, filing.note).summary = filing.summary;
-            state.guidance = value.explorerGuidance;
-            state.support = value.support;
             state.pending = value.verify;
             if (request.descriptor.input.verifyOnSolution) {
               const notes = request.descriptor.input.notes;

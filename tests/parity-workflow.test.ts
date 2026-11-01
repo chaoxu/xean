@@ -18,6 +18,7 @@ import {
   type Verification,
 } from "../src/policy/contracts.ts";
 import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
+import { guide } from "../src/inputs.ts";
 import { defineDoc, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxModels } from "./faux-models.ts";
 
@@ -61,14 +62,8 @@ const pass = (id: string, ancestors: string[] = []): JsonValue[] => [
   ...reconstruction([...ancestors, id]),
 ];
 const note = (text: string, support: string[] = []) => ({ text, support });
-const coordinate = (
-  ids: string[],
-  verify: Verification[],
-  support: string[] = [],
-) => ({
+const coordinate = (ids: string[], verify: Verification[]) => ({
   filings: ids.map((note) => ({ note, summary: `Summary ${note}.` })),
-  explorerGuidance: "Use the selected results.",
-  support,
   verify,
 });
 const labels = (calls: CallDescriptor[]) =>
@@ -273,7 +268,7 @@ test("solution-only verification waits for a nomination, then checks its depende
   expect(reconstructed?.input.notes.map(({ id }) => id)).toEqual(["n1", "n3"]);
 });
 
-test("partial batches settle before Explorer receives the index and suggested support, preserving authored summaries", async () => {
+test("partial batches settle before Explorer receives the complete index, preserving authored summaries", async () => {
   const originals = [
     {
       ...note("Lemma L."),
@@ -292,7 +287,6 @@ test("partial batches settle before Explorer receives the index and suggested su
           { note: "n1", verifiers: lemma },
           { note: "n2", verifiers: lemma },
         ],
-        ["n2"],
       ),
       check("n1"),
       check("n1"),
@@ -324,19 +318,53 @@ test("partial batches settle before Explorer receives the index and suggested su
       (note) => !("text" in note) && !("detailedSummary" in note),
     ),
   ).toBe(true);
-  expect(
-    second.input.support.map(({ id, text, verified }) => [id, text, verified]),
-  ).toEqual([
-    ["n1", "Lemma L.", true],
-    ["n2", "Lemma M.", true],
+  expect(second.input.notes.map(({ id, verified }) => [id, verified])).toEqual([
+    ["n1", true],
+    ["n2", true],
+    ["n3", false],
   ]);
-  expect(second.input.explorerGuidance).toBe("Use the selected results.");
+  expect(second.input).not.toHaveProperty("support");
+  expect(second.input.explorerGuidance).toBe("");
   expect(report.notes.map(({ id }) => id)).toEqual(["n1", "n2", "n3", "n4"]);
   expect(
     report.notes.slice(0, 3).map(({ text, support }) => ({ text, support })),
   ).toEqual(originals.map(({ text, support }) => ({ text, support })));
   expect(report.notes[0]).toMatchObject(originals[0]!);
   expect(report.accepted).toEqual([]);
+});
+
+test("operator guidance reaches only the next Explorer turn without Coordinator advice or reading selections", async () => {
+  const advice = "  Try a construction.\n";
+  let explorers = 0;
+  const drive = await fixture(
+    [1, 2, 3].flatMap((id) => [
+      { notes: [note(`Partial result ${id}.`)] },
+      coordinate([`n${id}`], []),
+    ]),
+    { maxExplorerTurns: 3 },
+    async (descriptor, owner) => {
+      if (descriptor.kind === "explorer" && ++explorers === 1)
+        await owner.root.commit(
+          (tx) => guide(tx, owner.root.id, "operator", advice),
+          BACKGROUND_CONTEXT,
+        );
+    },
+  );
+  expect((await drive.settle()).status.outcome).toBe("turn-limit");
+  const calls = drive.calls.filter((call) => call.kind === "explorer");
+  expect(calls.map((call) => call.input.explorerGuidance)).toEqual([
+    "",
+    advice,
+    "",
+  ]);
+  for (const call of calls) {
+    expect(Object.keys(call.input).sort()).toEqual([
+      "explorerGuidance",
+      "notes",
+      "task",
+    ]);
+    expect(resolveCall(call).prompt).not.toContain("Suggested reading");
+  }
 });
 
 test("reconstruction sees evidence recorded earlier in the same verifier worker", async () => {

@@ -45,7 +45,7 @@ const verdict = (
 });
 
 test("Explorer continuation is rejected and ordinary submissions have no solution flag", () => {
-  const input = { task, explorerGuidance: "", notes: [], support: [] };
+  const input = { task, explorerGuidance: "", notes: [] };
   const ordinary = explorerCall(input);
   const submitted = { notes: [{ text: "A partial result.", support: [] }] };
   expect(ordinary.schema.safeParse(submitted).success).toBe(true);
@@ -121,7 +121,16 @@ test("Explorer can append notes using live prior support but cannot edit or choo
 
 test("Coordinator requests verifier prefixes and orders support before its consumers", () => {
   const schema = coordinatorResultFor([note("n1"), note("n2", ["n1"])]);
-  const base = { filings: [], explorerGuidance: "Continue.", support: [] };
+  const base = { filings: [] };
+  for (const field of ["explorerGuidance", "support"]) {
+    expect(
+      schema.safeParse({
+        ...base,
+        verify: [],
+        [field]: field === "support" ? ["n1"] : "Try a different method.",
+      }).success,
+    ).toBe(false);
+  }
   expect(
     schema.safeParse({
       ...base,

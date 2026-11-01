@@ -1,7 +1,8 @@
 # `xean`
 
-`xean` 4.4.0 explores mathematical problems and checks proposed solutions on
-native Pi Durable. Explorer appends notes, Coordinator selects work, and Verifier
+`xean` explores mathematical problems and checks proposed solutions on
+native Pi Durable. Explorer chooses mathematical directions and appends notes.
+Coordinator files missing summaries and selects verification work. Verifier
 checks source, correctness, task requirements, and blind reconstruction.
 Acceptance requires reconstruction of both the candidate and its generated
 dependencies. Pi manages execution and recovery, records checks, and pins the
@@ -148,7 +149,7 @@ conventions, bounds, and limitations needed to apply them without reading the
 proof. Summaries preserve explicit gaps and conditional claims. Imported and
 generated notes use these fields alike.
 
-Explorer starts with the summary index and Coordinator's suggested note IDs.
+Explorer starts with the summary index and chooses which notes to read.
 It may apply a verified result from a sufficient summary and cite the note as
 support. It uses `read_notes({ids, level})` for detailed statements or full texts
 when it needs proofs, constructions, or missing details, batching up to 20 IDs
@@ -164,7 +165,7 @@ and previously checked statements for reused dependencies. Supplied summaries
 are the caller's responsibility. Source titles and chunk offsets alone cannot
 supply a theorem's statement or hypotheses.
 
-Coordinator uses summaries to select work and nominate solutions for verification.
+Coordinator uses summaries to select checks and nominate solutions for verification.
 It receives full texts only for notes lacking summaries. Supplied summaries avoid
 its initial filing pass. Include their preparation cost when comparing campaigns.
 
@@ -344,7 +345,10 @@ Pi 1.4.0 at `4a080252` owns tasks, conversations, checkpoints, and execution rec
 Retained patches are listed in [provenance](vendor/pi/provenance.json). Ordinary
 verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
-recovery, and Coordinator history construction differ from that runtime.
+recovery, and Coordinator history construction differ from that runtime. In the
+current policy, Explorer owns mathematical direction and reading choices.
+Coordinator returns only missing summaries and verification requests. Operator
+guidance through `guide` reaches the next fresh Explorer call.
 
 ## Qualification
 

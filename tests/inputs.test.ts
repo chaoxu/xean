@@ -238,8 +238,6 @@ test("terminal input remains pending without changing the completed result", asy
     supplied,
     {
       filings: [{ note: "n1", summary: "Partial result." }],
-      explorerGuidance: "Continue.",
-      support: [],
       verify: [],
     },
   ]);

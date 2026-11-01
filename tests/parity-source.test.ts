@@ -23,8 +23,6 @@ const initial: JsonValue[] = [
   { notes: [{ text: "Proof of P.", support: [] }] },
   {
     filings: [{ note: "n1", summary: "P holds." }],
-    explorerGuidance: "Prove P fully.",
-    support: [],
     verify: [{ note: "n1", verifiers: [...verifierNames] }],
   },
 ];

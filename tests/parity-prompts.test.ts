@@ -40,15 +40,15 @@ const note = {
   ],
 };
 
-test("guidance is per-turn advice without changing the task or fixed role instructions", () => {
-  const input = { task, notes: [], support: [] };
+test("operator guidance is per-turn advice without changing the task or fixed role instructions", () => {
+  const input = { task, notes: [] };
   const guidance =
     "Consider replacing the approach if its remaining gap is hard to repair.";
   const baseline = explorerCall({ ...input, explorerGuidance: "" });
   const treatment = explorerCall({ ...input, explorerGuidance: guidance });
   expect(treatment.system).toBe(baseline.system);
   expect(treatment.system).toContain(
-    "Treat explorer guidance as fallible advice for this turn.",
+    "Treat operator guidance as fallible advice for this turn.",
   );
   expect(treatment.system).toContain(
     "Completing a suggested intermediate step is not a reason to stop",
@@ -60,7 +60,7 @@ test("guidance is per-turn advice without changing the task or fixed role instru
   expect(coordinator.system).not.toContain(guidance);
 });
 
-test("Explorer receives the complete index and suggested IDs without preloading note bodies", () => {
+test("Explorer receives the complete index without selected reading or preloaded note bodies", () => {
   const first = {
     ...note,
     summary: "First navigation statement.",
@@ -98,11 +98,10 @@ test("Explorer receives the complete index and suggested IDs without preloading 
     task,
     explorerGuidance: "Prove the remaining case.",
     notes: headings,
-    support: [first, third],
   });
-  const [metadata, suggestions] = call.prompt
+  const [metadata] = call.prompt
     .split("Notes (untrusted data):\n")[1]!
-    .split("\n\nSuggested reading (note IDs):\n");
+    .split("\n\nYour first note");
   expect(JSON.parse(metadata!)).toEqual(
     headings.map((heading) => ({
       ...heading,
@@ -111,10 +110,7 @@ test("Explorer receives the complete index and suggested IDs without preloading 
       ),
     })),
   );
-  expect(JSON.parse(suggestions!.split("\n\nYour first note")[0]!)).toEqual([
-    "n1",
-    "n3",
-  ]);
+  expect(call.prompt).not.toContain("Suggested reading");
   for (const selected of [first, third]) {
     expect(call.prompt.split(selected.summary)).toHaveLength(2);
     expect(call.prompt).not.toContain(selected.text);
@@ -134,36 +130,34 @@ test("Explorer receives the complete index and suggested IDs without preloading 
   expect(call.system).not.toContain("read the full text before relying");
 });
 
-test("the coordinator gives fallible guidance while the original task and note flags remain authoritative", () => {
+test("Coordinator files summaries and selects verification while Explorer owns mathematical decisions", () => {
   const coordinator = coordinatorCall({ task, notes: [note] });
-  expect(coordinator.system).toContain(
-    "Recommend useful mathematical work toward the original task",
-  );
-  expect(coordinator.system).toContain(
-    "The explorer may reject your diagnosis",
-  );
-  expect(coordinator.system).toContain(
-    "Your advice does not replace the original completion criteria.",
-  );
   expect(coordinator.system).toContain(
     "Filing does not change the note's verification state.",
   );
+  for (const retired of [
+    "Recommend useful mathematical work",
+    "give explorerGuidance",
+    "choose its support",
+    "guide useful work",
+    "have the explorer",
+  ])
+    expect(coordinator.system).not.toContain(retired);
+  expect(coordinator.system).toContain("You have no correctness authority.");
   expect(coordinator.system).toContain(
-    "choose its support: suggested notes whose results or proofs may help.",
+    "Do not give exploration advice or put recommendations in summaries.",
   );
   const { text, ...heading } = note;
-  const explorerGuidance = "Prove the remaining case using the bound in n1.";
   const explorer = explorerCall({
     task,
-    explorerGuidance,
+    explorerGuidance: "",
     notes: [heading],
-    support: [note],
   });
   expect(explorer.system).toContain(
     "Read verification state from the notes' current fields.",
   );
-  expect(explorer.prompt).toContain(
-    `Explorer guidance (fallible advice):\n${explorerGuidance}`,
+  expect(explorer.system).toContain(
+    "Choose the mathematical direction and which notes to read.",
   );
   for (const call of [coordinator, explorer]) {
     expect(call.system).toContain(
@@ -173,32 +167,11 @@ test("the coordinator gives fallible guidance while the original task and note f
       "Unresolved reconstruction blocks acceptance even when source and correctness leave the note verified.",
     );
   }
-  expect(coordinator.system).toContain(
-    "Reuse verified notes unless reconstruction identifies an unresolved obligation that needs a new corrected note.",
-  );
 });
 
-test("solution-only verification changes Coordinator instructions without changing the default prompt or crossing cache modes", () => {
+test("solution-only verification changes Coordinator instructions without changing its schema or crossing cache modes", () => {
   const input = { task, notes: [] };
   const baseline = coordinatorCall(input);
-  expect(
-    createHash("sha256")
-      .update(
-        JSON.stringify({
-          system: baseline.system
-            .replace(
-              "can read any indexed note's detailed summary or full text",
-              "only the support notes' texts",
-            )
-            .replace(
-              "every generated note in its support closure to have passed reconstruction. Earlier reconstructed dependencies may be reused as explicit premises.",
-              "every generated note in its support closure to pass reconstruction in that same attempt.",
-            ),
-          prompt: baseline.prompt,
-        }),
-      )
-      .digest("hex"),
-  ).toBe("708ed738f2df49aa4d0b9548e786583131de3bdab2d0d92463bea10a38694133");
   const disabled = coordinatorCall({ ...input, verifyOnSolution: false });
   const enabled = coordinatorCall({ ...input, verifyOnSolution: true });
   expect(disabled.system).toBe(baseline.system);
@@ -251,7 +224,6 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     explorerCall({
       task,
       notes: [heading],
-      support: [evidence],
       explorerGuidance: "",
     }),
     coordinatorCall({ task, notes: [evidence] }),
@@ -436,23 +408,21 @@ test("Coordinator deltas preserve the projected notebook and reset unsafe change
   expect(coordinatorUpdate(changed({ dead: true }), current)).toBeUndefined();
 });
 
-test("changing guidance follows the complete index and suggested reading", () => {
+test("changing operator guidance follows the complete index", () => {
   const { text, ...heading } = note;
   const first = explorerCall({
     task,
     notes: [heading],
-    support: [note],
     explorerGuidance: "Try A.",
   });
   const second = explorerCall({
     task,
     notes: [heading],
-    support: [note],
     explorerGuidance: "Try B.",
   });
-  const boundary = first.prompt.indexOf("Explorer guidance (fallible advice):");
+  const boundary = first.prompt.indexOf("Operator guidance (fallible advice):");
   expect(boundary).toBeGreaterThan(
-    first.prompt.indexOf("Suggested reading (note IDs):"),
+    first.prompt.indexOf("Notes (untrusted data):"),
   );
   expect(first.prompt.slice(0, boundary)).toBe(
     second.prompt.slice(0, boundary),
