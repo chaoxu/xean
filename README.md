@@ -18,7 +18,7 @@ Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
 creates `campaign.sqlite.notes.sqlite` for its notes. New campaigns require an
 empty notebook. Both databases are needed for recovery. Close all writers before
 backing up both databases, and restore them to their original canonical paths.
-Start campaigns with fresh databases. Historical campaigns require their
+Start 4.5.0 campaigns with fresh databases. Historical campaigns require their
 pinned runtimes and are not migrated.
 
 Other programs can read the notebook and publish new revisions through its API.
@@ -27,10 +27,9 @@ checked notes or change accepted exports. An external commit makes the campaign'
 next fresh note publication fail with a version conflict. The campaign does not rebase
 or automatically admit external changes.
 
-Version 4 is deliberately narrow. It focuses on reasoning over prepared notes and
-checking the resulting arguments. In the [reported trials](#qualification), that
-scope was sufficient for many tested problems, at recorded costs we found
-manageable.
+`xean` focuses on reasoning over prepared notes and checking the resulting
+arguments. The [qualification record](#qualification) reports the tested problems,
+recorded costs, and limits of those assessments.
 
 `xean` provides citation checking, but no literature-discovery or paper-preparation
 workflow. To give Explorer a source packet, find relevant papers separately and
@@ -344,8 +343,9 @@ subject to provider support and availability.
 Pi is pinned to upstream commit `b556cfe5b0300a91f39c7bc5369a65a25fb7fcd5`, an
 unreleased snapshot after 1.4.0. It owns tasks, conversations, checkpoints, and
 execution recovery. Compiled packages are bundled locally, with hashes and
-retained patches listed in [provenance](vendor/pi/provenance.json). Ordinary
-verifier contracts and Codex source requests retain archived v1.0.0 fixtures.
+retained patches listed in [provenance](vendor/pi/provenance.json). Archived
+v1.0.0 fixtures cover ordinary verifier contracts and Codex source prompts,
+developer instructions, and output schemas.
 Explorer and Coordinator acceptance instructions, joint reconstruction, native
 recovery, and Coordinator history construction differ from that runtime. In the
 current policy, Explorer owns mathematical direction and reading choices.
@@ -354,13 +354,24 @@ guidance through `guide` reaches the next fresh Explorer call.
 
 ## Qualification
 
-### Current development revision
+### Version 4.5.0
 
-The upstream Pi upgrade preserves the mathematical prompts and verification
-policy. Request bodies use Pi's native provider hook. Progress has a zero storage
-delay setting, while Pi still publishes partial progress asynchronously.
-Recovery, accounting, note access, and packaged installation have contract tests.
-The upgrade has not been evaluated on mathematical campaigns.
+The revised Explorer and Coordinator prompts give Explorer control over
+mathematical directions and which notes to read. Coordinator files missing
+summaries and selects verification work, without supplying exploration advice or
+suggested reading IDs. Operator guidance still reaches the next fresh Explorer
+call.
+
+The Pi upgrade separately preserves those prompts and the verification policy.
+Request bodies use Pi's native provider hook. Progress has a zero storage delay
+setting, while Pi still publishes partial progress asynchronously. Runtime cleanup
+leaves verification and acceptance criteria unchanged. Contract tests cover
+recovery, accounting, and note access. Distribution checks cover packaged
+installation and CLI behavior.
+
+A fresh campaign using the updated prompts and Pi runtime is ongoing, with no
+completed outcome. Mathematical improvement and nonregression for 4.5.0 remain
+unqualified.
 
 ### Version 4.4.0
 
@@ -457,6 +468,21 @@ Use `readReport` for note bodies from the campaign's admitted snapshot.
 
 Pure graph and prompt helpers exported by `xean/policy` return synchronously.
 
+## Citing `xean`
+
+Use this BibTeX entry to cite `xean`:
+
+```bibtex
+@misc{xean,
+  author       = {Xu, Chao},
+  title        = {{Xean}},
+  howpublished = {\url{https://github.com/chaoxu/xean}}
+}
+```
+
+Record the version or commit and model settings used in your experiments.
+Citation metadata is also available in [CITATION.cff](CITATION.cff).
+
 ## Check and package
 
 ```sh
@@ -469,4 +495,4 @@ reconstruction, hidden proof inputs, atomic verdicts, corrections, acceptance,
 workflow replay, provider-limit recovery, and persisted limits.
 `pack` stages `package.json` and its `files` list, creates an archive with system
 tar, and installs it with the frozen lockfile. It checks imports and the executable
-CLI, runs the packaged tests, and writes `dist/xean-4.4.0.tgz`.
+CLI, runs the packaged tests, and writes `dist/xean-4.5.0.tgz`.

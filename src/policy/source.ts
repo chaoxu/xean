@@ -13,7 +13,6 @@ export const codexReasoning = z.enum([
 ]);
 
 export const codexRequest = z.strictObject({
-  protocol: z.literal("xean/codex-exec/v1"),
   model: nonblank,
   reasoning: codexReasoning,
   search: z.boolean(),

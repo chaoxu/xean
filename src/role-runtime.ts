@@ -179,7 +179,8 @@ export function createRoleRuntime() {
       const input = assignment.descriptor.input;
       const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
       if (!book) throw new Error("Campaign notebook is missing");
-      const notes = project(readNotebook(book)).notes;
+      const snapshot = readNotebook(book);
+      const notes = level === "full" ? snapshot.notes : project(snapshot).notes;
       const selected = ids.map((id) =>
         input.notes.some((note) => note.id === id)
           ? notes.find((note) => note.id === id)

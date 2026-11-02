@@ -433,32 +433,24 @@ export function sourceCall(
   profile: z.output<typeof codexProfile>,
   input: VerifierInput,
   judged: readonly string[],
-): {
-  readonly request: CodexRequest;
-  readonly schema: ReturnType<typeof sourceVerdictsFor>;
-} {
-  const schema = sourceVerdictsFor(judged);
-  return {
-    request: codexRequest.parse({
-      protocol: "xean/codex-exec/v1",
-      model: profile.model,
-      reasoning: profile.reasoning,
-      search: profile.search,
-      developerInstructions: [
-        ...verifierSystem,
-        profile.search
-          ? "Web search is your only tool."
-          : "You have no web search and no other tool.",
-        "Return one JSON object matching the output schema and nothing else.",
-      ].join(" "),
-      prompt: verifierPrompt(
-        "source",
-        input,
-        judged,
-        profile.search ? undefined : sourceObligationWithoutSearch,
-      ),
-      outputSchema: z.toJSONSchema(schema),
-    }),
-    schema,
-  };
+): CodexRequest {
+  return codexRequest.parse({
+    model: profile.model,
+    reasoning: profile.reasoning,
+    search: profile.search,
+    developerInstructions: [
+      ...verifierSystem,
+      profile.search
+        ? "Web search is your only tool."
+        : "You have no web search and no other tool.",
+      "Return one JSON object matching the output schema and nothing else.",
+    ].join(" "),
+    prompt: verifierPrompt(
+      "source",
+      input,
+      judged,
+      profile.search ? undefined : sourceObligationWithoutSearch,
+    ),
+    outputSchema: z.toJSONSchema(sourceVerdictsFor(judged)),
+  });
 }

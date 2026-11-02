@@ -237,7 +237,7 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
   );
   for (const [index, prompt] of [
     ...calls.map((c) => c.prompt),
-    native.request.prompt,
+    native.prompt,
   ].entries()) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
     expect(prompt).toContain('"verdict": "PASS"');
@@ -554,7 +554,7 @@ test("verifier and Codex prompts retain their baseline apart from declared-suppo
   );
   for (const call of [source, offline]) {
     digest.update(
-      `${historicalLabels[0]}\n${call.request.developerInstructions}\n${call.request.prompt}\n`,
+      `${historicalLabels[0]}\n${call.developerInstructions}\n${call.prompt}\n`,
     );
   }
   // Captured from pre-batch port ae15a025, normalizing only the two checks above. The old

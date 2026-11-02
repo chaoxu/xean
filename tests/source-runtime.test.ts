@@ -33,7 +33,6 @@ afterEach(async () => {
   }
 });
 const request = {
-  protocol: "xean/codex-exec/v1" as const,
   model: "fixture",
   reasoning: "low" as const,
   search: false,

@@ -1,0 +1,7 @@
+cff-version: 1.2.0
+message: "Cite this software using the metadata below."
+title: "Xean"
+authors:
+  - family-names: "Xu"
+    given-names: "Chao"
+url: "https://github.com/chaoxu/xean"

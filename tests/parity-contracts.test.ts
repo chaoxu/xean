@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import { note, verifierNames } from "../src/policy/contracts.ts";
+import {
+  note,
+  sourceVerdictsFor,
+  verifierNames,
+} from "../src/policy/contracts.ts";
 import {
   coordinatorCall,
   explorerCall,
@@ -80,24 +84,22 @@ test("contracts retain historical verification schemas while retiring Coordinato
   }
 });
 
-test("Codex source retains the historical request fields and output schema with search on or off", () => {
+test("Codex source retains historical request fields except the unused protocol marker", () => {
   for (const [name, search] of [
     ["online", true],
     ["offline", false],
   ] as const) {
     const call = sourceCall({ ...profile, search }, verification, [target.id]);
-    const { developerInstructions, prompt, ...contract } = call.request;
-    expect<unknown>(contract, name).toEqual(historical.codex[name]);
-    expect<unknown>(z.toJSONSchema(call.schema), name).toEqual(
-      historical.codex[name].outputSchema,
-    );
+    const { developerInstructions, prompt, ...contract } = call;
+    const { protocol, ...expected } = historical.codex[name];
+    expect<unknown>(contract, name).toEqual(expected);
   }
 });
 
 test("historical submissions retain required fields apart from retired Coordinator advice and reading selections", () => {
   const current = {
     ...calls(),
-    codex: sourceCall({ ...profile, search: true }, verification, [target.id]),
+    codex: { schema: sourceVerdictsFor([target.id]) },
   };
   for (const name of Object.keys(current) as (keyof typeof current)[]) {
     const schema = current[name].schema,

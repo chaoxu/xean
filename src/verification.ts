@@ -142,7 +142,7 @@ export async function verify(
       if (!dependencies.source)
         throw new Error("Codex source runtime is unavailable");
       const request = sourceCall(settings.source, input, judged);
-      const result = await dependencies.source(key, request.request, judged);
+      const result = await dependencies.source(key, request, judged);
       call = result.call;
       values = sourceVerdictsFor(judged).parse(result.value).verdicts;
     } else {

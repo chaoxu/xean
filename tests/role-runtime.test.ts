@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -36,7 +36,6 @@ import {
 import { convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { streamSimple as responsesStream } from "@earendil-works/pi-ai/api/openai-responses";
 import { z } from "zod";
-import * as prompts from "../src/policy/prompts.ts";
 import {
   createRoleRuntime,
   roleGenerationPolicy,
@@ -245,7 +244,13 @@ function wireReply(
   };
 }
 
-test("Responses optional Explorer nulls normalize before execution while raw evidence survives", async () => {
+test("Responses Explorer nulls normalize, invalid summaries and support fail, and raw evidence survives", async () => {
+  const supplied = {
+    text: "Thus 1 squared = 1.",
+    support: ["n1"],
+    summary: "The square of 1 is 1.",
+    detailedSummary: "In the real numbers, 1 squared = 1.",
+  };
   const raw = {
     notes: [
       {
@@ -254,15 +259,33 @@ test("Responses optional Explorer nulls normalize before execution while raw evi
         summary: null,
         detailedSummary: null,
       },
+      supplied,
     ],
   };
-  const expected = { notes: [{ text: raw.notes[0]!.text, support: [] }] };
+  const expected = {
+    notes: [{ text: raw.notes[0]!.text, support: [] }, supplied],
+  };
+  const rejected = [
+    { notes: [{ ...raw.notes[0]!, summary: " " }] },
+    { notes: [{ ...raw.notes[0]!, support: ["n99"] }] },
+  ];
   const fixture_ = fixture([
-    wireReply(raw, (tool) => {
+    ...rejected.map((value) => wireReply(value)),
+    wireReply(raw, (tool, transcript) => {
       const item = tool.parameters.properties.notes.items;
-      expect(item.required).toContain("summary");
-      expect(item.required).toContain("detailedSummary");
-      expect(item.properties.summary.anyOf).toContainEqual({ type: "null" });
+      for (const field of ["summary", "detailedSummary"]) {
+        expect(item.required).toContain(field);
+        expect(item.properties[field].anyOf).toContainEqual({ type: "null" });
+      }
+      const errors = transcript.messages.filter((m) => m.role === "toolResult");
+      expect(errors).toHaveLength(2);
+      expect(errors.every((m) => m.isError)).toBe(true);
+      expect(JSON.stringify(errors[0])).toContain(
+        "must contain non-whitespace text",
+      );
+      expect(JSON.stringify(errors[1])).toContain(
+        "support must name distinct notes that are not dead",
+      );
     }),
   ]);
   const { harness, invoke } = await fixture_.open();
@@ -270,24 +293,27 @@ test("Responses optional Explorer nulls normalize before execution while raw evi
     expect(
       (await harness.waitForTask(await invoke(), context)).state.outcome,
     ).toMatchObject({ status: "completed", result: { value: expected } });
-    expect(fixture_.provider.state.callCount).toBe(1);
+    expect(fixture_.provider.state.callCount).toBe(3);
     await harness.commit(async (tx) => {
       const conversations = await tx.scanConversations({}, 128);
       const entries = (
         await Promise.all(
           conversations.items.map((c) =>
-            tx.scanEntries({ conversationId: c.id }, 128),
+            tx.scanEntries({ conversationId: c.id, order: "ascending" }, 128),
           ),
         )
       ).flatMap((page) => page.items);
-      const message = entries
-        .flatMap((entry) => entry.model ?? [])
-        .find((m) => m.role === "assistant");
       expect(
-        message?.role === "assistant" &&
-          message.content.find((part) => part.type === "toolCall")?.arguments,
-      ).toEqual(raw);
-      const receipt = entries.find((entry) => ToolResultEntry.is(entry));
+        entries
+          .flatMap((entry) => entry.model ?? [])
+          .filter((m) => m.role === "assistant")
+          .flatMap((message) => message.content)
+          .filter((part) => part.type === "toolCall")
+          .map((part) => part.arguments),
+      ).toEqual([...rejected, raw]);
+      const receipt = entries
+        .filter((entry) => ToolResultEntry.is(entry))
+        .at(-1);
       expect(receipt?.model?.[0]).toMatchObject({
         role: "toolResult",
         details: expected,
@@ -296,109 +322,6 @@ test("Responses optional Explorer nulls normalize before execution while raw evi
     }, context);
   } finally {
     await harness.close(context);
-  }
-});
-
-test("Responses optional object nulls preserve mixed verdicts and contextual refinements", async () => {
-  // This control branch has no summary-correction policy. Supply only its schema
-  // as a fixture, leaving the real role adapter and native tool execution intact.
-  const correction = z.strictObject({
-    summary: z.string().refine((s) => s.trim().length > 0),
-    detailedSummary: z.string(),
-  });
-  const schema = z.strictObject({
-    verdicts: z.array(
-      z
-        .strictObject({
-          note: z.string(),
-          verdict: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]),
-          report: z.string(),
-          summaryCorrection: correction.optional(),
-        })
-        .refine(
-          (v) => !v.summaryCorrection || v.verdict === "PASS",
-          "correction requires PASS",
-        ),
-    ),
-  });
-  const original = prompts.resolveCall;
-  const override = spyOn(prompts, "resolveCall").mockImplementation(
-    (input) => ({ ...original(input), schema }),
-  );
-  const corrected = {
-    summary: "Exact claim.",
-    detailedSummary: "All hypotheses retained.",
-  };
-  const raw = {
-    verdicts: ["PASS", "FAIL", "INCONCLUSIVE", "PASS"].map((verdict, i) => ({
-      note: `n${i + 1}`,
-      verdict,
-      report: "Fixture assessment.",
-      summaryCorrection: i === 3 ? corrected : null,
-    })),
-  };
-  const rejected = (summaryCorrection: JsonValue, verdict: string) => ({
-    verdicts: [{ note: "n1", verdict, report: "Fixture.", summaryCorrection }],
-  });
-  const fixture_ = fixture([
-    wireReply(rejected(corrected, "FAIL")),
-    wireReply(rejected({ ...corrected, summary: " " }, "PASS")),
-    wireReply(raw, (tool, transcript) => {
-      const item = tool.parameters.properties.verdicts.items;
-      expect(item.required).toContain("summaryCorrection");
-      expect(item.properties.summaryCorrection.anyOf).toContainEqual({
-        type: "null",
-      });
-      const errors = transcript.messages.filter((m) => m.role === "toolResult");
-      expect(errors).toHaveLength(2);
-      expect(errors.every((m) => m.isError)).toBe(true);
-    }),
-  ]);
-  let harness: Harness | undefined;
-  try {
-    const current = await fixture_.open();
-    harness = current.harness;
-    const notes = project({
-      notes: raw.verdicts.map((v) => ({
-        id: v.note,
-        text: v.report,
-        support: [],
-      })),
-      checks: [],
-      guidance: [],
-      inputs: [],
-    }).notes;
-    const input: CallDescriptor = {
-      kind: "verifier",
-      name: "correctness",
-      judged: notes.map((n) => n.id),
-      input: {
-        task: descriptor.input.task,
-        notes,
-        support: [],
-        verify: notes.map((n) => ({
-          note: n.id,
-          verifiers: ["source", "correctness"],
-        })),
-      },
-    };
-    expect(
-      (await harness.waitForTask(await current.invoke([], input), context))
-        .state.outcome,
-    ).toMatchObject({
-      status: "completed",
-      result: {
-        value: {
-          verdicts: raw.verdicts.map(({ summaryCorrection, ...v }) =>
-            summaryCorrection ? { ...v, summaryCorrection } : v,
-          ),
-        },
-      },
-    });
-    expect(fixture_.provider.state.callCount).toBe(3);
-  } finally {
-    await harness?.close(context);
-    override.mockRestore();
   }
 });
 
