@@ -35,6 +35,7 @@ import { supportClosure } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
 import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import { verify } from "./verification.ts";
+import type { ActivityOptions } from "./activity.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
 export type SourceExecutor = (
@@ -89,8 +90,10 @@ export async function lastCampaign(tx: Tx, root: ConversationId) {
 }
 
 /** Pi owns execution and recovery. These tasks retain v1's research decisions. */
-export function createWorkflow(options: { source?: SourceExecutor } = {}) {
-  const roles = createRoleRuntime();
+export function createWorkflow(
+  options: { source?: SourceExecutor; activity?: ActivityOptions } = {},
+) {
+  const roles = createRoleRuntime(options.activity);
   const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
     name: "xean.worker",
     version: 1,

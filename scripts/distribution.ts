@@ -27,6 +27,9 @@ for (const file of [
   await access(join(root, file));
 const { open, inspect, readStatus } = await import(manifest.name);
 assert.equal(typeof open, "function");
+const { ActivityClient, createActivityHandler } = await import("xean/activity");
+assert.equal(typeof ActivityClient, "function");
+assert.equal(typeof createActivityHandler, "function");
 await using temporary = await mkdtempDisposable(
   join(tmpdir(), "xean-distribution-"),
 );

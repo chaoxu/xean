@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { Command } from "commander";
+import { z } from "zod";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { version } from "../../package.json";
 import {
@@ -13,6 +14,7 @@ import {
   guide,
 } from "../../src/index.ts";
 import { cliModels } from "./models.ts";
+import { createActivityHandler } from "../../src/activity.ts";
 
 const print = (value: unknown) =>
   Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
@@ -61,31 +63,94 @@ for (const command of ["run", "resume"] as const) {
         ? "Run or recover the current native campaign task"
         : "Explicitly resume a stopped campaign with its recorded progress",
     )
-    .action(async (campaign: string) => {
-      const owner = await open(resolve(campaign), {
-        models: await cliModels(),
-      });
-      let interrupted = false;
-      const stop = () => {
-        interrupted = true;
-        void owner.close().catch(() => {});
-      };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-      try {
-        if (command === "resume") await owner.resume();
-        if (!interrupted) await owner.root.waitForIdle(context);
-      } catch (error) {
-        if (!interrupted) throw error;
-      } finally {
-        process.off("SIGINT", stop);
-        process.off("SIGTERM", stop);
-        await owner.close();
-      }
-      await print(await inspect(resolve(campaign), readStatus));
-      if (interrupted) process.exitCode = 130;
-    });
+    .option("--activity-url <url>", "Observe and announce Explorer activity")
+    .option("--activity-scope <scope>", "Exact shared problem identity")
+    .option(
+      "--activity-owner <label>",
+      "Agent label, defaults to campaign name",
+    )
+    .action(
+      async (
+        campaign: string,
+        options: {
+          activityUrl?: string;
+          activityScope?: string;
+          activityOwner?: string;
+        },
+      ) => {
+        if (
+          (options.activityUrl ||
+            options.activityScope ||
+            options.activityOwner) &&
+          !(options.activityUrl && options.activityScope)
+        )
+          throw new Error(
+            "Activity requires --activity-url and --activity-scope",
+          );
+        const owner = await open(resolve(campaign), {
+          models: await cliModels(),
+          activity: options.activityUrl
+            ? {
+                url: options.activityUrl,
+                scope: options.activityScope!,
+                owner: options.activityOwner ?? basename(campaign),
+                token: process.env.XEAN_ACTIVITY_TOKEN || undefined,
+              }
+            : undefined,
+        });
+        let interrupted = false;
+        const stop = () => {
+          interrupted = true;
+          void owner.close().catch(() => {});
+        };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+        try {
+          if (command === "resume") await owner.resume();
+          if (!interrupted) await owner.root.waitForIdle(context);
+        } catch (error) {
+          if (!interrupted) throw error;
+        } finally {
+          process.off("SIGINT", stop);
+          process.off("SIGTERM", stop);
+          await owner.close();
+        }
+        await print(await inspect(resolve(campaign), readStatus));
+        if (interrupted) process.exitCode = 130;
+      },
+    );
 }
+program
+  .command("activity-serve")
+  .description("Serve temporary agent activity in memory")
+  .option("--hostname <host>", "Listen address", "127.0.0.1")
+  .option("--port <port>", "Listen port", "3480")
+  .action(async (options: { hostname: string; port: string }) => {
+    const token = process.env.XEAN_ACTIVITY_TOKEN || undefined;
+    if (!["127.0.0.1", "::1", "localhost"].includes(options.hostname) && !token)
+      throw new Error(
+        "Non-loopback activity serving requires XEAN_ACTIVITY_TOKEN",
+      );
+    const server = Bun.serve({
+      hostname: options.hostname,
+      port: z.coerce.number().int().min(0).max(65535).parse(options.port),
+      fetch: createActivityHandler({ token }),
+    });
+    let stop!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      stop = resolve;
+    });
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    try {
+      await print({ url: server.url.toString() });
+      await stopped;
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      await server.stop(true);
+    }
+  });
 for (const command of ["submit", "guide"] as const) {
   program
     .command(`${command} <campaign> <input>`)
