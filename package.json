@@ -18,6 +18,7 @@
     "examples/",
     "vendor/",
     "tests/",
+    "docs/faq.md",
     "README.md",
     "release-notes.md",
     "CITATION.cff",

@@ -14,6 +14,7 @@ const formatPaths = [
   "tests",
   "scripts",
   "examples",
+  "docs",
   "package.json",
   "tsconfig.json",
   "README.md",

@@ -1,16 +1,26 @@
 # `xean`
 
-`xean` explores mathematical problems and checks proposed solutions on Pi Durable.
-Explorer chooses mathematical directions and reads or appends notes. Coordinator
-files missing summaries and selects verification work. Verifier checks sources,
-correctness, task requirements, and blind reconstruction. The outer workflow is
+`xean` is a mathematical problem-solving tool for other agents. A controlling
+agent chooses a concrete problem, prepares reference notes, selects models, and
+uses the CLI or library to run and inspect a campaign. It handles literature
+discovery, computational experiments, scheduling across problems, and independent
+review of the result.
+
+Inside `xean`, Explorer chooses mathematical directions and reads or appends
+notes. Coordinator files missing summaries and selects verification work.
+Verifier checks sources, correctness, task requirements, and blind
+reconstruction. Pi Durable manages execution and recovery. The outer workflow is
 sequential, and a valid Explorer submission ends its turn.
 
-The caller prepares each problem and its reference notes, selects models, and
-inspects the result. Check current literature, including whether the exact problem
-has already been settled, before preparing a packet. Explorer has no browsing or
-code-execution tools. Literature discovery, computational experiments, scheduling
-across problems, and independent review belong to the caller.
+The design keeps research policy small and aims to reduce repeated reasoning
+costs. Explorer works from prepared notes and the model's learned mathematical
+knowledge, with no browsing or code-execution tools. The controlling agent should
+check current literature, including whether the exact problem has already been
+settled, before preparing the notes.
+
+The [FAQ](docs/faq.md) explains the design philosophy, what notes contain, the
+division of work between agents, and the limits of the system. The instructions
+below describe the current CLI and library.
 
 ## Start a campaign
 
@@ -149,9 +159,9 @@ Settings select provider, model, and reasoning level for `explorer`,
 `coordinator`, `source`, `correctness`, `requirements`, and `reconstruction`.
 Pi runs each role except the special Codex source profile below. OpenAI models
 have been exercised. Other Pi providers remain unqualified.
-`maxExplorerTurns` defaults to 10 completed Explorer submissions. Coordinator and
-queued verification still finish after the last turn. This is not a time or cost
-limit. `window` defaults to 100,000 characters for verification batches, always
+`maxExplorerTurns` defaults to 10 completed Explorer submissions. The turn cap
+does not stop Coordinator or eligible verification work. This is not a time or
+cost limit. `window` defaults to 100,000 characters for verification batches, always
 admitting at least the first entry.
 
 By default, Coordinator can request checks of intermediate notes. To wait until
