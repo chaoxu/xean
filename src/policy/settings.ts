@@ -4,16 +4,10 @@ import { THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { nonblank } from "./contracts";
 import { codexReasoning } from "./source";
 
-export const piReasoning = z.enum(THINKING_LEVELS);
-export const settingsDefaults = {
-  maxExplorerTurns: 10,
-  window: 100_000,
-} as const;
-
 export const piRoleProfile = z.strictObject({
   provider: nonblank,
   model: nonblank,
-  reasoning: piReasoning,
+  reasoning: z.enum(THINKING_LEVELS),
 });
 export type PiRoleProfile = z.output<typeof piRoleProfile>;
 
@@ -52,12 +46,8 @@ export const solveSettings = z.strictObject({
   source: sourceProfile,
   requirements: piRoleProfile,
   reconstruction: piRoleProfile,
-  maxExplorerTurns: z
-    .number()
-    .int()
-    .positive()
-    .default(settingsDefaults.maxExplorerTurns),
-  window: z.number().int().positive().default(settingsDefaults.window),
+  maxExplorerTurns: z.number().int().positive().default(10),
+  window: z.number().int().positive().default(100_000),
   verifyOnSolution: z.boolean().optional(),
 });
 export type SolveSettings = z.output<typeof solveSettings>;

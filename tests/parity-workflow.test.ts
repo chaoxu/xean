@@ -196,6 +196,8 @@ test("v1 drains requested batches at the Explorer cap and stops at the first acc
   expect(third?.kind).toBe("verifier");
   if (third?.kind !== "verifier")
     throw new Error("Missing third verification batch");
+  expect(third.input.verify).toEqual([{ note: "n3", verifiers: all }]);
+  expect(third.input.notes.map(({ id }) => id)).toEqual(["n3"]);
   expect(third.input.support.map(({ id }) => id)).toEqual(["n1", "n2"]);
   expect(third.input.support.every(({ verified }) => verified)).toBe(true);
   const argument = await exportAccepted(drive.path);
@@ -472,7 +474,7 @@ test("persisted retries reuse earlier checks and preserve the original verificat
     ).items.map((worker) => worker.state.outcome),
   );
   expect(workerOutcomes).toContainEqual({
-    status: "failed",
+    status: "faulted",
     error: { message: "verifier failed: provider disconnected" },
   });
   expect(failed.notes[0]).toMatchObject({ verified: true, dead: false });

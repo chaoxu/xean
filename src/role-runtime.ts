@@ -25,9 +25,14 @@ import {
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { applicationId, submissionTools } from "./policy/contracts.ts";
+import {
+  applicationId,
+  submissionTools,
+  type Note,
+} from "./policy/contracts.ts";
 import {
   coordinatorUpdate,
+  promptNote,
   resolveCall,
   type CallDescriptor,
   type RoleCall,
@@ -85,14 +90,8 @@ async function prefixFits(tx: Tx, boundary: InputBoundary, remaining: number) {
     for (const entry of page.items)
       for (const message of entry.model ?? [])
         if (message.role === "user")
-          remaining -=
-            typeof message.content === "string"
-              ? message.content.length
-              : message.content.reduce(
-                  (n, part) =>
-                    n + (part.type === "text" ? part.text.length : 0),
-                  0,
-                );
+          // Coordinator input boundaries contain only our string prompts.
+          remaining -= (message.content as string).length;
     if (remaining < 0) return false;
     cursor = page.next;
   } while (cursor);
@@ -105,6 +104,7 @@ async function receipt(
   conversationId: ConversationId,
   call: RoleCall,
   key: string,
+  skipAmbiguous = false,
 ): Promise<Receipt | undefined> {
   let cursor: Cursor | undefined;
   let found: Receipt | undefined;
@@ -123,13 +123,13 @@ async function receipt(
         !message.isError &&
         message.details !== undefined
       ) {
-        if (found)
+        if (found) {
+          if (skipAmbiguous) return undefined;
           throw new Error(`${call.tool} requires exactly one submission`);
+        }
         found = {
           call: entry.id,
-          value: copyJson(call.schema.parse(message.details), {
-            omitUndefinedProperties: true,
-          }) as JsonValue,
+          value: call.schema.parse(message.details) as JsonValue,
           fresh: false,
         };
       }
@@ -195,9 +195,9 @@ export function createRoleRuntime() {
         JSON.stringify(
           selected.map((note) => {
             if (level === "full") return note!.text;
-            const { text, detailedSummary, ...index } = note!;
+            const { text, detailedSummary, ...index } = note as Note;
             return {
-              ...index,
+              ...promptNote(index),
               detailedSummary: detailedSummary ?? null,
             };
           }),
@@ -260,6 +260,10 @@ export function createRoleRuntime() {
     tools: [...tools, reader],
     hooks: [
       hook(GenerationTask, {
+        onYield(answer) {
+          if (answer.stopReason === "length")
+            return { continue: roleGenerationPolicy.continuationPrompt };
+        },
         async beforeRequest({ messages, stream }, api, context) {
           const assignment = await api.snapshot(
             Assignment,
@@ -290,27 +294,21 @@ export function createRoleRuntime() {
                   },
           };
           return {
-            // Pi stores the assignment and the forked notebook input history.
-            messages: [
-              {
-                role: "system" as const,
-                content: call.system,
-                toolsAdded: [
-                  declaration,
-                  ...(call.role === "explorer"
-                    ? [
-                        {
-                          name: reader.name,
-                          description: reader.description,
-                          parameters: reader.parameters,
-                        },
-                      ]
-                    : []),
-                ],
-                timestamp: 0,
-              },
-              ...messages.filter((message) => message.role !== "system"),
-            ],
+            messages: messages.map((message) =>
+              message.role !== "system"
+                ? message
+                : {
+                    ...message,
+                    // Retain the v1 prompt without Pi's default instructions wrapper.
+                    sections: message.sections && {
+                      ...message.sections,
+                      instructions: call.system,
+                    },
+                    toolsAdded: message.toolsAdded?.map((tool) =>
+                      tool.name === call.tool ? declaration : tool,
+                    ),
+                  },
+            ),
             stream: (model, transcript, options) =>
               stream(model, transcript, {
                 ...options,
@@ -397,7 +395,7 @@ export function createRoleRuntime() {
           if (
             previous?.state.status !== "terminal" ||
             (previous.state.outcome.status !== "completed" &&
-              previous.state.outcome.status !== "failed")
+              previous.state.outcome.status !== "faulted")
           )
             continue;
           let cursor: Cursor | undefined;
@@ -414,7 +412,7 @@ export function createRoleRuntime() {
                 (await tx.submissionByRequest(child.id, key))?.status !== "done"
               )
                 continue;
-              recovered = await receipt(tx, child.id, call, key);
+              recovered = await receipt(tx, child.id, call, key, true);
               if (recovered) return;
             }
             cursor = page.next;

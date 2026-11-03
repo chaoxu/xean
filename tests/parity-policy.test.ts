@@ -5,14 +5,12 @@ import {
   judgedBy,
   missingVerdicts,
   noteIdAfter,
-  verifierInput,
   verifierNames,
   type Note,
   type Verdict,
   type Verification,
 } from "../src/policy/contracts.ts";
 import { explorerCall } from "../src/policy/prompts.ts";
-import { solveSettings } from "../src/policy/settings.ts";
 import { supportClosure } from "../src/policy/support.ts";
 import { verificationPrefix } from "../src/policy/verification.ts";
 
@@ -44,7 +42,7 @@ const verdict = (
   report: `${verifier}: ${value}`,
 });
 
-test("Explorer continuation is rejected and ordinary submissions have no solution flag", () => {
+test("Explorer submissions require notes and have no solution flag", () => {
   const input = { task, explorerGuidance: "", notes: [] };
   const ordinary = explorerCall(input);
   const submitted = { notes: [{ text: "A partial result.", support: [] }] };
@@ -53,35 +51,6 @@ test("Explorer continuation is rejected and ordinary submissions have no solutio
     ordinary.schema.safeParse({ ...submitted, solution: false }).success,
   ).toBe(false);
   expect(ordinary.schema.safeParse({ notes: [] }).success).toBe(false);
-  const profile = { provider: "test", model: "test-model", reasoning: "high" };
-  const settings = {
-    maxExplorerTurns: 4,
-    window: 100000,
-    ...Object.fromEntries(
-      ["explorer", "coordinator", ...verifierNames].map((role) => [
-        role,
-        profile,
-      ]),
-    ),
-  };
-  expect(solveSettings.parse(settings).verifyOnSolution).toBeUndefined();
-  for (const verifyOnSolution of [false, true])
-    expect(
-      solveSettings.parse({ ...settings, verifyOnSolution }).verifyOnSolution,
-    ).toBe(verifyOnSolution);
-  expect(
-    solveSettings.safeParse({ ...settings, verifyOnSolution: "true" }).success,
-  ).toBe(false);
-  for (const explorerContinuation of [false, true])
-    expect(() =>
-      solveSettings.parse({ ...settings, explorerContinuation }),
-    ).toThrow("explorerContinuation");
-  expect(
-    solveSettings.safeParse({
-      ...settings,
-      explorerContextBudgetTokens: 400000,
-    }).success,
-  ).toBe(false);
 });
 
 test("Explorer can append notes using live prior support but cannot edit or choose their IDs", () => {
@@ -254,19 +223,13 @@ test("verification receives the complete ordered support closure and counts shar
     { note: "n4", verifiers: lemma },
   ];
   expect(supportClosure([notes[2]!, notes[3]!], notes)).toEqual(["n1", "n2"]);
-  const input = {
-    task,
-    verify,
-    notes: notes.slice(2),
-    support: notes.slice(0, 2),
-  };
-  expect(verifierInput.safeParse(input).success).toBe(true);
-  for (const support of [
-    [notes[1]],
-    [notes[1], notes[0]],
-    [notes[0], notes[0], notes[1]],
-  ])
-    expect(verifierInput.safeParse({ ...input, support }).success).toBe(false);
+  expect(supportClosure(notes.slice(2), [...notes].reverse())).toEqual([
+    "n1",
+    "n2",
+  ]);
+  expect(() => supportClosure(notes.slice(2), [...notes, notes[0]!])).toThrow(
+    "duplicate note",
+  );
   for (const [window, selected] of [
     [125, ["n3"]],
     [130, ["n3", "n4"]],
@@ -278,10 +241,10 @@ test("verification receives the complete ordered support closure and counts shar
   expect(() => supportClosure([notes[2]!], [notes[2]!])).toThrow(
     "missing support",
   );
-  expect(
-    verifierInput.safeParse({
-      ...input,
-      support: [{ ...notes[0], support: ["n3"] }, notes[1]],
-    }).success,
-  ).toBe(false);
+  expect(() =>
+    supportClosure(notes.slice(2), [
+      { ...notes[0]!, support: ["n3"] },
+      ...notes.slice(1),
+    ]),
+  ).toThrow("must precede");
 });

@@ -1,6 +1,6 @@
 // Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
 import { z } from "zod";
-import { byId, supportClosure } from "./support";
+import { byId } from "./support";
 
 export const nonblank = z.string().refine((value) => value.trim().length > 0, {
   message: "must contain non-whitespace text",
@@ -9,16 +9,17 @@ const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
 
 export const applicationId = "xean-solve";
 
-export const roleNames = ["explorer", "coordinator", "verifier"] as const;
-export type RoleName = (typeof roleNames)[number];
+export type RoleName = "explorer" | "coordinator" | "verifier";
+const establishingVerifiers = ["source", "correctness"] as const;
 /** The verifiers in the order they run; the coordinator asks for a prefix of this order. */
 export const verifierNames = [
-  "source",
-  "correctness",
+  ...establishingVerifiers,
   "requirements",
   "reconstruction",
 ] as const;
 export type VerifierName = (typeof verifierNames)[number];
+export const establishes = (passed: (name: VerifierName) => boolean) =>
+  establishingVerifiers.every(passed);
 /** The submit tool for each mathematical assignment. */
 export const submissionTools = {
   explorer: "submit_notes",
@@ -42,6 +43,8 @@ export const verdict = z.strictObject({
   report: nonblank,
 });
 export type Verdict = z.output<typeof verdict>;
+export const invalidatesNote = ({ verifier, verdict }: Verdict) =>
+  verdict === "FAIL" && verifier !== "requirements";
 
 const supportIds = z
   .array(noteId)
@@ -77,7 +80,7 @@ export const submittedNotes = z.strictObject({
     .min(1),
 });
 
-const noteFields = z.strictObject({
+export const note = z.strictObject({
   id: noteId,
   ...summaries,
   text: nonblank,
@@ -87,7 +90,6 @@ const noteFields = z.strictObject({
   dead: z.boolean(),
   verification: externalVerification.optional(),
 });
-export const note = noteFields;
 export type Note = z.output<typeof note>;
 
 function distinctKnown(
@@ -106,12 +108,11 @@ function distinctKnown(
   }
 }
 
-export const explorerInput = z.strictObject({
-  task,
-  explorerGuidance: z.string(),
-  notes: z.array(noteFields.omit({ text: true, detailedSummary: true })),
-});
-export type ExplorerInput = z.output<typeof explorerInput>;
+export type ExplorerInput = {
+  task: Task;
+  explorerGuidance: string;
+  notes: Omit<Note, "text" | "detailedSummary">[];
+};
 
 export const explorerResult = z.strictObject({
   notes: z
@@ -244,57 +245,19 @@ export function coordinatorResultFor(
           path: ["verify", index, "note"],
         });
       }
-      if (entry.verifiers.includes("correctness")) {
+      if (establishes((name) => entry.verifiers.includes(name))) {
         listedWithCorrectness.add(entry.note);
       }
     }
   });
 }
 
-export const verifierInput = z
-  .strictObject({
-    task,
-    verify: z.array(verification).min(1),
-    notes: z.array(note),
-    support: z.array(note),
-  })
-  .superRefine((value, ctx) => {
-    const listed = value.verify.map(({ note }) => note);
-    if (new Set(listed).size !== listed.length) {
-      ctx.addIssue({
-        code: "custom",
-        message: "verify must list distinct notes",
-        path: ["verify"],
-      });
-    }
-    if (value.notes.map(({ id }) => id).join(",") !== listed.join(",")) {
-      ctx.addIssue({
-        code: "custom",
-        message: "notes must be the notes listed in verify, in order",
-        path: ["notes"],
-      });
-    }
-    let closure: string[];
-    try {
-      closure = supportClosure(value.notes, [...value.notes, ...value.support]);
-    } catch (error) {
-      ctx.addIssue({
-        code: "custom",
-        message: error instanceof Error ? error.message : String(error),
-        path: ["support"],
-      });
-      return;
-    }
-    if (value.support.map(({ id }) => id).join(",") !== closure.join(",")) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "support must be the complete transitive support of the notes outside them, in id order",
-        path: ["support"],
-      });
-    }
-  });
-export type VerifierInput = z.output<typeof verifierInput>;
+export type VerifierInput = {
+  task: Task;
+  verify: Verification[];
+  notes: Note[];
+  support: Note[];
+};
 export type ReconstructionPremise = Statement["statements"][number] &
   Pick<Note, "support">;
 export type ReconstructionInput = Pick<
@@ -311,9 +274,6 @@ export function pick<T extends { readonly id: string }>(
   return found;
 }
 
-const verifierIndex = (name: VerifierName): number =>
-  verifierNames.indexOf(name);
-
 /**
  * Requested roots whose preceding checks and support permit the next verifier.
  * Joint reconstruction expands these roots separately, so supporting lemmas
@@ -327,14 +287,16 @@ export function judgedBy(
   const known = new Map(
     [...input.notes, ...input.support].map((note) => [note.id, note]),
   );
-  const preceding = verifierNames.slice(0, verifierIndex(verifier));
+  const preceding = verifierNames.slice(0, verifierNames.indexOf(verifier));
+  const supportChecks = establishingVerifiers.filter((name) =>
+    preceding.includes(name),
+  );
   const passes = new Set<string>();
   const failures = new Set<string>();
   for (const value of recorded) {
     if (!preceding.includes(value.verifier)) continue;
     if (value.verdict === "PASS") passes.add(`${value.note}/${value.verifier}`);
-    if (value.verifier !== "requirements" && value.verdict === "FAIL")
-      failures.add(value.note);
+    if (invalidatesNote(value)) failures.add(value.note);
   }
   const dead = new Set<string>(),
     supported = new Set<string>();
@@ -347,7 +309,7 @@ export function judgedBy(
         (id) =>
           known.get(id)?.verified === true ||
           (supported.has(id) &&
-            preceding.slice(0, 2).every((name) => passes.has(`${id}/${name}`))),
+            supportChecks.every((name) => passes.has(`${id}/${name}`))),
       )
     )
       supported.add(note.id);

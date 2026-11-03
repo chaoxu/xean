@@ -6,7 +6,12 @@ import {
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import { isDeepStrictEqual } from "node:util";
 import type { Task, Note, Verdict } from "./policy/contracts.ts";
-import { note as noteSchema, verifierNames } from "./policy/contracts.ts";
+import {
+  establishes,
+  invalidatesNote,
+  note as noteSchema,
+  verifierNames,
+} from "./policy/contracts.ts";
 import type { SolveSettings } from "./policy/settings.ts";
 import { byId } from "./policy/support.ts";
 
@@ -23,10 +28,7 @@ export const DefinitionDoc = defineDoc({
     settings: null,
   }),
 });
-export type StoredNote = Pick<
-  Note,
-  "id" | "text" | "support" | "verification" | "summary" | "detailedSummary"
->;
+export type StoredNote = Omit<Note, "verdicts" | "verified" | "dead">;
 export type Check = { candidate: number; call: number; values: Verdict[] };
 export type NotebookState = {
   notes: StoredNote[];
@@ -132,12 +134,10 @@ export function project(book: NotebookState): {
     const attempts = Object.values(passes[entry.id] ?? {});
     const established =
       entry.verification !== undefined ||
-      attempts.some((p) => p.has("source") && p.has("correctness"));
+      attempts.some((p) => establishes((name) => p.has(name)));
     const dead =
-      reports[entry.id]?.some(
-        ({ verdict, verifier }) =>
-          verdict === "FAIL" && verifier !== "requirements",
-      ) || support.some((note) => note?.dead);
+      reports[entry.id]?.some(invalidatesNote) ||
+      support.some((note) => note?.dead);
     const verified =
       established && !dead && support.every((note) => note?.verified);
     const note = noteSchema.parse({

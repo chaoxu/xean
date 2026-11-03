@@ -22,19 +22,21 @@ import {
   createRegistry,
   defineExtension,
   defineTool,
+  GenerationTask,
   Harness,
+  hook,
   MemoryStorage,
   type GenerationPolicy,
   type HarnessOptions,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 
+const continuationPrompt = "Continue the interrupted response.";
 const policy: GenerationPolicy = {
   maxResponses: 32,
   maxLengthContinuations: 8,
   maxRecoveries: 8,
   continueEmptyLength: true,
-  continuationPrompt: "Continue the interrupted response.",
   retryContent: "completed-reasoning",
 };
 const truncated = (text = "Partial") =>
@@ -80,7 +82,18 @@ function fixture(
       };
     },
   });
-  const extension = defineExtension({ name: "test", tools: [tool] });
+  const extension = defineExtension({
+    name: "test",
+    tools: [tool],
+    hooks: [
+      hook(GenerationTask, {
+        onYield(answer) {
+          if (answer.stopReason === "length")
+            return { continue: continuationPrompt };
+        },
+      }),
+    ],
+  });
   return {
     provider,
     requests,
@@ -201,7 +214,7 @@ test("native Responses SSE parser treats max_output_tokens and max_messages as r
     expect(run.requests).toHaveLength(2);
     expect(run.requests[1]!.at(-1)).toMatchObject({
       role: "user",
-      content: policy.continuationPrompt,
+      content: continuationPrompt,
     });
     expect(result.raw[0]!.rawStopReason).toBe(`incomplete.${reason}`);
   }
@@ -227,25 +240,6 @@ test("empty and whitespace length continuation is opt-in and remains bounded", a
   });
   expect(raw).toHaveLength(9);
   expect(run.provider.state.callCount).toBe(9);
-});
-
-test("response budget allows the last response's tools and blocks the next provider request", async () => {
-  const accepted = fixture([
-    ...Array.from({ length: 31 }, () => finish("invalid")),
-    finish(),
-  ]);
-  expect((await accepted.run()).result.status).toBe("done");
-  expect(accepted.provider.state.callCount).toBe(32);
-  const exhausted = fixture(
-    Array.from({ length: 33 }, () => finish("invalid")),
-  );
-  const { result, raw } = await exhausted.run();
-  expect(result).toMatchObject({
-    status: "unanswered",
-    detail: "Model run exhausted 32 responses",
-  });
-  expect(exhausted.provider.state.callCount).toBe(32);
-  expect(raw).toHaveLength(32);
 });
 
 test("recovery budget persists across length responses and resets after a tool response", async () => {

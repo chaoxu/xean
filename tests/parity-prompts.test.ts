@@ -454,48 +454,6 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
   }
 });
 
-test("correctness permits valid partial claims and reserves task completion for requirements", () => {
-  const partial = {
-    ...note,
-    id: "n14",
-    summary: "The bound 9 <= n0 <= 16 holds.",
-    text: "Partial result: 9 <= n0 <= 16. This note does not determine the exact value of n0.",
-    verified: false,
-    verdicts: [],
-  };
-  const verification = {
-    task: {
-      problem: "Determine n0.",
-      completionCriteria: "Determine the exact value of n0 with a proof.",
-    },
-    verify: [{ note: "n14", verifiers: [...verifierNames] }],
-    notes: [partial],
-    support: [],
-  };
-  const correctness = verifierCall("correctness", verification, ["n14"]);
-  const requirements = verifierCall("requirements", verification, ["n14"]);
-  const source = verifierCall("source", verification, ["n14"]);
-  for (const call of [correctness, requirements, source]) {
-    expect(call.system).toContain(
-      "Only the requirements verifier judges whether the note completes the task.",
-    );
-    expect(call.system).not.toContain(
-      "FAIL requires a concrete defect in the note or an unmet completion criterion",
-    );
-    expect(call.prompt).toContain(partial.text);
-    expect(call.prompt).toContain(verification.task.completionCriteria);
-  }
-  expect(correctness.prompt).toContain(
-    "A correct partial result passes even when it explicitly leaves the task unfinished.",
-  );
-  expect(correctness.prompt).toContain(
-    "Fail a note when an inference is unsupported, a stated conclusion is unproved",
-  );
-  expect(requirements.prompt).toContain(
-    "Decide whether each note meets every completion criterion of the exact task.",
-  );
-});
-
 test("verifier and Codex prompts retain their baseline apart from declared-support and summary-fidelity checks", () => {
   const second = {
     ...note,

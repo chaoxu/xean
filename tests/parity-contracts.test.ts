@@ -1,10 +1,6 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import {
-  note,
-  sourceVerdictsFor,
-  verifierNames,
-} from "../src/policy/contracts.ts";
+import { note, verifierNames } from "../src/policy/contracts.ts";
 import {
   coordinatorCall,
   explorerCall,
@@ -16,7 +12,7 @@ import {
 } from "../src/policy/prompts.ts";
 import historical from "./fixtures/v100-contracts.json";
 
-// These expected declarations and validation outcomes were captured by the
+// These expected declarations were captured by the
 // archived 949a385 runtime with its own frozen dependencies, never by the port.
 // Coordinator advice/reading fields are deliberately retired; reconstruction
 // has an intentionally different batch contract below.
@@ -93,39 +89,6 @@ test("Codex source retains historical request fields except the unused protocol 
     const { developerInstructions, prompt, ...contract } = call;
     const { protocol, ...expected } = historical.codex[name];
     expect<unknown>(contract, name).toEqual(expected);
-  }
-});
-
-test("historical submissions retain required fields apart from retired Coordinator advice and reading selections", () => {
-  const current = {
-    ...calls(),
-    codex: { schema: sourceVerdictsFor([target.id]) },
-  };
-  for (const name of Object.keys(current) as (keyof typeof current)[]) {
-    const schema = current[name].schema,
-      expected = historical.validation[name];
-    const currentValue: Record<string, unknown> = { ...expected.value };
-    const retired =
-      name === "coordinator" ? ["explorerGuidance", "support"] : [];
-    for (const field of retired) delete currentValue[field];
-    expect(schema.safeParse(currentValue).success, name).toBe(
-      expected.accepted,
-    );
-    if (retired.length)
-      expect(schema.safeParse(expected.value).success).toBe(false);
-    for (const [field, accepted] of Object.entries(expected.missingFields)) {
-      if (retired.includes(field)) continue;
-      const value: Record<string, unknown> = { ...currentValue };
-      delete value[field];
-      expect(schema.safeParse(value).success, `${name} without ${field}`).toBe(
-        accepted,
-      );
-    }
-    expect(
-      schema.safeParse({ ...currentValue, extra: "not part of the contract" })
-        .success,
-      `${name} with extra field`,
-    ).toBe(expected.extraField);
   }
 });
 

@@ -6,7 +6,7 @@ import {
   type UsageState,
 } from "@earendil-works/pi-durable";
 import { definition, Notebook, project, readNotebook } from "./state.ts";
-import type { Note } from "./policy/contracts.ts";
+import { pick, type Note } from "./policy/contracts.ts";
 import { byId, supportClosure } from "./policy/support.ts";
 
 import {
@@ -75,10 +75,5 @@ export function acceptedArgument(notes: Note[], candidateId: string): string {
   const candidate = notes.find((note) => note.id === candidateId);
   if (!candidate) throw new Error("Accepted candidate is missing");
   const ids = [...supportClosure([candidate], notes), candidateId].sort(byId);
-  return ids
-    .map((id) => {
-      const note = notes.find((item) => item.id === id)!;
-      return `## ${note.id}\n\n${note.text}\n`;
-    })
-    .join("\n");
+  return ids.map((id) => `## ${id}\n\n${pick(notes, id).text}\n`).join("\n");
 }

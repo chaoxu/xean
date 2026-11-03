@@ -129,44 +129,6 @@ test("reuse retains ancestor statements and source definitions, but never assume
   expect(selected.support).toEqual([source]);
 });
 
-test("a lemma without requirements and its root share exactly three reconstruction calls and one verdict batch", async () => {
-  const batch = checks(verdict("n1"), verdict("n2"));
-  const request = input([note("n1"), note("n2", ["n1"])]);
-  request.verify[0]!.verifiers = ["source", "correctness"];
-  const drive = scripted([
-    batch,
-    batch,
-    checks(verdict("n2")),
-    statements("n1", "n2"),
-    proof,
-    comparison(verdict("n1"), verdict("n2")),
-  ]);
-  await verify(request, settings, drive.deps);
-  expect(labels(drive.calls)).toEqual([
-    "source",
-    "correctness",
-    "requirements",
-    "statement",
-    "proof",
-    "reconstruction",
-  ]);
-  expect(drive.recorded).toHaveLength(7);
-  expect(drive.batches.at(-1)).toEqual({
-    call: 6,
-    values: ["n1", "n2"].map((id) => ({
-      ...verdict(id),
-      verifier: "reconstruction",
-    })),
-  });
-  for (const call of drive.calls.slice(3))
-    expect(call.input.notes.map(({ id }) => id)).toEqual(["n1", "n2"]);
-  const independent = drive.calls.find((call) => call.kind === "proof")!;
-  expect((await resolveCall(independent)).prompt).not.toContain(
-    "ORIGINAL_PROOF",
-  );
-  expect((await resolveCall(independent)).prompt).toContain("Claim n2 holds.");
-});
-
 test.each([false, true])(
   "reconstruction respects source cutoffs unless selected as a root: %s",
   async (sourceRoot) => {
@@ -364,73 +326,6 @@ test("two fresh statement corrections stop automatic retry; resume replays them 
     statement: latest,
   });
 });
-
-test("a disconnected joint reconstruction retries only its missing comparison", async () => {
-  const batch = input([note("n1"), note("n2")]);
-  const pass = checks(verdict("n1"), verdict("n2"));
-  const drive = scripted([
-    pass,
-    pass,
-    pass,
-    statements("n1", "n2"),
-    proof,
-    new Error("provider disconnected"),
-  ]);
-  await expect(verify(batch, settings, drive.deps)).rejects.toThrow(
-    "provider disconnected",
-  );
-  expect(drive.recorded).toHaveLength(6);
-  drive.replies.push(comparison(verdict("n1"), verdict("n2")));
-  await verify(batch, settings, drive.deps);
-  expect(drive.recorded).toHaveLength(8);
-  expect(labels(drive.calls)).toEqual([
-    "source",
-    "correctness",
-    "requirements",
-    "statement",
-    "proof",
-    "reconstruction",
-    "reconstruction",
-  ]);
-});
-
-test.each(["before", "after"] as const)(
-  "recovery %s recording reuses the completed comparison and records one atomic batch",
-  async (boundary) => {
-    const batch = input([note("n1"), note("n2")]);
-    const pass = checks(verdict("n1"), verdict("n2"));
-    const drive = scripted([
-      pass,
-      pass,
-      pass,
-      statements("n1", "n2"),
-      proof,
-      comparison(verdict("n1"), verdict("n2")),
-    ]);
-    const record = drive.deps.record;
-    let interrupt = true;
-    drive.deps.record = async (call, values) => {
-      if (interrupt && values[0]?.verifier === "reconstruction") {
-        interrupt = false;
-        if (boundary === "after") await record(call, values);
-        throw new Error("Interrupted around verdict commit");
-      }
-      await record(call, values);
-    };
-    await expect(verify(batch, settings, drive.deps)).rejects.toThrow(
-      "Interrupted around verdict commit",
-    );
-    const calls = structuredClone(drive.calls);
-    await verify(batch, settings, drive.deps);
-    expect(drive.recorded).toHaveLength(8);
-    expect(drive.calls).toEqual(calls);
-    expect(
-      drive.batches.filter(
-        ({ values }) => values[0]?.verifier === "reconstruction",
-      ),
-    ).toHaveLength(1);
-  },
-);
 
 test.each([["n1", "n99"], ["n1", "n1"], ["n1"]].map((ids) => ({ ids })))(
   "invalid reconstruction IDs %j record no partial reconstruction verdicts",

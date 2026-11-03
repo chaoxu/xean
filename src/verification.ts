@@ -9,7 +9,6 @@ import {
   sourceVerdictsFor,
   statementsFor,
   verdictsFor,
-  verifierInput,
   verifierNames,
   type ReconstructionInput,
   type Verdict,
@@ -107,11 +106,10 @@ async function reconstruct(
 
 /** Native callbacks own calls, recovery, and atomic batch verdicts. */
 export async function verify(
-  inputValue: VerifierInput,
+  input: VerifierInput,
   settings: SolveSettings,
   dependencies: VerificationDependencies,
 ): Promise<void> {
-  let input = verifierInput.parse(inputValue);
   for (const name of verifierNames) {
     input = (await dependencies.refresh?.(input)) ?? input;
     if (name === "reconstruction") {

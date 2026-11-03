@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
-import {
-  stream,
-  streamSimple,
-} from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { streamSimple } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
 const model: Model<"openai-codex-responses"> = {
   id: "fixture",
@@ -28,13 +25,9 @@ const apiKey = `e30.${Buffer.from(
   }),
 ).toString("base64url")}.fixture`;
 
-async function capture(
-  simple: boolean,
-  selected: typeof model,
-  maxTokens?: number,
-) {
+async function capture(selected: typeof model, maxTokens?: number) {
   let payload: unknown;
-  const result = await (simple ? streamSimple : stream)(selected, context, {
+  const result = await streamSimple(selected, context, {
     apiKey,
     transport: "sse",
     ...(maxTokens === undefined ? {} : { maxTokens }),
@@ -50,29 +43,20 @@ async function capture(
   return payload as Record<string, unknown>;
 }
 
-test.each([false, true])(
-  "Codex adapter owns explicit and default output limits (simple=%s)",
-  async (simple) => {
-    const selected = { ...model, compat: { supportsMaxOutputTokens: true } };
-    expect((await capture(simple, selected, 128)).max_output_tokens).toBe(128);
-    expect((await capture(simple, selected)).max_output_tokens).toBe(
-      model.maxTokens,
-    );
-  },
-);
+test("Codex adapter owns explicit and default output limits", async () => {
+  const selected = { ...model, compat: { supportsMaxOutputTokens: true } };
+  expect((await capture(selected, 128)).max_output_tokens).toBe(128);
+  expect((await capture(selected)).max_output_tokens).toBe(model.maxTokens);
+});
 
-test.each([false, true])(
-  "Codex output limit stays omitted without explicit compatibility opt-in (simple=%s)",
-  async (simple) => {
-    const baseline = await capture(simple, model);
-    expect(baseline).not.toHaveProperty("max_output_tokens");
-    expect(await capture(simple, model, 128)).toEqual(baseline);
-    expect(
-      await capture(
-        simple,
-        { ...model, compat: { supportsMaxOutputTokens: false } },
-        128,
-      ),
-    ).toEqual(baseline);
-  },
-);
+test("Codex output limit stays omitted without explicit compatibility opt-in", async () => {
+  const baseline = await capture(model);
+  expect(baseline).not.toHaveProperty("max_output_tokens");
+  expect(await capture(model, 128)).toEqual(baseline);
+  expect(
+    await capture(
+      { ...model, compat: { supportsMaxOutputTokens: false } },
+      128,
+    ),
+  ).toEqual(baseline);
+});

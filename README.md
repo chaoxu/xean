@@ -1,42 +1,16 @@
 # `xean`
 
-`xean` explores mathematical problems and checks proposed solutions on
-native Pi Durable. Explorer chooses mathematical directions and appends notes.
-Coordinator files missing summaries and selects verification work. Verifier
-checks source, correctness, task requirements, and blind reconstruction.
-Acceptance requires reconstruction of both the candidate and its generated
-dependencies. Pi manages execution and recovery, records checks, and pins the
-admitted note snapshot. Admitted notes live in a separate SQLite notebook.
+`xean` explores mathematical problems and checks proposed solutions on Pi Durable.
+Explorer chooses mathematical directions and reads or appends notes. Coordinator
+files missing summaries and selects verification work. Verifier checks sources,
+correctness, task requirements, and blind reconstruction. The outer workflow is
+sequential, and a valid Explorer submission ends its turn.
 
-Campaign isolation is deliberate. `xean` never transfers notes, verification
-trust, or reconstructed proofs between campaigns. Reconstruction reuses
-previously reconstructed supporting notes from the same campaign. Selected
-candidates still receive fresh reconstruction.
-
-The bundled `@chaoxu/notebook-store` package has no dependency on Pi or `xean`.
-Installing `xean` installs it automatically. A campaign at `campaign.sqlite`
-creates `campaign.sqlite.notes.sqlite` for its notes. New campaigns require an
-empty notebook. Both databases are needed for recovery. Close all writers before
-backing up both databases, and restore them to their original canonical paths.
-Start 4.5.0 campaigns with fresh databases. Historical campaigns require their
-pinned runtimes and are not migrated.
-
-Other programs can read the notebook and publish new revisions through its API.
-Campaign reads stay pinned to admitted content. External edits do not replace
-checked notes or change accepted exports. An external commit makes the campaign's
-next fresh note publication fail with a version conflict. The campaign does not rebase
-or automatically admit external changes.
-
-`xean` focuses on reasoning over prepared notes and checking the resulting
-arguments. The [qualification record](#qualification) reports the tested problems,
-recorded costs, and limits of those assessments.
-
-`xean` provides citation checking, but no literature-discovery or paper-preparation
-workflow. To give Explorer a source packet, find relevant papers separately and
-convert their texts into notes with provenance, exact hypotheses, and conventions.
-The optional Codex source verifier can retrieve cited results while checking
-notes. It does not automatically import papers into the notebook. See
-[paper admission](#supply-papers-and-notes) and [source verification](#source-verification).
+The caller prepares each problem and its reference notes, selects models, and
+inspects the result. Check current literature, including whether the exact problem
+has already been settled, before preparing a packet. Explorer has no browsing or
+code-execution tools. Literature discovery, computational experiments, scheduling
+across problems, and independent review belong to the caller.
 
 ## Start a campaign
 
@@ -49,14 +23,7 @@ cp examples/task.json task.json
 cp examples/settings.json settings.json
 ```
 
-The example settings use `openai/gpt-6-astra` with `max` reasoning. Set
-`OPENAI_API_KEY` before running. For a supported subscription, use `bun run pi`
-and `/login`, then select the matching Pi provider and model in settings.
-The CLI reads Pi credentials from `~/.pi/agent/auth.json`.
-It also loads custom providers and model overrides from `~/.pi/agent/models.json`.
-`PI_CODING_AGENT_DIR` selects another Pi configuration directory.
-
-Edit `task.json` to state the exact problem and what counts as completion:
+Edit `task.json` to state the exact problem and completion criteria:
 
 ```json
 {
@@ -65,53 +32,52 @@ Edit `task.json` to state the exact problem and what counts as completion:
 }
 ```
 
-Set the models and [verification timing](#when-verification-runs) before
-initialization. `init` freezes the task and settings without model calls:
+The [example settings](examples/settings.json) use `openai/gpt-6-astra` with
+`max` reasoning. Set `OPENAI_API_KEY`. For a supported subscription, use
+`bun run pi` and `/login`, then select the matching Pi provider and model.
+The CLI reads credentials from `~/.pi/agent/auth.json` and custom providers and
+model overrides from `~/.pi/agent/models.json`. `PI_CODING_AGENT_DIR` selects
+another Pi configuration directory.
+
+`init` freezes the task and settings without model calls. Submit any
+[reference notes](#supply-papers-and-notes) before the first `run`:
 
 ```sh
 bun run xean init task.json .xean/demo.sqlite settings.json
-```
-
-If the task needs reference notes, [submit them](#supply-papers-and-notes) now,
-before the first `run`. The elementary example needs none.
-
-```sh
 bun run xean run .xean/demo.sqlite
 ```
 
-While it runs, another terminal can read progress without starting model calls:
+Another terminal can inspect progress without starting models:
 
 ```sh
 bun run xean status .xean/demo.sqlite
 bun run xean inspect .xean/demo.sqlite
 ```
 
-Read the outcome: `accepted`, `turn-limit`, or `call-failure`. A successful process
-exit alone does not establish acceptance. After `accepted`, save the argument:
+Read the outcome: `accepted`, `turn-limit`, or `call-failure`. Process exit alone
+does not establish acceptance. After `accepted`, export the note texts and their
+support as Markdown:
 
 ```sh
 bun run xean export .xean/demo.sqlite > accepted.md
 ```
 
-Keep both databases as the record of the attempt. Acceptance is an internal model
-judgment. [Independent review](#what-does-accepted-mean) remains separate.
+Acceptance ends the campaign. A different target requires a new campaign.
 
 ## Supply papers and notes
 
-`submit` accepts text notes, not PDFs or arbitrary files. Convert relevant paper
-text into `notes.json`. Preserve definitions, hypotheses, conventions, and source
-provenance. To admit an established result as an external premise:
+`submit` accepts JSON text notes. Save relevant paper passages as `notes.json`
+in this format, preserving definitions, hypotheses, conventions, limitations,
+and source versions. Citations and URLs belong in `text`:
 
 ```json
 {
   "notes": [
     {
-      "text": "Source excerpt, including hypotheses and conventions.",
-      "support": [],
-      "verification": {
-        "source": "Paper title, version, and section",
-        "report": "Caller admits the established results under their stated hypotheses."
-      }
+      "summary": "Result and its exact scope, or the unresolved question.",
+      "detailedSummary": "Definitions, hypotheses, conclusion, and limitations.",
+      "text": "Full statement or excerpt, with paper title, version, section, URL, and any uncertainty about applicability.",
+      "support": []
     }
   ]
 }
@@ -121,84 +87,105 @@ After `init`, while the campaign owner is closed:
 
 ```sh
 bun run xean submit .xean/demo.sqlite notes.json --id initial-notes
+bun run xean inspect .xean/demo.sqlite
+bun run xean run .xean/demo.sqlite
 ```
 
-`--id` identifies the submission. `xean` assigns note IDs at intake. A note's
-`support` may name only existing notes that are not dead, not new notes in the
-same submission. Use `inspect` to read assigned IDs. Repeating the same submission
-ID and content is idempotent. Reusing an ID with different content fails.
-New submissions require the notebook head to match the campaign's pinned version.
+`inspect` shows queued `inputs` until execution admits them at its next intake
+boundary. `xean` assigns note IDs then. Caller-supplied `support` can name only
+existing notes that are not dead, excluding new notes in the same submission.
+Repeating an ID and identical content is idempotent. Reusing the ID with different
+content fails. Submission does not start models or reopen a terminal result.
 
-The optional `verification` attestation grants source and correctness trust when
-the note serves as support. A directly nominated candidate still receives its
-requested checks and reconstruction. Admit only established results at their
-exact scope. Conjectures retain their status, and applications require checking.
-Omit `verification` for notes needing ordinary checks. `verified` is derived,
-not a submitted field.
+Ordinary notes omit `verification` and receive normal checks when selected.
+State each nonroutine external theorem as a separate note with its exact
+hypotheses, conclusion, and citation. Applications name that note in `support`.
+Routine facts need no separate note. To admit an established result explicitly
+as a premise, the caller may add:
 
-These commands queue input without starting models or reopening a terminal
-result. To add input to an interrupted CLI campaign, close its owner, submit,
-then run again. Cross-process admission to an active owner is not implemented.
+```json
+{
+  "verification": {
+    "source": "Paper title, version, and section",
+    "report": "Caller admits the established result under its stated hypotheses."
+  }
+}
+```
+
+This attestation grants source and correctness trust when the note serves as
+support. A directly nominated candidate still requires its requested checks and
+reconstruction. Admit results only at their exact scope, retain conjectures and
+gaps as such, and check applications. `verified` is derived, not a submitted field.
+
+Mathematical text is append-only. Corrections use new notes. For short, fallible
+advice to the next fresh Explorer call, close the owner and use:
+
+```sh
+bun run xean guide .xean/demo.sqlite guidance.txt --id try-construction
+```
+
+Guidance preserves the frozen task and does not interrupt a running call.
+Cross-process admission to an active owner is not implemented.
 
 ## Reading notes
 
-Every note has authoritative full `text` and may also carry a short `summary`
-and a `detailedSummary`. A detailed summary states the results with the definitions, hypotheses,
-conventions, bounds, and limitations needed to apply them without reading the
-proof. Summaries preserve explicit gaps and conditional claims. Imported and
-generated notes use these fields alike.
+Full `text` is authoritative. Optional `summary` and `detailedSummary` fields
+state results, hypotheses, conventions, bounds, limitations, and explicit gaps
+without reproducing the proof. Supplied summaries are the caller's responsibility.
+The correctness verifier checks their fidelity against the full text.
 
-Explorer starts with the summary index and chooses which notes to read.
-It may apply a verified result from a sufficient summary and cite the note as
-support. It uses `read_notes({ids, level})` for detailed statements or full texts
-when it needs proofs, constructions, or missing details, batching up to 20 IDs
-per call. A missing detailed summary is returned as `null`. Full reads return
-only the complete text strings in a JSON array, in the requested ID order.
-Pi continues the conversation after each read, and a valid `submit_notes`
-submission ends the Explorer turn.
+Explorer starts with the summary index. It can apply a verified result from a
+sufficient summary and must cite the note as support. `read_notes({ids, level})`
+reads up to 20 IDs per call. `detailed` returns statements and verification state,
+with `null` for a missing detailed summary. PASS and external-attestation report
+prose is omitted, while FAIL and INCONCLUSIVE reports remain. Full evidence stays
+available through `inspect`. `full` returns only text strings in requested order.
+Coordinator receives full text only for notes lacking summaries and files each
+missing summary once.
 
-Summaries carry the note's verification state. They do not establish unverified
-results. The correctness verifier checks summary fidelity against the full text,
-and verification reads full texts. Reconstruction uses full texts for new targets
-and previously checked statements for reused dependencies. Supplied summaries
-are the caller's responsibility. Source titles and chunk offsets alone cannot
-supply a theorem's statement or hypotheses.
+## Verification and models
 
-Coordinator uses summaries to select checks and nominate solutions for verification.
-It receives full texts only for notes lacking summaries. Supplied summaries avoid
-its initial filing pass. Include their preparation cost when comparing campaigns.
+Settings select provider, model, and reasoning level for `explorer`,
+`coordinator`, `source`, `correctness`, `requirements`, and `reconstruction`.
+Pi runs each role except the special Codex source profile below. OpenAI models
+have been exercised. Other Pi providers remain unqualified.
+`maxExplorerTurns` defaults to 10 completed Explorer submissions. Coordinator and
+queued verification still finish after the last turn. This is not a time or cost
+limit. `window` defaults to 100,000 characters for verification batches, always
+admitting at least the first entry.
 
-## Models and verification
-
-[Settings](examples/settings.json) contain profiles for `explorer`, `coordinator`,
-`source`, `correctness`, `requirements`, and `reconstruction`. Each selects a
-provider, model, and reasoning level. Pi runs these roles except when `source`
-selects the special Codex CLI profile below. OpenAI models have been exercised.
-Other Pi providers are accepted by the schema but remain unqualified.
-
-`maxExplorerTurns` defaults to 10. `window` defaults to 100,000 characters for
-verification batches, always admitting at least the first entry.
-
-### When verification runs
-
-By default, Coordinator can request checks of intermediate notes. To defer all
-verification until a claimed complete solution, initialize with:
+By default, Coordinator can request checks of intermediate notes. To wait until
+it nominates a claimed complete solution, initialize with:
 
 ```sh
 bun run xean init task.json .xean/deferred.sqlite settings.json --verify-on-solution
 ```
 
 The flag sets `verifyOnSolution: true`, also accepted in settings. All checks,
-including source search, wait until Coordinator nominates a claimed solution for
-all four verifiers. Only nominated candidates and their declared dependency
-closure are verified. The order, acceptance criteria, joint reconstruction, and
-Explorer turn allowance remain unchanged. If no solution is accepted, exploration
-continues while turns remain. This mode defaults to off and is frozen at `init`.
+including source search, wait until nomination. Only nominated candidates and
+their declared dependency closure are checked. Verification timing is frozen at
+`init`. If no solution is accepted, exploration continues while turns remain.
+
+Acceptance requires source, correctness, requirements, and reconstruction PASS
+in one attempt. Joint reconstruction covers the candidate and generated dependency
+closure. Selected candidates receive fresh reconstruction. Supporting notes may
+reuse successful reconstruction from the same campaign, and admitted verified
+source dependencies are premise leaves. Blind proof input contains extracted
+statements, declared support IDs, and admitted or reused premises. Extraction and
+comparison see the original texts, while blind proof excludes original target
+proofs and verifier reports. `verified` establishes source and correctness
+over verified support, rather than task completion.
+
+Source, correctness, or reconstruction FAIL makes a note and its dependents dead.
+Requirements FAIL can leave a useful partial result verified. INCONCLUSIVE leaves
+the check unresolved without marking the note defective. Models can make mistakes.
+Acceptance and independent model review are separate assessments, neither a formal
+proof certificate.
 
 ### Source verification
 
-The example source profile runs through Pi without web access. To let Codex look
-up citations, replace `source` with:
+The example source profile runs through Pi without web access. For citation
+lookup through Codex, replace `source` with:
 
 ```json
 {
@@ -213,264 +200,76 @@ Install Codex and authenticate with
 `codex -c 'cli_auth_credentials_store="file"' login`. The adapter reads
 `$CODEX_HOME/auth.json`, defaulting to `~/.codex/auth.json`.
 `search: false` disables search. `XEAN_CODEX_COMMAND` selects another executable.
-This profile is for the source verifier, not Explorer.
+This source-only profile checks cited results and their applicability. It does
+not discover literature or automatically import retrieved papers.
 
-Source checking assesses invoked results, declared dependencies, and applicability:
+The verifier may use supplied texts and mathematical knowledge, so PASS need not
+involve a fresh lookup. Search has no historical cutoff. Reported URLs and claims
+are not individually matched against retrieved content by the runtime.
+Codex runs with temporary configuration, user configuration and execpolicy rules
+ignored, skill instructions suppressed, and plugins disabled. Tool restrictions
+rely on that configuration, without an independent event-log audit or host-added
+process isolation. Receipts retain the validated JSON result and raw stdout/stderr.
 
-- PASS: the model finds the results and their applicability established, or finds
-  no external result to check.
-- FAIL: a concrete defect, such as a source mismatch, missing dependency, or
-  incorrect application.
-- INCONCLUSIVE: available evidence cannot settle the check.
-
-With search enabled, the verifier is instructed to open authoritative sources
-when available. Mathematical knowledge and supplied texts remain permitted, so
-every PASS need not involve a fresh lookup. Search has no historical date cutoff.
-The runtime does not match each reported URL and result against retrieved content.
-
-The Codex adapter uses temporary configuration, ignores user configuration and
-execpolicy rules, suppresses skill instructions, and disables plugins. Codex
-writes a final JSON verdict that `xean` validates. Receipts retain that result and
-raw stdout/stderr. Tool restrictions rely on Codex configuration, without an
-independent event-log audit or host-added process isolation.
-
-## FAQ
-
-### What does accepted mean?
-
-The candidate passed source, correctness, requirements, and reconstruction in one
-attempt. Its generated dependencies passed reconstruction earlier in the same
-campaign or in that batch. Reuse reads the checked statements from Pi's recorded
-comparison and keeps the notes' declared dependencies. Pi's frozen worker input
-retains the receipt references across recovery. Earlier generated proofs and
-verifier reports stay out of the blind proof input. Failed dependencies remain
-unusable.
-An admitted source dependency is a premise leaf. `verified` is weaker:
-it establishes source and correctness over verified support, not task completion.
-Models can make mistakes. Independent review is external to this campaign, and
-neither assessment is a formal proof certificate.
-
-### Can I use partial results or ask for improvements?
-
-Notes can retain partial results and failed approaches. Read them with `inspect`.
-`export` writes only accepted note texts and their support as Markdown, excluding
-summaries. It does not produce a finished research paper.
-For a better bound or generalization, state the exact improvement in the task's
-completion criteria. Acceptance ends the campaign. A further target needs a new
-campaign.
-
-### Should I use guidance or notes? Can I change them?
-
-Use notes for mathematical claims and reference material. Use `guide` for short,
-fallible advice to the next fresh Explorer call:
-
-```sh
-bun run xean guide .xean/demo.sqlite guidance.txt --id try-construction
-```
-
-Close the CLI owner before adding guidance, as for `submit`. Guidance preserves
-the frozen task and does not interrupt a running call. Mathematical note text is
-append-only, so corrections use new notes. Coordinator files summaries once.
-Explorer sees the summary index and requests detailed summaries or full texts
-through the notebook reader.
-
-### Can Explorer browse or execute code?
-
-Explorer has no web, shell, or code-execution tools. Citation lookup is confined
-to the optional [source verifier](#source-verification). Paper discovery,
-preparation, and computational experiments require an external workflow.
-
-### What happens after a failed or inconclusive check?
-
-A source, correctness, or reconstruction FAIL makes a note and its dependents
-dead. A requirements FAIL can leave a useful partial result verified.
-INCONCLUSIVE leaves the check unresolved. Neither supplies the missing acceptance
-check. If no candidate is accepted, the workflow returns to exploration while
-turns remain.
-
-A reconstruction statement correction replaces the complete statement batch and
-publishes no verdicts. The first fresh correction triggers another blind proof
-automatically. A repeated fresh correction stops with `call-failure`. Explicit
-`resume` continues from the latest corrected batch.
-
-### How do I stop, recover, and read usage?
+## Recovery, storage, and usage
 
 Ctrl-C closes the owner and preserves recorded progress. `run` recovers unfinished
-native work. After `call-failure`, inspect the error and use `resume` to retry it.
-A `turn-limit` result stays stopped. Task and settings remain frozen.
+native work. After `call-failure`, inspect the error and retry with:
+
+```sh
+bun run xean resume .xean/demo.sqlite
+```
+
+`turn-limit` stays stopped. Multiple valid role submissions fail the call, and
+resume skips that ambiguous result to make a fresh call. Reconstruction can correct its
+statement batch and retry automatically once. A repeated fresh correction stops
+with `call-failure`, and explicit `resume` uses the latest corrected batch.
+
+The independent `@chaoxu/notebook-store` package is bundled and installs with
+`xean`. A campaign at `campaign.sqlite` creates `campaign.sqlite.notes.sqlite`.
+Both databases are required for recovery. Close all writers before backing up
+both, and restore them to their original canonical paths. Use fresh databases
+for this version. Historical campaigns keep their pinned runtimes without migration.
+
+Campaigns never share notes, trust, or reconstructed proofs. Other programs may
+read the notebook and publish through its API, but campaign reads remain pinned
+to admitted content. External commits are not automatically admitted and cause
+the next fresh publication to fail with a version conflict. Existing checked
+notes and accepted exports remain unchanged. New submissions also require the
+notebook head to match the campaign's admitted version.
 
 Pi handles output limits and retryable transport errors. Long responses can
-disconnect near 15 minutes ([#24](https://github.com/chaoxu/xean/issues/24)). Retained
-reasoning and failed-response usage remain incompletely measured. `inspect`
-includes Pi's per-conversation usage ledgers, which omit some outbound attempts
-and external Codex source usage. Recorded costs can therefore be lower bounds.
-
-## Policy and implementation
-
-The policy reference is `xean` 1.0.0 at `d4af872`, with transport repair `949a385`.
-A valid Explorer submission ends its call. Joint reconstruction strengthens the
-original acceptance policy. The 3.5 implementation is preserved separately as
-`yean-3.5` at `c546de8`, a rename-only fork of `148bb128`.
-
-### Version 4.2.0 compared with 3.5
-
-The comparison describes released 4.2.0, before reconstruction reuse, and 3.5 at
-`148bb12`, including its native Explorer.
-
-| Area                            | 4.2.0 policy                                                                                                                                                                                                                                                                       | 3.5                                                                                                                                                                                                 |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Note changes                    | Mathematical content is append-only. Corrections use new notes, and Coordinator files each summary once.                                                                                                                                                                           | Revision-checked edits preserve note IDs and invalidate affected checks. Explorer edits to mathematical content revoke external trust.                                                              |
-| Context                         | Coordinator receives a compact note index, with full texts for notes lacking summaries. Explorer receives the index and suggested IDs, then requests detailed summaries or full texts as needed.                                                                                   | Coordinator and native Explorer receive note indexes and use `read_notes` for detailed summaries or full texts.                                                                                     |
-| Explorer continuation           | A valid submission ends the call. The requested verification batches finish before the next Explorer turn.                                                                                                                                                                         | Native Explorer can publish multiple submissions within its response allowance. Coordinator chooses the next worker after the worker finishes.                                                      |
-| Verification order              | Source, correctness, requirements, then reconstruction.                                                                                                                                                                                                                            | Correctness extracts checked statements and external premises before source checking, followed by requirements and reconstruction.                                                                  |
-| Missing justification           | Correctness returns FAIL for unsupported inferences or unproved assertions, except omitted routine facts.                                                                                                                                                                          | Returns INCONCLUSIVE when missing justification is the only blocker. FAIL requires a concrete defect.                                                                                               |
-| Source checks without retrieval | The source model assesses invoked results and applicability from supplied texts and mathematical knowledge.                                                                                                                                                                        | With retrieval disabled, unresolved extracted premises receive INCONCLUSIVE locally, without a model call for source checking.                                                                      |
-| Batching                        | Drains Coordinator's ordered list in text-size batches, always including the first entry. Each reconstruction stage jointly handles eligible final roots and their generated dependency closure, deduplicated and sorted by note ID.                                               | Selects batches within each stage using model context and output estimates, including reconstruction batches.                                                                                       |
-| Blind proof input               | Extracted statements and declared support IDs for every target, plus admitted source premise texts. Original target texts, summaries, verdict reports, and earlier proofs are withheld.                                                                                            | Checked statements and approved external premises across the dependency closure. Original proofs are withheld.                                                                                      |
-| Trust and acceptance            | A final root needs all four PASS checks in one attempt, with generated ancestors' reconstruction PASS in that attempt. Earlier source/correctness checks may establish support. Admitted verified source dependencies are premise leaves. Selected roots are always reconstructed. | Caller trust grants correctness and source checks. Acceptance requires reconstruction throughout the dependency closure, including externally trusted notes, and the candidate's requirements PASS. |
-
-Each eligible verification batch uses joint statement extraction, blind proof,
-and comparison. Batch verdicts publish atomically. Supporting lemmas need not
-satisfy the task's completion criteria.
-
-Coordinator uses Pi's compatible prior input boundaries to append new notes and
-changed fields. It excludes prior Coordinator reasoning and tool output, bounds
-retained input plus updates to twice the current snapshot's character count, and
-sends an exact snapshot when no boundary qualifies. Recovery retains the recorded
-parent. Stable OpenAI routing headers and preserved prefixes can support caching,
-subject to provider support and availability.
-
-Pi is pinned to upstream commit `b556cfe5b0300a91f39c7bc5369a65a25fb7fcd5`, an
-unreleased snapshot after 1.4.0. It owns tasks, conversations, checkpoints, and
-execution recovery. Compiled packages are bundled locally, with hashes and
-retained patches listed in [provenance](vendor/pi/provenance.json). Archived
-v1.0.0 fixtures cover ordinary verifier contracts and Codex source prompts,
-developer instructions, and output schemas.
-Explorer and Coordinator acceptance instructions, joint reconstruction, native
-recovery, and Coordinator history construction differ from that runtime. In the
-current policy, Explorer owns mathematical direction and reading choices.
-Coordinator returns only missing summaries and verification requests. Operator
-guidance through `guide` reaches the next fresh Explorer call.
+disconnect near 15 minutes ([#24](https://github.com/chaoxu/xean/issues/24)).
+`inspect` includes Pi's usage ledgers, which omit some outbound attempts and
+external Codex source usage. Retained reasoning and failed-response usage remain
+incompletely measured, so recorded costs can be lower bounds.
 
 ## Qualification
 
-### Version 4.5.0
+Fresh campaigns on the final Pi 1.5.0 runtime passed independent model review
+for destroying rigidity, matroid t-connectivity, and First Proof P10. The
+[release notes](release-notes.md) distinguish these runs from the earlier 4.4.0
+comparison. This bounded validation does not establish general mathematical
+nonregression or formal certification.
 
-The revised Explorer and Coordinator prompts give Explorer control over
-mathematical directions and which notes to read. Coordinator files missing
-summaries and selects verification work, without supplying exploration advice or
-suggested reading IDs. Operator guidance still reaches the next fresh Explorer
-call.
+## Library and development
 
-The Pi upgrade separately preserves those prompts and the verification policy.
-Request bodies use Pi's native provider hook. Progress has a zero storage delay
-setting, while Pi still publishes partial progress asynchronously. Runtime cleanup
-leaves verification and acceptance criteria unchanged. Contract tests cover
-recovery, accounting, and note access. Distribution checks cover packaged
-installation and CLI behavior.
+Library entry points include `open`, `inspect`, and `readReport`. Callers using
+saved Pi credentials supply authenticated `models` to `open`. Always close the
+owner after use. Pi owns execution and recovery.
+Released Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
+retained patches recorded in [provenance](vendor/pi/provenance.json).
 
-A fresh campaign using the updated prompts and Pi runtime is ongoing, with no
-completed outcome. Mathematical improvement and nonregression for 4.5.0 remain
-unqualified.
-
-### Version 4.4.0
-
-Tests cover notebook publication replay after Pi rollback, changed retry content,
-external commits, read-only inspection, and intake during recovery.
-
-Full `read_notes` results contain only the requested text strings, in request
-order. A deterministic comparison against `139ae55`, which already included that
-reader change, preserved model inputs, tool results, reconstruction reuse,
-recovery, and accepted output. Relative to that baseline, the notebook integration
-preserves the mathematical prompts, verification policy, and sequential workflow.
-
-### Version 4.3.0
-
-Version 4.3.0 added reconstruction reuse and native Pi tool-argument validation,
-and upgraded Pi to 1.4.0. The tests cover dependency invalidation, fresh
-reconstruction of selected candidates, recovery with frozen receipt references,
-provider-generated optional fields, and read-only rejection of older databases.
-The mathematical prompts and settings match the tested reconstruction-reuse
-baseline.
-
-### Version 4.2.0
-
-The note-access experiment at `96aa0d5` ran two campaigns per First Proof Batch 3
-problem with prepared source packets and `gpt-6-astra`/max. At the release
-checkpoint, 18 of 20 campaigns had passed fresh independent review. Both P08
-campaigns were still running.
-
-Among the 16 pairs with independent PASS results for both this experiment and
-4.1.0 controls, recorded solver cost fell from $254.19 to $166.10. Coordinator
-cost fell from $81.29 to $7.77. These are observed API-equivalent costs, excluding
-packet preparation, independent review, and unreported failed responses. The
-comparison combines note access with prepared summary metadata, so it does not
-isolate either change. Seven pairs finished faster, and median paired elapsed
-time increased by 4.5%.
-
-The final summary-reading change at `ad4541a` passed two live `gpt-6-luna`/high
-role checks: Explorer applied a verified result using only its detailed summary,
-and the correctness verifier rejected a summary that omitted a necessary
-hypothesis. These narrow checks do not establish full-campaign performance for
-the final prompt change.
-
-### Earlier qualification
-
-A fresh strict-cut control produced a self-contained counterexample to an
-already-disproved conjecture and passed independent `gpt-6-astra`/high review.
-TSP and First Proof P05 campaigns on `ad1f082` exercised generated dependency
-reconstruction and passed fresh independent `gpt-6-astra`/high review with complete
-original source packets. These bounded model assessments do not qualify every
-later runtime change. The specific P10 replay and broader
-[qualification work](TODO.md) remain pending.
-
-Paired Codex checks with `gpt-6-luna` demonstrated discovery and primary-paper
-retrieval for [Forni's Lemma 3.5](https://arxiv.org/pdf/0706.3981v1), returning PASS
-for the exact attribution and FAIL when conservativity was omitted. A separate
-applicability check admitted that premise. It returned PASS for applying the lemma
-to $X=\partial_\theta$ on $S^1$ with invariant volume $d\theta$, and FAIL for
-applying it to $X=\sin\theta\,\partial_\theta$.
-These checks cover that source and hypothesis distinction, not broad reliability.
-
-The earlier First Proof Batch 3 run tested `b9ee726` with curated source notes
-and source checking without web access, before joint reconstruction. All ten
-candidates were internally accepted. Independent review after source adjudication
-recorded nine PASS results and P08 INCONCLUSIVE. Recorded API-equivalent costs
-were at least $134.48 for the solver and $39.80 for independent review, excluding
-unreported usage. This run does not qualify open-ended retrieval or the stronger
-acceptance policy.
-
-## Library
-
-```ts
-import { open, inspect, readReport } from "xean";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-
-const task = await Bun.file("examples/task.json").json();
-const settings = await Bun.file("examples/settings.json").json();
-const owner = await open("campaign.sqlite", { create: { task, settings } });
-try {
-  await owner.root.waitForIdle(context);
-} finally {
-  await owner.close();
-}
-const report = await inspect("campaign.sqlite", readReport);
+```sh
+bun run check
+bun run pack
 ```
 
-`open` accepts injected Pi `models` and a `source` executor. It returns the native `harness`, root conversation, `close`, and
-`resume`. Library callers using saved Pi credentials supply authenticated
-`models`. Note records live in the external notebook. Pi retains execution
-documents, task records, checks, and frozen call inputs and results. `readReport`
-reads the campaign's admitted snapshot.
-
-The exported `Notebook` Pi document holds note IDs and a snapshot reference.
-Use `readReport` for note bodies from the campaign's admitted snapshot.
-
-Pure graph and prompt helpers exported by `xean/policy` return synchronously.
+`check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
+and writes `dist/xean-4.5.0.tgz`. `bun run check:distribution` checks packaging
+without retaining an archive.
 
 ## Citing `xean`
-
-Use this BibTeX entry to cite `xean`:
 
 ```bibtex
 @misc{xean,
@@ -480,19 +279,5 @@ Use this BibTeX entry to cite `xean`:
 }
 ```
 
-Record the version or commit and model settings used in your experiments.
+Record the version or commit and model settings used in experiments.
 Citation metadata is also available in [CITATION.cff](CITATION.cff).
-
-## Check and package
-
-```sh
-bun run check
-bun run pack
-```
-
-`check` runs TypeScript, formatting, and tests. Regressions cover joint
-reconstruction, hidden proof inputs, atomic verdicts, corrections, acceptance,
-workflow replay, provider-limit recovery, and persisted limits.
-`pack` stages `package.json` and its `files` list, creates an archive with system
-tar, and installs it with the frozen lockfile. It checks imports and the executable
-CLI, runs the packaged tests, and writes `dist/xean-4.5.0.tgz`.

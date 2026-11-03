@@ -73,8 +73,6 @@ const disabledFeatures = [
   "workspace_dependencies",
 ] as const;
 
-const fileCredentials = 'cli_auth_credentials_store="file"';
-
 async function sourceEnvironment(
   directory: string,
   inherited: NodeJS.ProcessEnv,
@@ -114,10 +112,9 @@ export function codexExec(
   const command =
     options.command ?? process.env["XEAN_CODEX_COMMAND"] ?? "codex";
   const inherited = options.environment ?? process.env;
-  let knownVersion: string | undefined;
   return async (request, signal) => {
     let directory: string | undefined;
-    let codexVersion = knownVersion;
+    let codexVersion: string | undefined;
     let stdout = "";
     let stderr = "";
     let exitCode: number | null | undefined;
@@ -128,29 +125,20 @@ export function codexExec(
       const schemaPath = join(directory, "verdict.schema.json");
       const resultPath = join(directory, "verdict.json");
       await writeFile(schemaPath, JSON.stringify(request.outputSchema));
-      if (codexVersion === undefined) {
-        const version = await runCommand(command, ["--version"], {
-          env,
-          ...(signal === undefined ? {} : { signal }),
-        });
-        const reported = version.stdout.trim();
-        if (version.cancelled) {
-          return {
-            state: "cancelled",
-            ...(reported === "" ? {} : { codexVersion: reported }),
-            stdout,
-            stderr: version.stderr,
-            error: "source verification cancelled",
-          };
-        }
-        if (version.failed || reported === "") {
-          throw new Error(
-            version.stderr || "could not determine Codex version",
-          );
-        }
-        codexVersion = reported;
-        knownVersion = reported;
+      const version = await runCommand(command, ["--version"], {
+        env,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      const reported = version.stdout.trim();
+      if (version.cancelled) {
+        codexVersion = reported || undefined;
+        stderr = version.stderr;
+        throw new Error("source verification cancelled");
       }
+      if (version.failed || reported === "") {
+        throw new Error(version.stderr || "could not determine Codex version");
+      }
+      codexVersion = reported;
       const run = await runCommand(
         command,
         [
@@ -173,32 +161,26 @@ export function codexExec(
           schemaPath,
           "--output-last-message",
           resultPath,
-          "-c",
-          fileCredentials,
-          "-c",
-          `model_reasoning_effort="${request.reasoning}"`,
           // Current Codex needs these explicit controls to retain v1's tool policy:
           // an omitted --search may allow cached search, and feature flags alone
           // do not disable model-configured subagents. Mathematical prompts stay exact.
-          ...(request.search ? [] : ["-c", 'web_search="disabled"']),
-          "-c",
-          "agents.enabled=false",
-          "-c",
-          `developer_instructions=${JSON.stringify(request.developerInstructions)}`,
-          "-c",
-          "skills.include_instructions=false",
-          "-c",
-          "include_environment_context=false",
-          "-c",
-          "include_permissions_instructions=false",
-          "-c",
-          "include_apps_instructions=false",
-          "-c",
-          "include_collaboration_mode_instructions=false",
-          "-c",
-          "project_doc_max_bytes=0",
-          "-c",
-          "tools.update_plan.enabled=false",
+          ...Object.entries({
+            cli_auth_credentials_store: "file",
+            model_reasoning_effort: request.reasoning,
+            ...(request.search ? {} : { web_search: "disabled" }),
+            "agents.enabled": false,
+            developer_instructions: request.developerInstructions,
+            "skills.include_instructions": false,
+            include_environment_context: false,
+            include_permissions_instructions: false,
+            include_apps_instructions: false,
+            include_collaboration_mode_instructions: false,
+            project_doc_max_bytes: 0,
+            "tools.update_plan.enabled": false,
+          }).flatMap(([key, value]) => [
+            "-c",
+            `${key}=${JSON.stringify(value)}`,
+          ]),
           "-C",
           directory,
           "-",
@@ -245,11 +227,8 @@ export function codexExec(
       };
     } finally {
       if (directory !== undefined) {
-        try {
-          await rm(directory, { recursive: true, force: true });
-        } catch {
-          // Cleanup must not discard the returned execution receipt.
-        }
+        // Cleanup must not discard the returned execution receipt.
+        await rm(directory, { recursive: true, force: true }).catch(() => {});
       }
     }
   };

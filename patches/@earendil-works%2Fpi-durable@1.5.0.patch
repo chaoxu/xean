@@ -1,7 +1,8 @@
 diff --git a/dist/harness/agent.js b/dist/harness/agent.js
+index de65a5e..0566214 100644
 --- a/dist/harness/agent.js
 +++ b/dist/harness/agent.js
-@@ -45,6 +45,7 @@
+@@ -45,6 +45,7 @@ export function resolveSettings(settings) {
          ...(extensions === undefined ? {} : { extensions }),
          stream: { ...settings?.stream },
          retry: { ...DEFAULT_RETRY_POLICY, ...settings?.retry },
@@ -10,6 +11,7 @@ diff --git a/dist/harness/agent.js b/dist/harness/agent.js
          // Field by field, so an explicitly undefined interval keeps its default.
          progress: {
 diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
+index e79adbf..a462f0f 100644
 --- a/dist/harness/context.d.ts
 +++ b/dist/harness/context.d.ts
 @@ -1,8 +1,11 @@
@@ -26,7 +28,7 @@ diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
  /** Head marker and newest visible entry that fix one committed context range. */
  export type ContextBounds = {
      readonly head: (EntryRecord & {
-@@ -54,19 +57,19 @@
+@@ -54,19 +57,19 @@ type Baseline = Message | null | undefined;
   * keeps the range for `advanceRange()` checks `current` again, synchronously where it installs it: a commit can be
   * published between this function's return and the caller's continuation.
   */
@@ -50,6 +52,7 @@ diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
  export declare function rangeEntry(range: ContextRange, id: EntryId): EntryRecord | undefined;
  /**
 diff --git a/dist/harness/context.js b/dist/harness/context.js
+index b64a1ec..b2bfde5 100644
 --- a/dist/harness/context.js
 +++ b/dist/harness/context.js
 @@ -1,5 +1,8 @@
@@ -61,7 +64,7 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
  const SCAN_PAGE_SIZE = 256;
  const EXCLUDED_STOP_REASONS = new Set(["aborted", "error", "deferred"]);
  const MISSING_RESULT_TEXT = "Tool result unavailable: history ends before this call completed.";
-@@ -33,11 +36,16 @@
+@@ -33,11 +36,16 @@ visible = false) {
   * keeps the range for `advanceRange()` checks `current` again, synchronously where it installs it: a commit can be
   * published between this function's return and the caller's continuation.
   */
@@ -79,7 +82,7 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
      freezeJson(bounds.head);
      const current = at === undefined;
      let range;
-@@ -72,9 +80,9 @@
+@@ -72,9 +80,9 @@ export async function readContextFrom(session, storage, conversationId, context,
      };
  }
  /** Committed context of one conversation: bounds captured on the Session line, entries derived off it. */
@@ -91,7 +94,7 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
  }
  /**
   * Derive the active transcript and model context of one conversation within captured bounds.
-@@ -82,10 +90,10 @@
+@@ -82,10 +90,10 @@ export async function readContext(session, storage, conversationId, context, at)
   * H = newest visible head marker; the range runs from `H.head` (or transcript start) through the tail. Per target,
   * the newest edit in the range wins. Context entries are H followed by the range's non-head entries.
   */
@@ -104,7 +107,7 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
  }
  function emptyView() {
      return { head: undefined, entries: [], contributions: [], messages: [] };
-@@ -131,14 +139,15 @@
+@@ -131,14 +139,15 @@ export function advanceRange(range, appended) {
      return deriveRange(bounds, entries, true);
  }
  /** Derive the context view from the entries scanned within `bounds`. */
@@ -122,7 +125,7 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
      const { settled, open } = settle([], contributions.flat());
      const baseline = findBaseline(bounds.head, active);
      const messages = leadWithSystem([...settled, ...orderToolResults(open)], baseline);
-@@ -209,11 +218,72 @@
+@@ -209,11 +218,72 @@ function leadWithSystem(messages, baseline) {
      return [system, ...messages.slice(0, index), ...messages.slice(index + 1)];
  }
  /** One active entry's model messages after its edit and excluded stop reasons, before tool result ordering. */
@@ -198,9 +201,10 @@ diff --git a/dist/harness/context.js b/dist/harness/context.js
  /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
  const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+index ac42dfe..723cdc3 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
  import { defineTask } from "../tasks.js";
  import { addTools, agentHooks, sectionExtension } from "./agent.js";
  import { compactionPolicy, createCompaction, estimateContext, selectCut } from "./compaction.js";
@@ -208,7 +212,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
  import { applyBoundary, hasQueuedReset, prepareBoundary, withdrawQueuedInputs } from "./inbox.js";
  import { cutOffCount, cutOffTooOften, endRun, LiveDoc, PROGRESS_COMMIT, salvageable, } from "./live.js";
  import { PartialChanges } from "./partial-changes.js";
-@@ -16,6 +17,11 @@
+@@ -16,6 +17,11 @@ import { appendToolResult, harnessError, ToolTask } from "./tool.js";
  import { recordUsage } from "./usage.js";
  import { optionalExtension } from "./util.js";
  const DEFAULT_POLL_AFTER_MS = 5000;
@@ -220,7 +224,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
  /**
   * Built-in generation task: prepares the positional system prompt and tool loadout, requests or polls the model,
   * retries, and classifies the response. The run's inputs live in `pi.live.run`.
-@@ -63,12 +69,16 @@
+@@ -63,12 +69,16 @@ export const GenerationTask = defineTask({
                      return failModelError(runtime, compactionFailure(outcome), context);
                  }
              }
@@ -239,7 +243,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
                  return failNothingToAnswer(runtime, context);
              const shown = replaySections(view.messages);
              let env;
-@@ -138,12 +148,13 @@
+@@ -138,12 +148,13 @@ export const GenerationTask = defineTask({
              const model = runtime.models.getModel(ref.provider, ref.modelId);
              if (model === undefined)
                  return failNoModel(runtime, ref, context);
@@ -257,7 +261,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              });
              const options = {
                  ...streamOptions,
-@@ -153,7 +164,7 @@
+@@ -153,7 +164,7 @@ export const GenerationTask = defineTask({
                  ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
                  onPayload: (payload) => providerPayload(runtime, model, payload, context),
              };
@@ -266,7 +270,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
              const request = { attempt, compacted, model: ref, thinkingLevel, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
-@@ -503,7 +514,7 @@
+@@ -503,7 +514,7 @@ async function providerPayload(runtime, model, payload, context) {
   * thinking grew by and applies the argument changes since the last one (`PartialChanges`), so its cost follows the new
   * text, not the strings' length.
   */
@@ -275,7 +279,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
      const interval = runtime.settings.progress.partialIntervalMs;
      let pending;
      let timer;
-@@ -546,7 +557,7 @@
+@@ -546,7 +557,7 @@ async function streamResponse(runtime, model, messages, options, attempt, contex
          });
      };
      try {
@@ -284,7 +288,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          for await (const event of events) {
              // A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
              // never gets past it, so it never leaves a partial.
-@@ -594,19 +605,30 @@
+@@ -594,11 +605,22 @@ async function classify(runtime, request, message, context) {
          return;
      }
      await runtime.hooks.each("afterResponse", (hook) => hook(message, runtime, context));
@@ -304,12 +308,11 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          return startToolRound(runtime, request, message, calls, context);
      }
 -    if (message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse") {
--        return answer(runtime, message, context);
 +    if (incomplete || message.stopReason === "stop" || message.stopReason === "toolUse") {
-+        return answer(runtime, message, context, incomplete);
+         return answer(runtime, message, context);
      }
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
-     const settings = runtime.settings;
+@@ -606,7 +628,7 @@ async function classify(runtime, request, message, context) {
      const overflow = message.stopReason === "error" && isContextOverflow(message);
      const compaction = compactionPolicy(settings, ref);
      if (overflow && compacted === undefined && compaction.enabled) {
@@ -318,7 +321,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          if (selectCut(view, compaction.keepRecentTokens) !== undefined) {
              const text = message.errorMessage ?? "Context overflow";
              await runtime.commit(async (tx) => {
-@@ -625,7 +647,7 @@
+@@ -625,7 +647,7 @@ async function classify(runtime, request, message, context) {
      const retry = message.stopReason === "error" &&
          !overflow &&
          isRetryableAssistantError(message) &&
@@ -327,7 +330,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          attempt <= policy.maxRetries;
      const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
      await runtime.commit(async (tx) => {
-@@ -643,7 +665,15 @@
+@@ -643,7 +665,15 @@ async function classify(runtime, request, message, context) {
              };
              return { status: "sleeping", checkpoint, until };
          }
@@ -344,61 +347,7 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
          await endFailedRun(tx, runtime, live, failure, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -657,14 +687,16 @@
-  * Otherwise the run's inputs settle `done`; with `afterRun` hooks selected the run waits for the tasks they ask for,
-  * in `finish` and `drain`, before the final boundary; without, selected user items start the next run now.
-  */
--async function answer(runtime, message, context) {
--    let continuation;
-+async function answer(runtime, message, context, incomplete) {
-+    let continuation = incomplete
-+        ? runtime.settings.generation.continuationPrompt ?? "Continue from the preceding incomplete response. Finish the response; reissue any incomplete tool call with complete arguments."
-+        : undefined;
-     await runtime.hooks.each("onYield", async (hook) => {
-         if (continuation !== undefined)
-             return;
-         continuation = (await hook(message, runtime, context))?.continue;
-     });
--    const afterRun = await asksAfterRun(runtime, context);
-+    const afterRun = !incomplete && await asksAfterRun(runtime, context);
-     const conversationId = runtime.conversationId;
-     await runtime.commit(async (tx) => {
-         // Queue modes are read on the Session line, when the boundary is decided.
-@@ -672,24 +704,29 @@
-         const live = await tx.doc(LiveDoc, conversationId);
-         const entry = await appendAssistant(tx, conversationId, message);
-         const result = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
--        const continues = takesContinuation(continuation, boundary) ? continuation : undefined;
-+        const continues = (incomplete ? !hasQueuedReset(boundary.inbox.items) : takesContinuation(continuation, boundary))
-+            ? continuation : undefined;
-         if (continues === undefined && afterRun) {
-             const held = holdRun(tx, live, runtime, { reason: "answer", answer: entry.id, last: entry.id });
-             if (held !== undefined)
-                 return held;
-         }
--        const { users, first } = await applyBoundary(tx, boundary, "final", runtime.now());
-+        const { users, first } = await applyBoundary(tx, boundary, incomplete ? "postTools" : "final", runtime.now());
-         if (continues !== undefined) {
-+            if (incomplete && live.run?.taskId === runtime.taskId)
-+                live.run.inputs.push(...users);
-             const user = { role: "user", content: continues, timestamp: runtime.now() };
-             await tx.appendEntry(UserEntry, conversationId, { model: [user] });
-             // The continuation starts the run's turn count over: bounding `onYield` loops is the extension's job.
--            if (live.run?.taskId === runtime.taskId)
-+            if (!incomplete && live.run?.taskId === runtime.taskId)
-                 live.run.turns = 0;
-             handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
-             delete live.generation;
-             return result;
-         }
--        endRun(tx, live, runtime.taskId, { status: "done", answer: entry.id });
-+        endRun(tx, live, runtime.taskId, incomplete
-+            ? { status: "unanswered", reason: "reset" }
-+            : { status: "done", answer: entry.id });
-         if (users.length > 0)
-             await startRun(tx, conversationId, live, { inputs: users, first });
-         return result;
-@@ -928,6 +965,13 @@
+@@ -928,6 +958,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
   * REMINDER: every built-in writer of assistant entries goes through here, so the usage ledger stays complete.
   */
  async function appendAssistant(tx, conversationId, message) {
@@ -413,9 +362,10 @@ diff --git a/dist/harness/generation.js b/dist/harness/generation.js
      return tx.appendEntry(AssistantEntry, conversationId, { model: [message] });
  }
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
+index e286f00..d8a3768 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
-@@ -59,7 +59,7 @@
+@@ -59,7 +59,7 @@ class ConversationImpl {
          return this.#host.harness.commitWith(change, context, { conversationId: this.id }, options);
      }
      context(context, options) {
@@ -425,9 +375,10 @@ diff --git a/dist/harness/harness.js b/dist/harness/harness.js
      entries(query, limit, cursor, context) {
          const scan = conversationEntries(this.id, query);
 diff --git a/dist/harness/live.d.ts b/dist/harness/live.d.ts
+index a70aedb..d47bf84 100644
 --- a/dist/harness/live.d.ts
 +++ b/dist/harness/live.d.ts
-@@ -109,6 +109,9 @@
+@@ -109,6 +109,9 @@ export type RunFailure = {
  };
  /** Run control (spec §8.2). */
  export type LiveRun = {
@@ -438,9 +389,10 @@ diff --git a/dist/harness/live.d.ts b/dist/harness/live.d.ts
      taskId: TaskId;
      /** The run's placed inputs, settled when it ends; `[]` once it answered and runs only its `afterRun` tasks. */
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
+index 365ea3a..3ddaf26 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
-@@ -2607,7 +2607,7 @@
+@@ -2607,7 +2607,7 @@ export class TaskScheduler {
              }),
              entries: (query, limit, cursor, context) => this.#read(invocation, () => this.#session.readOnLine((storage) => storage.scanEntries(conversationEntries(invocation.conversationId, query), limit, cursor, context))),
              context: (conversationId, context, options) => this.#read(invocation, async () => {
@@ -450,9 +402,10 @@ diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
                  // Checked again here, synchronously up to the install below: a commit published since the read returned
                  // was not seen by `#advanceContexts`, so a range that missed it must not be advanced.
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index eb64e47..489eb88 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -543,12 +543,27 @@
+@@ -543,12 +543,26 @@ export type CompactionResult = {
      entryId?: EntryId;
      submissionId?: SubmissionId;
  };
@@ -462,7 +415,6 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
 +    maxLengthContinuations?: number;
 +    maxRecoveries?: number;
 +    continueEmptyLength?: boolean;
-+    continuationPrompt?: string;
 +    retryContent?: "completed-reasoning";
 +};
 +/** Request context projection; raw entries and diagnostic reads are unchanged. */
@@ -480,7 +432,7 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
      readonly compaction?: CompactionSettings;
      readonly progress?: Partial<ProgressPolicy>;
      readonly toolExecution?: ToolExecutionMode;
-@@ -593,6 +608,7 @@
+@@ -593,6 +607,7 @@ export type Settings = {
      readonly extensions?: readonly Extension[];
      readonly stream: ConversationStreamOptions;
      readonly retry: ConversationRetryPolicy;
@@ -488,7 +440,7 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
      /** Harness-wide policy over the defaults; per-model overrides apply where the model is known. */
      readonly compaction: CompactionPolicy & Pick<CompactionSettings, "modelOverrides">;
      readonly progress: ProgressPolicy;
-@@ -785,6 +801,7 @@
+@@ -785,6 +800,7 @@ export interface Conversation {
       */
      context(context: Context, options?: {
          readonly at?: EntryId;
@@ -496,7 +448,7 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
      }): Promise<ContextView>;
      /** Fork-aware history of this conversation, newest first unless `query.order` is `ascending`. */
      entries(query: Omit<EntryQuery, "conversationId">, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<EntryRecord, Cursor>>;
-@@ -891,8 +908,10 @@
+@@ -891,8 +907,10 @@ export interface GenerationHooks {
      /** Before every request attempt, including recovery; the result is used for that request only. */
      beforeRequest(request: {
          readonly messages: readonly Message[];
@@ -509,9 +461,10 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
      /**
       * After pi-ai builds the provider request body, before it is sent; the result replaces the body for that request only.
 diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 454e933..742e6f3 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -17,7 +17,7 @@
+@@ -17,7 +17,7 @@ export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from ".
  export { DURABLE_TELEMETRY_SCHEMA } from "./harness/telemetry.ts";
  export { NestedCallDoc, type NestedCallState, ToolTask, type ToolTaskCheckpoint, type ToolTaskInput, type ToolTaskResult, } from "./harness/tool.ts";
  export { ConversationTranscript, type ConversationTranscriptOptions, type EntryLoader, type TranscriptItem, type TranscriptView, } from "./harness/transcript.ts";
@@ -521,9 +474,10 @@ diff --git a/dist/index.d.ts b/dist/index.d.ts
  export type { ConversationView, ConversationWindow } from "./harness/view.ts";
  export { createSession } from "./session/session.ts";
 diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
+index bdf2b1f..a5de7f0 100644
 --- a/dist/storage/sqlite/storage.d.ts
 +++ b/dist/storage/sqlite/storage.d.ts
-@@ -3,6 +3,8 @@
+@@ -3,6 +3,8 @@ import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
  import type { CommitResult, ConversationId, ConversationQuery, ConversationRecord, Cursor, DocumentAddress, DocumentId, DocumentPoint, DocumentQuery, DocumentRecord, EntryId, EntryQuery, EntryRecord, Id, Page, Seq, Storage, StorageWrite, StoredDocument, SubmissionId, SubmissionQuery, SubmissionRecord, TaskId, TaskQuery, TaskRecord } from "../../types.ts";
  type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
  export type SqliteStorageOptions = {
@@ -532,7 +486,7 @@ diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
      /**
       * Prefix for every table and index in the durable schema. It must be a SQLite identifier and must not use
       * SQLite's reserved `sqlite_` prefix. Existing data is not migrated when this changes.
-@@ -18,6 +20,7 @@
+@@ -18,6 +20,7 @@ export declare class SqliteStorage implements Storage {
      private closing;
      private admittedReads;
      private readsDrained;
@@ -541,9 +495,10 @@ diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
      /** Initialize storage over an owned SQLite database facade. */
      static open(db: SqliteDatabase, options?: SqliteStorageOptions): Promise<SqliteStorage>;
 diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
+index 890f142..0059cab 100644
 --- a/dist/storage/sqlite/storage.js
 +++ b/dist/storage/sqlite/storage.js
-@@ -2,7 +2,7 @@
+@@ -2,7 +2,7 @@ import { apply } from "@earendil-works/chord/delta";
  import { StorageRequestError } from "../../errors.js";
  import { idFromNumber, seqFromNumber } from "../../ids.js";
  import { nextCursor, scanStart } from "../scan.js";
@@ -552,7 +507,7 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
  import { createSqliteSchema } from "./schema.js";
  const parseJson = (value) => JSON.parse(value);
  const encodeJson = (value) => JSON.stringify(value);
-@@ -101,20 +101,25 @@
+@@ -101,20 +101,25 @@ export class SqliteStorage {
      closing;
      admittedReads = 0;
      readsDrained;
@@ -582,7 +537,7 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
          }
          catch (error) {
              try {
-@@ -132,7 +137,7 @@
+@@ -132,7 +137,7 @@ export class SqliteStorage {
       * before it. No savepoints, which Durable Objects do not allow: the checks run before the writes instead.
       */
      async commit(batches, receive, _context) {
@@ -591,7 +546,7 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
          const seqs = [];
          let refused;
          let candidateNextId = this.nextId;
-@@ -193,7 +198,7 @@
+@@ -193,7 +198,7 @@ export class SqliteStorage {
          await this.applyDocumentActions(executor, documentActions, seq);
      }
      async mintId() {
@@ -600,7 +555,7 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
          if (!Number.isSafeInteger(this.nextId))
              throw new Error("ID space is exhausted");
          return idFromNumber(this.nextId++);
-@@ -434,6 +439,8 @@
+@@ -434,6 +439,8 @@ export class SqliteStorage {
      }
      async document(id, at, _context) {
          this.assertOpen();
@@ -609,7 +564,7 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
          // The record and revision queries must observe one committed state; a commit between them can replace the base.
          return this.db.transaction((transaction) => this.materializeDocument(transaction, id, at));
      }
-@@ -739,9 +746,11 @@
+@@ -739,9 +746,11 @@ export class SqliteStorage {
              }
          }
      }
@@ -624,9 +579,10 @@ diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
 diff --git a/dist/types.d.ts b/dist/types.d.ts
+index b43143c..e75ed74 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -3,7 +3,7 @@
+@@ -3,7 +3,7 @@ import type { Op } from "@earendil-works/chord/delta";
  import type { Message, Models } from "@earendil-works/pi-ai";
  import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
  import type { ExecutionEnv } from "./env/index.ts";
@@ -635,7 +591,7 @@ diff --git a/dist/types.d.ts b/dist/types.d.ts
  /** JSON object used as the root of every durable document. */
  export type JsonObject = {
      [key: string]: JsonValue;
-@@ -289,6 +289,7 @@
+@@ -289,6 +289,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
      /** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
      context(conversationId: ConversationId, context: Context, options?: {
          readonly at?: EntryId;

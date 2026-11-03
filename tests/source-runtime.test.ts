@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -90,14 +91,24 @@ else if(mode==='cancel') {
   };
 }
 
-test("source executor preserves the request, enforces search selection and removes ambient credentials", async () => {
+test("source executor preserves request isolation, search selection and current executable version", async () => {
   const f = await fixture();
   await f.mode("ok");
   for (const search of [false, true]) {
+    const version = search ? "codex-cli upgraded" : "codex-cli fixture";
+    if (search) {
+      const command = join(f.root, "codex-fixture");
+      await writeFile(
+        `${command}.next`,
+        (await readFile(command, "utf8")).replace("codex-cli fixture", version),
+        { mode: 0o700 },
+      );
+      await rename(`${command}.next`, command);
+    }
     const result = await f.execute({ ...request, search });
     expect(result).toEqual({
       state: "succeeded",
-      codexVersion: "codex-cli fixture",
+      codexVersion: version,
       output: { verdicts: [] },
       stdout: "fixture-output\n",
       stderr: "fixture-stderr\n",

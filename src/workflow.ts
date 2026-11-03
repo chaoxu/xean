@@ -19,12 +19,12 @@ import {
 } from "./state.ts";
 import {
   coordinatorResultFor,
-  explorerInput,
+  establishes,
   explorerResultFor,
   noteIdAfter,
   pick,
   sourceVerdictsFor,
-  verifierInput,
+  type ExplorerInput,
   type Verification,
   type VerifierInput,
   type Verdict,
@@ -47,7 +47,6 @@ type WorkerInput = (
       kind: "verify";
       input: VerifierInput;
       settings: SolveSettings;
-      candidate?: number;
       reconstruction?: { note: string; call: number }[];
     }
 ) & { previousTasks?: number[] };
@@ -100,178 +99,160 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
     phases: {
       async run(task, runtime, context) {
         let value: JsonValue;
-        try {
-          if (task.input.kind === "call") {
-            const answer = await roles.run(
-              runtime,
-              "role",
-              task.input.descriptor,
-              task.input.profile,
+        if (task.input.kind === "call") {
+          const answer = await roles.run(
+            runtime,
+            "role",
+            task.input.descriptor,
+            task.input.profile,
+            context,
+            task.input.previousTasks,
+          );
+          value = answer.value;
+        } else {
+          const input = task.input;
+          const candidate = input.previousTasks?.[0] ?? task.id;
+          const recorded = async (): Promise<Verdict[]> => {
+            const book = await runtime.snapshot(
+              Notebook,
+              task.conversationId,
               context,
-              task.input.previousTasks,
             );
-            value = answer.value;
-          } else {
-            const input = task.input;
-            const candidate = input.candidate ?? task.id;
-            const recorded = async (): Promise<Verdict[]> => {
+            if (!book) throw new Error("Campaign notebook is missing");
+            return book.checks
+              .filter((c) => c.candidate === candidate)
+              .flatMap((c) => c.values);
+          };
+          const premises: Record<string, string> = {};
+          await runtime.commit(async (tx) => {
+            for (const ref of input.reconstruction ?? []) {
+              const entry = await tx.entry(ref.call as EntryId);
+              const { descriptor } = await tx.doc(
+                Assignment,
+                entry!.conversationId,
+              );
+              if (descriptor?.kind !== "reconstruction")
+                throw new Error("Missing reconstruction assignment");
+              premises[ref.note] = descriptor.statement.statements.find(
+                (value) => value.note === ref.note,
+              )!.statement;
+            }
+          }, context);
+          await verify(input.input, input.settings, {
+            premises,
+            call: (key, descriptor, profile) =>
+              roles.run(
+                runtime,
+                key,
+                descriptor,
+                profile,
+                context,
+                input.previousTasks,
+              ),
+            recorded,
+            refresh: async (value) => {
+              const refreshed = copy(value);
               const book = await runtime.snapshot(
                 Notebook,
                 task.conversationId,
                 context,
               );
               if (!book) throw new Error("Campaign notebook is missing");
-              return book.checks
-                .filter((c) => c.candidate === candidate)
-                .flatMap((c) => c.values);
-            };
-            const premises: Record<string, string> = {};
-            await runtime.commit(async (tx) => {
-              for (const ref of input.reconstruction ?? []) {
-                const entry = await tx.entry(ref.call as EntryId);
-                const { descriptor } = await tx.doc(
-                  Assignment,
-                  entry!.conversationId,
-                );
-                if (descriptor?.kind !== "reconstruction")
-                  throw new Error("Missing reconstruction assignment");
-                premises[ref.note] = descriptor.statement.statements.find(
-                  (value) => value.note === ref.note,
-                )!.statement;
+              const current = new Map(
+                project(readNotebook(book)).notes.map((note) => [
+                  note.id,
+                  note,
+                ]),
+              );
+              for (const note of [...refreshed.notes, ...refreshed.support]) {
+                const latest = current.get(note.id);
+                if (latest === undefined) continue;
+                note.verdicts = latest.verdicts;
+                note.verified = latest.verified;
+                note.dead = latest.dead;
               }
-            }, context);
-            await verify(input.input, input.settings, {
-              premises,
-              call: (key, descriptor, profile) =>
-                roles.run(
-                  runtime,
-                  key,
-                  descriptor,
-                  profile,
-                  context,
-                  input.previousTasks,
-                ),
-              recorded,
-              refresh: async (value) => {
-                const refreshed = copy(value);
-                const book = await runtime.snapshot(
-                  Notebook,
-                  task.conversationId,
-                  context,
-                );
-                if (!book) throw new Error("Campaign notebook is missing");
-                const current = new Map(
-                  project(readNotebook(book)).notes.map((note) => [
-                    note.id,
-                    note,
-                  ]),
-                );
-                for (const note of [...refreshed.notes, ...refreshed.support]) {
-                  const latest = current.get(note.id);
-                  if (latest === undefined) continue;
-                  note.verdicts = latest.verdicts;
-                  note.verified = latest.verified;
-                  note.dead = latest.dead;
-                }
-                return refreshed;
-              },
-              record: async (id, values) => {
-                await runtime.commit(async (tx) => {
-                  const book = await tx.doc(Notebook, task.conversationId);
-                  if (!book.checks.some((check) => check.call === id))
-                    book.checks.push({
-                      candidate,
-                      call: id,
-                      values: copy(values),
-                    });
-                }, context);
-              },
-              source: async (key, request, judged) => {
-                if (!options.source)
-                  throw new Error("Codex source execution is not registered");
-                const validate = (output: CodexResult) => {
-                  if (output.state !== "succeeded")
-                    throw new Error(`verifier failed: ${output.error}`);
-                  const value = sourceVerdictsFor(judged).parse(output.output);
-                  if (
-                    !request.search &&
-                    value.verdicts.some((v) => v.sources.length)
-                  )
-                    throw new Error(
-                      "Source citations require search to be enabled",
-                    );
-                  return value;
-                };
-                let prior:
-                  | { call: number; value: ReturnType<typeof validate> }
-                  | undefined;
-                const owners = [task.id, ...(input.previousTasks ?? [])];
-                await runtime.commit(async (tx) => {
-                  let cursor;
-                  do {
-                    const page = await tx.scanEntries(
-                      { conversationId: task.conversationId },
-                      128,
-                      cursor,
-                    );
-                    for (const entry of page.items) {
-                      if (
-                        !ResultEntry.is(entry) ||
-                        entry.byTaskId === undefined ||
-                        !owners.includes(entry.byTaskId) ||
-                        entry.data.key !== key ||
-                        JSON.stringify(entry.data.descriptor) !==
-                          JSON.stringify(request)
-                      )
-                        continue;
-                      try {
-                        prior = {
-                          call: entry.id,
-                          value: validate(entry.data.value as CodexResult),
-                        };
-                        return;
-                      } catch {
-                        /* Failed calls remain evidence, not reusable answers. */
-                      }
+              return refreshed;
+            },
+            record: async (id, values) => {
+              await runtime.commit(async (tx) => {
+                const book = await tx.doc(Notebook, task.conversationId);
+                if (!book.checks.some((check) => check.call === id))
+                  book.checks.push({
+                    candidate,
+                    call: id,
+                    values: copy(values),
+                  });
+              }, context);
+            },
+            source: async (key, request, judged) => {
+              if (!options.source)
+                throw new Error("Codex source execution is not registered");
+              const validate = (output: CodexResult) => {
+                if (output.state !== "succeeded")
+                  throw new Error(`verifier failed: ${output.error}`);
+                const value = sourceVerdictsFor(judged).parse(output.output);
+                if (
+                  !request.search &&
+                  value.verdicts.some((v) => v.sources.length)
+                )
+                  throw new Error(
+                    "Source citations require search to be enabled",
+                  );
+                return value;
+              };
+              let prior:
+                | { call: number; value: ReturnType<typeof validate> }
+                | undefined;
+              const owners = [task.id, ...(input.previousTasks ?? [])];
+              await runtime.commit(async (tx) => {
+                let cursor;
+                do {
+                  const page = await tx.scanEntries(
+                    { conversationId: task.conversationId },
+                    128,
+                    cursor,
+                  );
+                  for (const entry of page.items) {
+                    if (
+                      !ResultEntry.is(entry) ||
+                      entry.byTaskId === undefined ||
+                      !owners.includes(entry.byTaskId) ||
+                      entry.data.key !== key ||
+                      JSON.stringify(entry.data.descriptor) !==
+                        JSON.stringify(request)
+                    )
+                      continue;
+                    try {
+                      prior = {
+                        call: entry.id,
+                        value: validate(entry.data.value as CodexResult),
+                      };
+                      return;
+                    } catch {
+                      /* Failed calls remain evidence, not reusable answers. */
                     }
-                    cursor = page.next;
-                  } while (cursor);
-                }, context);
-                if (prior) return prior;
-                const output = await options.source(request, runtime.signal);
-                let id!: number;
-                await runtime.commit(async (tx) => {
-                  id = (
-                    await tx.appendEntry(ResultEntry, task.conversationId, {
-                      data: {
-                        key,
-                        value: copy(output) as JsonValue,
-                        descriptor: copy(request) as JsonValue,
-                      },
-                    })
-                  ).id;
-                }, context);
-                return { call: id, value: validate(output) };
-              },
-            });
-            value = null;
-          }
-        } catch (error) {
-          if (runtime.signal.aborted) throw error;
-          await runtime.commit(
-            () => ({
-              status: "terminal",
-              outcome: {
-                status: "failed",
-                error: {
-                  message:
-                    error instanceof Error ? error.message : String(error),
-                },
-              },
-            }),
-            context,
-          );
-          return;
+                  }
+                  cursor = page.next;
+                } while (cursor);
+              }, context);
+              if (prior) return prior;
+              const output = await options.source(request, runtime.signal);
+              let id!: number;
+              await runtime.commit(async (tx) => {
+                id = (
+                  await tx.appendEntry(ResultEntry, task.conversationId, {
+                    data: {
+                      key,
+                      value: copy(output) as JsonValue,
+                      descriptor: copy(request) as JsonValue,
+                    },
+                  })
+                ).id;
+              }, context);
+              return { call: id, value: validate(output) };
+            },
+          });
+          value = null;
         }
         await runtime.commit(
           () => ({
@@ -330,7 +311,6 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               ...(request.previousTasks ?? []),
               state.child,
             ];
-            if (request.kind === "verify") request.candidate ??= state.child;
           } else {
             if (state.step === "verifier") {
               const available = new Set(
@@ -340,7 +320,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 const note = pick(notes, entry.note);
                 if (note.dead || note.support.some((id) => !available.has(id)))
                   return false;
-                if (entry.verifiers.includes("correctness"))
+                if (establishes((name) => entry.verifiers.includes(name)))
                   available.add(note.id);
                 return true;
               });
@@ -380,13 +360,13 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 .map((v) => v.text)
                 .join("\n\n");
               state.guidanceThrough = book.guidance.length;
-              const input = explorerInput.parse({
+              const input: ExplorerInput = {
                 task: config.task,
                 explorerGuidance: guidance,
                 notes: notes.map(
                   ({ text: _text, detailedSummary: _detail, ...note }) => note,
                 ),
-              });
+              };
               request = {
                 kind: "call",
                 profile: config.settings.explorer,
@@ -417,14 +397,14 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                 config.settings.window,
               );
               const listed = batch.map((entry) => pick(notes, entry.note));
-              const input = verifierInput.parse({
+              const input: VerifierInput = {
                 task: config.task,
                 verify: batch,
                 notes: listed,
                 support: supportClosure(listed, notes).map((id) =>
                   pick(notes, id),
                 ),
-              });
+              };
               request = {
                 kind: "verify",
                 input,
@@ -471,9 +451,8 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   outcome: "call-failure",
                   turns: state.turns,
                   error:
-                    outcome?.status === "failed"
-                      ? outcome.error.message
-                      : `Worker ${child.id} did not complete`,
+                    outcome?.error?.message ??
+                    `Worker ${child.id} did not complete`,
                   resume: state,
                 },
               },

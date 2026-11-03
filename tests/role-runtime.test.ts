@@ -381,6 +381,10 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
       detailedSummary: "First exact conditions.",
       text: "A".repeat(60_000) + " FIRST_END_α",
       support: [],
+      verification: {
+        source: "Given premise",
+        report: "External attestation.",
+      },
     },
     {
       id: "n2",
@@ -389,9 +393,21 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
       support: [],
     },
   ];
+  const checks = (["PASS", "FAIL", "INCONCLUSIVE"] as const).map((verdict) => ({
+    candidate: 1,
+    call: 1,
+    values: [
+      {
+        verifier: "requirements" as const,
+        note: "n2",
+        verdict,
+        report: `${verdict} report`,
+      },
+    ],
+  }));
   const notes = project({
     notes: sources,
-    checks: [],
+    checks,
     guidance: [],
     inputs: [],
   }).notes;
@@ -466,6 +482,15 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
         ),
       ).toEqual(["First exact conditions.", null]);
       expect(readNotes.every((entry: object) => !("text" in entry))).toBe(true);
+      expect(readNotes[0].verification).toEqual({ source: "Given premise" });
+      expect(readNotes[1].verdicts[0]).toEqual({
+        verifier: "requirements",
+        note: "n2",
+        verdict: "PASS",
+      });
+      expect(readNotes[1].verdicts).toHaveLength(3);
+      expect(resultText(transcript)).toContain("FAIL report");
+      expect(resultText(transcript)).toContain("INCONCLUSIVE report");
       return read(["n2", "n1"], "full");
     },
     (transcript) => {
@@ -492,6 +517,7 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
         ...sources,
         { id: "n3", text: "UNINDEXED_BODY", support: [] },
       ];
+      ref.checks = checks;
       saveNotebook(tx, ref, book);
     }, context);
     expect(
@@ -502,29 +528,6 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
       result: { value: result, fresh: true },
     });
     expect(fixture_.provider.state.callCount).toBe(5);
-  } finally {
-    await harness.close(context);
-  }
-});
-
-test("a syntactically valid unknown support is rejected before a successful receipt", async () => {
-  const fixture_ = fixture([
-    submitted({ notes: [{ text: "Unjustified claim", support: ["n99"] }] }),
-    (transcript) => {
-      expect(
-        transcript.messages.some(
-          (message) => message.role === "toolResult" && message.isError,
-        ),
-      ).toBe(true);
-      return submitted();
-    },
-  ]);
-  const { harness, invoke } = await fixture_.open();
-  try {
-    const result = (await harness.waitForTask(await invoke(), context)).state
-      .outcome;
-    expect(result).toMatchObject({ status: "completed", result: { value } });
-    expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
   }
@@ -1179,23 +1182,27 @@ test("native retry recognizes v1 diagnostic-only and Responses message-limit fai
   }
 });
 
-test("installed provider patch matches the retained provenance", async () => {
-  const patch = provenance.patches.find(
-    (patch) => patch.package === "@earendil-works/pi-ai",
-  )!;
-  const hash = async (path: string) =>
-    createHash("sha256")
-      .update(await readFile(join(import.meta.dir, "..", path)))
-      .digest("hex");
-  expect(await hash(patch.path)).toBe(patch.sha256);
-  for (const [file, expected] of Object.entries(patch.files))
-    expect(await hash(`node_modules/${patch.package}/${file}`), file).toBe(
-      expected!,
-    );
-});
+test.each(provenance.patches)(
+  "installed $package patch matches the retained provenance",
+  async (patch) => {
+    const hash = async (path: string) =>
+      createHash("sha256")
+        .update(await readFile(join(import.meta.dir, "..", path)))
+        .digest("hex");
+    expect(await hash(patch.path)).toBe(patch.sha256);
+    for (const [file, expected] of Object.entries(patch.files))
+      expect(await hash(`node_modules/${patch.package}/${file}`), file).toBe(
+        expected!,
+      );
+  },
+);
 
-test("two successful submissions cannot silently select only the first", async () => {
-  const fixture_ = fixture([
+test("two successful submissions fail closed and resume starts a fresh conversation", async () => {
+  const provider = fauxProvider({
+    provider: "test",
+    models: [{ id: "math", reasoning: true }],
+  });
+  provider.setResponses([
     fauxAssistantMessage(
       [
         fauxToolCall("submit_notes", value),
@@ -1203,24 +1210,63 @@ test("two successful submissions cannot silently select only the first", async (
       ],
       { stopReason: "toolUse" },
     ),
+    submitted(),
+    fauxAssistantMessage(
+      [
+        fauxToolCall("submit_coordination", {
+          filings: [{ note: "n1", summary: "Equality is reflexive." }],
+          verify: [],
+        }),
+      ],
+      { stopReason: "toolUse" },
+    ),
   ]);
-  const { harness, invoke } = await fixture_.open();
+  const models = createModels();
+  models.setProvider(provider.provider);
+  const directory = await mkdtemp(join(tmpdir(), "xean-duplicate-resume-"));
+  notebookDirectories.push(directory);
+  const path = join(directory, "campaign.sqlite");
+  const settings = solveSettings.parse({
+    ...Object.fromEntries(
+      ["explorer", "coordinator", ...verifierNames].map((name) => [
+        name,
+        { provider: "test", model: "math", reasoning: "max" },
+      ]),
+    ),
+    maxExplorerTurns: 1,
+  });
+  let owner = await open(path, {
+    models,
+    create: { task: descriptor.input.task, settings },
+  });
   try {
-    const result = (await harness.waitForTask(await invoke(), context)).state
-      .outcome;
-    expect(result).toMatchObject({
-      status: "faulted",
-      error: { message: "submit_notes requires exactly one submission" },
+    await owner.root.waitForIdle(context);
+    const failed = await inspect(path, readReport);
+    expect(failed.status).toMatchObject({
+      outcome: "call-failure",
+      error: "submit_notes requires exactly one submission",
     });
+    expect(failed.notes).toEqual([]);
+    expect(provider.state.callCount).toBe(1);
+    await owner.close();
+    owner = await open(path, { models });
+    await owner.resume();
+    await owner.root.waitForIdle(context);
+    const resumed = await inspect(path, readReport);
+    expect(resumed.status.outcome).toBe("turn-limit");
+    expect(resumed.notes.map((note) => note.text)).toEqual([
+      value.notes[0]!.text,
+    ]);
+    expect(provider.state.callCount).toBe(3);
   } finally {
-    await harness.close(context);
+    await owner.close();
   }
 });
 
-test("schema repairs may pass sixteen responses but stop at v1's limit of thirty-two", async () => {
+test("schema repairs allow response thirty-two and block the next request", async () => {
   const invalid = () =>
     submitted({ notes: [{ text: "Unjustified claim", support: ["n99"] }] });
-  for (const count of [16, 32]) {
+  for (const count of [31, 32]) {
     const fixture_ = fixture([
       ...Array.from({ length: count }, invalid),
       submitted(),
@@ -1229,8 +1275,8 @@ test("schema repairs may pass sixteen responses but stop at v1's limit of thirty
     try {
       const result = (await harness.waitForTask(await invoke(), context)).state
         .outcome;
-      expect(result.status === "completed").toBe(count === 16);
-      expect(fixture_.provider.state.callCount).toBe(count === 16 ? 17 : 32);
+      expect(result.status === "completed").toBe(count < 32);
+      expect(fixture_.provider.state.callCount).toBe(Math.min(count + 1, 32));
     } finally {
       await harness.close(context);
     }

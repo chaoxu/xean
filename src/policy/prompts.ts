@@ -80,7 +80,7 @@ const taskText = (task: Task): string =>
 
 // Verdict evidence stays in the journal. Successful explanations are not
 // working memory; failures and uncertainty still carry their full reports.
-function promptNote<T extends Pick<Note, "verdicts" | "verification">>(
+export function promptNote<T extends Pick<Note, "verdicts" | "verification">>(
   note: T,
 ) {
   return {
@@ -124,7 +124,7 @@ export function explorerCall(
       "Spend the turn doing mathematics. A note is one self-contained text: a result with its complete proof, a partial result with its gaps stated, or a failed approach with the reason it fails. Split a long argument into notes, one per result, so each can be verified and built on. Say in the text when a note meets the completion criteria.",
       "Each note names as support every note whose result its text uses without proving it, in any form: a fact it cites, a case it inherits, an object it takes as defined, or a hypothesis it assumes established. Mentioning a note for provenance or discussing its failure does not itself make it support. Your notes are numbered in the order you return them, and a note may name an earlier note of yours as support.",
       "Give each new note a short index summary and a detailedSummary stating its results so they can be applied without reading the proof. Include definitions, notation, hypotheses, quantifiers, conventions, parameter ranges, bounds, and limitations needed for the stated results. Preserve explicit gaps, failed approaches, conditionality, and negative conclusions in both summaries. State any claim to meet the original task's completion criteria. Summaries must agree with the authoritative text without strengthening it. Do not use web search or external tools. The notebook reader is available for this task.",
-      "Call submit_notes exactly once.",
+      `Call ${submissionTools.explorer} exactly once.`,
     ].join(" "),
     prompt: [
       taskText(input.task),
@@ -157,7 +157,7 @@ export function coordinatorCall(
       "A note may be listed only after every note in its support is verified or listed earlier with the correctness verifier. A dead note is never listed again: it is replaced by a new note. Explorer receives verifier reports and decides further mathematical work.",
       "You have no correctness authority.",
       "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
-      "Call submit_coordination exactly once.",
+      `Call ${submissionTools.coordinator} exactly once.`,
     ].join(" "),
     prompt: [
       taskText(input.task),
@@ -246,7 +246,7 @@ const verifierSystem = [
 const verdictSystem = [
   ...verifierSystem,
   "Do not use web search or external tools.",
-  "Call submit_verdict exactly once.",
+  `Call ${submissionTools.verifier} exactly once.`,
 ].join(" ");
 
 /** The notes a verifier call reads: those it judges and their full support closure. */
@@ -411,7 +411,7 @@ export function reconstructionCall(
       "Otherwise return statements=[] and exactly one verdict per target ID. PASS requires a faithful statement and a complete correct independent proof of that exact claim. For generated notes, the original argument must also establish the claim. Explicit external verification grants the original result but never replaces its independent proof when the note is a target. A missing argument cannot be repaired only in the independent proof or report. FAIL requires a concrete defect in the original claim or argument. An incomplete independent proof without such a defect gives INCONCLUSIVE. A dependent proof cannot pass by assuming a generated ancestor left unproved. State each reason concretely and distinguish mathematical defects from unresolved checks.",
       routineText,
       "Do not use web search or external tools.",
-      "Call submit_verdict exactly once.",
+      `Call ${submissionTools.verifier} exactly once.`,
     ].join(" "),
     prompt: [
       reconstructionText(input),
