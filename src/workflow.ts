@@ -37,11 +37,47 @@ export type CampaignResult = {
 };
 export const campaignKind = "xean.campaign";
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+async function collectGroup(tx: Tx, state: CampaignState) {
+  const failed: number[] = [];
+  const errors: string[] = [];
+  for (const id of state.children!) {
+    const child = (await tx.task(id as TaskId))!;
+    if (child.state.status !== "terminal")
+      throw new Error(`Worker ${id} has not settled`);
+    const outcome = child.state.outcome;
+    if (outcome.status === "completed") {
+      if (state.step === "explorer") state.turns++;
+    } else {
+      failed.push(id);
+      errors.push(outcome.error?.message ?? `Worker ${id} did not complete`);
+    }
+  }
+  if (failed.length) state.children = failed;
+  else {
+    delete state.children;
+    state.step = state.step === "explorer" ? "verifier" : "explorer";
+  }
+  state.phase = "next";
+  return { state, errors };
+}
 const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
-  await runtime.commit(
-    () => ({ status: "terminal", outcome: { status: "aborted" } }),
-    context,
-  );
+  await runtime.commit(async (tx, task) => {
+    const state = copy(task.state.checkpoint) as CampaignState;
+    // Pi aborts ordinary descendants before reserving their parent's handler.
+    if (state.phase === "collect") await collectGroup(tx, state);
+    return {
+      status: "terminal",
+      outcome: {
+        status: "aborted",
+        result: {
+          outcome: "call-failure",
+          turns: state.turns,
+          error: "Campaign aborted",
+          resume: state,
+        },
+      },
+    };
+  }, context);
 };
 
 export async function lastCampaign(tx: Tx, root: ConversationId) {
@@ -148,22 +184,11 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
       },
       async collect(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          const state = copy(task.state.checkpoint);
-          const failed: number[] = [];
-          const errors: string[] = [];
-          for (const id of state.children!) {
-            const child = (await tx.task(id as TaskId))!;
-            const outcome = child.state.outcome;
-            if (outcome?.status === "completed") {
-              if (state.step === "explorer") state.turns++;
-            } else {
-              failed.push(id);
-              errors.push(
-                outcome?.error?.message ?? `Worker ${id} did not complete`,
-              );
-            }
-          }
-          if (failed.length)
+          const { state, errors } = await collectGroup(
+            tx,
+            copy(task.state.checkpoint),
+          );
+          if (state.children?.length)
             return {
               status: "terminal",
               outcome: {
@@ -172,13 +197,11 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
                   outcome: "call-failure",
                   turns: state.turns,
                   error: errors.join("\n"),
-                  resume: { ...state, phase: "next", children: failed },
+                  resume: state,
                 },
               },
             };
-          delete state.children;
-          state.step = state.step === "explorer" ? "verifier" : "explorer";
-          return { status: "running", checkpoint: { ...state, phase: "next" } };
+          return { status: "running", checkpoint: state };
         }, context);
       },
     },
