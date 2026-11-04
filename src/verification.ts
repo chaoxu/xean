@@ -1,13 +1,10 @@
 import type { JsonValue } from "@earendil-works/chord";
-import { z } from "zod";
 import {
   judgedBy,
   missingVerdicts,
   proof,
   reconstructionResultFor,
   reconstructionStatementIds,
-  sourceVerdicts,
-  sourceVerdictsFor,
   statementsFor,
   verdictsFor,
   verifierNames,
@@ -31,12 +28,12 @@ export interface VerificationDependencies {
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
   ): Promise<{ call: number; value: JsonValue; fresh: boolean }>;
-  /** The source runtime validates the structured Codex result. */
+  /** Validate and atomically publish the source result and its verdicts. */
   source?(
     key: string,
     request: CodexRequest,
     judged: readonly string[],
-  ): Promise<{ call: number; value: z.output<typeof sourceVerdicts> }>;
+  ): Promise<void>;
   recorded(): Promise<Verdict[]>;
   record(call: number, verdicts: Verdict[]): Promise<void>;
 }
@@ -121,29 +118,24 @@ export async function verify(
     const judged = missingVerdicts(have, name, judgedBy(input, have, name));
     if (judged.length === 0) continue;
     const key = `${name}/${judged.join(",")}`;
-    let call: number;
-    let values: z.output<ReturnType<typeof verdictsFor>>["verdicts"];
     if (name === "source" && codexSource(settings.source)) {
       if (!dependencies.source)
         throw new Error("Codex source runtime is unavailable");
       const request = sourceCall(settings.source, input, judged);
-      const result = await dependencies.source(key, request, judged);
-      call = result.call;
-      values = sourceVerdictsFor(judged).parse(result.value).verdicts;
-    } else {
-      const profile =
-        name === "source" ? (settings.source as PiRoleProfile) : settings[name];
-      const result = await dependencies.call(
-        key,
-        { kind: "verifier", name, input, judged },
-        profile,
-      );
-      call = result.call;
-      values = verdictsFor(judged).parse(result.value).verdicts;
+      await dependencies.source(key, request, judged);
+      continue;
     }
+    const profile =
+      name === "source" ? (settings.source as PiRoleProfile) : settings[name];
+    const result = await dependencies.call(
+      key,
+      { kind: "verifier", name, input, judged },
+      profile,
+    );
+    const { verdicts } = verdictsFor(judged).parse(result.value);
     await dependencies.record(
-      call,
-      values.map(({ note, verdict, report }) => ({
+      result.call,
+      verdicts.map(({ note, verdict, report }) => ({
         note,
         verdict,
         report,

@@ -228,7 +228,6 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     task,
     notes: [target],
     support: [evidence],
-    order: ["n1", "n2"],
     verify: [{ note: "n2", verifiers: [...verifierNames] }],
   };
   const { text, ...heading } = evidence;
@@ -334,7 +333,6 @@ test("native and Codex checks assume direct dependencies without checking them a
     task,
     notes: [note, target],
     support: [],
-    order: ["n1", "n2"],
     verify: [{ note: "n2", verifiers: [...verifierNames] }],
   };
   const source = sourceCall(
@@ -403,7 +401,6 @@ test("initial and corrected blind calls contain scoped statements without any or
     task,
     notes: generated,
     support: [source],
-    order: [source.id, ...generated.map(({ id }) => id)],
   };
   const before = structuredClone(input);
   const initial = {

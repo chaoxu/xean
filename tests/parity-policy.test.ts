@@ -174,7 +174,6 @@ test("source then correctness then requirements then reconstruction gate reachab
   const input = {
     notes: [note("n1"), note("n2", ["n1"])],
     support: [],
-    order: ["n1", "n2"],
     verify: [
       { note: "n1", verifiers: lemma },
       { note: "n2", verifiers: all },
@@ -223,7 +222,6 @@ test.each(["source", "correctness"] as const)(
     const input = {
       notes: [note("n1"), note("n3", ["n2"]), note("n4")],
       support: [{ ...note("n2", ["n1"]), verified: true }],
-      order: ["n1", "n2", "n3", "n4"],
       verify: [
         { note: "n1", verifiers: all },
         { note: "n3", verifiers: all },
@@ -294,7 +292,6 @@ test("narrowed local checks retain only direct assumptions from the original ass
     task,
     notes,
     support: [],
-    order: notes.map(({ id }) => id),
   };
   expect(reconstructionInput(input, ["c"]).notes.map(({ id }) => id)).toEqual([
     "c",
@@ -346,7 +343,6 @@ test("new adverse evidence gates directly dead roots without propagating during 
   const input = {
     notes: [notes[0]!, notes[2]!, notes[3]!],
     support: [{ ...notes[1]!, verified: true }],
-    order: notes.map(({ id }) => id),
     verify: ["ancestor", "target", "independent"].map((note) => ({
       note,
       verifiers: all,

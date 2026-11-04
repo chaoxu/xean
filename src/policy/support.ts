@@ -66,7 +66,6 @@ export function reconstructionInput(
   ).filter(({ id }) => !selected.has(id));
   return {
     task: input.task,
-    order: [...input.order],
     notes: input.notes.filter(({ id }) => selected.has(id)),
     support: assumptions,
   };

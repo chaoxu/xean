@@ -220,19 +220,17 @@ export type VerifierInput = {
   verify: Verification[];
   notes: Note[];
   support: Note[];
-  order: string[];
 };
 export type ReconstructionInput = Pick<
   VerifierInput,
-  "task" | "notes" | "support" | "order"
+  "task" | "notes" | "support"
 >;
 
 /** IDs extracted as exact claims: selected roots followed by direct premises. */
 export function reconstructionStatementIds(
   input: ReconstructionInput,
 ): string[] {
-  const known = new Set([...input.notes, ...input.support].map(({ id }) => id));
-  return input.order.filter((id) => known.has(id));
+  return [...input.notes, ...input.support].map(({ id }) => id);
 }
 
 export function pick<T extends { readonly id: string }>(
@@ -250,7 +248,7 @@ export function pick<T extends { readonly id: string }>(
  * resolved by projection after the local receipt rather than gating this call.
  */
 export function judgedBy(
-  input: Pick<VerifierInput, "verify" | "notes" | "support" | "order">,
+  input: Pick<VerifierInput, "verify" | "notes" | "support">,
   recorded: readonly Verdict[],
   verifier: VerifierName,
 ): string[] {

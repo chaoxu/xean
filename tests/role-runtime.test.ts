@@ -1130,7 +1130,6 @@ test("frozen verification reuses its original assignment and receipt after later
           dead: false,
         },
       ],
-      order: ["n0", "n1"],
     },
   };
   const result = {

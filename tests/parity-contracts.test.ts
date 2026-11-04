@@ -23,7 +23,6 @@ const verification = {
   task,
   notes: [target],
   support: [support],
-  order: [support.id, target.id],
   verify: [{ note: target.id, verifiers: [...verifierNames] }],
 };
 const profile = {
@@ -104,7 +103,6 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
     task,
     notes: [support, target],
     support: [],
-    order: [support.id, target.id],
   };
   const value = {
     statements: [
@@ -139,7 +137,7 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
   expect(extra.success).toBe(false);
   if (!extra.success)
     expect(extra.error.issues[0]!.message).toBe(
-      `Return verdicts only for selected target IDs: ${target.id}. Statement corrections must cover IDs: ${support.id}, ${target.id}.`,
+      `Return verdicts only for selected target IDs: ${target.id}. Statement corrections must cover IDs: ${target.id}, ${support.id}.`,
     );
   expect(compare.schema.safeParse({ statements: [], verdicts }).success).toBe(
     true,

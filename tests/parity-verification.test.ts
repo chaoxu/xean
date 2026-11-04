@@ -32,7 +32,6 @@ const input = (notes = [note("n1")]): VerifierInput => ({
   task,
   notes,
   support: [],
-  order: notes.map(({ id }) => id),
   verify: notes.map(({ id }) => ({ note: id, verifiers: [...verifierNames] })),
 });
 const verdict = (note = "n1", verdict: Verdict["verdict"] = "PASS") => ({
@@ -92,7 +91,7 @@ test.each([false, true])(
     const a = note("A"),
       b = { ...note("B", ["A"]), dead },
       c = note("C", ["B"]);
-    const batch = { ...input([c]), support: [a, b], order: ["A", "B", "C"] };
+    const batch = { ...input([c]), support: [a, b] };
     const pass = checks(verdict("C"));
     const drive = scripted([
       pass,
@@ -164,7 +163,6 @@ test("unselected and inconclusive dependencies do not block a selected note's ow
 test("a supporting lemma can request reconstruction without requirements", async () => {
   const batch = input([note("B", ["A"])]);
   batch.support = [note("A")];
-  batch.order = ["A", "B"];
   batch.verify[0]!.verifiers = ["source", "correctness", "reconstruction"];
   const pass = checks(verdict("B"));
   const drive = scripted([
@@ -213,7 +211,6 @@ test("own source or correctness failure blocks reconstruction, while a requireme
 test("mixed reconstruction results publish the selected batch atomically and replay without partial duplication", async () => {
   const batch = input([note("B", ["A"]), note("C", ["A"])]);
   batch.support = [note("A")];
-  batch.order = ["A", "B", "C"];
   const pass = checks(verdict("B"), verdict("C"));
   const drive = scripted([
     pass,
@@ -241,7 +238,6 @@ test("a corrected statement array replaces both targets and assumptions before a
   const batch = {
     ...input([note("B", ["A"])]),
     support: [note("A")],
-    order: ["A", "B"],
   };
   const before = structuredClone(batch);
   const pass = checks(verdict("B"));
@@ -285,7 +281,6 @@ test("two fresh corrections stop automatic retries and resume replays the latest
   const batch = {
     ...input([note("B", ["A"])]),
     support: [note("A")],
-    order: ["A", "B"],
   };
   const pass = checks(verdict("B"));
   const first = statements("A", "B");
@@ -326,7 +321,6 @@ test.each([["A", "B"], ["A"], ["B", "B"], ["missing"]].map((ids) => ({ ids })))(
     const batch = {
       ...input([note("B", ["A"])]),
       support: [note("A")],
-      order: ["A", "B"],
     };
     const pass = checks(verdict("B"));
     const drive = scripted([
@@ -349,7 +343,6 @@ test("a correction omitting a dependency statement is rejected before another pr
   const batch = {
     ...input([note("B", ["A"])]),
     support: [note("A")],
-    order: ["A", "B"],
   };
   const pass = checks(verdict("B"));
   const drive = scripted([
@@ -370,10 +363,10 @@ test("a selected dependency remains a target while unselected ancestors stay out
     b = note("B", ["A"]),
     c = note("C", ["B"]),
     d = note("D", ["C"]);
-  const result = reconstructionInput(
-    { task, notes: [b, d], support: [a, c], order: ["A", "B", "C", "D"] },
-    ["B", "D"],
-  );
+  const result = reconstructionInput({ task, notes: [b, d], support: [a, c] }, [
+    "B",
+    "D",
+  ]);
   expect(result.notes.map((note) => note.id)).toEqual(["B", "D"]);
   expect(result.support.map((note) => note.id)).toEqual(["A", "C"]);
 });

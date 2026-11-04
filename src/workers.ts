@@ -134,13 +134,11 @@ function claimFor(
   const support = directSupport(listed, notes).filter(
     (note) => !selectedIds.has(note.id),
   );
-  const included = new Set([...listed, ...support].map((note) => note.id));
   const verifier: VerifierInput = {
     task: input.input.task,
     verify: batch,
     notes: listed,
     support,
-    order: notes.filter((note) => included.has(note.id)).map((note) => note.id),
   };
   return { kind: "verify", input: verifier, settings: input.settings };
 }
@@ -294,10 +292,9 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
             } catch (cause) {
               error = cause;
             }
-            let id!: number;
             await runtime.commit(async (tx) => {
               const book = await tx.doc(Notebook, task.conversationId);
-              id = (
+              const id = (
                 await tx.appendEntry(ResultEntry, task.conversationId, {
                   data: {
                     key,
@@ -319,7 +316,6 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
                 });
             }, context);
             if (!value) throw error;
-            return { call: id, value };
           },
         });
         await runtime.commit(

@@ -37,7 +37,6 @@ export type CampaignResult = {
   resume?: CampaignState;
 };
 export const campaignKind = "xean.campaign";
-const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 async function collectGroup(tx: Tx, state: CampaignState) {
   const failed: number[] = [];
   const errors: string[] = [];
@@ -63,7 +62,7 @@ async function collectGroup(tx: Tx, state: CampaignState) {
 }
 const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
   await runtime.commit(async (tx, task) => {
-    const state = copy(task.state.checkpoint) as CampaignState;
+    const state = { ...task.state.checkpoint } as CampaignState;
     // Pi aborts ordinary descendants before reserving their parent's handler.
     if (state.phase === "collect") await collectGroup(tx, state);
     return {
@@ -111,7 +110,7 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
     phases: {
       async next(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          const state = copy(task.state.checkpoint);
+          const state = { ...task.state.checkpoint };
           const config = await definition(tx, task.conversationId);
           let requests: WorkerRequest[];
           // Settle interrupted members before considering a provisional acceptance.
@@ -176,10 +175,9 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
       },
       async collect(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          const { state, errors } = await collectGroup(
-            tx,
-            copy(task.state.checkpoint),
-          );
+          const { state, errors } = await collectGroup(tx, {
+            ...task.state.checkpoint,
+          });
           if (state.children?.length)
             return completed<CampaignResult>({
               outcome: "call-failure",
