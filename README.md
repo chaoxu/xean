@@ -163,14 +163,15 @@ Settings select provider, model, and reasoning level for `explorer`, `source`,
 below. OpenAI models have been exercised. Other Pi providers remain unqualified.
 
 `explorers` and `verifiers` are positive integer group sizes, both defaulting to
+`1`. Set `"explorers": 2` and `"verifiers": 2` before `init` to run up to two workers
+of each role concurrently. Each group's membership is fixed before it starts.
+The campaign waits for every member before starting the next group.
 
-1. Set `"explorers": 2` and `"verifiers": 2` before `init` to run up to two workers
-   of each role concurrently. Each group's membership is fixed before it starts.
-   The campaign waits for every member before starting the next group.
-   `maxExplorerTurns` defaults to 10 completed Explorer submissions and does not
-   stop eligible verification work. It imposes no time or cost limit. `window`
-   defaults to 100,000 characters per verification batch, always admitting its
-   first entry.
+`maxExplorerTurns` defaults to 10 completed Explorer submissions. The final
+configured Verifier group finishes before the campaign stops at `turn-limit`.
+Eligible notes may remain unchecked and require later worker invocations.
+The cap imposes no time or cost limit. `window` defaults to 100,000 characters
+per verification batch, always admitting its first entry.
 
 By default, Verifiers can select intermediate notes for checks. To defer checks
 until a Verifier selects a claimed complete solution, initialize with:
@@ -282,14 +283,17 @@ The library also exposes independently callable workers. Create a fresh root
 with `open(path, {create, startCampaign: false, models})`, then create a worker
 inside `owner.root.commit` with `owner.workers.create(tx, owner.root.id, request)`.
 Requests select `explorer` or `verifier`. Explorer publishes its notes and
-summaries. A Verifier selects work and records checks. Pass `verify` in a Verifier
-request to supply an explicit selection. Each invocation processes a batch within
-`window`. Wait on the returned native task ID with
+summaries. A Verifier selects work for checks. Pass `verify` in a Verifier
+request to supply an explicit selection. Each invocation processes at most one
+batch within `window`. A default Verifier may instead complete with result
+`{status: "no-work", verify: []}` when no selected work remains, or
+`{status: "busy", verify: []}` when its selection conflicts with competing work.
+These results add no checks. Wait on the returned native task ID with
 `owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
 the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
 
-[The worker example](examples/workers.ts) runs an Explorer followed by a Verifier
-that selects and checks a batch:
+[The worker example](examples/workers.ts) runs an Explorer followed by a default
+Verifier:
 
 ```sh
 bun examples/workers.ts task.json settings.json .xean/workers.sqlite

@@ -341,6 +341,18 @@ export function createRoleRuntime() {
     ],
   });
 
+  function cleanup(
+    sessionId: string | undefined,
+    runtime: Runtime,
+    context: Context,
+  ) {
+    try {
+      if (sessionId) cleanupSessionResources(sessionId);
+    } catch (error) {
+      if (!context.abortSignal?.aborted) runtime.report(error);
+    }
+  }
+
   /** Recover the admitted stage, without rebuilding it from newer evidence. */
   async function peek(
     runtime: Runtime,
@@ -356,10 +368,20 @@ export function createRoleRuntime() {
     );
     // A close can precede the generation's settlement after its tool receipt.
     // Finish already-admitted native work before deciding whether a new call is needed.
-    if (progress?.conversation !== undefined)
-      await (
-        await runtime.conversation(progress.conversation, context)
-      )?.waitForIdle(context);
+    if (progress?.conversation !== undefined) {
+      const provider = await runtime.snapshot(
+        ProviderDoc,
+        progress.conversation,
+        context,
+      );
+      try {
+        await (
+          await runtime.conversation(progress.conversation, context)
+        )?.waitForIdle(context);
+      } finally {
+        cleanup(provider?.sessionId, runtime, context);
+      }
+    }
     let found: FrozenRole | undefined;
     await runtime.commit(async (tx) => {
       const read = async (conversationId: ConversationId, strict = false) => {
@@ -525,11 +547,7 @@ export function createRoleRuntime() {
       }
       throw error;
     } finally {
-      try {
-        if (sessionId) cleanupSessionResources(sessionId);
-      } catch (cleanupError) {
-        if (!context.abortSignal?.aborted) runtime.report(cleanupError);
-      }
+      cleanup(sessionId, runtime, context);
     }
   }
   return { extension, run, peek };

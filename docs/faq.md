@@ -128,9 +128,10 @@ remains distinct from a formal proof certificate. See the complete
 
 ## Is there a fixed time or cost budget?
 
-`maxExplorerTurns` limits completed Explorer submissions and leaves eligible
-verification work running. It imposes no wall-clock or monetary limit. The
-controlling agent manages its overall budget and scheduling.
+`maxExplorerTurns` limits completed Explorer submissions. The final configured
+Verifier group finishes before `turn-limit`, but eligible notes may remain
+unchecked and need later worker invocations. The cap imposes no wall-clock or
+monetary limit. The controlling agent manages its overall budget and scheduling.
 
 `inspect` reports Pi's recorded usage. Some failed or external calls have
 incomplete accounting. Include source preparation and independent review when
@@ -181,11 +182,12 @@ pinned runtimes and preserve both databases when backing up a campaign.
 
 The library can create a root with `startCampaign: false` and invoke Explorer
 and Verifier separately. Explorer publishes notes and summaries. Verifier selects
-work and records checks, or accepts an explicit `verify` selection. The caller
-waits on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted
+work for checks, or accepts an explicit `verify` selection. A default Verifier
+can complete with `no-work` or `busy` in its result without adding checks. The
+caller waits on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted
 or aborted workers need `{kind: "retry", task: id}`, preserving their frozen
 input and exact publication references. [The worker example](../examples/workers.ts)
-runs an Explorer followed by a Verifier batch. [The library instructions](../README.md#library-and-development)
+runs an Explorer followed by a default Verifier. [The library instructions](../README.md#library-and-development)
 explain queued-note intake and manual Explorer guidance.
 
 This interface retains a single database owner. Manual workers of the same role
