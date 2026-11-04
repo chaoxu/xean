@@ -44,6 +44,8 @@ export class ResearchOwnedError extends Error {
 }
 export type OpenOptions = {
   create?: Definition;
+  /** Create the sequential campaign task with a new root. Existing tasks are preserved. */
+  startCampaign?: boolean;
   models?: Models;
   source?: SourceExecutor;
   activity?: ActivityOptions;
@@ -51,7 +53,7 @@ export type OpenOptions = {
 
 function validateDefinition(value: unknown): Definition {
   if (!value || typeof value !== "object")
-    throw new Error("Not an initialized Xean 4 campaign");
+    throw new Error("Not an initialized xean campaign");
   const input = value as Definition;
   const settings = solveSettings.parse(input.settings);
   return { task: taskSchema.parse(input.task), settings };
@@ -189,12 +191,14 @@ export async function open(path: string, options: OpenOptions = {}) {
       init: async (tx, root) => {
         Object.assign(await tx.doc(DefinitionDoc, root), definition);
         await initializeNotebook(tx, root, `${canonical}.notes.sqlite`);
-        await workflow.initialize(tx, root);
+        if (options.startCampaign !== false)
+          await workflow.initialize(tx, root);
       },
     });
     return {
       harness,
       root,
+      workers: workflow.workers,
       close,
       resume: async () => {
         await root.commit((tx) => workflow.resume(tx, root.id), context);

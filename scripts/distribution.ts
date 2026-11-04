@@ -25,8 +25,12 @@ for (const file of [
   "bun.lock",
 ])
   await access(join(root, file));
-const { open, inspect, readStatus } = await import(manifest.name);
+const { open, inspect, readStatus, readNotes, createWorkers } = await import(
+  manifest.name
+);
 assert.equal(typeof open, "function");
+assert.equal(typeof readNotes, "function");
+assert.equal(typeof createWorkers, "function");
 const { ActivityClient, createActivityHandler } = await import("xean/activity");
 assert.equal(typeof ActivityClient, "function");
 assert.equal(typeof createActivityHandler, "function");

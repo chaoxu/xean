@@ -170,3 +170,19 @@ packet for a fresh campaign and decides which premises it is admitting.
 Inside a campaign, the outer workflow remains sequential. The caller owns
 scheduling across problems. Keep historical campaigns with their pinned runtimes
 and preserve both databases when backing up a campaign.
+
+## Can another agent call the workers directly?
+
+The library can create a root with `startCampaign: false` and invoke Explorer,
+Coordinator, and Verifier separately. Each worker publishes its own notes,
+summaries, or checks before completing. The caller chooses the sequence and waits
+on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted or
+aborted workers need a `{kind: "retry", task: id}` request, which preserves their
+frozen input and requires the same admitted notebook version.
+[The worker example](../examples/workers.ts) shows a pass through the roles and
+the first selected verification batch. [The library instructions](../README.md#library-and-development)
+explain queued-note intake and manual Explorer guidance.
+
+This interface retains a single database owner and sequential worker admission.
+The ordinary CLI still runs the full research loop. Independent workers do not
+enable concurrent notebook writers or transfer knowledge between campaigns.

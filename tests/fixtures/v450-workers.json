@@ -1,0 +1,876 @@
+{
+  "sourceCommit": "26669ebb071f8fc13e8a51f66a474d7ce9af387a",
+  "sourceArchiveSha256": "38fc7905655d3ada9a0aee385be47d336b5df0c85b8b108d11e48cca78acaa6c",
+  "bun": "1.4.2 (744846f84)",
+  "bunLockSha256": "c9d0219e9923d2c571722724f7e634e541f5544e766b3b2d20bc27ed01fd030e",
+  "normalization": [
+    "JSON object keys sorted; array order and all mathematical text retained.",
+    "System messages rendered with Pi getCurrentSystemPrompt; current tool schemas retained.",
+    "Non-system messages omit only top-level timestamp and tool-result durationMs.",
+    "Tool-call IDs and matching tool-result references renamed by first occurrence per request.",
+    "Check receipt IDs omitted; candidate IDs renamed by first occurrence, preserving attempt grouping.",
+    "Provider session IDs, usage timing, storage IDs and notebook paths are outside the captured projection."
+  ],
+  "cases": {
+    "corrected-ancestor-reconstruction-reuse": {
+      "requests": [
+        {
+          "role": "explorer",
+          "descriptor": "4aa7996fd3164be8472267a7894d50db125ec2b34ca42c4a35bcef380a86df42",
+          "system": "0ebd0304b6de055162c654026e647e31fb8fbf8c8958d1466d6e12afa06b01aa",
+          "tools": "fdeb0366cea77998a30a0682f820c6ed4871b5e94d32a7a1a79fbfad38fc3914",
+          "messages": "0aca95b8c7888548e6338f6395917f55343c57235987e8f9696a2808f0d076e5"
+        },
+        {
+          "role": "coordinator",
+          "descriptor": "89deff5dbfa4bf9390b5e5bbba12154d5f638eed3ca5e9536d27ea0a2097f0a7",
+          "system": "2527a91e7ba6e3652f3d0ea02757181c036c93078fb07fa0bfc8196d704a7270",
+          "tools": "cc93bdd347423b174a09230fa5ad51cb1bba152fd22ffcab35f9245152d0027b",
+          "messages": "fc38b8a9b09af87bd79ead57076898cfaa043df4f2467fcaae3cce2f688cb07b"
+        },
+        {
+          "role": "source",
+          "descriptor": "3776ad1beffb7adcac09e43cd960a86b5b088bf31659346fc9c6ffba2aa5b08d",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "cacc9aacc5a3c4954d58aa9487e471303b7e66cafcc50db2386a0c807605ee0a"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "6f3bf6152bfe6455eef2102ea5cd5804ea0cbd49ad656c6a852480c90b904918",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "79aec98b0705cccb6a522c3188e01a3c5215269f77822902538c2bb40a6ca875"
+        },
+        {
+          "role": "source",
+          "descriptor": "31d191020d2dab895c06de387762cbbcd50146b3b680a3491e21ffef5e1a7358",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "fb3b878fec9e4c31e0718901a26de11de3a376ed817f7d0d1fe036795a058b04"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "001dad93713de28278900e30d84d6484483757b658667c6d015c8297d2c26e96",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "d5b51e8ac94a5574b87c70f774207213c28356d123ac2f2483eb0ff28500287e"
+        },
+        {
+          "role": "requirements",
+          "descriptor": "40131d67358709d14123e3c977bf11ccb54479a3151d81bdfcc3fd7a83c0bbde",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "886c60e86c52d11f18967492b7f5c0515451ec1893ede6ec2cf7a3696bd8c9f2"
+        },
+        {
+          "role": "statement",
+          "descriptor": "21cde44237d6c4c0277a38f478d4d8b70f0626fd80144ed2d644c26e4d0aeee9",
+          "system": "32454e064dfda707604db8811a7afd01765bdaacde9d4c3b3be2cf0131529b42",
+          "tools": "f19e9ae03ea16ebbed792d2618a07847273d883f2ef980cb80ef6c73e2fd877c",
+          "messages": "4b24fc058f529062299d07d9ee305b876b3ccbb265fcc1f9ccbfa7411f2790fb"
+        },
+        {
+          "role": "proof",
+          "descriptor": "49f7d39c89e083addd838eb47510a0bd11092adf45c48df58af49dee9e518703",
+          "system": "908762b681905bd5c431c373749b3906e9d0ecc0ad0f9b92c6ffbac1eba983eb",
+          "tools": "ddceb407999336939ffc2f4213bf212b32ef24f1e291b611d13115e9c45b50b1",
+          "messages": "2b5066992995f8bd244f88b40c93d84dc5a04d16dcd8bda0cb3f2ce8d5cdc827"
+        },
+        {
+          "role": "reconstruction",
+          "descriptor": "5cf71a672a19460ab76c7882b025f8330468998f2b1619506553b84551760660",
+          "system": "e646c2007c0d79d79252723e9063c0a27f5347cfdddcf09fb3c79df0c9d92e92",
+          "tools": "1e27a14e660a15278d4398d9598ee4912b4f02fc8a314e649af845e9fc15c303",
+          "messages": "029f33e47ef050010a282f397deeaf2fe850232f590c2f6b8174e15b082173ba"
+        },
+        {
+          "role": "proof",
+          "descriptor": "d0d4a8a89da563dc57582bae54ccf1a0249a2d91b29cc74a8143047bcae92ad0",
+          "system": "908762b681905bd5c431c373749b3906e9d0ecc0ad0f9b92c6ffbac1eba983eb",
+          "tools": "ddceb407999336939ffc2f4213bf212b32ef24f1e291b611d13115e9c45b50b1",
+          "messages": "0190d478ffc7a5b51c3a1c5bf2aa300f6ef83bc8d3484cf7532df09fc46329c0"
+        },
+        {
+          "role": "reconstruction",
+          "descriptor": "c4a0b26ebfc31de7ed159094dfe55e2a7f9628a1f47da8fa83e4712c093d6844",
+          "system": "e646c2007c0d79d79252723e9063c0a27f5347cfdddcf09fb3c79df0c9d92e92",
+          "tools": "1e27a14e660a15278d4398d9598ee4912b4f02fc8a314e649af845e9fc15c303",
+          "messages": "c843b2a52f92fb1d7b5b4d84e06b8698b5601bb52e26906b9f59085b17400888"
+        },
+        {
+          "role": "explorer",
+          "descriptor": "e8fc5dd791ac9e2b066762fa8568f5ed29b873078156c6fe205f37a445f310a2",
+          "system": "0ebd0304b6de055162c654026e647e31fb8fbf8c8958d1466d6e12afa06b01aa",
+          "tools": "fdeb0366cea77998a30a0682f820c6ed4871b5e94d32a7a1a79fbfad38fc3914",
+          "messages": "8a1658df38e6a5a22c77146f4ba2759fd1c748bc58c2b4ee85309e1fc8b85079"
+        },
+        {
+          "role": "coordinator",
+          "descriptor": "11a459b89eb7bcc280b87920ddc901ce8327473689fe491fbc33bbb979e97049",
+          "system": "2527a91e7ba6e3652f3d0ea02757181c036c93078fb07fa0bfc8196d704a7270",
+          "tools": "cc93bdd347423b174a09230fa5ad51cb1bba152fd22ffcab35f9245152d0027b",
+          "messages": "4f8b6f181a7f505dea8c1b1817d97ddabed308a2b737bfe84aea6f5eec82a77d"
+        },
+        {
+          "role": "source",
+          "descriptor": "abe7829b144a5f2b529e97615a6d261a264341962f8451a1e855cd8e17a11159",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "cf9ef3b45c6d2cd917094b1ce10afc3a526a7d6ea2f0619d603b7c22a2e4dc97"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "df2482ecc41280804e16e6404574de069a7e56210ad15808ede60f514e152c99",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "aeeffae584440533a474b23f5e31d73bc2f07f93c731d0ff506f842fb7a2c4d5"
+        },
+        {
+          "role": "requirements",
+          "descriptor": "039a1dd415e4587effe6a079f83c123e7d38b93f42cdfb484516417b64260794",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "a364e4e44ccbb2bfea3aef914183e241be3f3e0dccc5adfc1d46f8cbefdba8b6"
+        },
+        {
+          "role": "statement",
+          "descriptor": "04cef08753b08436d7195da4c461573be763519b26b93f1562b8019987728b0e",
+          "system": "32454e064dfda707604db8811a7afd01765bdaacde9d4c3b3be2cf0131529b42",
+          "tools": "f19e9ae03ea16ebbed792d2618a07847273d883f2ef980cb80ef6c73e2fd877c",
+          "messages": "7c5e9a24e9480eb53deed3e336a40dfef63350f35f09c00d11d5f790260e42e3"
+        },
+        {
+          "role": "proof",
+          "descriptor": "97e136bd62c81c5291f5c858c5c361be5dc82a2454fc20aefa12c642b10c508e",
+          "system": "908762b681905bd5c431c373749b3906e9d0ecc0ad0f9b92c6ffbac1eba983eb",
+          "tools": "ddceb407999336939ffc2f4213bf212b32ef24f1e291b611d13115e9c45b50b1",
+          "messages": "4eed132839e6ffa4952df10e27da40c0b44216984f2432a9356e9139562eda4e"
+        },
+        {
+          "role": "reconstruction",
+          "descriptor": "eb9966da4faae85ba5186deb6651c51534b3bed725ed073744ab27e9dfc0f224",
+          "system": "e646c2007c0d79d79252723e9063c0a27f5347cfdddcf09fb3c79df0c9d92e92",
+          "tools": "1e27a14e660a15278d4398d9598ee4912b4f02fc8a314e649af845e9fc15c303",
+          "messages": "2991c9fde7631b8d186e9c217ddbc6339d312423b69e675bfe95b960739df01e"
+        }
+      ],
+      "result": {
+        "outcome": "accepted",
+        "turns": 2,
+        "accepted": ["n3"],
+        "notes": [
+          {
+            "id": "n1",
+            "summary": "PRIVATE_SUMMARY",
+            "detailedSummary": "PRIVATE_DETAIL",
+            "text": "PRIVATE_ORIGINAL_PROOF",
+            "support": [],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "PRIVATE_LEMMA_REPORT"
+              }
+            ],
+            "verified": true,
+            "dead": false
+          },
+          {
+            "id": "n2",
+            "summary": "Summary n2.",
+            "text": "First candidate.",
+            "support": ["n1"],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "requirements",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n2",
+                "verdict": "INCONCLUSIVE",
+                "report": "Check inconclusive."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          },
+          {
+            "id": "n3",
+            "summary": "Summary n3.",
+            "text": "Repaired candidate.",
+            "support": ["n1"],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "requirements",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          }
+        ],
+        "checks": [
+          {
+            "candidate": 1,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 1,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "requirements"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "PRIVATE_LEMMA_REPORT",
+                "verifier": "reconstruction"
+              },
+              {
+                "note": "n2",
+                "verdict": "INCONCLUSIVE",
+                "report": "Check inconclusive.",
+                "verifier": "reconstruction"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "requirements"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "reconstruction"
+              }
+            ]
+          }
+        ],
+        "argument": "## n1\n\nPRIVATE_ORIGINAL_PROOF\n\n## n3\n\nRepaired candidate.\n"
+      }
+    },
+    "failed-source-then-fresh-explorer": {
+      "requests": [
+        {
+          "role": "explorer",
+          "descriptor": "4aa7996fd3164be8472267a7894d50db125ec2b34ca42c4a35bcef380a86df42",
+          "system": "0ebd0304b6de055162c654026e647e31fb8fbf8c8958d1466d6e12afa06b01aa",
+          "tools": "fdeb0366cea77998a30a0682f820c6ed4871b5e94d32a7a1a79fbfad38fc3914",
+          "messages": "0aca95b8c7888548e6338f6395917f55343c57235987e8f9696a2808f0d076e5"
+        },
+        {
+          "role": "coordinator",
+          "descriptor": "7024131b71348c3598d4e8024a4ba2062e6694f40d80af6972ab5baa359aac90",
+          "system": "2527a91e7ba6e3652f3d0ea02757181c036c93078fb07fa0bfc8196d704a7270",
+          "tools": "cc93bdd347423b174a09230fa5ad51cb1bba152fd22ffcab35f9245152d0027b",
+          "messages": "8e29b648f22e7e0e4a67a9f565bd26999e796fc03c31c9765b4b9e2b1f637365"
+        },
+        {
+          "role": "source",
+          "descriptor": "d0063cfcceb2a7e60aca32ac5b261e5da8d06d5dcebe935f493c008ac462ff0c",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "abf77f148742a3fe6abbe4e269cae648e89df90be743db57b68cae01de31e8e9"
+        },
+        {
+          "role": "explorer",
+          "descriptor": "0bfbca2470918dd95c41002df493490396b6785e18ffa95f03ad76d42619be31",
+          "system": "0ebd0304b6de055162c654026e647e31fb8fbf8c8958d1466d6e12afa06b01aa",
+          "tools": "fdeb0366cea77998a30a0682f820c6ed4871b5e94d32a7a1a79fbfad38fc3914",
+          "messages": "c820ca10c6f36cc136c1be4cd2ded2eb36a7cdd1f5867c2b2e1a81897bdb4b48"
+        },
+        {
+          "role": "coordinator",
+          "descriptor": "6edf44539a427b75cbc6beac2f2424fbdabb5ff6f0b201306e4e403f782f7246",
+          "system": "2527a91e7ba6e3652f3d0ea02757181c036c93078fb07fa0bfc8196d704a7270",
+          "tools": "cc93bdd347423b174a09230fa5ad51cb1bba152fd22ffcab35f9245152d0027b",
+          "messages": "7aad924ff08b0b15b06356eb864fea97762c4636aeca65448de7c0d64413a417"
+        },
+        {
+          "role": "source",
+          "descriptor": "2d299ca74e786092dedbf5600524446d0f84995c246b31657dc779abb35a071a",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "fe184ddbdd41ff1ebfe66846f56f085b343801e7072f8e220b1c8d431d435cc5"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "179b1d92beb596709270bf652de3e4760127553b946a55eb59a4677606b3d748",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "eadbd820c9d91d284355d0d6febe48c3405da576953469291d801510a1ce621c"
+        },
+        {
+          "role": "requirements",
+          "descriptor": "7c15de3f9d9514c84c03d7d7ef76982b20ee9ca9134366b384847172db95d1e2",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "c162b28a21a0e033fb59791f509a1a633d820ea7206f2d0cdf1880f2d37e4b14"
+        },
+        {
+          "role": "statement",
+          "descriptor": "f5c50c7dd91d8e85223ad7b802a1a814d54dd3f81fa6ed05c1360ceae678a882",
+          "system": "32454e064dfda707604db8811a7afd01765bdaacde9d4c3b3be2cf0131529b42",
+          "tools": "f19e9ae03ea16ebbed792d2618a07847273d883f2ef980cb80ef6c73e2fd877c",
+          "messages": "6672e699f5ebec264d706c7eb919356ab50742557efa0acfec9df81ff209984b"
+        },
+        {
+          "role": "proof",
+          "descriptor": "375875f442c00bea364d7f869eb7dd999a07f4c249154a7fb09ef901091d3c83",
+          "system": "908762b681905bd5c431c373749b3906e9d0ecc0ad0f9b92c6ffbac1eba983eb",
+          "tools": "ddceb407999336939ffc2f4213bf212b32ef24f1e291b611d13115e9c45b50b1",
+          "messages": "056462a01c6a841b29bbed4b68ea5127ba74f0fe55e96d4832e6cf91549021ae"
+        },
+        {
+          "role": "reconstruction",
+          "descriptor": "cfb99060dbd1f081bce4b276368c9887c9220ab92805997319fd7a063754f42b",
+          "system": "e646c2007c0d79d79252723e9063c0a27f5347cfdddcf09fb3c79df0c9d92e92",
+          "tools": "1e27a14e660a15278d4398d9598ee4912b4f02fc8a314e649af845e9fc15c303",
+          "messages": "eff8d1ea17db58c6de63d794baea634c2064c09fb764a1d179fc694b9dca1ec0"
+        }
+      ],
+      "result": {
+        "outcome": "accepted",
+        "turns": 2,
+        "accepted": ["n2"],
+        "notes": [
+          {
+            "id": "n1",
+            "summary": "Summary n1.",
+            "text": "Original proof.",
+            "support": [],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n1",
+                "verdict": "FAIL",
+                "report": "Check fail."
+              }
+            ],
+            "verified": false,
+            "dead": true
+          },
+          {
+            "id": "n2",
+            "summary": "Summary n2.",
+            "text": "New proof.",
+            "support": [],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "requirements",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          }
+        ],
+        "checks": [
+          {
+            "candidate": 1,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "FAIL",
+                "report": "Check fail.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "requirements"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "reconstruction"
+              }
+            ]
+          }
+        ],
+        "argument": "## n2\n\nNew proof.\n"
+      }
+    },
+    "generated-dependency-acceptance": {
+      "requests": [
+        {
+          "role": "explorer",
+          "descriptor": "4aa7996fd3164be8472267a7894d50db125ec2b34ca42c4a35bcef380a86df42",
+          "system": "0ebd0304b6de055162c654026e647e31fb8fbf8c8958d1466d6e12afa06b01aa",
+          "tools": "fdeb0366cea77998a30a0682f820c6ed4871b5e94d32a7a1a79fbfad38fc3914",
+          "messages": "0aca95b8c7888548e6338f6395917f55343c57235987e8f9696a2808f0d076e5"
+        },
+        {
+          "role": "coordinator",
+          "descriptor": "c1e5c7736122ffc0f54f3deb05958c1994cd102df9eac680cf2a0950739ecb0e",
+          "system": "2527a91e7ba6e3652f3d0ea02757181c036c93078fb07fa0bfc8196d704a7270",
+          "tools": "cc93bdd347423b174a09230fa5ad51cb1bba152fd22ffcab35f9245152d0027b",
+          "messages": "5c06f55eec8d84a35ec22c78547eb807b2cd735bf9d57bfb5a97ed037fadf7bd"
+        },
+        {
+          "role": "source",
+          "descriptor": "8859e8f2084a556b4431bd3e34ec73b2a90331c66aa1d6246993ab5d6c0a7350",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "814a7c766a9121443bd5839d5135e8e971fc0a86fb9b92fcb15f69caf973f0fe"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "1760527fa63bc35cc9b57d067ab943e034aecaad455bc23f6208fbbe200b1a76",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "c4547bcf4d34783154316f52bc061e24cda7ddb3113bf322e01bfc201b0c6a22"
+        },
+        {
+          "role": "source",
+          "descriptor": "b8f60371aca84a1e3a4ddfd83df68c53f9d91ebf95098234ebac83c83bca49ce",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "6a3bc36470a931b15c60cfbf2cc7e4724955aff1b92d1334ab91531905f8322f"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "0c3be3d689f42786f2133a79d9ec43d3195e47ed0d67c3419910eaf43a324090",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "2e9a00a28d65c881bda1ca526a3d63c31df2e5c42ee66ff144b051faeb83c960"
+        },
+        {
+          "role": "source",
+          "descriptor": "bb210a7c1e1def9193728769ce057c6553fc8f8db6c0d7f22ad0a83ca3147029",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "a100bf9e1dc96890ecdd25dde32bc392c8bdc6e3689e5838661844ee867b1abf"
+        },
+        {
+          "role": "correctness",
+          "descriptor": "f2cc7fcefc91ee2776258f37d67d0a7856eee1b7ba45a1316afdcd8d1bae4b93",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "022fe51a33488963875525af5457574576b45806def5f2725d4faecd2f4aee1a"
+        },
+        {
+          "role": "requirements",
+          "descriptor": "bd4239aa11574bb981d324c70226b381ae5d4e395c73e1e03ae29d011d160336",
+          "system": "e6f7f5300dccd5218163a128fa7fb1feddc4593721432e9d5754ca0803f0d0bb",
+          "tools": "df6f19b5461d0eedf6ca8ae01d247afbc157b9d6040af43ec89cd54ce4711543",
+          "messages": "4fa0ef85a52bc5002cde494bcccc3d91787153a9cd2d56ea5e9f483a1ad3eb1c"
+        },
+        {
+          "role": "statement",
+          "descriptor": "3a64de46096b13cbe231a23b2736bda3846bb135242bfd718fb5e14520096895",
+          "system": "32454e064dfda707604db8811a7afd01765bdaacde9d4c3b3be2cf0131529b42",
+          "tools": "f19e9ae03ea16ebbed792d2618a07847273d883f2ef980cb80ef6c73e2fd877c",
+          "messages": "bead4dbb6767b500b22abc57b9977b7025277927bf62644c8a6fb2381cbd859d"
+        },
+        {
+          "role": "proof",
+          "descriptor": "0fdea47c7b68190b9ce168d08fffc6ff64326f43c1d03d5491bf9931cadcd2c8",
+          "system": "908762b681905bd5c431c373749b3906e9d0ecc0ad0f9b92c6ffbac1eba983eb",
+          "tools": "ddceb407999336939ffc2f4213bf212b32ef24f1e291b611d13115e9c45b50b1",
+          "messages": "59c6c08b3e5c42c6cc5d806d8ab3f846c6bc40b1f01b3b0cf105d6d9f9836cc9"
+        },
+        {
+          "role": "reconstruction",
+          "descriptor": "f85074c0d6c6bb493f779212f14788bd67c511ea95f4fde75561d8c440a774a1",
+          "system": "e646c2007c0d79d79252723e9063c0a27f5347cfdddcf09fb3c79df0c9d92e92",
+          "tools": "1e27a14e660a15278d4398d9598ee4912b4f02fc8a314e649af845e9fc15c303",
+          "messages": "c1a56617631b4019b585cd1ffb8cf01c8306d51bf035be438b7975bd74867295"
+        }
+      ],
+      "result": {
+        "outcome": "accepted",
+        "turns": 1,
+        "accepted": ["n3"],
+        "notes": [
+          {
+            "id": "n1",
+            "summary": "Summary n1.",
+            "text": "Lemma L.",
+            "support": [],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          },
+          {
+            "id": "n2",
+            "summary": "Summary n2.",
+            "text": "Lemma M from L.",
+            "support": ["n1"],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          },
+          {
+            "id": "n3",
+            "summary": "Summary n3.",
+            "text": "Complete P from M.",
+            "support": ["n2"],
+            "verdicts": [
+              {
+                "verifier": "source",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "correctness",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "requirements",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              },
+              {
+                "verifier": "reconstruction",
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass."
+              }
+            ],
+            "verified": true,
+            "dead": false
+          },
+          {
+            "id": "n4",
+            "summary": "Summary n4.",
+            "text": "Unrelated alternative.",
+            "support": [],
+            "verdicts": [],
+            "verified": false,
+            "dead": false
+          }
+        ],
+        "checks": [
+          {
+            "candidate": 1,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 1,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 2,
+            "values": [
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "source"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "correctness"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "requirements"
+              }
+            ]
+          },
+          {
+            "candidate": 3,
+            "values": [
+              {
+                "note": "n1",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "reconstruction"
+              },
+              {
+                "note": "n2",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "reconstruction"
+              },
+              {
+                "note": "n3",
+                "verdict": "PASS",
+                "report": "Check pass.",
+                "verifier": "reconstruction"
+              }
+            ]
+          }
+        ],
+        "argument": "## n1\n\nLemma L.\n\n## n2\n\nLemma M from L.\n\n## n3\n\nComplete P from M.\n"
+      }
+    }
+  }
+}

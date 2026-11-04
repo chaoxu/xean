@@ -15,6 +15,11 @@ import {
   type CampaignState,
 } from "./workflow.ts";
 
+/** Read the admitted notes without requiring an automatic campaign task. */
+export async function readNotes(tx: Tx, root: ConversationId) {
+  return project(readNotebook(await tx.doc(Notebook, root))).notes;
+}
+
 /** Status comes from the latest native campaign task, not a second run table. */
 export async function readStatus(tx: Tx, root: ConversationId) {
   const campaign = await lastCampaign(tx, root);

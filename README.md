@@ -24,8 +24,8 @@ below describe the current CLI and library.
 
 ## Start a campaign
 
-Use Bun 1.4.2 or later on macOS or Linux. From an extracted release archive or
-source checkout:
+This checkout is `5.0.0-dev.1` and requires fresh campaign databases. Use Bun
+1.4.2 or later on macOS or Linux. From an extracted archive or source checkout:
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -298,17 +298,50 @@ incompletely measured, so recorded costs can be lower bounds.
 
 ## Qualification
 
-Fresh campaigns on the final Pi 1.5.0 runtime passed independent model review
+The 4.5.0 release's fresh campaigns on Pi 1.5.0 passed independent model review
 for destroying rigidity, matroid t-connectivity, and First Proof P10. The
 [release notes](release-notes.md) distinguish these runs from the earlier 4.4.0
 comparison. This bounded validation does not establish general mathematical
-nonregression or formal certification.
+nonregression or formal certification. Independent workers have not received
+live-model qualification.
 
 ## Library and development
 
 Library entry points include `open`, `inspect`, and `readReport`. Callers using
 saved Pi credentials supply authenticated `models` to `open`. Always close the
 owner after use. Pi owns execution and recovery.
+
+The library also exposes independently callable workers. Create a fresh root
+with `open(path, {create, startCampaign: false, models})`, then create a worker
+inside `owner.root.commit` with `owner.workers.create(tx, owner.root.id, request)`.
+Requests select `explorer`, `coordinator`, or `verifier`. Explorer publishes its
+notes, Coordinator publishes summaries and returns verification selections, and
+Verifier records checks. Wait on the returned native task ID with
+`owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
+the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
+
+[The worker example](examples/workers.ts) runs Explorer, Coordinator, and the
+first selected verification batch:
+
+```sh
+bun examples/workers.ts task.json settings.json .xean/workers.sqlite
+```
+
+This interface uses the existing database owner and admits workers sequentially.
+It does not add parallel writers or share notes between processes.
+`startCampaign: false` only omits initial campaign creation. Reopening preserves
+existing tasks. Waiting on the same task ID recovers unfinished work. For a
+faulted or aborted worker, create `{kind: "retry", task: id}`. A retry preserves
+the frozen input and requires the same admitted notebook version.
+
+Fresh Explorer and Coordinator workers admit notes queued through `submitNotes`.
+Verifier workers and retries leave queued notes for a later intake. For manual
+exploration, pass advice as `{kind: "explorer", guidance: "..."}`. The `guide`
+queue is consumed by the automatic campaign controller.
+
+Campaign `status`, `inspect`, `resume`, and `export` commands require the automatic
+campaign task. The default CLI keeps the complete sequential research loop.
+
 Released Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
 retained patches recorded in [provenance](vendor/pi/provenance.json).
 
@@ -318,7 +351,7 @@ bun run pack
 ```
 
 `check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
-and writes `dist/xean-4.5.0.tgz`. `bun run check:distribution` checks packaging
+and writes `dist/xean-5.0.0-dev.1.tgz`. `bun run check:distribution` checks packaging
 without retaining an archive.
 
 ## Citing `xean`

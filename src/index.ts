@@ -8,10 +8,12 @@ export {
 export {
   readStatus,
   readReport,
+  readNotes,
   readUsage,
   acceptedArgument,
 } from "./report.ts";
 export { createWorkflow, type SourceExecutor } from "./workflow.ts";
+export { createWorkers, type WorkerRequest } from "./workers.ts";
 export {
   DefinitionDoc,
   Notebook,

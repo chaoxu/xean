@@ -10,6 +10,7 @@ import {
   establishes,
   invalidatesNote,
   note as noteSchema,
+  noteIdAfter,
   verifierNames,
 } from "./policy/contracts.ts";
 import type { SolveSettings } from "./policy/settings.ts";
@@ -36,6 +37,17 @@ export type NotebookState = {
   guidance: { id: string; text: string }[];
   inputs: { id: string; notes: Omit<StoredNote, "id">[]; consumed: boolean }[];
 };
+
+/** Intake is explicit at fresh exploration/coordination boundaries, never retries. */
+export function admitNotes(book: NotebookState): boolean {
+  const pending = book.inputs.filter((input) => !input.consumed);
+  for (const input of pending) {
+    for (const note of input.notes)
+      book.notes.push({ ...note, id: noteIdAfter(book.notes.length, 0) });
+    input.consumed = true;
+  }
+  return pending.length > 0;
+}
 type NotebookReference = Omit<NotebookState, "notes"> & {
   path: string;
   version: number;

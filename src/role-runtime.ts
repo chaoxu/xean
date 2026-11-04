@@ -517,7 +517,8 @@ export function createRoleRuntime(activity?: ActivityOptions) {
           if (
             previous?.state.status !== "terminal" ||
             (previous.state.outcome.status !== "completed" &&
-              previous.state.outcome.status !== "faulted")
+              previous.state.outcome.status !== "faulted" &&
+              previous.state.outcome.status !== "aborted")
           )
             continue;
           let cursor: Cursor | undefined;

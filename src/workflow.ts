@@ -1,17 +1,15 @@
-import type { Context, JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord";
 import {
-  defineEntry,
   defineExtension,
   defineTask,
   type ConversationId,
-  type EntryId,
   type TaskId,
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { createRoleRuntime, Assignment } from "./role-runtime.ts";
 import {
   Notebook,
+  admitNotes,
   definition,
   project,
   readNotebook,
@@ -20,37 +18,20 @@ import {
 import {
   coordinatorResultFor,
   establishes,
-  explorerResultFor,
-  noteIdAfter,
   pick,
-  sourceVerdictsFor,
-  type ExplorerInput,
   type Verification,
-  type VerifierInput,
-  type Verdict,
 } from "./policy/contracts.ts";
-import type { CallDescriptor } from "./policy/prompts.ts";
-import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
 import { supportClosure } from "./policy/support.ts";
-import { verificationPrefix } from "./policy/verification.ts";
-import type { CodexRequest, CodexResult } from "./policy/source.ts";
-import { verify } from "./verification.ts";
 import type { ActivityOptions } from "./activity.ts";
+import {
+  createWorkers,
+  type SourceExecutor,
+  type WorkerInput,
+  type WorkerRequest,
+} from "./workers.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
-export type SourceExecutor = (
-  request: CodexRequest,
-  signal: AbortSignal,
-) => Promise<CodexResult>;
-type WorkerInput = (
-  | { kind: "call"; descriptor: CallDescriptor; profile: PiRoleProfile }
-  | {
-      kind: "verify";
-      input: VerifierInput;
-      settings: SolveSettings;
-      reconstruction?: { note: string; call: number }[];
-    }
-) & { previousTasks?: number[] };
+export type { SourceExecutor } from "./workers.ts";
 type Step = "explorer" | "coordinator" | "verifier";
 export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
   step: Step;
@@ -67,11 +48,6 @@ export type CampaignResult = {
   resume?: CampaignState;
 };
 export const campaignKind = "xean.campaign";
-const ResultEntry = defineEntry<{
-  key: string;
-  value: JsonValue;
-  descriptor?: JsonValue;
-}>("xean.role-result");
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
   await runtime.commit(
@@ -93,181 +69,7 @@ export async function lastCampaign(tx: Tx, root: ConversationId) {
 export function createWorkflow(
   options: { source?: SourceExecutor; activity?: ActivityOptions } = {},
 ) {
-  const roles = createRoleRuntime(options.activity);
-  const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
-    name: "xean.worker",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    abort,
-    phases: {
-      async run(task, runtime, context) {
-        let value: JsonValue;
-        if (task.input.kind === "call") {
-          const answer = await roles.run(
-            runtime,
-            "role",
-            task.input.descriptor,
-            task.input.profile,
-            context,
-            task.input.previousTasks,
-          );
-          value = answer.value;
-        } else {
-          const input = task.input;
-          const candidate = input.previousTasks?.[0] ?? task.id;
-          const recorded = async (): Promise<Verdict[]> => {
-            const book = await runtime.snapshot(
-              Notebook,
-              task.conversationId,
-              context,
-            );
-            if (!book) throw new Error("Campaign notebook is missing");
-            return book.checks
-              .filter((c) => c.candidate === candidate)
-              .flatMap((c) => c.values);
-          };
-          const premises: Record<string, string> = {};
-          await runtime.commit(async (tx) => {
-            for (const ref of input.reconstruction ?? []) {
-              const entry = await tx.entry(ref.call as EntryId);
-              const { descriptor } = await tx.doc(
-                Assignment,
-                entry!.conversationId,
-              );
-              if (descriptor?.kind !== "reconstruction")
-                throw new Error("Missing reconstruction assignment");
-              premises[ref.note] = descriptor.statement.statements.find(
-                (value) => value.note === ref.note,
-              )!.statement;
-            }
-          }, context);
-          await verify(input.input, input.settings, {
-            premises,
-            call: (key, descriptor, profile) =>
-              roles.run(
-                runtime,
-                key,
-                descriptor,
-                profile,
-                context,
-                input.previousTasks,
-              ),
-            recorded,
-            refresh: async (value) => {
-              const refreshed = copy(value);
-              const book = await runtime.snapshot(
-                Notebook,
-                task.conversationId,
-                context,
-              );
-              if (!book) throw new Error("Campaign notebook is missing");
-              const current = new Map(
-                project(readNotebook(book)).notes.map((note) => [
-                  note.id,
-                  note,
-                ]),
-              );
-              for (const note of [...refreshed.notes, ...refreshed.support]) {
-                const latest = current.get(note.id);
-                if (latest === undefined) continue;
-                note.verdicts = latest.verdicts;
-                note.verified = latest.verified;
-                note.dead = latest.dead;
-              }
-              return refreshed;
-            },
-            record: async (id, values) => {
-              await runtime.commit(async (tx) => {
-                const book = await tx.doc(Notebook, task.conversationId);
-                if (!book.checks.some((check) => check.call === id))
-                  book.checks.push({
-                    candidate,
-                    call: id,
-                    values: copy(values),
-                  });
-              }, context);
-            },
-            source: async (key, request, judged) => {
-              if (!options.source)
-                throw new Error("Codex source execution is not registered");
-              const validate = (output: CodexResult) => {
-                if (output.state !== "succeeded")
-                  throw new Error(`verifier failed: ${output.error}`);
-                const value = sourceVerdictsFor(judged).parse(output.output);
-                if (
-                  !request.search &&
-                  value.verdicts.some((v) => v.sources.length)
-                )
-                  throw new Error(
-                    "Source citations require search to be enabled",
-                  );
-                return value;
-              };
-              let prior:
-                | { call: number; value: ReturnType<typeof validate> }
-                | undefined;
-              const owners = [task.id, ...(input.previousTasks ?? [])];
-              await runtime.commit(async (tx) => {
-                let cursor;
-                do {
-                  const page = await tx.scanEntries(
-                    { conversationId: task.conversationId },
-                    128,
-                    cursor,
-                  );
-                  for (const entry of page.items) {
-                    if (
-                      !ResultEntry.is(entry) ||
-                      entry.byTaskId === undefined ||
-                      !owners.includes(entry.byTaskId) ||
-                      entry.data.key !== key ||
-                      JSON.stringify(entry.data.descriptor) !==
-                        JSON.stringify(request)
-                    )
-                      continue;
-                    try {
-                      prior = {
-                        call: entry.id,
-                        value: validate(entry.data.value as CodexResult),
-                      };
-                      return;
-                    } catch {
-                      /* Failed calls remain evidence, not reusable answers. */
-                    }
-                  }
-                  cursor = page.next;
-                } while (cursor);
-              }, context);
-              if (prior) return prior;
-              const output = await options.source(request, runtime.signal);
-              let id!: number;
-              await runtime.commit(async (tx) => {
-                id = (
-                  await tx.appendEntry(ResultEntry, task.conversationId, {
-                    data: {
-                      key,
-                      value: copy(output) as JsonValue,
-                      descriptor: copy(request) as JsonValue,
-                    },
-                  })
-                ).id;
-              }, context);
-              return { call: id, value: validate(output) };
-            },
-          });
-          value = null;
-        }
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result: value },
-          }),
-          context,
-        );
-      },
-    },
-  });
-
+  const workers = createWorkers(options);
   const Campaign = defineTask<
     { resume?: CampaignState },
     CampaignState,
@@ -293,7 +95,7 @@ export function createWorkflow(
           const config = await definition(tx, task.conversationId);
           const ref = await tx.doc(Notebook, task.conversationId);
           const book = readNotebook(ref);
-          let { notes, accepted, reconstructed } = project(book);
+          let { notes, accepted } = project(book);
           if (accepted.length)
             return {
               status: "terminal",
@@ -306,14 +108,9 @@ export function createWorkflow(
                 },
               },
             };
-          let request: WorkerInput;
+          let request: WorkerRequest;
           if (state.child !== undefined) {
-            const previous = (await tx.task(state.child as TaskId))!;
-            request = copy(previous.input) as WorkerInput;
-            request.previousTasks = [
-              ...(request.previousTasks ?? []),
-              state.child,
-            ];
+            request = { kind: "retry", task: state.child };
           } else {
             if (state.step === "verifier") {
               const available = new Set(
@@ -343,16 +140,7 @@ export function createWorkflow(
             // V1 imports only before a fresh Explorer or its Coordinator handoff.
             // A failed request already names its future notes, so its intake stays frozen.
             if (state.step === "explorer" || state.step === "coordinator") {
-              const imported = book.inputs.filter((input) => !input.consumed);
-              for (const input of imported) {
-                for (const note of input.notes)
-                  book.notes.push({
-                    ...copy(note),
-                    id: noteIdAfter(book.notes.length, 0),
-                  });
-                input.consumed = true;
-              }
-              if (imported.length) {
+              if (admitNotes(book)) {
                 notes = project(book).notes;
                 if (state.step === "explorer") state.step = "coordinator";
               }
@@ -363,69 +151,20 @@ export function createWorkflow(
                 .map((v) => v.text)
                 .join("\n\n");
               state.guidanceThrough = book.guidance.length;
-              const input: ExplorerInput = {
-                task: config.task,
-                explorerGuidance: guidance,
-                notes: notes.map(
-                  ({ text: _text, detailedSummary: _detail, ...note }) => note,
-                ),
-              };
-              request = {
-                kind: "call",
-                profile: config.settings.explorer,
-                descriptor: {
-                  kind: "explorer",
-                  input,
-                },
-              };
+              request = { kind: "explorer", guidance };
             } else if (state.step === "coordinator") {
-              request = {
-                kind: "call",
-                profile: config.settings.coordinator,
-                descriptor: {
-                  kind: "coordinator",
-                  input: {
-                    task: config.task,
-                    notes,
-                    ...(config.settings.verifyOnSolution
-                      ? { verifyOnSolution: true }
-                      : {}),
-                  },
-                },
-              };
+              request = { kind: "coordinator" };
             } else {
-              const batch = verificationPrefix(
-                state.pending,
-                notes,
-                config.settings.window,
-              );
-              const listed = batch.map((entry) => pick(notes, entry.note));
-              const input: VerifierInput = {
-                task: config.task,
-                verify: batch,
-                notes: listed,
-                support: supportClosure(listed, notes).map((id) =>
-                  pick(notes, id),
-                ),
-              };
-              request = {
-                kind: "verify",
-                input,
-                settings: config.settings,
-                reconstruction: [...input.notes, ...input.support].flatMap(
-                  (note) =>
-                    reconstructed[note.id] === undefined
-                      ? []
-                      : [{ note: note.id, call: reconstructed[note.id]! }],
-                ),
-              };
+              request = { kind: "verifier", verify: state.pending };
             }
           }
           saveNotebook(tx, ref, book);
-          const child = await tx.createTask(Worker, request, {
-            conversationId: task.conversationId,
-            ownership: { kind: "task", taskId: task.id },
-          });
+          const child = await workers.create(
+            tx,
+            task.conversationId,
+            request,
+            task.id,
+          );
           return {
             status: "waiting",
             on: [child],
@@ -461,22 +200,12 @@ export function createWorkflow(
               },
             };
           }
-          const ref = await tx.doc(Notebook, task.conversationId);
-          const book = readNotebook(ref);
           if (state.step === "explorer") {
             if (
               request.kind !== "call" ||
               request.descriptor.kind !== "explorer"
             )
               throw new Error("Explorer request mismatch");
-            const value = explorerResultFor(
-              request.descriptor.input.notes,
-            ).parse(result);
-            for (const note of value.notes)
-              book.notes.push({
-                ...note,
-                id: noteIdAfter(book.notes.length, 0),
-              });
             state.turns++;
             state.step = "coordinator";
           } else if (state.step === "coordinator") {
@@ -488,8 +217,6 @@ export function createWorkflow(
             const value = coordinatorResultFor(
               request.descriptor.input.notes,
             ).parse(result);
-            for (const filing of value.filings)
-              pick(book.notes, filing.note).summary = filing.summary;
             state.pending = value.verify;
             if (request.descriptor.input.verifyOnSolution) {
               const notes = request.descriptor.input.notes;
@@ -511,7 +238,6 @@ export function createWorkflow(
             state.pending = state.pending.slice(request.input.verify.length);
           }
           delete state.child;
-          saveNotebook(tx, ref, book);
           return { status: "running", checkpoint: { ...state, phase: "next" } };
         }, context);
       },
@@ -519,11 +245,12 @@ export function createWorkflow(
   });
 
   const extension = defineExtension({
-    ...roles.extension,
-    tasks: [Campaign, Worker],
+    ...workers.extension,
+    tasks: [...workers.extension.tasks!, Campaign],
   });
   return {
     extension,
+    workers,
     initialize: (tx: Tx, root: ConversationId) =>
       tx.createTask(
         Campaign,
