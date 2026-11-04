@@ -131,7 +131,7 @@ function fixture(
       descriptor: CallDescriptor;
       previousTasks: TaskId[];
       profile: PiRoleProfile;
-      frozen: boolean;
+      allowNew: boolean;
     },
     { phase: "run" },
     JsonValue,
@@ -142,23 +142,19 @@ function fixture(
     initial: () => ({ phase: "run" }),
     phases: {
       async run(task, runtime, ctx) {
-        const prior = task.input.frozen
-          ? await role.peek(runtime, "role", ctx, task.input.previousTasks)
-          : undefined;
-        const result =
-          prior?.receipt ??
-          (await role.run(
-            runtime,
-            "role",
-            prior?.descriptor ?? task.input.descriptor,
-            prior?.profile ?? task.input.profile,
-            ctx,
-            task.input.previousTasks,
-          ));
+        const result = await role.run(
+          runtime,
+          "role",
+          task.input.descriptor,
+          task.input.profile,
+          ctx,
+          task.input.previousTasks,
+          async () => task.input.allowNew,
+        );
         await runtime.commit(
           () => ({
             status: "terminal",
-            outcome: { status: "completed", result },
+            outcome: { status: "completed", result: result ?? null },
           }),
           ctx,
         );
@@ -211,13 +207,13 @@ function fixture(
             model: "math",
             reasoning: "max",
           },
-          frozen = false,
+          allowNew = true,
         ) {
           return root.commit(
             (tx) =>
               tx.createTask(
                 Invoke,
-                { descriptor: input, previousTasks, profile, frozen },
+                { descriptor: input, previousTasks, profile, allowNew },
                 { ownership: { kind: "conversation" } },
               ),
             context,
@@ -1099,45 +1095,111 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
 });
 
 test("frozen recovery finds a later completed receipt after an earlier interrupted assignment", async () => {
+  const input: CallDescriptor = {
+    kind: "verifier",
+    name: "correctness",
+    judged: ["n1"],
+    input: {
+      task: descriptor.input.task,
+      verify: [{ note: "n1", verifiers: ["source", "correctness"] }],
+      notes: [
+        {
+          id: "n1",
+          text: "Equality is reflexive.",
+          support: [],
+          verdicts: [],
+          verified: false,
+          dead: false,
+        },
+      ],
+      support: [],
+      order: ["n1"],
+    },
+  };
+  const result = {
+    verdicts: [{ note: "n1", verdict: "PASS", report: "Reflexivity." }],
+  };
   const driver = fixture(
     [
       fauxAssistantMessage("", {
         stopReason: "error",
         errorMessage: "Disconnected",
       }),
-      submitted(),
+      (transcript) => {
+        expect(JSON.stringify(transcript.messages)).not.toContain(
+          "Later global evidence.",
+        );
+        return fauxAssistantMessage([fauxToolCall("submit_verdict", result)], {
+          stopReason: "toolUse",
+        });
+      },
     ],
     undefined,
     false,
   );
   const { harness, invoke } = await driver.open();
   try {
-    const first = await invoke();
+    const first = await invoke([], input);
     expect(
       (await harness.waitForTask(first, context)).state.outcome.status,
     ).toBe("faulted");
-    const second = await invoke([first], descriptor, undefined, true);
+    const changed: CallDescriptor = {
+      ...input,
+      input: {
+        ...input.input,
+        notes: input.input.notes.map((note) => ({
+          ...note,
+          verdicts: [
+            {
+              note: note.id,
+              verifier: "requirements",
+              verdict: "INCONCLUSIVE",
+              report: "Later global evidence.",
+            },
+          ],
+        })),
+      },
+    };
+    const second = await invoke([first], changed);
     const completed = (await harness.waitForTask(second, context)).state
       .outcome;
     expect(completed.status).toBe("completed");
-    const changed: CallDescriptor = {
-      ...descriptor,
-      input: { ...descriptor.input, explorerGuidance: "Later global advice." },
-    };
     const recovered = (
       await harness.waitForTask(
-        await invoke([first, second], changed, undefined, true),
+        await invoke([first, second], changed, undefined, false),
         context,
       )
     ).state.outcome;
     expect(recovered).toMatchObject({
       status: "completed",
-      result: { value, fresh: false },
+      result: { value: result, fresh: false },
     });
     expect((recovered.result as { call: number }).call).toBe(
       (completed.result as { call: number }).call,
     );
     expect(driver.provider.state.callCount).toBe(2);
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("a rejected new-call gate creates no conversation or model request", async () => {
+  const driver = fixture([]);
+  const { harness, invoke } = await driver.open();
+  try {
+    const id = await invoke([], descriptor, undefined, false);
+    expect((await harness.waitForTask(id, context)).state.outcome).toEqual({
+      status: "completed",
+      result: null,
+    });
+    expect(
+      await harness.commit(
+        async (tx) =>
+          (await tx.scanConversations({ ownerTaskId: id }, 1)).items.length,
+        context,
+      ),
+    ).toBe(0);
+    expect(driver.provider.state.callCount).toBe(0);
   } finally {
     await harness.close(context);
   }

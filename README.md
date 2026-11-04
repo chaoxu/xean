@@ -299,6 +299,11 @@ These results add no checks. Wait on the returned native task ID with
 `owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
 the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
 
+Default Verifiers created together receive separate subsets of note IDs, each
+expanded to include all ancestor notes and frozen at admission. An empty view
+returns `no-work` without a model call. Shared ancestors can still cause `busy`,
+and equivalent mathematics can appear under different note IDs.
+
 [The worker example](examples/workers.ts) runs an Explorer followed by a default
 Verifier:
 
@@ -313,7 +318,8 @@ awaits recovery. `startCampaign: false` only omits initial campaign creation.
 Reopening preserves existing tasks. Waiting on the same task ID recovers
 unfinished work. For a faulted or aborted worker, create
 `{kind: "retry", task: id}`. A retry preserves the frozen input and its exact
-publication references.
+publication references. If an aborted Verifier's verification child has already
+completed, retry can return that child's existing task ID.
 
 Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite
 file. Other agents can read those records without starting work:

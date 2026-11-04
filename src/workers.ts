@@ -85,7 +85,7 @@ const ResultEntry = defineEntry<{
   descriptor?: JsonValue;
 }>("xean.role-result");
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-const completed = (result: JsonValue) => ({
+export const completed = <Result extends JsonValue>(result: Result) => ({
   status: "terminal" as const,
   outcome: { status: "completed" as const, result },
 });
@@ -248,18 +248,15 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
         }
         if (task.input.kind === "verifier") {
           const input = task.input;
-          let prior: NativeTask | undefined;
-          await runtime.commit(async (tx) => {
-            prior = (await tasks(tx, task.conversationId)).findLast(
-              (child) =>
-                child.kind === workerKind &&
-                child.owner !== undefined &&
-                input.previousTasks?.includes(child.owner) &&
-                (child.input as WorkerInput).kind === "verify",
+          if (input.verify === undefined && input.input.notes.length === 0) {
+            await runtime.commit(
+              () => completed({ status: "no-work", verify: [] }),
+              context,
             );
-          }, context);
+            return;
+          }
           let selected = input.verify;
-          if (!prior && selected === undefined) {
+          if (selected === undefined) {
             const answer = await roles.run(
               runtime,
               "selection",
@@ -273,41 +270,24 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
             ).verify;
           }
           await runtime.commit(async (tx) => {
-            if (prior?.state.outcome?.status === "completed")
-              return completed(prior.state.outcome.result);
             const records = await tasks(tx, task.conversationId);
-            let claim: WorkerInput;
-            if (prior) {
-              if (prior.state.status !== "terminal")
-                throw new Error("Previous verification is still running");
-              claim = copy(prior.input) as WorkerInput;
-              claim.previousTasks = [...(claim.previousTasks ?? []), prior.id];
-            } else {
-              const { notes, reconstructed } = project(
-                readNotebook(await tx.doc(Notebook, task.conversationId)),
-              );
-              const parsed = selectionResultFor(notes).safeParse({
-                verify: selected,
-              });
-              if (!parsed.success)
-                return completed({ status: "no-work", verify: [] });
-              const next = claimFor(
-                input,
-                parsed.data.verify,
-                notes,
-                reconstructed,
-              );
-              if (!next) return completed({ status: "no-work", verify: [] });
-              claim = next;
-            }
-            if (claim.kind !== "verify")
-              throw new Error("Verification claim is missing");
+            const { notes, reconstructed } = project(
+              readNotebook(await tx.doc(Notebook, task.conversationId)),
+            );
+            const parsed = selectionResultFor(notes).safeParse({
+              verify: selected,
+            });
+            if (!parsed.success)
+              return completed({ status: "no-work", verify: [] });
+            const claim = claimFor(
+              input,
+              parsed.data.verify,
+              notes,
+              reconstructed,
+            );
+            if (!claim) return completed({ status: "no-work", verify: [] });
             const occupied = new Set(claims(records));
             if (claim.targets.some((id) => occupied.has(id))) {
-              if (prior)
-                throw new Error(
-                  "Verification claim is busy; retry after competing work settles",
-                );
               return completed({ status: "busy", verify: [] });
             }
             const child = await tx.createTask(Worker, claim, {
@@ -324,45 +304,38 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
           return;
         }
         const input = task.input;
-        const recorded = async (): Promise<Verdict[]> => {
+        const known = input.input.order.map((id) =>
+          pick([...input.input.notes, ...input.input.support], id),
+        );
+        const snapshot = async () => {
           const book = await runtime.snapshot(
             Notebook,
             task.conversationId,
             context,
           );
           if (!book) throw new Error("Campaign notebook is missing");
+          return book;
+        };
+        const recorded = async (): Promise<Verdict[]> => {
+          const book = await snapshot();
           return book.checks
             .filter((check) => check.candidate === origin)
             .flatMap((check) => check.values);
         };
         const allowed = async (ids: readonly string[]) => {
-          const book = await runtime.snapshot(
-            Notebook,
-            task.conversationId,
-            context,
+          const book = await snapshot();
+          const roots = ids.map((id) => pick(known, id));
+          const relevant = new Set([...ids, ...supportClosure(roots, known)]);
+          return !book.checks.some((check) =>
+            check.values.some(
+              (value) => relevant.has(value.note) && invalidatesNote(value),
+            ),
           );
-          if (!book) throw new Error("Campaign notebook is missing");
-          const current = new Map(
-            project(readNotebook(book)).notes.map((note) => [note.id, note]),
-          );
-          return ids.every((id) => current.get(id)?.dead === false);
         };
         const relevant = (descriptor: CallDescriptor) => {
-          if (descriptor.kind === "explorer" || descriptor.kind === "selection")
-            throw new Error(
-              "Verification cannot run an exploration or selection call",
-            );
-          const known = input.input.order.map((id) =>
-            pick([...input.input.notes, ...input.input.support], id),
-          );
-          const roots =
-            descriptor.kind === "verifier"
-              ? descriptor.judged.map((id) => pick(known, id))
-              : descriptor.input.notes;
-          return [
-            ...roots.map((note) => note.id),
-            ...supportClosure(roots, known),
-          ];
+          return descriptor.kind === "verifier"
+            ? descriptor.judged
+            : descriptor.input.notes.map((note) => note.id);
         };
         const premises: Record<string, string> = {};
         await runtime.commit(async (tx) => {
@@ -384,27 +357,18 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
         }, context);
         await verify(input.input, input.settings, {
           premises,
-          call: async (key, descriptor, profile) => {
-            const prior = await roles.peek(
-              runtime,
-              key,
-              context,
-              input.previousTasks,
-            );
-            if (prior?.receipt) return prior.receipt;
-            descriptor = prior?.descriptor ?? descriptor;
-            if (!(await allowed(relevant(descriptor)))) return;
-            return roles.run(
+          call: (key, descriptor, profile) =>
+            roles.run(
               runtime,
               key,
               descriptor,
-              prior?.profile ?? profile,
+              profile,
               context,
               input.previousTasks,
-            );
-          },
+              (frozen) => allowed(relevant(frozen)),
+            ),
           recorded,
-          refresh: async () => refreshAttempt(input.input, await recorded()),
+          refresh: async (_input, have) => refreshAttempt(input.input, have),
           record: async (id, values) => {
             await runtime.commit(async (tx) => {
               const book = await tx.doc(Notebook, task.conversationId);
@@ -433,50 +397,18 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
                 );
               return value;
             };
-            let prior:
-              { call: number; value: ReturnType<typeof validate> } | undefined;
-            const owners = [task.id, ...(input.previousTasks ?? [])];
-            await runtime.commit(async (tx) => {
-              let cursor;
-              do {
-                const page = await tx.scanEntries(
-                  { conversationId: task.conversationId },
-                  128,
-                  cursor,
-                );
-                for (const entry of page.items) {
-                  if (
-                    !ResultEntry.is(entry) ||
-                    entry.byTaskId === undefined ||
-                    !owners.includes(entry.byTaskId) ||
-                    entry.data.key !== key ||
-                    JSON.stringify(entry.data.descriptor) !==
-                      JSON.stringify(request)
-                  )
-                    continue;
-                  try {
-                    prior = {
-                      call: entry.id,
-                      value: validate(entry.data.value as CodexResult),
-                    };
-                    return;
-                  } catch {
-                    /* Failed calls remain evidence, not reusable answers. */
-                  }
-                }
-                cursor = page.next;
-              } while (cursor);
-            }, context);
-            if (prior) return prior;
-            const known = input.input.order.map((id) =>
-              pick([...input.input.notes, ...input.input.support], id),
-            );
-            const roots = judged.map((id) => pick(known, id));
-            if (!(await allowed([...judged, ...supportClosure(roots, known)])))
-              return;
+            if (!(await allowed(judged))) return;
             const output = await options.source(request, runtime.signal);
+            let value: ReturnType<typeof validate> | undefined;
+            let error: unknown;
+            try {
+              value = validate(output);
+            } catch (cause) {
+              error = cause;
+            }
             let id!: number;
             await runtime.commit(async (tx) => {
+              const book = await tx.doc(Notebook, task.conversationId);
               id = (
                 await tx.appendEntry(ResultEntry, task.conversationId, {
                   data: {
@@ -486,8 +418,20 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
                   },
                 })
               ).id;
+              if (value)
+                book.checks.push({
+                  candidate: origin,
+                  call: id,
+                  values: value.verdicts.map(({ note, verdict, report }) => ({
+                    note,
+                    verdict,
+                    report,
+                    verifier: "source",
+                  })),
+                });
             }, context);
-            return { call: id, value: validate(output) };
+            if (!value) throw error;
+            return { call: id, value };
           },
         });
         await runtime.commit(
@@ -524,71 +468,84 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
       throw new Error("A retry group cannot admit fresh work");
     const records = await tasks(tx, root);
     const campaign = records.findLast((task) => task.kind === campaignKind);
-    const parent =
-      owner === undefined
-        ? undefined
-        : records.find((task) => task.id === owner);
-    if (
-      owner !== undefined &&
-      (!parent ||
-        parent.kind !== campaignKind ||
-        parent.state.status === "terminal")
-    )
-      throw new Error("Worker owner must be an active campaign");
+    const live = records.filter((task) => task.state.status !== "terminal");
     const result = campaign?.state.outcome?.result as
       { resume?: { children?: number[] } } | undefined;
-    if (
+    if (owner !== undefined) {
+      if (
+        campaign?.id !== owner ||
+        live.some((task) => task.kind === workerKind)
+      )
+        throw new Error(
+          "Campaign groups are sealed until their workers settle",
+        );
+    } else if (
       campaign &&
-      campaign.id !== owner &&
       (campaign.state.status !== "terminal" || result?.resume)
     )
       throw new Error(
         "Campaign work must settle or resume before outside admission",
       );
     const resume = (
-      parent?.input as { resume?: { children?: number[] } } | undefined
+      campaign?.input as { resume?: { children?: number[] } } | undefined
     )?.resume;
     const origins = new Set<number>();
     const prepared = requests.map((request) => {
-      const prior =
-        request.kind === "retry"
-          ? records.find((task) => task.id === request.task)
+      if (request.kind !== "retry") return request;
+      const prior = records.find((task) => task.id === request.task);
+      if (
+        !prior ||
+        prior.kind !== workerKind ||
+        prior.state.status !== "terminal" ||
+        !["faulted", "aborted"].includes(prior.state.outcome.status)
+      )
+        throw new Error(
+          "Retry requires a faulted or aborted public worker from this campaign",
+        );
+      if (prior.owner !== owner && !resume?.children?.includes(prior.id))
+        throw new Error("Retry must belong to the campaign's admitted group");
+      // Ordinary ownership makes a terminal parent's child immutable as well.
+      const child =
+        (prior.input as WorkerInput).kind === "verifier"
+          ? records.findLast(
+              (task) =>
+                task.owner === prior.id &&
+                task.kind === workerKind &&
+                (task.input as WorkerInput).kind === "verify",
+            )
           : undefined;
-      if (request.kind === "retry") {
-        if (
-          !prior ||
-          prior.kind !== workerKind ||
-          prior.state.status !== "terminal" ||
-          !["faulted", "aborted"].includes(prior.state.outcome.status) ||
-          (prior.input as WorkerInput).kind === "verify"
-        )
-          throw new Error(
-            "Retry requires a faulted or aborted public worker from this campaign",
-          );
-        if (prior.owner !== owner && !resume?.children?.includes(prior.id))
-          throw new Error("Retry must belong to the campaign's admitted group");
-        const origin =
-          (prior.input as WorkerInput).previousTasks?.[0] ?? prior.id;
-        if (origins.has(origin))
-          throw new Error("Worker group contains duplicate retries");
-        origins.add(origin);
-      }
-      return {
-        request,
-        prior,
-        kind: prior ? (prior.input as WorkerInput).kind : request.kind,
-      };
+      const previous = child ?? prior;
+      const input = copy(previous.input) as WorkerInput;
+      const origin = input.previousTasks?.[0] ?? previous.id;
+      if (origins.has(origin))
+        throw new Error("Worker group contains duplicate retries");
+      origins.add(origin);
+      if (child?.state.outcome?.status === "completed") return child.id;
+      input.previousTasks = [...(input.previousTasks ?? []), previous.id];
+      return input;
     });
-    const kind = prepared[0]!.kind;
-    if (prepared.some((request) => request.kind !== kind))
+    const role = (input: (typeof prepared)[number]) =>
+      typeof input === "number" || input.kind === "verify"
+        ? "verifier"
+        : input.kind;
+    const kind = role(prepared[0]!);
+    if (prepared.some((input) => role(input) !== kind))
       throw new Error("Explorer and Verifier groups cannot overlap");
-    for (const live of records.filter(
-      (task) => task.state.status !== "terminal" && task.id !== owner,
-    )) {
-      if (live.kind !== workerKind)
+    const occupied = new Set(claims(records));
+    for (const input of prepared)
+      if (typeof input !== "number" && input.kind === "verify")
+        for (const target of input.targets) {
+          if (occupied.has(target))
+            throw new Error(
+              "Verification claim is busy; retry after competing work settles",
+            );
+          occupied.add(target);
+        }
+    for (const task of live.filter((task) => task.id !== owner)) {
+      if (task.kind !== workerKind)
         throw new Error("Campaign already has live work");
-      const input = live.input as WorkerInput;
-      if (origins.has(input.previousTasks?.[0] ?? live.id))
+      const input = task.input as WorkerInput;
+      if (origins.has(input.previousTasks?.[0] ?? task.id))
         throw new Error("Worker already has a live retry");
       if (
         kind === "explorer"
@@ -596,14 +553,6 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
           : input.kind === "explorer"
       )
         throw new Error("Explorer and Verifier groups cannot overlap");
-      if (
-        owner !== undefined &&
-        live.owner !== owner &&
-        !records.some(
-          (parent) => parent.id === live.owner && parent.owner === owner,
-        )
-      )
-        throw new Error("Worker belongs to another admitted group");
     }
     const config = await definition(tx, root);
     if (
@@ -612,10 +561,7 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
         (request) =>
           request.kind === "verifier" && request.verify === undefined,
       ) &&
-        !records.some(
-          (task) =>
-            task.kind === workerKind && task.state.status !== "terminal",
-        ))
+        !live.some((task) => task.kind === workerKind))
     )
       await admitNotes(tx, root);
     const { notes, accepted } = project(
@@ -623,12 +569,32 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
     );
     if (requests[0]!.kind !== "retry" && accepted.length)
       throw new Error("Campaign is already accepted");
-    const inputs: WorkerInput[] = prepared.map(({ request, prior }) => {
-      if (prior) {
-        const input = copy(prior.input) as WorkerInput;
-        input.previousTasks = [...(input.previousTasks ?? []), prior.id];
-        return input;
-      }
+    const claimed = [...new Set(claims(records))];
+    const reserved = new Set([
+      ...claimed,
+      ...requests.flatMap((request) =>
+        request.kind === "verifier"
+          ? (request.verify ?? []).map((entry) => entry.note)
+          : [],
+      ),
+    ]);
+    const available = notes.filter(
+      (note) => !note.dead && !reserved.has(note.id),
+    );
+    const selectors = requests.filter(
+      (request) => request.kind === "verifier" && request.verify === undefined,
+    ).length;
+    const views = Array.from({ length: selectors }, (_, slot) => {
+      const roots = available.filter((_, index) => index % selectors === slot);
+      const included = new Set([
+        ...roots.map((note) => note.id),
+        ...supportClosure(roots, notes),
+      ]);
+      return notes.filter((note) => included.has(note.id));
+    });
+    let slot = 0;
+    const inputs = prepared.map((request): WorkerInput | TaskId<JsonValue> => {
+      if (typeof request === "number" || "input" in request) return request;
       if (request.kind === "explorer")
         return {
           kind: "explorer",
@@ -646,8 +612,8 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
           kind: "verifier",
           input: {
             task: config.task,
-            notes,
-            claimed: [...new Set(claims(records))],
+            notes: request.verify === undefined ? views[slot++]! : notes,
+            claimed,
             ...(config.settings.verifyOnSolution
               ? { verifyOnSolution: true }
               : {}),
@@ -667,13 +633,15 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
     const created: TaskId<JsonValue>[] = [];
     for (const input of inputs)
       created.push(
-        await tx.createTask(Worker, input, {
-          conversationId: root,
-          ownership:
-            owner === undefined
-              ? { kind: "conversation" }
-              : { kind: "task", taskId: owner },
-        }),
+        typeof input === "number"
+          ? input
+          : await tx.createTask(Worker, input, {
+              conversationId: root,
+              ownership:
+                owner === undefined
+                  ? { kind: "conversation" }
+                  : { kind: "task", taskId: owner },
+            }),
       );
     return created;
   }

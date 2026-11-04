@@ -10,14 +10,14 @@ import { verifierNames } from "../src/policy/contracts.ts";
 
 const all = [...verifierNames];
 
-test("a sealed cohort runs two Explorers and two Verifiers concurrently and admits no outside worker", async () => {
+test("a sealed cohort gives identical selectors distinct roots and overlapping checking calls", async () => {
   const firstWave = Promise.withResolvers<void>();
   const releaseWave = Promise.withResolvers<void>();
   const sources = Promise.withResolvers<void>();
   const releaseSources = Promise.withResolvers<void>();
   let firstRequests = 0,
-    selection = 0,
     sourceCalls = 0;
+  const selected: string[] = [];
   const run = await fixture(
     async (request): Promise<Awaited<ReturnType<Respond>>> => {
       const { descriptor } = request;
@@ -29,8 +29,10 @@ test("a sealed cohort runs two Explorers and two Verifiers concurrently and admi
         descriptor.kind === "selection" &&
         descriptor.input.notes.length > 0
       ) {
-        const selected = descriptor.input.notes[selection++ % 2]!;
-        return { verify: [{ note: selected.id, verifiers: all }] };
+        const root = descriptor.input.notes.find((note) => !note.dead)?.id;
+        expect(root).toBeDefined();
+        selected.push(root!);
+        return { verify: [{ note: root!, verifiers: all }] };
       }
       if (descriptor.kind === "verifier" && descriptor.name === "source") {
         if (++sourceCalls === 2) sources.resolve();
@@ -49,8 +51,24 @@ test("a sealed cohort runs two Explorers and two Verifiers concurrently and admi
   expect(await run.notes()).toEqual([]);
   await expect(run.create({ kind: "explorer" })).rejects.toThrow();
   await expect(run.create({ kind: "verifier" })).rejects.toThrow();
+  const campaign = (await run.tasks()).find(
+    (task: { kind: string }) => task.kind === "xean.campaign",
+  );
+  await expect(
+    run.owner.root.commit(
+      (tx) =>
+        run.owner.workers.createGroup(
+          tx,
+          run.owner.root.id,
+          [{ kind: "explorer" }],
+          campaign.id,
+        ),
+      context,
+    ),
+  ).rejects.toThrow("sealed");
   releaseWave.resolve();
   await sources.promise;
+  expect(new Set(selected).size).toBe(2);
   expect(await run.notes()).toHaveLength(2);
   expect((await inspect(run.path, readStatus)).status).not.toBe("terminal");
   releaseSources.resolve();
@@ -123,8 +141,7 @@ test.each(["fault", "abort"])(
     let ancestor = "",
       initialRoot = "",
       finalRoot = "";
-    let exploration = 0,
-      selection = 0;
+    let exploration = 0;
     const run = await fixture(
       async (request): Promise<Awaited<ReturnType<Respond>>> => {
         const { descriptor } = request;
@@ -154,15 +171,6 @@ test.each(["fault", "abort"])(
             ],
           };
         }
-        if (descriptor.kind === "selection")
-          return {
-            verify: [
-              {
-                note: ++selection === 1 ? finalRoot : ancestor,
-                verifiers: all,
-              },
-            ],
-          };
         if (
           descriptor.kind === "reconstruction" &&
           descriptor.input.notes.some((note) => note.id === initialRoot)
@@ -176,7 +184,7 @@ test.each(["fault", "abort"])(
             })),
           };
         if (
-          selection &&
+          exploration > 1 &&
           descriptor.kind === "verifier" &&
           descriptor.name === "source" &&
           descriptor.judged.includes(ancestor)
@@ -210,6 +218,32 @@ test.each(["fault", "abort"])(
     const campaign = await run.owner.root.commit(
       (tx) => createWorkflow().initialize(tx, run.owner.root.id),
       context,
+    );
+    // Fix these adversarial assignments explicitly: focus distribution is
+    // tested separately, while the actual campaign still owns and seals them.
+    const createGroup = run.owner.workers.createGroup.bind(run.owner.workers);
+    const assignments = spyOn(
+      run.owner.workers,
+      "createGroup",
+    ).mockImplementation((tx, root, requests, owner) =>
+      createGroup(
+        tx,
+        root,
+        owner !== undefined &&
+          requests.every((request) => request.kind === "verifier")
+          ? [
+              {
+                kind: "verifier",
+                verify: [{ note: finalRoot, verifiers: all }],
+              },
+              {
+                kind: "verifier",
+                verify: [{ note: ancestor, verifiers: all }],
+              },
+            ]
+          : requests,
+        owner,
+      ),
     );
     const original = verification.verify;
     let interrupted = false;
@@ -255,6 +289,7 @@ test.each(["fault", "abort"])(
       await idle;
     } finally {
       verifier.mockRestore();
+      assignments.mockRestore();
     }
     expect(interrupted).toBe(true);
     expect(

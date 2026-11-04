@@ -42,7 +42,7 @@ export interface VerificationDependencies {
   recorded(): Promise<Verdict[]>;
   record(call: number, verdicts: Verdict[]): Promise<void>;
   /** Add only this attempt's own evidence to its frozen input. */
-  refresh?(input: VerifierInput): Promise<VerifierInput>;
+  refresh?(input: VerifierInput, have: Verdict[]): Promise<VerifierInput>;
 }
 
 async function reconstruct(
@@ -104,9 +104,9 @@ export async function verify(
   dependencies: VerificationDependencies,
 ): Promise<void> {
   for (const name of verifierNames) {
-    input = (await dependencies.refresh?.(input)) ?? input;
+    const have = await dependencies.recorded();
+    input = (await dependencies.refresh?.(input, have)) ?? input;
     if (name === "reconstruction") {
-      const have = await dependencies.recorded();
       // A comparison publishes its entire batch in one commit. Do not regroup
       // that frozen assignment from the outcomes it has already published.
       if (have.some((value) => value.verifier === name)) return;
@@ -124,7 +124,6 @@ export async function verify(
       );
       return;
     }
-    const have = await dependencies.recorded();
     const judged = missingVerdicts(have, name, judgedBy(input, have, name));
     if (judged.length === 0) continue;
     const key = `${name}/${judged.join(",")}`;

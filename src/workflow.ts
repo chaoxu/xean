@@ -16,6 +16,7 @@ import {
 } from "./state.ts";
 import {
   createWorkers,
+  completed,
   type SourceExecutor,
   type WorkerRequest,
 } from "./workers.ts";
@@ -122,28 +123,19 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             );
             const { accepted } = project(book);
             if (accepted.length)
-              return {
-                status: "terminal",
-                outcome: {
-                  status: "completed",
-                  result: {
-                    outcome: "accepted",
-                    turns: state.turns,
-                    accepted: accepted[0]!,
-                  },
-                },
-              };
+              return completed<CampaignResult>({
+                outcome: "accepted",
+                turns: state.turns,
+                accepted: accepted[0]!,
+              });
             if (
               state.step === "explorer" &&
               state.turns >= config.settings.maxExplorerTurns
             )
-              return {
-                status: "terminal",
-                outcome: {
-                  status: "completed",
-                  result: { outcome: "turn-limit", turns: state.turns },
-                },
-              };
+              return completed<CampaignResult>({
+                outcome: "turn-limit",
+                turns: state.turns,
+              });
             if (await admitNotes(tx, task.conversationId))
               state.step = "verifier";
             if (state.step === "explorer") {
@@ -189,18 +181,12 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
             copy(task.state.checkpoint),
           );
           if (state.children?.length)
-            return {
-              status: "terminal",
-              outcome: {
-                status: "completed",
-                result: {
-                  outcome: "call-failure",
-                  turns: state.turns,
-                  error: errors.join("\n"),
-                  resume: state,
-                },
-              },
-            };
+            return completed<CampaignResult>({
+              outcome: "call-failure",
+              turns: state.turns,
+              error: errors.join("\n"),
+              resume: state,
+            });
           return { status: "running", checkpoint: state };
         }, context);
       },

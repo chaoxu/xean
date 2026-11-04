@@ -208,6 +208,14 @@ test("completed statement and proof receipts survive abort and verifier retry", 
   expect(before.checks).toHaveLength(3);
   await run.owner.harness.abortTask(first, context);
   expect((await pending).state.outcome.status).toBe("aborted");
+  const child = (await run.tasks()).find(
+    (task: { owner?: number; input: { kind: string } }) =>
+      task.owner === first && task.input.kind === "verify",
+  );
+  expect(child.state.outcome.status).toBe("aborted");
+  await expect(run.create({ kind: "retry", task: child.id })).rejects.toThrow(
+    "belong",
+  );
   hold = false;
   const count = run.provider.state.callCount;
   const retry = await run.run({ kind: "retry", task: first });
@@ -229,31 +237,63 @@ test("completed statement and proof receipts survive abort and verifier retry", 
   ).toHaveLength(1);
 });
 
-test("two Verifiers cannot claim the same target after selecting it concurrently", async () => {
-  const selected = Promise.withResolvers<void>();
+test("explicit duplicate verification claims still produce one busy result", async () => {
+  const checking = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  let selections = 0;
   const run = await fixture(
     async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (request.descriptor.kind === "selection") {
-        if (++selections === 2) selected.resolve();
+      if (
+        request.descriptor.kind === "verifier" &&
+        request.descriptor.name === "source"
+      ) {
+        checking.resolve();
         await release.promise;
       }
       return complete(request);
     },
   );
-  await run.run({ kind: "explorer" });
-  const ids = await Promise.all([
-    run.create({ kind: "verifier" }),
-    run.create({ kind: "verifier" }),
-  ]);
+  const explored = await run.run({ kind: "explorer" });
+  const verify = [
+    {
+      note: `w${explored.id}.1`,
+      verifiers: [
+        "source",
+        "correctness",
+        "requirements",
+        "reconstruction",
+      ] as const,
+    },
+  ];
+  const ids = await run.owner.root.commit(
+    (tx) =>
+      run.owner.workers.createGroup(tx, run.owner.root.id, [
+        {
+          kind: "verifier",
+          verify: verify.map((entry) => ({
+            ...entry,
+            verifiers: [...entry.verifiers],
+          })),
+        },
+        {
+          kind: "verifier",
+          verify: verify.map((entry) => ({
+            ...entry,
+            verifiers: [...entry.verifiers],
+          })),
+        },
+      ]),
+    context,
+  );
   const pending = ids.map((id) => run.wait(id));
-  await selected.promise;
+  await checking.promise;
+  expect((await Promise.race(pending)).state.outcome).toMatchObject({
+    status: "completed",
+    result: { status: "busy" },
+  });
   release.resolve();
   const results = (await Promise.all(pending)).map(
     (task) => task.state.outcome,
   );
-  expect(results.every((result) => result.status === "completed")).toBe(true);
   expect(
     results
       .map(
@@ -264,12 +304,86 @@ test("two Verifiers cannot claim the same target after selecting it concurrently
       .sort(),
   ).toEqual(["busy", "completed"]);
   expect(
+    run.requests.some(({ descriptor }) => descriptor.kind === "selection"),
+  ).toBe(false);
+  expect(
     run.requests.filter(
       ({ descriptor }) =>
         descriptor.kind === "verifier" && descriptor.name === "source",
     ),
   ).toHaveLength(1);
   expect((await run.book()).checks).toHaveLength(4);
+});
+
+test("an empty assigned view completes without calling the selector model", async () => {
+  const run = await fixture();
+  await run.run({ kind: "explorer" });
+  const ids = await run.owner.root.commit(
+    (tx) =>
+      run.owner.workers.createGroup(tx, run.owner.root.id, [
+        { kind: "verifier" },
+        { kind: "verifier" },
+      ]),
+    context,
+  );
+  const results = (await Promise.all(ids.map((id) => run.wait(id)))).map(
+    (task) => task.state.outcome,
+  );
+  expect(
+    results
+      .map(
+        (result) =>
+          result.status === "completed" &&
+          (result.result as { status: string }).status,
+      )
+      .sort(),
+  ).toEqual(["completed", "no-work"]);
+  expect(
+    run.requests.filter(({ descriptor }) => descriptor.kind === "selection"),
+  ).toHaveLength(1);
+  const workers = await run.tasks();
+  expect(
+    ids
+      .map(
+        (id) =>
+          workers.find((task: { id: number }) => task.id === id).input.input
+            .notes.length,
+      )
+      .sort(),
+  ).toEqual([0, 1]);
+});
+
+test("retry keeps the selector's original note view after unrelated notes are published", async () => {
+  let fail = true;
+  const run = await fixture((request) => {
+    if (request.descriptor.kind === "selection" && fail) {
+      fail = false;
+      return new Error("Selection interrupted");
+    }
+    return complete(request);
+  });
+  const firstNote = await run.run({ kind: "explorer" });
+  const first = await run.run({ kind: "verifier" });
+  expect(first.outcome.status).toBe("faulted");
+  const before = run.requests.find(
+    ({ descriptor }) => descriptor.kind === "selection",
+  )!.descriptor;
+  if (before.kind !== "selection") throw new Error("Missing selection");
+  expect(before.input.notes.map((note) => note.id)).toEqual([
+    `w${firstNote.id}.1`,
+  ]);
+  const added = await run.run({ kind: "explorer" });
+  expect(
+    (await run.run({ kind: "retry", task: first.id })).outcome.status,
+  ).toBe("completed");
+  const selections = run.requests.filter(
+    ({ descriptor }) => descriptor.kind === "selection",
+  );
+  expect(selections).toHaveLength(2);
+  expect(selections[1]!.descriptor).toEqual(before);
+  expect(before.input.notes.some((note) => note.id === `w${added.id}.1`)).toBe(
+    false,
+  );
 });
 
 test("queued caller literature gets stable admission IDs before fresh exploration", async () => {
@@ -505,3 +619,113 @@ test.each(["PASS", "FAIL"] as const)(
     }
   },
 );
+
+test("assigned selector views retain complete support in notebook order", async () => {
+  const run = await fixture((request) => {
+    if (request.descriptor.kind === "explorer") {
+      const first = `${request.descriptor.input.namespace}.1`;
+      return {
+        notes: [
+          note("Shared prerequisite."),
+          note("First root.", [first]),
+          note("Second root.", [first]),
+        ],
+      };
+    }
+    return complete(request);
+  });
+  const explored = await run.run({ kind: "explorer" });
+  const ids = await run.owner.root.commit(
+    (tx) =>
+      run.owner.workers.createGroup(tx, run.owner.root.id, [
+        { kind: "verifier" },
+        { kind: "verifier" },
+      ]),
+    context,
+  );
+  const tasks = await run.tasks();
+  const views = ids.map(
+    (id) =>
+      tasks.find((task: { id: number }) => task.id === id).input.input
+        .notes as { id: string; support: string[] }[],
+  );
+  const original = (await run.notes()).map((note) => note.id);
+  expect(
+    new Set(views.flatMap((notes) => notes.map((note) => note.id))),
+  ).toEqual(new Set(original));
+  for (const view of views) {
+    expect(view.map((note) => note.id)).toEqual(
+      original.filter((id) => view.some((note) => note.id === id)),
+    );
+    expect(view.some((note) => note.id === `w${explored.id}.1`)).toBe(true);
+    for (const [index, note] of view.entries())
+      for (const support of note.support)
+        expect(
+          view.slice(0, index).some((parent) => parent.id === support),
+        ).toBe(true);
+  }
+});
+
+test("retry returns a completed child's receipt when its aborted parent has a busy sibling", async () => {
+  let holdSource = false;
+  const checking = Promise.withResolvers<void>();
+  const releaseSource = Promise.withResolvers<void>();
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (
+        holdSource &&
+        request.descriptor.kind === "verifier" &&
+        request.descriptor.name === "source"
+      ) {
+        checking.resolve();
+        await releaseSource.promise;
+      }
+      return complete(request);
+    },
+  );
+  const explored = await run.run({ kind: "explorer" });
+  const verify = [
+    { note: `w${explored.id}.1`, verifiers: ["source"] as ["source"] },
+  ];
+  const collected = Promise.withResolvers<void>();
+  const phases = run.owner.workers.Worker.definition.phases;
+  const original = phases.collect;
+  let holdCollect = true;
+  const collect = spyOn(phases, "collect").mockImplementation(
+    async (task, runtime, ctx) => {
+      if (holdCollect) {
+        holdCollect = false;
+        collected.resolve();
+        await abortable(runtime.signal);
+        runtime.signal.throwIfAborted();
+      }
+      return original(task, runtime, ctx);
+    },
+  );
+  const parent = await run.create({ kind: "verifier", verify });
+  const pending = run.wait(parent);
+  await collected.promise;
+  const child = (await run.tasks()).find(
+    (task: { owner?: number; input: { kind: string } }) =>
+      task.owner === parent && task.input.kind === "verify",
+  );
+  expect(child.state.outcome.status).toBe("completed");
+  try {
+    await run.owner.harness.abortTask(parent, context);
+    expect((await pending).state.outcome.status).toBe("aborted");
+  } finally {
+    collect.mockRestore();
+  }
+  holdSource = true;
+  const sibling = await run.create({ kind: "verifier", verify });
+  const siblingPending = run.wait(sibling);
+  await checking.promise;
+  const calls = run.provider.state.callCount;
+  const retry = await run.create({ kind: "retry", task: parent });
+  expect(retry).toBe(child.id);
+  expect((await run.wait(retry)).state.outcome).toEqual(child.state.outcome);
+  expect(run.provider.state.callCount).toBe(calls);
+  await expect(run.create({ kind: "retry", task: child.id })).rejects.toThrow();
+  releaseSource.resolve();
+  expect((await siblingPending).state.outcome.status).toBe("completed");
+});

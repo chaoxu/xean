@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ProviderDoc } from "@earendil-works/pi-durable";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -15,7 +16,6 @@ import {
   open,
   inspect,
   readReport,
-  Notebook,
   solveSettings,
   type SourceExecutor,
 } from "../src/index.ts";
@@ -159,8 +159,11 @@ async function fixture(
       await owner.root.waitForIdle(BACKGROUND_CONTEXT);
       return inspect(path, readReport);
     },
-    async resume() {
-      await owner.close();
+    async resume(storageFailure?: string) {
+      if (storageFailure) {
+        owners.splice(owners.indexOf(owner), 1);
+        await expect(owner.close()).rejects.toThrow(storageFailure);
+      } else await owner.close();
       owner = await open(path, { source, models: native.models });
       owners.push(owner);
       await owner.resume();
@@ -188,42 +191,72 @@ async function fixture(
   };
 }
 
-test("a simulated receipt-before-verdict interruption reuses the exact durable Codex answer on resume", async () => {
-  const output = sourceResult();
-  const drive = await fixture(
-    [output],
-    [...initial, new Error("Correctness disconnected")],
-  );
-  const failed = await drive.settle();
-  expect(failed.status).toMatchObject({
-    outcome: "call-failure",
-    error: "verifier failed: Correctness disconnected",
-  });
-  expect(failed.checks).toHaveLength(1);
-  const sourceCheck = failed.checks[0]!;
-  const originalReceipt = (await drive.receipts())[0]!;
-  expect(originalReceipt.id).toBe(sourceCheck.call);
-  expect(originalReceipt.data.value).toEqual(output);
-  // Synthetic crash boundary: remove only the derived verdict after a later
-  // role fails; retain the native durable source result and original request.
-  await drive.owner.root.commit(async (tx) => {
-    const book = await tx.doc(Notebook, drive.owner.root.id);
-    book.checks = book.checks.filter(
-      (check) => check.call !== sourceCheck.call,
+test.each(["before", "after"] as const)(
+  "Codex receipt and check recover atomically from failure %s their storage commit",
+  async (boundary) => {
+    const message = `Interrupted ${boundary} source commit`;
+    const original = SqliteStorage.prototype.commit;
+    let interrupted = false;
+    const commit = spyOn(SqliteStorage.prototype, "commit").mockImplementation(
+      async function (this: SqliteStorage, batches, receive, context) {
+        const sourceBatch = batches.find((batch) =>
+          batch.some(
+            (write) =>
+              write.type === "entry" && write.value.kind === "xean.role-result",
+          ),
+        );
+        if (interrupted || !sourceBatch)
+          return original.call(this, batches, receive, context);
+        interrupted = true;
+        expect(
+          sourceBatch.some((write) => write.type === "document.change"),
+        ).toBe(true);
+        if (boundary === "after")
+          await original.call(this, batches, receive, context);
+        throw new Error(message);
+      },
     );
-  }, BACKGROUND_CONTEXT);
-  drive.replies.push(...remaining);
-  await drive.resume();
-  const report = await drive.settle();
-  expect(report.status).toMatchObject({
-    outcome: "accepted",
-    accepted: drive.id,
-    turns: 1,
-  });
-  expect(drive.requests).toHaveLength(1);
-  expect(report.checks[0]).toEqual(sourceCheck);
-  expect(await drive.receipts()).toEqual([originalReceipt]);
-});
+    try {
+      const output = sourceResult();
+      const drive = await fixture(
+        boundary === "before" ? [output, sourceResult()] : [output],
+        [...initial],
+      );
+      const idle = drive.owner.root.waitForIdle(BACKGROUND_CONTEXT);
+      void idle.catch(() => {});
+      expect(await drive.owner.harness.closed).toMatchObject({
+        kind: "failed",
+      });
+      await expect(idle).rejects.toThrow();
+      commit.mockRestore();
+      const stored = await inspect(drive.path, readReport);
+      const receipts = await drive.receipts();
+      expect(interrupted).toBe(true);
+      expect(stored.checks).toHaveLength(boundary === "before" ? 0 : 1);
+      expect(receipts).toHaveLength(stored.checks.length);
+      if (boundary === "after") {
+        expect(stored.checks[0]?.call).toBe(receipts[0]?.id);
+        expect(receipts[0]?.data.value).toEqual(output);
+      }
+      drive.replies.push(...remaining);
+      await drive.resume(message);
+      const report = await drive.settle();
+      expect(report.status).toMatchObject({
+        outcome: "accepted",
+        accepted: drive.id,
+        turns: 1,
+      });
+      expect(drive.requests).toHaveLength(boundary === "before" ? 2 : 1);
+      expect(await drive.receipts()).toHaveLength(1);
+      if (boundary === "after") {
+        expect(report.checks[0]).toEqual(stored.checks[0]);
+        expect(await drive.receipts()).toEqual(receipts);
+      }
+    } finally {
+      commit.mockRestore();
+    }
+  },
+);
 
 test("Codex source rejects citations with search disabled and retains the result", async () => {
   const output = sourceResult(true);
