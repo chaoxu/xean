@@ -191,8 +191,9 @@ closure. Selected candidates receive fresh reconstruction. Supporting notes may
 reuse successful reconstruction from the same campaign, and admitted verified
 source dependencies are premise leaves. Blind proof input contains extracted
 statements, declared support IDs, and admitted or reused premises. Extraction and
-comparison see the original texts, while blind proof excludes original target
-proofs and verifier reports. `verified` establishes source and correctness
+comparison see the original texts. The blind proof request omits the original
+target proof fields and verifier reports, but extracted statements can still
+disclose proof methods. `verified` establishes source and correctness
 over verified support, rather than task completion.
 
 Source, correctness, or reconstruction FAIL makes a note and its dependents dead.
@@ -270,8 +271,14 @@ The 4.5.0 release's fresh campaigns on Pi 1.5.0 passed independent model review
 for destroying rigidity, matroid t-connectivity, and First Proof P10. The
 [release notes](release-notes.md) distinguish these runs from the earlier 4.4.0
 comparison. This bounded validation does not establish general mathematical
-nonregression or formal certification. Independent workers have not received
-live-model qualification.
+nonregression or formal certification.
+
+A `gpt-6-luna` live smoke at `d475f1c` showed overlapping requests within Explorer
+and explicitly assigned Verifier groups and produced correct elementary proofs.
+Independent review passed manual blind reconstruction but found that the automatic
+run's extraction model included the original proof method and its comparison model
+accepted it despite their existing instructions. The automatic run fails
+blind-reconstruction policy qualification despite its internal `accepted` outcome.
 
 ## Library and development
 
