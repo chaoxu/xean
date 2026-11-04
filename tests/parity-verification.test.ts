@@ -15,10 +15,7 @@ const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const profile = { provider: "test", model: "math", reasoning: "high" };
 const settings = solveSettings.parse(
   Object.fromEntries(
-    ["explorer", "coordinator", ...verifierNames].map((role) => [
-      role,
-      profile,
-    ]),
+    ["explorer", ...verifierNames].map((role) => [role, profile]),
   ),
 );
 const note = (id: string, support: string[] = []): Note => ({
@@ -34,6 +31,7 @@ const input = (notes = [note("n1")]): VerifierInput => ({
   task,
   notes,
   support: [],
+  order: notes.map(({ id }) => id),
   verify: notes.map(({ id }) => ({ note: id, verifiers: [...verifierNames] })),
 });
 const verdict = (note = "n1", verdict: Verdict["verdict"] = "PASS") => ({
@@ -103,6 +101,7 @@ test("reuse retains ancestor statements and source definitions, but never assume
     task,
     notes: [notes[3]!],
     support: [source, ...notes.slice(1, 3)],
+    order: notes.map(({ id }) => id),
   };
   const reusable = Object.fromEntries(
     notes.slice(1).map(({ id }) => [id, `DEFINITION_AND_CLAIM_${id}`]),
@@ -156,6 +155,7 @@ test.each([false, true])(
       ...(sourceRoot ? [] : [trusted]),
       lemma,
     ];
+    batch.order = ["n1", "n2", "n3", "n10", "n11"];
     const targets = [...(sourceRoot ? ["n1", "n2"] : []), "n3", "n10", "n11"];
     const pass = checks(...batch.notes.map(({ id }) => verdict(id)));
     const drive = scripted([
@@ -355,4 +355,26 @@ test("a batch naming the wrong note cannot record even a partial verdict", async
   ).rejects.toThrow("one verdict per note");
   expect(drive.recorded).toEqual([]);
   expect(labels(drive.calls)).toEqual(["source"]);
+});
+
+test("selected ancestors remain proof obligations when target and support arrays interleave", () => {
+  const notes = [
+    note("w90.1"),
+    note("i70.1", ["w90.1"]),
+    note("w2.1", ["i70.1"]),
+  ].map((note) => ({ ...note, verified: true }));
+  const original = {
+    task,
+    notes: [notes[0]!, notes[2]!],
+    support: [notes[1]!],
+    order: notes.map(({ id }) => id),
+  };
+  const result = reconstructionInput(original, ["w90.1", "w2.1"], {
+    "w90.1": "Claim A.",
+    "i70.1": "Claim B.",
+  });
+  expect(result.notes.map(({ id }) => id)).toEqual(original.order);
+  expect(result.premises).toBeUndefined();
+  expect(result.support).toEqual([]);
+  expect(result.order).toEqual(original.order);
 });

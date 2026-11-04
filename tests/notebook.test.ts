@@ -1,252 +1,260 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { Notebook as NoteStore, ConflictError } from "@chaoxu/notebook-store";
 import { Database } from "bun:sqlite";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import {
-  open,
-  inspect,
-  readReport,
-  exportAccepted,
-  solveSettings,
-} from "../src/index.ts";
+import { inspect, open, solveSettings } from "../src/index.ts";
 import {
   DefinitionDoc,
   Notebook,
+  admitNotes,
+  appendNotes,
   initializeNotebook,
+  project,
   readNotebook,
-  saveNotebook,
+  type StoredNote,
 } from "../src/state.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
+import { acceptedArgument } from "../src/report.ts";
 import { fauxModels } from "./faux-models.ts";
 import { submitNotes } from "../src/inputs.ts";
 
 const directories: string[] = [],
-  owners: Awaited<ReturnType<typeof open>>[] = [];
+  handles: Harness[] = [];
 const task = { problem: "Prove P.", completionCriteria: "Prove P." };
 const profile = { provider: "test", model: "test", reasoning: "high" };
 const settings = solveSettings.parse(
   Object.fromEntries(
-    ["explorer", "coordinator", ...verifierNames].map((name) => [
-      name,
-      profile,
-    ]),
+    ["explorer", ...verifierNames].map((name) => [name, profile]),
   ),
 );
 afterEach(async () => {
-  for (const owner of owners.splice(0)) await owner.close();
+  for (const handle of handles.splice(0)) await handle.close(context);
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
 });
 async function path() {
   const directory = await mkdtemp(join(tmpdir(), "xean-notebook-"));
   directories.push(directory);
-  return join(directory, "campaign.sqlite");
+  return join(await realpath(directory), "campaign.sqlite");
 }
-
-test("publication survives Pi rollback and replays after reopening and an external edit", async () => {
-  const file = await path(),
-    native = fauxModels();
-  let owner = await open(file, {
-    create: { task, settings },
-    models: native.models,
-  });
-  owners.push(owner);
-  const note = { id: "n1", text: "Exact original body.\n", support: [] };
-  using store = new NoteStore(`${file}.notes.sqlite`);
-  const publish = async (fail: boolean) =>
-    owner.root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, owner.root.id);
-      const book = readNotebook(ref);
-      book.notes.push(note);
-      saveNotebook(tx, ref, book);
-      if (fail) throw new Error("after external commit");
-    }, context);
-  await expect(publish(true)).rejects.toThrow("after external commit");
-  expect(store.snapshot()).toBe(1);
-  expect(store.read(1).notes).toEqual({ n1: note });
-  expect((await inspect(file, readReport)).notes).toEqual([]);
-  await expect(
-    owner.root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, owner.root.id);
-      const book = readNotebook(ref);
-      book.notes.push({ ...note, text: "Different retry." });
-      saveNotebook(tx, ref, book);
-    }, context),
-  ).rejects.toBeInstanceOf(ConflictError);
-  expect(store.read(1).notes).toEqual({ n1: note });
-  expect((await inspect(file, readReport)).notes).toEqual([]);
-  await owner.close();
-  store.commit(
-    1,
-    { n1: { ...note, text: "External revision." } },
-    "human-edit",
+async function fixture(file = "") {
+  file ||= await path();
+  const harness = await Harness.open(
+    await openNodeSqliteStorage(file),
+    {
+      registry: createRegistry(),
+      models: fauxModels().models,
+    },
+    context,
   );
-  owner = await open(file, { models: native.models });
-  owners.push(owner);
-  await publish(false);
-  expect(store.snapshot()).toBe(2);
-  expect(
-    (await owner.harness.snapshot(Notebook, owner.root.id, context))!.version,
-  ).toBe(1);
-  const report = await inspect(relative(process.cwd(), file), readReport);
-  expect(report.notes[0]!.text).toBe(note.text);
-  expect(report.notes[0]!.verified).toBe(false);
-  expect(store.read().notes.n1!.text).toBe("External revision.");
-  await expect(
-    owner.root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, owner.root.id);
-      const book = readNotebook(ref);
-      book.notes.push({ id: "n2", text: "Another note.", support: ["n1"] });
-      saveNotebook(tx, ref, book);
-    }, context),
-  ).rejects.toBeInstanceOf(ConflictError);
-  expect(await inspect(file, readReport)).toEqual(report);
-  expect(store.snapshot()).toBe(2);
-  expect(native.provider.state.callCount).toBe(0);
-});
-
-test("new input cannot change a pending publication before exact recovery", async () => {
-  const file = await path(),
-    native = fauxModels();
-  let owner = await open(file, {
-    create: { task, settings },
-    models: native.models,
+  handles.push(harness);
+  const root = await harness.root(context, {
+    init: async (tx, id) => {
+      Object.assign(await tx.doc(DefinitionDoc, id), { task, settings });
+      await initializeNotebook(tx, id, `${file}.notes.sqlite`);
+    },
   });
-  owners.push(owner);
-  const input = { notes: [{ text: "Caller result.", support: [] }] };
-  const submit = (id: string) =>
-    owner.root.commit(
-      (tx) => submitNotes(tx, owner.root.id, id, input),
+  const snapshot = () =>
+    root.commit(
+      async (tx) =>
+        JSON.parse(
+          JSON.stringify(readNotebook(await tx.doc(Notebook, root.id))),
+        ),
       context,
     );
-  const first = await submit("first");
-  const publish = (fail: boolean) =>
-    owner.root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, owner.root.id);
-      const book = readNotebook(ref);
-      book.notes.push({ ...book.inputs[0]!.notes[0]!, id: "n1" });
-      book.inputs[0]!.consumed = true;
-      saveNotebook(tx, ref, book);
-      if (fail) throw new Error("after intake publication");
+  const publish = (notes: StoredNote[], id: string, fail = false) =>
+    root.commit(async (tx) => {
+      const version = appendNotes(
+        tx,
+        await tx.doc(Notebook, root.id),
+        notes,
+        id,
+      );
+      if (fail) throw new Error("after external commit");
+      return version;
     }, context);
-  await expect(publish(true)).rejects.toThrow("after intake publication");
-  const before = await inspect(file, readReport);
-  await expect(submit("second")).rejects.toThrow("pending publication");
-  expect(await submit("first")).toEqual(first);
-  expect(await inspect(file, readReport)).toEqual(before);
-  await owner.close();
-  owner = await open(file, { models: native.models });
-  owners.push(owner);
-  await publish(false);
-  await submit("second");
-  const after = await inspect(file, readReport);
-  expect(after.notes.map(({ id, text }) => ({ id, text }))).toEqual([
-    { id: "n1", text: "Caller result." },
-  ]);
-  expect(after.inputs.map(({ id, consumed }) => ({ id, consumed }))).toEqual([
-    { id: "first", consumed: true },
-    { id: "second", consumed: false },
-  ]);
-  using store = new NoteStore(`${file}.notes.sqlite`, { readonly: true });
+  return { file, harness, root, snapshot, publish };
+}
+
+test("A rollback, B publication and A recovery retain both immutable batches in publication order", async () => {
+  let f = await fixture();
+  const a = [
+    { id: "w100.1", text: "Exact original body names w100.1.\n", support: [] },
+    { id: "w100.2", text: "Use w100.1 literally.", support: ["w100.1"] },
+  ];
+  const b = [{ id: "w2.1", text: "Independent B.", support: [] }];
+  using store = new NoteStore(`${f.file}.notes.sqlite`);
+  await expect(f.publish(a, "worker/100", true)).rejects.toThrow(
+    "after external commit",
+  );
   expect(store.snapshot()).toBe(1);
-  expect(native.provider.state.callCount).toBe(0);
+  expect((await f.snapshot()).notes).toEqual([]);
+  expect(await f.publish(b, "worker/2")).toBe(2);
+  store.commit(
+    2,
+    { "w100.1": { ...a[0]!, text: "Outside replacement." }, "w100.2": null },
+    "outside",
+  );
+  await f.harness.close(context);
+  f = await fixture(f.file);
+  expect(await f.publish(a, "worker/100")).toBe(1);
+  expect(store.snapshot()).toBe(3);
+  expect((await f.snapshot()).notes).toEqual([...a, ...b]);
+  const pins = (await f.harness.snapshot(Notebook, f.root.id, context))!
+    .publications;
+  expect(pins).toEqual([
+    { id: "worker/2", version: 2, notes: ["w2.1"] },
+    { id: "worker/100", version: 1, notes: ["w100.1", "w100.2"] },
+  ]);
+  expect(await f.publish(a, "worker/100")).toBe(1);
+  expect(
+    (await f.harness.snapshot(Notebook, f.root.id, context))!.publications,
+  ).toEqual(pins);
+  await expect(
+    f.publish([{ ...a[0]!, text: "Changed retry." }, a[1]!], "worker/100"),
+  ).rejects.toBeInstanceOf(ConflictError);
+  await expect(f.publish(a, "different-publication")).rejects.toBeInstanceOf(
+    ConflictError,
+  );
+  await expect(f.publish([...a].reverse(), "worker/100")).rejects.toThrow(
+    "different note order",
+  );
+  const c = [
+    { id: "w1.1", text: "Build on A and B.", support: ["w2.1", "w100.2"] },
+  ];
+  expect(await f.publish(c, "worker/1")).toBe(4);
+  const current = await f.snapshot();
+  expect(current.notes).toEqual([...a, ...b, ...c]);
+  expect(project(current).notes.at(-1)!.support).toEqual(["w100.2", "w2.1"]);
+  expect(store.read().notes["w100.1"]!.text).toBe("Outside replacement.");
 });
 
-test("read-only inspection rejects external publication before writing either database", async () => {
-  const file = await path();
-  const owner = await open(file, {
-    create: { task, settings },
-    models: fauxModels().models,
-  });
-  owners.push(owner);
-  using store = new NoteStore(`${file}.notes.sqlite`);
-  const before = store.read();
-  using database = new Database(`${file}.notes.sqlite`, { readonly: true });
+test("import identities and receipts survive rollback while later input remains independently admissible", async () => {
+  let f = await fixture();
+  const input = { notes: [{ text: "Caller result.\n", support: [] }] };
+  const submit = (id: string) =>
+    f.root.commit((tx) => submitNotes(tx, f.root.id, id, input), context);
+  const first = await submit("first");
+  const namespace = (await f.snapshot()).inputs[0].namespace;
+  const entries = await f.root.commit(
+    (tx) => tx.scanEntries({ conversationId: f.root.id }, 128),
+    context,
+  );
+  expect(namespace).toBe(
+    `i${entries.items.find((entry) => entry.kind === "xean.note-input")!.id}`,
+  );
+  await expect(
+    f.root.commit(async (tx) => {
+      expect(await admitNotes(tx, f.root.id)).toBe(true);
+      throw new Error("after intake publication");
+    }, context),
+  ).rejects.toThrow("after intake publication");
+  expect((await f.snapshot()).inputs[0].consumed).toBe(false);
+  await submit("second");
+  expect(await submit("first")).toEqual(first);
+  expect((await f.snapshot()).inputs[0].namespace).toBe(namespace);
+  await f.harness.close(context);
+  f = await fixture(f.file);
+  expect(await f.root.commit((tx) => admitNotes(tx, f.root.id), context)).toBe(
+    true,
+  );
+  expect(await f.root.commit((tx) => admitNotes(tx, f.root.id), context)).toBe(
+    false,
+  );
+  const after = await f.snapshot();
+  expect(after.notes).toEqual(
+    after.inputs.map((queued: { namespace: string }) => ({
+      ...input.notes[0],
+      id: `${queued.namespace}.1`,
+    })),
+  );
+  expect(
+    after.inputs.map((queued: { id: string; consumed: boolean }) => ({
+      id: queued.id,
+      consumed: queued.consumed,
+    })),
+  ).toEqual([
+    { id: "first", consumed: true },
+    { id: "second", consumed: true },
+  ]);
+  using store = new NoteStore(`${f.file}.notes.sqlite`, { readonly: true });
+  expect(store.snapshot()).toBe(2);
+});
+
+test("read-only inspection rejects append before changing either database", async () => {
+  const f = await fixture();
+  using store = new NoteStore(`${f.file}.notes.sqlite`);
+  using database = new Database(`${f.file}.notes.sqlite`, { readonly: true });
   const rows = () =>
     ["commits", "revisions"].map((table) =>
       database.query(`SELECT * FROM ${table}`).all(),
     );
-  const stored = rows();
+  const before = rows();
   await expect(
-    inspect(file, async (tx, root) => {
-      const ref = await tx.doc(Notebook, root);
-      const book = readNotebook(ref);
-      book.notes.push({
-        id: "n1",
-        text: "Forbidden external write.",
-        support: [],
-      });
-      saveNotebook(tx, ref, book);
+    inspect(f.file, async (tx, root) => {
+      appendNotes(
+        tx,
+        await tx.doc(Notebook, root),
+        [{ id: "forbidden", text: "No write.", support: [] }],
+        "forbidden",
+      );
     }),
   ).rejects.toThrow("read-only");
-  const other = `${file}.other.sqlite`;
+  const other = `${f.file}.other.sqlite`;
   await expect(
-    inspect(file, (tx, root) => initializeNotebook(tx, root, other)),
+    inspect(f.file, (tx, root) => initializeNotebook(tx, root, other)),
   ).rejects.toThrow("read-only");
   expect(await Bun.file(other).exists()).toBe(false);
-  expect(store.read()).toEqual(before);
-  expect(rows()).toEqual(stored);
-  expect((await inspect(file, readReport)).notes).toEqual([]);
+  expect(store.snapshot()).toBe(0);
+  expect(rows()).toEqual(before);
 });
 
-test("external changes cannot retarget accepted proof text, support, or verdicts", async () => {
-  const file = await path();
-  const checked = {
-    verdicts: [{ note: "n1", verdict: "PASS", report: "Checked." }],
-  };
-  const native = fauxModels([
-    {
-      notes: [
-        { text: "Original proof of P.", summary: "P holds.", support: [] },
-      ],
-    },
-    {
-      filings: [],
-      verify: [{ note: "n1", verifiers: [...verifierNames] }],
-    },
-    checked,
-    checked,
-    checked,
-    { statements: [{ note: "n1", statement: "P holds." }] },
-    { proof: "Independent proof." },
-    { statements: [], ...checked },
-  ]);
-  const owner = await open(file, {
-    create: { task, settings },
-    models: native.models,
-  });
-  owners.push(owner);
-  await owner.root.waitForIdle(context);
-  const before = await inspect(file, readReport);
-  expect(before.status.outcome).toBe("accepted");
-  const proof = await exportAccepted(file);
-  const ref = (await owner.harness.snapshot(Notebook, owner.root.id, context))!;
-  using store = new NoteStore(ref.path);
+test("external edits cannot retarget accepted text, support or verdicts in admitted snapshots", async () => {
+  const f = await fixture();
+  const note = { id: "w9.1", text: "Original proof of P.", support: [] };
+  await f.publish([note], "worker/9");
+  await f.root.commit(async (tx) => {
+    (await tx.doc(Notebook, f.root.id)).checks.push({
+      candidate: 9,
+      call: 20,
+      values: verifierNames.map((verifier) => ({
+        note: note.id,
+        verifier,
+        verdict: "PASS",
+        report: "Checked.",
+      })),
+    });
+  }, context);
+  const before = project(await f.snapshot());
+  const proof = acceptedArgument(before.notes, note.id);
+  expect(before.accepted).toEqual([note.id]);
+  using store = new NoteStore(`${f.file}.notes.sqlite`);
   store.commit(
-    ref.version,
+    store.snapshot(),
     {
-      n1: { id: "n1", text: "Different false claim.", support: ["n999"] },
+      [note.id]: {
+        ...note,
+        text: "Different false claim.",
+        support: ["unknown"],
+      },
       external: { text: "Not admitted." },
     },
     "outside",
   );
-  expect(await inspect(file, readReport)).toEqual(before);
-  expect(await exportAccepted(file)).toBe(proof);
-  expect(
-    (await owner.harness.snapshot(Notebook, owner.root.id, context))!.notes,
-  ).toEqual(["n1"]);
-  expect(native.provider.state.callCount).toBe(8);
+  const after = project(await f.snapshot());
+  expect(after).toEqual(before);
+  expect(acceptedArgument(after.notes, note.id)).toBe(proof);
 });
 
 test("initialization preserves an existing nonempty notebook", async () => {
   const file = await path();
   using store = new NoteStore(`${file}.notes.sqlite`);
-  store.commit(0, { n1: { text: "Existing knowledge." } }, "independent");
+  store.append("independent", { n1: { text: "Existing knowledge." } });
   const before = store.read();
   await expect(
     open(file, { create: { task, settings }, models: fauxModels().models }),
@@ -254,7 +262,7 @@ test("initialization preserves an existing nonempty notebook", async () => {
   expect(store.read()).toEqual(before);
 });
 
-test("closed-store 4.3 campaigns are rejected without mutation or automatic migration", async () => {
+test("historical closed-store campaigns reject without mutation or migration", async () => {
   const file = await path();
   const harness = await Harness.open(
     await openNodeSqliteStorage(file),
@@ -279,9 +287,6 @@ test("closed-store 4.3 campaigns are rejected without mutation or automatic migr
   await harness.close(context);
   const before = await Bun.file(file).bytes();
   await expect(open(file)).rejects.toThrow("fresh campaigns only");
-  await expect(inspect(file, readReport)).rejects.toThrow(
-    "fresh campaigns only",
-  );
   expect(await Bun.file(file).bytes()).toEqual(before);
   expect(
     (await readdir(directories.at(-1)!)).some((name) =>

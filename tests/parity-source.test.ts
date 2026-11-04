@@ -4,6 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { ProviderDoc } from "@earendil-works/pi-durable";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+import { Assignment } from "../src/role-runtime.ts";
 import {
   open,
   inspect,
@@ -20,9 +27,8 @@ const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const profile = { provider: "test", model: "math", reasoning: "high" };
 const verdict = { note: "n1", verdict: "PASS", report: "Checked." };
 const initial: JsonValue[] = [
-  { notes: [{ text: "Proof of P.", support: [] }] },
+  { notes: [{ summary: "P holds.", text: "Proof of P.", support: [] }] },
   {
-    filings: [{ note: "n1", summary: "P holds." }],
     verify: [{ note: "n1", verifiers: [...verifierNames] }],
   },
 ];
@@ -63,19 +69,66 @@ async function fixture(
   directories.push(directory);
   const path = join(directory, "research.sqlite"),
     requests: CodexRequest[] = [];
+  let owner: Awaited<ReturnType<typeof open>>;
+  let noteId: string | undefined;
+  const relabel = (value: JsonValue): JsonValue =>
+    JSON.parse(JSON.stringify(value), (_key, item: unknown) =>
+      item === "n1" ? noteId : item,
+    ) as JsonValue;
   const source: SourceExecutor = async (request) => {
     requests.push(structuredClone(request));
     const output = outputs.shift();
     if (!output) throw new Error("Unexpected Codex execution");
+    if (output.state === "succeeded") output.output = relabel(output.output);
     return output;
   };
-  const native = fauxModels(replies);
+  const native = fauxModels();
+  const queued = {
+    push: (...values: (JsonValue | Error)[]) =>
+      native.provider.appendResponses(
+        values.map((value) => async (transcript, options) => {
+          if (!noteId) {
+            noteId = await owner.root.commit(async (tx) => {
+              const { items } = await tx.scanConversations({}, 128);
+              for (const conversation of items) {
+                if (
+                  (await tx.doc(ProviderDoc, conversation.id)).sessionId !==
+                  options?.sessionId
+                )
+                  continue;
+                const { descriptor } = await tx.doc(
+                  Assignment,
+                  conversation.id,
+                );
+                if (descriptor?.kind === "explorer")
+                  return `${descriptor.input.namespace}.1`;
+              }
+              throw new Error("Explorer namespace is missing");
+            }, BACKGROUND_CONTEXT);
+          }
+          if (value instanceof Error)
+            return fauxAssistantMessage("", {
+              stopReason: "error",
+              errorMessage: value.message,
+            });
+          const tool = getCurrentTools(transcript.messages)[0];
+          if (!tool) throw new Error("Expected role submission tool");
+          return fauxAssistantMessage(
+            [
+              fauxToolCall(
+                tool.name,
+                relabel(value) as Record<string, JsonValue>,
+              ),
+            ],
+            { stopReason: "toolUse" },
+          );
+        }),
+      ),
+  };
+  queued.push(...replies);
   const settings = solveSettings.parse({
     ...Object.fromEntries(
-      ["explorer", "coordinator", ...verifierNames].map((role) => [
-        role,
-        profile,
-      ]),
+      ["explorer", ...verifierNames].map((role) => [role, profile]),
     ),
     source: {
       provider: "codex",
@@ -85,7 +138,7 @@ async function fixture(
     },
     maxExplorerTurns: 1,
   });
-  let owner = await open(path, {
+  owner = await open(path, {
     create: { task, settings },
     source,
     models: native.models,
@@ -94,7 +147,10 @@ async function fixture(
   return {
     path,
     requests,
-    replies: native.replies,
+    replies: queued,
+    get id() {
+      return noteId!;
+    },
     outputs,
     get owner() {
       return owner;
@@ -120,7 +176,7 @@ async function fixture(
             entries.items.filter(
               (entry) =>
                 entry.kind === "xean.role-result" &&
-                (entry.data as { key?: string }).key === "source/n1",
+                (entry.data as { key?: string }).key === `source/${noteId}`,
             ),
           ),
         ) as {
@@ -161,7 +217,7 @@ test("a simulated receipt-before-verdict interruption reuses the exact durable C
   const report = await drive.settle();
   expect(report.status).toMatchObject({
     outcome: "accepted",
-    accepted: "n1",
+    accepted: drive.id,
     turns: 1,
   });
   expect(drive.requests).toHaveLength(1);
@@ -218,7 +274,10 @@ test("a completed failed Codex execution remains evidence while resume makes a f
   drive.replies.push(...remaining);
   await drive.resume();
   const report = await drive.settle();
-  expect(report.status).toMatchObject({ outcome: "accepted", accepted: "n1" });
+  expect(report.status).toMatchObject({
+    outcome: "accepted",
+    accepted: drive.id,
+  });
   expect(drive.requests).toHaveLength(2);
   expect(drive.requests[1]).toEqual(drive.requests[0]);
   const receipts = await drive.receipts();

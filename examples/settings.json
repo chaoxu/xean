@@ -4,11 +4,6 @@
     "model": "gpt-6-astra",
     "reasoning": "max"
   },
-  "coordinator": {
-    "provider": "openai",
-    "model": "gpt-6-astra",
-    "reasoning": "max"
-  },
   "source": {
     "provider": "openai",
     "model": "gpt-6-astra",
@@ -29,6 +24,8 @@
     "model": "gpt-6-astra",
     "reasoning": "max"
   },
+  "explorers": 1,
+  "verifiers": 1,
   "maxExplorerTurns": 10,
   "window": 100000
 }

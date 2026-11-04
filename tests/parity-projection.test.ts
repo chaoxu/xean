@@ -217,3 +217,26 @@ test.each(["source", "correctness", "reconstruction"] as const)(
     expect(project(value).reconstructed).toEqual({});
   },
 );
+
+test("publication order governs opaque identities and shared ancestor invalidation", () => {
+  const ids = ["w90.3", "i700.1", "w2.1"];
+  const value = book(
+    [note(ids[0]!), note(ids[1]!, [ids[0]!]), note(ids[2]!, [ids[1]!])],
+    [
+      ...ids.flatMap((id) => [
+        checked(10, id, "source"),
+        checked(10, id, "correctness"),
+      ]),
+      checked(10, ids[2]!, "requirements"),
+      reconstructed(10, ids),
+    ],
+  );
+  expect(project(value).notes.map(({ id }) => id)).toEqual(ids);
+  expect(project(value).accepted).toEqual([ids[2]!]);
+  expect(() =>
+    project({ ...value, notes: [...value.notes].reverse() }),
+  ).toThrow("must precede");
+  value.checks.push(checked(20, ids[0]!, "correctness", "FAIL"));
+  expect(project(value).accepted).toEqual([]);
+  expect(project(value).notes.every(({ dead }) => dead)).toBe(true);
+});

@@ -1,17 +1,17 @@
 // Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
 import { z } from "zod";
-import { byId } from "./support";
+import { noteOrder } from "./support";
 
 export const nonblank = z.string().refine((value) => value.trim().length > 0, {
   message: "must contain non-whitespace text",
 });
-const noteId = z.string().regex(/^n[1-9][0-9]*$/u);
+const noteId = nonblank;
 
 export const applicationId = "xean-solve";
 
-export type RoleName = "explorer" | "coordinator" | "verifier";
+export type RoleName = "explorer" | "selection" | "verifier";
 const establishingVerifiers = ["source", "correctness"] as const;
-/** The verifiers in the order they run; the coordinator asks for a prefix of this order. */
+/** The verifiers in the order they run; selection asks for a prefix of this order. */
 export const verifierNames = [
   ...establishingVerifiers,
   "requirements",
@@ -23,7 +23,7 @@ export const establishes = (passed: (name: VerifierName) => boolean) =>
 /** The submit tool for each mathematical assignment. */
 export const submissionTools = {
   explorer: "submit_notes",
-  coordinator: "submit_coordination",
+  selection: "select_verification",
   verifier: "submit_verdict",
   statement: "submit_statement",
   proof: "submit_proof",
@@ -111,6 +111,7 @@ function distinctKnown(
 export type ExplorerInput = {
   task: Task;
   explorerGuidance: string;
+  namespace: string;
   notes: Omit<Note, "text" | "detailedSummary">[];
 };
 
@@ -119,6 +120,7 @@ export const explorerResult = z.strictObject({
     .array(
       z.strictObject({
         ...summaries,
+        summary: nonblank,
         text: nonblank,
         support: z.array(noteId),
       }),
@@ -126,9 +128,9 @@ export const explorerResult = z.strictObject({
     .min(1),
 });
 
-/** The explorer's notes are numbered after the notes it received, in order. */
-export function noteIdAfter(count: number, position: number): string {
-  return `n${count + position + 1}`;
+/** Each submission keeps its namespace and local note positions across retries. */
+export function noteIdAfter(namespace: string, position: number): string {
+  return `${namespace}.${position + 1}`;
 }
 
 /**
@@ -136,7 +138,10 @@ export function noteIdAfter(count: number, position: number): string {
  * same turn. Mathematical verification checks whether that support suffices;
  * validation does not infer dependencies from the note's prose or notation.
  */
-export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
+export function explorerResultFor(
+  notes: readonly Pick<Note, "id" | "dead">[],
+  namespace: string,
+) {
   return explorerResult.superRefine((value, ctx) => {
     const allowed = new Set(
       notes.filter(({ dead }) => !dead).map(({ id }) => id),
@@ -149,14 +154,15 @@ export function explorerResultFor(notes: readonly Pick<Note, "id" | "dead">[]) {
         ["notes", position, "support"],
         "support must name distinct notes that are not dead",
       );
-      allowed.add(noteIdAfter(notes.length, position));
+      allowed.add(noteIdAfter(namespace, position));
     }
   });
 }
 
-export type CoordinatorInput = {
+export type SelectionInput = {
   task: Task;
   notes: Note[];
+  claimed: string[];
   verifyOnSolution?: boolean;
 };
 
@@ -176,43 +182,18 @@ const verification = z
   );
 export type Verification = z.output<typeof verification>;
 
-export const coordinatorResult = z.strictObject({
-  filings: z.array(z.strictObject({ note: noteId, summary: nonblank })),
+export const selectionResult = z.strictObject({
   verify: z.array(verification),
 });
 
-export function coordinatorResultFor(
-  notes: readonly Pick<
-    Note,
-    "id" | "summary" | "support" | "verified" | "dead"
-  >[],
+export function selectionResultFor(
+  notes: readonly Pick<Note, "id" | "support" | "verified" | "dead">[],
 ) {
   const known = new Set(notes.map(({ id }) => id));
-  const withoutSummary = new Set(
-    notes.filter(({ summary }) => summary === undefined).map(({ id }) => id),
-  );
   const verified = new Set(
     notes.filter(({ verified }) => verified).map(({ id }) => id),
   );
-  return coordinatorResult.superRefine((value, ctx) => {
-    const filed = new Set<string>();
-    for (const [index, filing] of value.filings.entries()) {
-      if (!withoutSummary.has(filing.note) || filed.has(filing.note)) {
-        ctx.addIssue({
-          code: "custom",
-          message: "each note without a summary must be filed exactly once",
-          path: ["filings", index, "note"],
-        });
-      }
-      filed.add(filing.note);
-    }
-    if (filed.size !== withoutSummary.size) {
-      ctx.addIssue({
-        code: "custom",
-        message: `all ${withoutSummary.size} notes without a summary must be filed`,
-        path: ["filings"],
-      });
-    }
+  return selectionResult.superRefine((value, ctx) => {
     distinctKnown(
       known,
       value.verify.map(({ note }) => note),
@@ -257,12 +238,13 @@ export type VerifierInput = {
   verify: Verification[];
   notes: Note[];
   support: Note[];
+  order: string[];
 };
 export type ReconstructionPremise = Statement["statements"][number] &
   Pick<Note, "support">;
 export type ReconstructionInput = Pick<
   VerifierInput,
-  "task" | "notes" | "support"
+  "task" | "notes" | "support" | "order"
 > & { premises?: ReconstructionPremise[] };
 
 export function pick<T extends { readonly id: string }>(
@@ -280,7 +262,7 @@ export function pick<T extends { readonly id: string }>(
  * need no requirements PASS or explicit reconstruction request.
  */
 export function judgedBy(
-  input: Pick<VerifierInput, "verify" | "notes" | "support">,
+  input: Pick<VerifierInput, "verify" | "notes" | "support" | "order">,
   recorded: readonly Verdict[],
   verifier: VerifierName,
 ): string[] {
@@ -300,16 +282,22 @@ export function judgedBy(
   }
   const dead = new Set<string>(),
     supported = new Set<string>();
-  // Validated support edges point to earlier numeric IDs.
-  for (const note of [...known.values()].sort((a, b) => byId(a.id, b.id))) {
-    if (failures.has(note.id) || note.support.some((id) => dead.has(id)))
+  const order = noteOrder(input.order.map((id) => ({ id })));
+  for (const note of [...known.values()].sort((a, b) => order(a.id, b.id))) {
+    if (
+      note.dead ||
+      failures.has(note.id) ||
+      note.support.some((id) => dead.has(id))
+    )
       dead.add(note.id);
     if (
+      !dead.has(note.id) &&
       note.support.every(
         (id) =>
-          known.get(id)?.verified === true ||
-          (supported.has(id) &&
-            supportChecks.every((name) => passes.has(`${id}/${name}`))),
+          !dead.has(id) &&
+          (known.get(id)?.verified === true ||
+            (supported.has(id) &&
+              supportChecks.every((name) => passes.has(`${id}/${name}`)))),
       )
     )
       supported.add(note.id);
@@ -342,12 +330,11 @@ function verdictsOver<T extends z.ZodType<{ note: string }>>(
   entry: T,
   judged: readonly string[],
 ) {
-  const expected = [...judged].sort(byId).join(",");
   // Keep the provider schema stable across candidates. The runtime still
   // requires exactly the requested note IDs, once each, before recording.
   return z
     .strictObject({ verdicts: z.array(entry) })
-    .refine((value) => listedIds(value.verdicts) === expected, {
+    .refine((value) => exactIds(value.verdicts, judged), {
       message: "one verdict per note under verification",
       path: ["verdicts"],
     });
@@ -364,15 +351,20 @@ export const statement = z.strictObject({
 });
 export type Statement = z.output<typeof statement>;
 
-const listedIds = (entries: readonly { note: string }[]) =>
-  entries
-    .map(({ note }) => note)
-    .sort(byId)
-    .join(",");
+const exactIds = (
+  entries: readonly { note: string }[],
+  expected: readonly string[],
+) => {
+  const ids = new Set(entries.map(({ note }) => note));
+  return (
+    entries.length === expected.length &&
+    ids.size === entries.length &&
+    expected.every((id) => ids.has(id))
+  );
+};
 
 export function statementsFor(judged: readonly string[]) {
-  const expected = [...judged].sort(byId).join(",");
-  return statement.refine((value) => listedIds(value.statements) === expected, {
+  return statement.refine((value) => exactIds(value.statements, judged), {
     message: "one statement per note under reconstruction",
     path: ["statements"],
   });
@@ -393,11 +385,12 @@ export const reconstructionResult = z
   );
 
 export function reconstructionResultFor(judged: readonly string[]) {
-  const expected = [...judged].sort(byId).join(",");
   return reconstructionResult.refine(
     (value) =>
-      listedIds(value.statements.length ? value.statements : value.verdicts) ===
-      expected,
+      exactIds(
+        value.statements.length ? value.statements : value.verdicts,
+        judged,
+      ),
     "one entry per note under reconstruction",
   );
 }

@@ -1,11 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
-import { Notebook as NoteStore, ConflictError } from "@chaoxu/notebook-store";
-import type { ConversationId, Tx } from "@earendil-works/pi-durable";
+import {
+  defineEntry,
+  type ConversationId,
+  type Tx,
+} from "@earendil-works/pi-durable";
 import { z } from "zod";
 import { nonblank, submittedNotes } from "./policy/contracts.ts";
 import { definition, Notebook, project, readNotebook } from "./state.ts";
 
-/** Queue caller notes; the workflow assigns IDs only at its next intake boundary. */
+const InputEntry = defineEntry<{ id: string }>("xean.note-input");
+
+/** Queue caller notes with a stable native identity before their publication. */
 export async function submitNotes(
   tx: Tx,
   root: ConversationId,
@@ -23,11 +28,6 @@ export async function submitNotes(
       throw new Error(`notes id already has a different submission: ${id}`);
     return { id, notes };
   }
-  using store = new NoteStore(ref.path, { readonly: true });
-  if (store.snapshot() !== ref.version)
-    throw new ConflictError(
-      "Notebook changed. Recover pending publication or resolve the external conflict before adding input",
-    );
   const live = new Set(
     project(book)
       .notes.filter((note) => !note.dead)
@@ -38,7 +38,8 @@ export async function submitNotes(
       throw new Error(
         "submitted support must name distinct existing notes that are not dead",
       );
-  book.inputs.push({ id, notes, consumed: false });
+  const entry = await tx.appendEntry(InputEntry, root, { data: { id } });
+  book.inputs.push({ id, namespace: `i${entry.id}`, notes, consumed: false });
   return { id, notes };
 }
 

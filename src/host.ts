@@ -243,7 +243,7 @@ async function inspectSession<T>(
       );
     if (notebook.path !== `${path}.notes.sqlite`)
       throw new Error("Notebook path does not match campaign");
-    readNotebook({ ...notebook, notes: [] });
+    readNotebook({ ...notebook, publications: [] });
     return await read(session, ROOT_CONVERSATION_ID, definition);
   } finally {
     await session.close(context);

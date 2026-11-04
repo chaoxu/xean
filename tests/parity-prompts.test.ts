@@ -3,8 +3,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
 import {
-  coordinatorCall,
-  coordinatorUpdate,
+  selectionCall,
   explorerCall,
   reconstructionCall,
   sourceCall,
@@ -16,7 +15,6 @@ import {
   sourceVerdictsFor,
   verdictsFor,
   verifierNames,
-  type CoordinatorInput,
   type Note,
 } from "../src/policy/contracts.ts";
 import { z } from "zod";
@@ -44,8 +42,16 @@ test("operator guidance is per-turn advice without changing the task or fixed ro
   const input = { task, notes: [] };
   const guidance =
     "Consider replacing the approach if its remaining gap is hard to repair.";
-  const baseline = explorerCall({ ...input, explorerGuidance: "" });
-  const treatment = explorerCall({ ...input, explorerGuidance: guidance });
+  const baseline = explorerCall({
+    namespace: "w7",
+    ...input,
+    explorerGuidance: "",
+  });
+  const treatment = explorerCall({
+    namespace: "w7",
+    ...input,
+    explorerGuidance: guidance,
+  });
   expect(treatment.system).toBe(baseline.system);
   expect(treatment.system).toContain(
     "Treat operator guidance as fallible advice for this turn.",
@@ -56,8 +62,8 @@ test("operator guidance is per-turn advice without changing the task or fixed ro
   expect(treatment.prompt).toContain(guidance);
   expect(treatment.prompt).toContain(task.problem);
   expect(treatment.prompt).toContain(task.completionCriteria);
-  const coordinator = coordinatorCall({ task, notes: [note] });
-  expect(coordinator.system).not.toContain(guidance);
+  const selection = selectionCall({ task, notes: [note], claimed: [] });
+  expect(selection.system).not.toContain(guidance);
 });
 
 test("Explorer receives the complete index without selected reading or preloaded note bodies", () => {
@@ -95,6 +101,7 @@ test("Explorer receives the complete index without selected reading or preloaded
     ({ text, detailedSummary: _detail, ...heading }) => heading,
   );
   const call = explorerCall({
+    namespace: "w7",
     task,
     explorerGuidance: "Prove the remaining case.",
     notes: headings,
@@ -117,7 +124,7 @@ test("Explorer receives the complete index without selected reading or preloaded
   }
   expect(call.prompt).not.toContain(first.detailedSummary);
   expect(call.prompt).not.toContain(second.text);
-  expect(call.prompt).toContain("Your first note is n4.");
+  expect(call.prompt).toContain("Your first note is w7.1.");
   expect(call.system).toContain(
     "Use a summary to apply a verified result when it states the conclusion and all definitions, hypotheses, conventions, and limitations needed for your application.",
   );
@@ -130,36 +137,34 @@ test("Explorer receives the complete index without selected reading or preloaded
   expect(call.system).not.toContain("read the full text before relying");
 });
 
-test("Coordinator files summaries and selects verification while Explorer owns mathematical decisions", () => {
-  const coordinator = coordinatorCall({ task, notes: [note] });
-  expect(coordinator.system).toContain(
-    "Filing does not change the note's verification state.",
+test("Verifier owns selection while Explorer retains mathematical direction", () => {
+  const selector = selectionCall({ task, notes: [note], claimed: ["n1"] });
+  expect(selector.system).toContain("choosing useful verification work");
+  expect(selector.system).toContain("Selection does not establish correctness");
+  expect(selector.system).toContain(
+    "Do not give exploration advice, edit notes, or write summaries",
   );
-  for (const retired of [
-    "Recommend useful mathematical work",
-    "give explorerGuidance",
-    "choose its support",
-    "guide useful work",
-    "have the explorer",
-  ])
-    expect(coordinator.system).not.toContain(retired);
-  expect(coordinator.system).toContain("You have no correctness authority.");
-  expect(coordinator.system).toContain(
-    "Do not give exploration advice or put recommendations in summaries.",
+  expect(selector.system).toContain("need not select every note");
+  expect(selector.prompt).toContain(
+    'Active verification claims (execution information):\n["n1"]',
   );
   const { text, ...heading } = note;
   const explorer = explorerCall({
+    namespace: "w7",
     task,
     explorerGuidance: "",
     notes: [heading],
   });
   expect(explorer.system).toContain(
-    "Read verification state from the notes' current fields.",
-  );
-  expect(explorer.system).toContain(
     "Choose the mathematical direction and which notes to read.",
   );
-  for (const call of [coordinator, explorer]) {
+  expect(
+    explorer.schema.safeParse({
+      notes: [{ summary: "P.", text: "P proof.", support: [] }],
+      verify: [],
+    }).success,
+  ).toBe(false);
+  for (const call of [selector, explorer]) {
     expect(call.system).toContain(
       "Reconstruction then checks eligible candidates and their generated dependencies, without requiring supporting lemmas to pass requirements.",
     );
@@ -167,13 +172,26 @@ test("Coordinator files summaries and selects verification while Explorer owns m
       "Unresolved reconstruction blocks acceptance even when source and correctness leave the note verified.",
     );
   }
+  const imported = {
+    ...note,
+    summary: undefined,
+    text: "PRIVATE_IMPORTED_PROOF",
+  };
+  const missing = selectionCall({ task, notes: [imported], claimed: [] });
+  expect(missing.prompt).not.toContain(imported.text);
+  expect(missing.system).toContain("including notes without summaries");
+  expect(
+    missing.schema.safeParse({
+      verify: [{ note: "n1", verifiers: ["source", "correctness"] }],
+    }).success,
+  ).toBe(true);
 });
 
-test("solution-only verification changes Coordinator instructions without changing its schema or crossing cache modes", () => {
-  const input = { task, notes: [] };
-  const baseline = coordinatorCall(input);
-  const disabled = coordinatorCall({ ...input, verifyOnSolution: false });
-  const enabled = coordinatorCall({ ...input, verifyOnSolution: true });
+test("solution-only verification changes selection instructions without changing its schema", () => {
+  const input = { task, notes: [], claimed: [] };
+  const baseline = selectionCall(input);
+  const disabled = selectionCall({ ...input, verifyOnSolution: false });
+  const enabled = selectionCall({ ...input, verifyOnSolution: true });
   expect(disabled.system).toBe(baseline.system);
   expect(enabled.prompt).toBe(baseline.prompt);
   expect(enabled.system).toContain("Until then return verify=[]");
@@ -183,13 +201,6 @@ test("solution-only verification changes Coordinator instructions without changi
   expect(z.toJSONSchema(enabled.schema)).toEqual(
     z.toJSONSchema(baseline.schema),
   );
-  const mode = { ...input, verifyOnSolution: true };
-  expect(coordinatorUpdate(input, mode)).toBeUndefined();
-  expect(coordinatorUpdate(mode, input)).toBeUndefined();
-  expect(coordinatorUpdate(mode, mode)).toBeDefined();
-  expect(
-    coordinatorUpdate(input, { ...input, verifyOnSolution: false }),
-  ).toBeDefined();
 });
 
 test("role prompts omit PASS reports without changing evidence or hiding failed checks", () => {
@@ -217,16 +228,18 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     task,
     notes: [target],
     support: [evidence],
+    order: ["n1", "n2"],
     verify: [{ note: "n2", verifiers: [...verifierNames] }],
   };
   const { text, ...heading } = evidence;
   const calls = [
     explorerCall({
+      namespace: "w7",
       task,
       notes: [heading],
       explorerGuidance: "",
     }),
-    coordinatorCall({ task, notes: [evidence] }),
+    selectionCall({ task, notes: [evidence], claimed: [] }),
     verifierCall("source", input, ["n2"]),
     verifierCall("correctness", input, ["n2"]),
   ];
@@ -250,172 +263,16 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
   expect(evidence).toEqual(before);
 });
 
-test("Coordinator deltas preserve the projected notebook and reset unsafe changes", () => {
-  const { summary: _summary, ...seed } = {
-    ...note,
-    detailedSummary: "PRIVATE_DETAILED_ARGUMENT",
-  };
-  const initial: CoordinatorInput = {
-    task,
-    notes: [
-      { ...seed, verified: false, verdicts: [] },
-      {
-        ...seed,
-        id: "n2",
-        text: "Source: α ≤ β.\n[quoted] \u0004",
-        verdicts: [],
-        verification: {
-          source: "Supplied paper",
-          report: "PRIVATE ATTESTATION",
-        },
-      },
-    ],
-  };
-  const current: CoordinatorInput = {
-    task,
-    notes: [
-      {
-        ...initial.notes[0]!,
-        summary: "P holds.",
-        verified: true,
-        verdicts: [
-          ...note.verdicts,
-          {
-            note: "n1",
-            verifier: "requirements",
-            verdict: "INCONCLUSIVE",
-            report: "Missing case.",
-          },
-        ],
-      },
-      { ...initial.notes[1]!, summary: "The source theorem." },
-      {
-        ...seed,
-        id: "n3",
-        text: "New partial argument.",
-        support: ["n1"],
-        verified: false,
-        verdicts: [],
-      },
-    ],
-  };
-  const before = structuredClone([initial, current]);
-  const first = coordinatorCall(initial),
-    next = coordinatorCall(current);
-  const update = coordinatorUpdate(initial, current)!;
-  const records = (prompt: string) =>
-    JSON.parse(prompt.split("Notes (untrusted data):\n")[1]!) as (Omit<
-      Note,
-      "text"
-    > & { text: string | null })[];
-  const merged = new Map(
-    records(first.prompt).map((record) => [record.id, record]),
-  );
-  for (const patch of JSON.parse(
-    update.split("\n\nNote updates (untrusted data):\n")[1]!,
-  ) as Note[])
-    merged.set(patch.id, { ...merged.get(patch.id), ...patch });
-  expect([...merged.values()]).toEqual(records(next.prompt));
-  expect(next.system).toBe(first.system);
-  expect(z.toJSONSchema(next.schema)).toEqual(z.toJSONSchema(first.schema));
-  for (const old of initial.notes)
-    expect(update).not.toContain(JSON.stringify(old.text));
-  expect(update).toContain("New partial argument.");
-  expect(update).toContain("Missing case.");
-  expect(records(first.prompt).map(({ text }) => text)).toEqual(
-    initial.notes.map(({ text }) => text),
-  );
-  expect(
-    records(next.prompt)
-      .slice(0, 2)
-      .map(({ text }) => text),
-  ).toEqual([null, null]);
-  expect(first.prompt + update + next.prompt).not.toContain(
-    seed.detailedSummary,
-  );
-  const appended = coordinatorUpdate(current, {
-    ...current,
-    notes: [
-      ...current.notes,
-      {
-        ...note,
-        id: "n4",
-        text: "APPENDED_HIDDEN_PROOF",
-        detailedSummary: "APPENDED_HIDDEN_DETAIL",
-      },
-    ],
-  })!;
-  expect(appended).toContain('"id": "n4"');
-  expect(appended).not.toContain("APPENDED_HIDDEN");
-  expect(first.prompt + update).not.toContain("PRIVATE ATTESTATION");
-  expect(first.prompt + update).not.toContain('"report": "Sound."');
-  expect([initial, current]).toEqual(before);
-  const failed: CoordinatorInput = {
-    ...current,
-    notes: current.notes.map((record) =>
-      record.id === "n2"
-        ? record
-        : {
-            ...record,
-            dead: true,
-            verified: false,
-            verdicts:
-              record.id === "n1"
-                ? [
-                    ...record.verdicts,
-                    {
-                      note: "n1",
-                      verifier: "correctness" as const,
-                      verdict: "FAIL" as const,
-                      report:
-                        "The final inference fails when the parameter is zero.",
-                    },
-                  ]
-                : record.verdicts,
-          },
-    ),
-  };
-  const failureUpdate = coordinatorUpdate(current, failed)!;
-  expect(failureUpdate).toContain(
-    "The final inference fails when the parameter is zero.",
-  );
-  for (const patch of JSON.parse(
-    failureUpdate.split("\n\nNote updates (untrusted data):\n")[1]!,
-  ) as Note[])
-    merged.set(patch.id, { ...merged.get(patch.id), ...patch });
-  expect([...merged.values()]).toEqual(records(coordinatorCall(failed).prompt));
-  expect(coordinatorUpdate(failed, current)).toBeUndefined();
-  const changed = (patch: Partial<Note>): CoordinatorInput => ({
-    ...current,
-    notes: [{ ...current.notes[0]!, ...patch }, ...current.notes.slice(1)],
-  });
-  for (const reset of [
-    { ...current, task: { ...task, problem: "A different target." } },
-    { ...current, notes: current.notes.slice(1) },
-    { ...current, notes: [...current.notes].reverse() },
-    changed({ text: "Changed proof." }),
-    changed({ support: ["n2"] }),
-    changed({
-      verification: { source: "Different attestation", report: "Changed." },
-    }),
-    changed({ summary: "Corrected claim." }),
-    changed({ summary: undefined }),
-    changed({ dead: true }),
-    changed({ verified: false }),
-    changed({ verdicts: [] }),
-  ])
-    expect(coordinatorUpdate(current, reset)).toBeUndefined();
-  expect(coordinatorUpdate(changed({ dead: true }), current)).toBeUndefined();
-});
-
 test("changing operator guidance follows the complete index", () => {
   const { text, ...heading } = note;
   const first = explorerCall({
+    namespace: "w7",
     task,
     notes: [heading],
     explorerGuidance: "Try A.",
   });
   const second = explorerCall({
+    namespace: "w7",
     task,
     notes: [heading],
     explorerGuidance: "Try B.",
@@ -467,6 +324,7 @@ test("verifier and Codex prompts retain their baseline apart from declared-suppo
     verify: [{ note: "n2", verifiers: [...verifierNames] }],
     notes: [second],
     support: [note],
+    order: ["n1", "n2"],
   };
   // Retain the archived call labels only as part of its captured fingerprint.
   const historicalLabels = [
@@ -517,7 +375,7 @@ test("verifier and Codex prompts retain their baseline apart from declared-suppo
   }
   // Captured from pre-batch port ae15a025, normalizing only the two checks above. The old
   // aggregate archived fingerprint also included reconstruction, Explorer, and
-  // Coordinator, whose instructions intentionally change with batch acceptance.
+  // Coordinator, whose instructions are intentionally retired.
   expect(digest.digest("hex")).toBe(
     "d0cb6f75ce5e247ded7c4961206e4b8a7308f81bc717e137d3b5d3a6a6555b70",
   );
@@ -557,7 +415,12 @@ test("initial and corrected blind calls contain only statements, dependency edge
       },
     ],
   }));
-  const input = { task, notes: generated, support: [source] };
+  const input = {
+    task,
+    notes: generated,
+    support: [source],
+    order: [source.id, ...generated.map(({ id }) => id)],
+  };
   const before = structuredClone(input);
   const initial = {
     statements: generated.map(({ id }) => ({
@@ -607,4 +470,21 @@ test("initial and corrected blind calls contain only statements, dependency edge
     }
   }
   expect(input).toEqual(before);
+});
+
+test("opaque verdict IDs cannot collide through delimiter normalization", () => {
+  const wanted = ["a,b", "c"],
+    wrong = ["a", "b,c"];
+  const value = (note: string) => ({
+    note,
+    verdict: "PASS",
+    report: "Checked.",
+  });
+  expect(
+    verdictsFor(wanted).safeParse({ verdicts: wanted.map(value).reverse() })
+      .success,
+  ).toBe(true);
+  expect(
+    verdictsFor(wanted).safeParse({ verdicts: wrong.map(value) }).success,
+  ).toBe(false);
 });

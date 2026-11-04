@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  coordinatorResultFor,
+  selectionResultFor,
   explorerResultFor,
   judgedBy,
   missingVerdicts,
@@ -11,7 +11,7 @@ import {
   type Verification,
 } from "../src/policy/contracts.ts";
 import { explorerCall } from "../src/policy/prompts.ts";
-import { supportClosure } from "../src/policy/support.ts";
+import { noteOrder, supportClosure } from "../src/policy/support.ts";
 import { verificationPrefix } from "../src/policy/verification.ts";
 
 // Cases taken from v1.0.0's workflow, continuation, support and recovery tests.
@@ -43,9 +43,11 @@ const verdict = (
 });
 
 test("Explorer submissions require notes and have no solution flag", () => {
-  const input = { task, explorerGuidance: "", notes: [] };
+  const input = { task, explorerGuidance: "", namespace: "w7", notes: [] };
   const ordinary = explorerCall(input);
-  const submitted = { notes: [{ text: "A partial result.", support: [] }] };
+  const submitted = {
+    notes: [{ summary: "A claim.", text: "A partial result.", support: [] }],
+  };
   expect(ordinary.schema.safeParse(submitted).success).toBe(true);
   expect(
     ordinary.schema.safeParse({ ...submitted, solution: false }).success,
@@ -54,21 +56,29 @@ test("Explorer submissions require notes and have no solution flag", () => {
 });
 
 test("Explorer can append notes using live prior support but cannot edit or choose their IDs", () => {
-  const schema = explorerResultFor([note("n1"), { ...note("n2"), dead: true }]);
-  expect(noteIdAfter(2, 0)).toBe("n3");
-  expect(noteIdAfter(2, 1)).toBe("n4");
+  const schema = explorerResultFor(
+    [note("n1"), { ...note("n2"), dead: true }],
+    "w7",
+  );
+  expect(noteIdAfter("w7", 0)).toBe("w7.1");
+  expect(noteIdAfter("w7", 1)).toBe("w7.2");
   expect(
     schema.parse({
       notes: [
-        { text: "New lemma.", support: ["n1"] },
-        { text: "Use the newly appended lemma.", support: ["n3"] },
+        { summary: "A claim.", text: "New lemma.", support: ["n1"] },
+        {
+          summary: "A claim.",
+          text: "Use the newly appended lemma.",
+          support: ["w7.1"],
+        },
       ],
     }).notes,
   ).toHaveLength(2);
-  for (const support of [["n2"], ["n3"], ["n99"], ["n1", "n1"]])
+  for (const support of [["n2"], ["w7.1"], ["n99"], ["n1", "n1"]])
     expect(
-      schema.safeParse({ notes: [{ text: "Invalid support.", support }] })
-        .success,
+      schema.safeParse({
+        notes: [{ summary: "A claim.", text: "Invalid support.", support }],
+      }).success,
     ).toBe(false);
   expect(
     schema.safeParse({
@@ -77,20 +87,22 @@ test("Explorer can append notes using live prior support but cannot edit or choo
   ).toBe(false);
   expect(
     schema.safeParse({
-      notes: [{ text: "New proof.", support: [] }],
+      notes: [{ summary: "A claim.", text: "New proof.", support: [] }],
       edits: [],
     }).success,
   ).toBe(false);
   expect(
     schema.safeParse({
-      notes: [{ text: "The bound is n4^{-L}.", support: [] }],
+      notes: [
+        { summary: "A claim.", text: "The bound is n4^{-L}.", support: [] },
+      ],
     }).success,
   ).toBe(true);
 });
 
-test("Coordinator requests verifier prefixes and orders support before its consumers", () => {
-  const schema = coordinatorResultFor([note("n1"), note("n2", ["n1"])]);
-  const base = { filings: [] };
+test("Verifier selection requests verifier prefixes and orders support before its consumers", () => {
+  const schema = selectionResultFor([note("n1"), note("n2", ["n1"])]);
+  const base = {};
   for (const field of ["explorerGuidance", "support"]) {
     expect(
       schema.safeParse({
@@ -122,21 +134,20 @@ test("Coordinator requests verifier prefixes and orders support before its consu
     ],
   ])
     expect(schema.safeParse({ ...base, verify }).success).toBe(false);
-  const unfiled = coordinatorResultFor([{ ...note("n1"), summary: undefined }]);
-  expect(unfiled.safeParse({ ...base, verify: [] }).success).toBe(false);
+  const imported = { ...note("n1"), summary: undefined };
+  const unfiled = selectionResultFor([imported]);
+  expect(unfiled.safeParse({ verify: [] }).success).toBe(true);
   expect(
-    unfiled.safeParse({
-      ...base,
-      filings: [{ note: "n1", summary: "P." }],
-      verify: [],
-    }).success,
+    unfiled.safeParse({ verify: [{ note: "n1", verifiers: lemma }] }).success,
   ).toBe(true);
+  expect(unfiled.safeParse({ filings: [], verify: [] }).success).toBe(false);
 });
 
 test("source then correctness then requirements then reconstruction gate reachable checks", () => {
   const input = {
     notes: [note("n1"), note("n2", ["n1"])],
     support: [],
+    order: ["n1", "n2"],
     verify: [
       { note: "n1", verifiers: lemma },
       { note: "n2", verifiers: all },
@@ -185,6 +196,7 @@ test.each(["source", "correctness"] as const)(
     const input = {
       notes: [note("n1"), note("n3", ["n2"]), note("n4")],
       support: [{ ...note("n2", ["n1"]), verified: true }],
+      order: ["n1", "n2", "n3", "n4"],
       verify: [
         { note: "n1", verifiers: all },
         { note: "n3", verifiers: all },
@@ -223,10 +235,9 @@ test("verification receives the complete ordered support closure and counts shar
     { note: "n4", verifiers: lemma },
   ];
   expect(supportClosure([notes[2]!, notes[3]!], notes)).toEqual(["n1", "n2"]);
-  expect(supportClosure(notes.slice(2), [...notes].reverse())).toEqual([
-    "n1",
-    "n2",
-  ]);
+  expect(() => supportClosure(notes.slice(2), [...notes].reverse())).toThrow(
+    "must precede",
+  );
   expect(() => supportClosure(notes.slice(2), [...notes, notes[0]!])).toThrow(
     "duplicate note",
   );
@@ -247,4 +258,60 @@ test("verification receives the complete ordered support closure and counts shar
       ...notes.slice(1),
     ]),
   ).toThrow("must precede");
+});
+
+test("opaque identities follow notebook order and namespace positions, not spelling", () => {
+  const notes = [
+    note("w900.8"),
+    note("i30.1", ["w900.8"]),
+    note("w2.1", ["i30.1"]),
+  ];
+  expect(supportClosure([notes[2]!], notes)).toEqual(["w900.8", "i30.1"]);
+  expect(["w2.1", "i30.1", "w900.8"].sort(noteOrder(notes))).toEqual(
+    notes.map(({ id }) => id),
+  );
+  const namespace = "w17";
+  const schema = explorerResultFor(notes, namespace);
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    summary: "Claim.",
+    text: `Proof for ${noteIdAfter(namespace, index)}.`,
+    support: index ? [noteIdAfter(namespace, index - 1)] : ["w2.1"],
+  }));
+  expect(schema.safeParse({ notes: many }).success).toBe(true);
+  expect(
+    schema.safeParse({ notes: [{ text: "Missing summary.", support: [] }] })
+      .success,
+  ).toBe(false);
+});
+
+test("new adverse evidence gates dead roots and their closure despite this attempt's passes", () => {
+  const notes = [
+    note("ancestor"),
+    note("middle", ["ancestor"]),
+    note("target", ["middle"]),
+    note("independent"),
+  ];
+  const input = {
+    notes: [notes[0]!, notes[2]!, notes[3]!],
+    support: [{ ...notes[1]!, verified: true }],
+    order: notes.map(({ id }) => id),
+    verify: ["ancestor", "target", "independent"].map((note) => ({
+      note,
+      verifiers: all,
+    })),
+  };
+  const passes = input.verify.flatMap(({ note }) => [
+    verdict("source", note),
+    verdict("correctness", note),
+    verdict("requirements", note),
+  ]);
+  input.notes[0]!.dead = true;
+  expect(judgedBy(input, passes, "source")).toEqual(["independent"]);
+  expect(judgedBy(input, passes, "reconstruction")).toEqual(["independent"]);
+  input.notes[0]!.dead = false;
+  input.support[0]!.dead = true;
+  expect(judgedBy(input, passes, "reconstruction")).toEqual([
+    "ancestor",
+    "independent",
+  ]);
 });

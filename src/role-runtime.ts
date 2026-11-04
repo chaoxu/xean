@@ -31,7 +31,6 @@ import {
   type Note,
 } from "./policy/contracts.ts";
 import {
-  coordinatorUpdate,
   promptNote,
   resolveCall,
   type CallDescriptor,
@@ -50,7 +49,11 @@ export const roleGenerationPolicy = {
     "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work.",
   retryContent: "completed-reasoning" as const,
 };
-type Assignment = { descriptor?: CallDescriptor; profile?: PiRoleProfile };
+type Assignment = {
+  key?: string;
+  descriptor?: CallDescriptor;
+  profile?: PiRoleProfile;
+};
 export const Assignment = defineDoc({
   kind: "xean.role.assignment",
   version: 1,
@@ -68,42 +71,16 @@ const Progress = defineDocFamily({
   family: true,
   initial: (): { conversation?: ConversationId } => ({}),
 });
-type InputBoundary = { conversationId: ConversationId; at: EntryId };
-const CoordinatorPrefix = defineDoc({
-  kind: "xean.coordinator.prefix",
-  version: 1,
-  checkpointWhen: () => false,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: (): { latest?: InputBoundary } => ({}),
-});
-
-async function prefixFits(tx: Tx, boundary: InputBoundary, remaining: number) {
-  let cursor: Cursor | undefined;
-  do {
-    const page = await tx.scanEntries(
-      { conversationId: boundary.conversationId, maxEntryId: boundary.at },
-      128,
-      cursor,
-    );
-    for (const entry of page.items)
-      for (const message of entry.model ?? [])
-        if (message.role === "user")
-          // Coordinator input boundaries contain only our string prompts.
-          remaining -= (message.content as string).length;
-    if (remaining < 0) return false;
-    cursor = page.next;
-  } while (cursor);
-  return true;
-}
-
 type Receipt = { call: EntryId; value: JsonValue; fresh: boolean };
+type FrozenRole = {
+  descriptor: CallDescriptor;
+  profile: PiRoleProfile;
+  receipt?: Receipt;
+};
 async function receipt(
   tx: Tx,
   conversationId: ConversationId,
   call: RoleCall,
-  key: string,
   skipAmbiguous = false,
 ): Promise<Receipt | undefined> {
   let cursor: Cursor | undefined;
@@ -136,14 +113,6 @@ async function receipt(
     }
     cursor = page.next;
   } while (cursor);
-  if (found && call.role === "coordinator") {
-    const submission = await tx.submissionByRequest(conversationId, key);
-    if (submission?.type === "input" && submission.status === "done")
-      (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID)).latest = {
-        conversationId,
-        at: submission.entry,
-      };
-  }
   return found;
 }
 
@@ -174,8 +143,11 @@ export function createRoleRuntime() {
         api.conversationId,
         context,
       );
-      if (assignment?.descriptor?.kind !== "explorer")
-        throw new Error("Notebook reads require an Explorer assignment");
+      if (
+        assignment?.descriptor?.kind !== "explorer" &&
+        assignment?.descriptor?.kind !== "selection"
+      )
+        throw new Error("Notebook reads require Explorer or selection");
       const input = assignment.descriptor.input;
       const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
       if (!book) throw new Error("Campaign notebook is missing");
@@ -273,7 +245,7 @@ export function createRoleRuntime() {
           if (!assignment?.descriptor) return;
           const call = resolveCall(assignment.descriptor);
           const campaign =
-            call.role === "coordinator"
+            call.role === "selection"
               ? await api.snapshot(ProviderDoc, ROOT_CONVERSATION_ID, context)
               : undefined;
           const routingId = campaign
@@ -286,7 +258,7 @@ export function createRoleRuntime() {
             description: call.description,
             parameters: z.toJSONSchema(call.schema),
             constrainedSampling:
-              call.role === "coordinator"
+              call.role === "selection"
                 ? (false as const)
                 : {
                     type: "json_schema" as const,
@@ -369,6 +341,78 @@ export function createRoleRuntime() {
     ],
   });
 
+  /** Recover the admitted stage, without rebuilding it from newer evidence. */
+  async function peek(
+    runtime: Runtime,
+    key: string,
+    context: Context,
+    previousTasks: readonly number[] = [],
+  ): Promise<FrozenRole | undefined> {
+    const progress = await runtime.snapshot(
+      Progress,
+      runtime.taskId,
+      key,
+      context,
+    );
+    // A close can precede the generation's settlement after its tool receipt.
+    // Finish already-admitted native work before deciding whether a new call is needed.
+    if (progress?.conversation !== undefined)
+      await (
+        await runtime.conversation(progress.conversation, context)
+      )?.waitForIdle(context);
+    let found: FrozenRole | undefined;
+    await runtime.commit(async (tx) => {
+      const read = async (conversationId: ConversationId, strict = false) => {
+        const saved = await tx.doc(Assignment, conversationId);
+        if (saved.key !== key || !saved.descriptor || !saved.profile)
+          return false;
+        const result = await receipt(
+          tx,
+          conversationId,
+          resolveCall(saved.descriptor),
+          !strict,
+        );
+        if (result || !found)
+          found = copyJson(
+            {
+              descriptor: saved.descriptor,
+              profile: saved.profile,
+              ...(result ? { receipt: result } : {}),
+            },
+            { omitUndefinedProperties: true },
+          ) as FrozenRole;
+        return result !== undefined;
+      };
+      if (
+        progress?.conversation !== undefined &&
+        (await read(progress.conversation, true))
+      )
+        return;
+      for (const owner of previousTasks) {
+        const prior = await tx.task(owner as TaskId);
+        if (
+          prior?.state.status !== "terminal" ||
+          !["completed", "faulted", "aborted"].includes(
+            prior.state.outcome.status,
+          )
+        )
+          continue;
+        let cursor: Cursor | undefined;
+        do {
+          const page = await tx.scanConversations(
+            { ownerTaskId: owner as TaskId },
+            128,
+            cursor,
+          );
+          for (const conversation of page.items)
+            if (await read(conversation.id)) return;
+          cursor = page.next;
+        } while (cursor);
+      }
+    }, context);
+    return found;
+  }
+
   async function run(
     runtime: Runtime,
     key: string,
@@ -385,9 +429,8 @@ export function createRoleRuntime() {
     let conversation: ConversationHandle | undefined;
     let recovered: Receipt | undefined;
     let fresh = true;
-    let prompt = call.prompt;
     const assignment = copyJson(
-      { descriptor, profile },
+      { key, descriptor, profile },
       { omitUndefinedProperties: true },
     );
     try {
@@ -415,14 +458,13 @@ export function createRoleRuntime() {
                 (await tx.submissionByRequest(child.id, key))?.status !== "done"
               )
                 continue;
-              recovered = await receipt(tx, child.id, call, key, true);
+              recovered = await receipt(tx, child.id, call, true);
               if (recovered) return;
             }
             cursor = page.next;
           } while (cursor);
         }
         const progress = await tx.doc(Progress, runtime.taskId, key, null);
-        let parent: InputBoundary | undefined;
         if (progress.conversation !== undefined) {
           conversationId = progress.conversation;
           const saved = await tx.doc(Assignment, conversationId);
@@ -430,52 +472,22 @@ export function createRoleRuntime() {
             throw new Error(
               "Recovered role arguments do not match the durable assignment",
             );
-          fresh = (await receipt(tx, conversationId, call, key)) === undefined;
-          parent = (await tx.conversation(conversationId))?.parent;
-        } else if (descriptor.kind === "coordinator") {
-          parent = (await tx.doc(CoordinatorPrefix, ROOT_CONVERSATION_ID))
-            .latest;
-        }
-        while (parent && descriptor.kind === "coordinator") {
-          const prior = await tx.doc(Assignment, parent.conversationId);
-          const update =
-            prior.descriptor?.kind === "coordinator" &&
-            isDeepStrictEqual(prior.profile, profile)
-              ? coordinatorUpdate(prior.descriptor.input, descriptor.input)
-              : undefined;
-          if (progress.conversation !== undefined && update === undefined)
-            throw new Error(
-              "Recovered Coordinator input no longer matches its parent",
-            );
-          if (
-            update !== undefined &&
-            (progress.conversation !== undefined ||
-              (await prefixFits(
-                tx,
-                parent,
-                2 * call.prompt.length - update.length,
-              )))
-          ) {
-            prompt = update;
-            break;
-          }
-          parent = (await tx.conversation(parent.conversationId))?.parent;
+          fresh = (await receipt(tx, conversationId, call)) === undefined;
         }
         if (progress.conversation === undefined) {
           const ownership = { kind: "task" as const, taskId: runtime.taskId };
-          conversationId = (
-            parent
-              ? await tx.forkConversation(parent.conversationId, parent.at, {
-                  ownership,
-                })
-              : await tx.createConversation({ ownership })
-          ).id;
+          conversationId = (await tx.createConversation({ ownership })).id;
           Object.assign(await tx.doc(Assignment, conversationId), assignment);
           await configure(tx, conversationId, {
             model: { provider: profile.provider, modelId: profile.model },
             thinkingLevel: profile.reasoning,
             extensions: [extension],
-            tools: [tool, ...(call.role === "explorer" ? [reader] : [])],
+            tools: [
+              tool,
+              ...(["explorer", "selection"].includes(call.role)
+                ? [reader]
+                : []),
+            ],
             instructions: call.system,
           });
           progress.conversation = conversationId;
@@ -489,7 +501,7 @@ export function createRoleRuntime() {
         {
           type: "input",
           requestId: key,
-          content: prompt,
+          content: call.prompt,
         },
         context,
       );
@@ -501,7 +513,7 @@ export function createRoleRuntime() {
         );
       let result: Receipt | undefined;
       await runtime.commit(async (tx) => {
-        result = await receipt(tx, conversationId, call, key);
+        result = await receipt(tx, conversationId, call);
       }, context);
       if (result) return { ...result, fresh };
       throw new Error(`${call.role} returned no ${call.tool} submission`);
@@ -520,5 +532,5 @@ export function createRoleRuntime() {
       }
     }
   }
-  return { extension, run };
+  return { extension, run, peek };
 }

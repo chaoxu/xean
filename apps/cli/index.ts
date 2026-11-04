@@ -24,7 +24,7 @@ program
   .description("Freeze a task and settings in a fresh campaign database")
   .option(
     "--verify-on-solution",
-    "Defer verification until a claimed complete solution",
+    "Defer checks until a Verifier selects a claimed complete solution",
   )
   .action(
     async (

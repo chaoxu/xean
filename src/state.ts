@@ -4,7 +4,6 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
-import { isDeepStrictEqual } from "node:util";
 import type { Task, Note, Verdict } from "./policy/contracts.ts";
 import {
   establishes,
@@ -14,7 +13,7 @@ import {
   verifierNames,
 } from "./policy/contracts.ts";
 import type { SolveSettings } from "./policy/settings.ts";
-import { byId } from "./policy/support.ts";
+import { noteOrder } from "./policy/support.ts";
 
 export type Definition = { task: Task; settings: SolveSettings };
 export const DefinitionDoc = defineDoc({
@@ -35,23 +34,39 @@ export type NotebookState = {
   notes: StoredNote[];
   checks: Check[];
   guidance: { id: string; text: string }[];
-  inputs: { id: string; notes: Omit<StoredNote, "id">[]; consumed: boolean }[];
+  inputs: {
+    id: string;
+    namespace: string;
+    notes: Omit<StoredNote, "id">[];
+    consumed: boolean;
+  }[];
 };
 
-/** Intake is explicit at fresh exploration/coordination boundaries, never retries. */
-export function admitNotes(book: NotebookState): boolean {
-  const pending = book.inputs.filter((input) => !input.consumed);
+/** Intake publishes each queued submission under its original native identity. */
+export async function admitNotes(
+  tx: Tx,
+  root: ConversationId,
+): Promise<boolean> {
+  const ref = await tx.doc(Notebook, root);
+  const pending = ref.inputs.filter((input) => !input.consumed);
   for (const input of pending) {
-    for (const note of input.notes)
-      book.notes.push({ ...note, id: noteIdAfter(book.notes.length, 0) });
+    appendNotes(
+      tx,
+      ref,
+      input.notes.map((note, index) => ({
+        ...note,
+        id: noteIdAfter(input.namespace, index),
+      })),
+      `input/${input.namespace}`,
+    );
     input.consumed = true;
   }
   return pending.length > 0;
 }
-type NotebookReference = Omit<NotebookState, "notes"> & {
+export type Publication = { id: string; version: number; notes: string[] };
+export type NotebookReference = Omit<NotebookState, "notes"> & {
   path: string;
-  version: number;
-  notes: string[];
+  publications: Publication[];
 };
 export const Notebook = defineDoc({
   kind: "xean.notebook-reference",
@@ -62,8 +77,7 @@ export const Notebook = defineDoc({
   fork: "current",
   initial: (): NotebookReference => ({
     path: "",
-    version: 0,
-    notes: [],
+    publications: [],
     checks: [],
     guidance: [],
     inputs: [],
@@ -89,36 +103,57 @@ export async function initializeNotebook(
 export function readNotebook(ref: NotebookReference) {
   if (!ref.path) throw new Error("External notebook is not initialized");
   using store = new NoteStore(ref.path, { readonly: true });
-  const records = store.read(ref.version, ref.notes).notes;
   return {
-    ...ref,
-    notes: ref.notes.map((id) => {
-      const note = records[id];
-      if (!note) throw new Error(`Missing pinned note: ${id}`);
-      return note as StoredNote;
-    }),
+    checks: ref.checks,
+    guidance: ref.guidance,
+    inputs: ref.inputs,
+    notes: [...ref.publications]
+      .sort((a, b) => a.version - b.version)
+      .flatMap((publication) => {
+        const records = store.read(
+          publication.version,
+          publication.notes,
+        ).notes;
+        return publication.notes.map((id) => {
+          const note = records[id];
+          if (!note) throw new Error(`Missing pinned note: ${id}`);
+          return note as StoredNote;
+        });
+      }),
   };
 }
 
-/** Store receipts survive Pi rollback; replay uses the same pinned base and changes. */
-export function saveNotebook(
+/** Store receipts survive Pi rollback; every admitted batch keeps its exact snapshot. */
+export function appendNotes(
   tx: Tx,
   ref: NotebookReference,
-  book: ReturnType<typeof readNotebook>,
+  notes: StoredNote[],
+  requestId: string,
 ) {
   if (readOnly.has(tx)) throw new Error("Cannot change a read-only notebook");
-  if (ref.version !== book.version) throw new Error("Stale notebook snapshot");
-  const before = readNotebook(ref).notes;
-  const changes = Object.fromEntries(
-    book.notes
-      .filter((note, index) => !isDeepStrictEqual(before[index], note))
-      .map((note) => [note.id, note]),
+  if (!ref.path) throw new Error("External notebook is not initialized");
+  const ids = notes.map((note) => note.id);
+  if (!ids.length || new Set(ids).size !== ids.length)
+    throw new Error("A publication requires distinct notes");
+  const prior = ref.publications.find(
+    (publication) => publication.id === requestId,
   );
-  if (Object.keys(changes).length) {
-    using store = new NoteStore(ref.path);
-    ref.version = store.commit(ref.version, changes, `xean/${ref.version}`);
-  }
-  ref.notes = book.notes.map((note) => note.id);
+  if (
+    prior &&
+    (prior.notes.length !== ids.length ||
+      prior.notes.some((id, index) => id !== ids[index]))
+  )
+    throw new Error("Publication admission has different note order");
+  using store = new NoteStore(ref.path);
+  const version = store.append(
+    requestId,
+    Object.fromEntries(notes.map((note) => [note.id, note])),
+  );
+  if (prior) {
+    if (prior.version !== version)
+      throw new Error("Publication receipt mismatch");
+  } else ref.publications.push({ id: requestId, version, notes: ids });
+  return version;
 }
 
 /** Reconstruction can use earlier successful proofs of immutable dependencies. */
@@ -141,7 +176,11 @@ export function project(book: NotebookState): {
     accepted: string[] = [];
   const first = new Map<string, number>();
   const reconstructed: Record<string, number> = {};
-  for (const entry of [...book.notes].sort((a, b) => byId(a.id, b.id))) {
+  const order = noteOrder(book.notes);
+  for (const entry of book.notes) {
+    for (const parent of entry.support)
+      if (order(parent, entry.id) >= 0)
+        throw new Error(`support ${parent} must precede ${entry.id}`);
     const support = entry.support.map((id) => notes.get(id));
     const attempts = Object.values(passes[entry.id] ?? {});
     const established =
@@ -154,7 +193,7 @@ export function project(book: NotebookState): {
       established && !dead && support.every((note) => note?.verified);
     const note = noteSchema.parse({
       ...entry,
-      support: [...entry.support].sort(byId),
+      support: [...entry.support].sort(order),
       verdicts: reports[entry.id] ?? [],
       dead,
       verified,

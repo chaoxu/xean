@@ -6,11 +6,11 @@ uses the CLI or library to run and inspect a campaign. It handles literature
 discovery, computational experiments, scheduling across problems, and independent
 review of the result.
 
-Inside `xean`, Explorer chooses mathematical directions and reads or appends
-notes. Coordinator files missing summaries and selects verification work.
-Verifier checks sources, correctness, task requirements, and blind
-reconstruction. Pi Durable manages execution and recovery. The outer workflow is
-sequential, and a valid Explorer submission ends its turn.
+Inside `xean`, Explorers choose mathematical directions and append notes with
+summaries. Verifiers select work and check sources, correctness, task requirements,
+and blind reconstruction. Campaigns alternate groups of Explorers and Verifiers,
+waiting for each group to settle before advancing. Pi Durable manages execution
+and recovery. A valid Explorer submission ends its turn.
 
 The design keeps research policy small and aims to reduce repeated reasoning
 costs. Explorer works from prepared notes and the model's learned mathematical
@@ -24,7 +24,7 @@ below describe the current CLI and library.
 
 ## Start a campaign
 
-This checkout is `5.0.0-dev.1` and requires fresh campaign databases. Use Bun
+This checkout is `5.0.0-dev.2` and requires fresh campaign databases. Use Bun
 1.4.2 or later on macOS or Linux. From an extracted archive or source checkout:
 
 ```sh
@@ -102,7 +102,9 @@ bun run xean run .xean/demo.sqlite
 ```
 
 `inspect` shows queued `inputs` until execution admits them at its next intake
-boundary. `xean` assigns note IDs then. Caller-supplied `support` can name only
+boundary. `xean` assigns opaque note IDs then. Generated notes use IDs such as
+`w42.1`, and imported notes use IDs such as `i17.1`. Treat these as references,
+not sequence numbers. Caller-supplied `support` can name only
 existing notes that are not dead, excluding new notes in the same submission.
 Repeating an ID and identical content is idempotent. Reusing the ID with different
 content fails. Submission does not start models or reopen a terminal result.
@@ -139,8 +141,9 @@ Cross-process admission to an active owner is not implemented.
 
 ## Reading notes
 
-Full `text` is authoritative. Optional `summary` and `detailedSummary` fields
-state results, hypotheses, conventions, bounds, limitations, and explicit gaps
+Full `text` is authoritative. Explorer supplies a `summary` for each generated
+note. Imported notes may omit summaries. A `summary` or optional `detailedSummary`
+states results, hypotheses, conventions, bounds, limitations, and explicit gaps
 without reproducing the proof. Supplied summaries are the caller's responsibility.
 The correctness verifier checks their fidelity against the full text.
 
@@ -150,29 +153,34 @@ reads up to 20 IDs per call. `detailed` returns statements and verification stat
 with `null` for a missing detailed summary. PASS and external-attestation report
 prose is omitted, while FAIL and INCONCLUSIVE reports remain. Full evidence stays
 available through `inspect`. `full` returns only text strings in requested order.
-Coordinator receives full text only for notes lacking summaries and files each
-missing summary once.
+Notes without sufficient summaries remain available through full reads.
 
 ## Verification and models
 
-Settings select provider, model, and reasoning level for `explorer`,
-`coordinator`, `source`, `correctness`, `requirements`, and `reconstruction`.
-Pi runs each role except the special Codex source profile below. OpenAI models
-have been exercised. Other Pi providers remain unqualified.
-`maxExplorerTurns` defaults to 10 completed Explorer submissions. The turn cap
-does not stop Coordinator or eligible verification work. This is not a time or
-cost limit. `window` defaults to 100,000 characters for verification batches, always
-admitting at least the first entry.
+Settings select provider, model, and reasoning level for `explorer`, `source`,
+`correctness`, `requirements`, and `reconstruction`. Verifier selection uses the
+`correctness` profile. Pi runs each role except the special Codex source profile
+below. OpenAI models have been exercised. Other Pi providers remain unqualified.
 
-By default, Coordinator can request checks of intermediate notes. To wait until
-it nominates a claimed complete solution, initialize with:
+`explorers` and `verifiers` are positive integer group sizes, both defaulting to
+
+1. Set `"explorers": 2` and `"verifiers": 2` before `init` to run up to two workers
+   of each role concurrently. Each group's membership is fixed before it starts.
+   The campaign waits for every member before starting the next group.
+   `maxExplorerTurns` defaults to 10 completed Explorer submissions and does not
+   stop eligible verification work. It imposes no time or cost limit. `window`
+   defaults to 100,000 characters per verification batch, always admitting its
+   first entry.
+
+By default, Verifiers can select intermediate notes for checks. To defer checks
+until a Verifier selects a claimed complete solution, initialize with:
 
 ```sh
 bun run xean init task.json .xean/deferred.sqlite settings.json --verify-on-solution
 ```
 
 The flag sets `verifyOnSolution: true`, also accepted in settings. All checks,
-including source search, wait until nomination. Only nominated candidates and
+including source search, wait until that selection. Only selected candidates and
 their declared dependency closure are checked. Verification timing is frozen at
 `init`. If no solution is accepted, exploration continues while turns remain.
 
@@ -234,6 +242,8 @@ bun run xean resume .xean/demo.sqlite
 resume skips that ambiguous result to make a fresh call. Reconstruction can correct its
 statement batch and retry automatically once. A repeated fresh correction stops
 with `call-failure`, and explicit `resume` uses the latest corrected batch.
+A group with a failed worker remains `call-failure` until resumed, even when
+another member's checks provisionally establish an accepted note.
 
 The independent `@chaoxu/notebook-store` package is bundled and installs with
 `xean`. A campaign at `campaign.sqlite` creates `campaign.sqlite.notes.sqlite`.
@@ -241,12 +251,11 @@ Both databases are required for recovery. Close all writers before backing up
 both, and restore them to their original canonical paths. Use fresh databases
 for this version. Historical campaigns keep their pinned runtimes without migration.
 
-Campaigns never share notes, trust, or reconstructed proofs. Other programs may
-read the notebook and publish through its API, but campaign reads remain pinned
-to admitted content. External commits are not automatically admitted and cause
-the next fresh publication to fail with a version conflict. Existing checked
-notes and accepted exports remain unchanged. New submissions also require the
-notebook head to match the campaign's admitted version.
+Campaigns never share notes, trust, or reconstructed proofs. Each admitted
+publication is pinned to its exact notebook revision. Unrelated appends do not
+change frozen worker inputs or prevent their recovery. Other programs may read
+and publish through the notebook API, but external material still needs explicit
+admission. Mathematical note texts remain immutable within a campaign.
 
 Pi handles output limits and retryable transport errors. Long responses can
 disconnect near 15 minutes ([#24](https://github.com/chaoxu/xean/issues/24)).
@@ -272,25 +281,28 @@ owner after use. Pi owns execution and recovery.
 The library also exposes independently callable workers. Create a fresh root
 with `open(path, {create, startCampaign: false, models})`, then create a worker
 inside `owner.root.commit` with `owner.workers.create(tx, owner.root.id, request)`.
-Requests select `explorer`, `coordinator`, or `verifier`. Explorer publishes its
-notes, Coordinator publishes summaries and returns verification selections, and
-Verifier records checks. Wait on the returned native task ID with
+Requests select `explorer` or `verifier`. Explorer publishes its notes and
+summaries. A Verifier selects work and records checks. Pass `verify` in a Verifier
+request to supply an explicit selection. Each invocation processes a batch within
+`window`. Wait on the returned native task ID with
 `owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
 the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
 
-[The worker example](examples/workers.ts) runs Explorer, Coordinator, and the
-first selected verification batch:
+[The worker example](examples/workers.ts) runs an Explorer followed by a Verifier
+that selects and checks a batch:
 
 ```sh
 bun examples/workers.ts task.json settings.json .xean/workers.sqlite
 ```
 
-This interface uses the existing database owner and admits workers sequentially.
-It does not add parallel writers or share notes between processes.
-`startCampaign: false` only omits initial campaign creation. Reopening preserves
-existing tasks. Waiting on the same task ID recovers unfinished work. For a
-faulted or aborted worker, create `{kind: "retry", task: id}`. A retry preserves
-the frozen input and requires the same admitted notebook version.
+This interface uses the existing database owner. Manual workers of the same
+role may overlap, while mixed Explorer and Verifier work is rejected until the
+active workers settle. An automatic campaign owns admission while it runs or
+awaits recovery. `startCampaign: false` only omits initial campaign creation.
+Reopening preserves existing tasks. Waiting on the same task ID recovers
+unfinished work. For a faulted or aborted worker, create
+`{kind: "retry", task: id}`. A retry preserves the frozen input and its exact
+publication references.
 
 Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite
 file. Other agents can read those records without starting work:
@@ -307,13 +319,16 @@ Stored status reports the last committed state. A `running` record can remain
 after its process dies. Mathematical note texts stay in the separate notebook
 database.
 
-Fresh Explorer and Coordinator workers admit notes queued through `submitNotes`.
-Verifier workers and retries leave queued notes for a later intake. For manual
-exploration, pass advice as `{kind: "explorer", guidance: "..."}`. The `guide`
-queue is consumed by the automatic campaign controller.
+Fresh Explorer workers admit notes queued through `submitNotes`. A Verifier
+without an explicit selection admits queued notes when no worker is active.
+Explicit Verifier batches and retries leave queued notes for a later intake.
+For manual exploration, pass advice as `{kind: "explorer", guidance: "..."}`.
+The `guide` queue is consumed by the automatic campaign controller.
 
 Campaign `status`, `inspect`, `resume`, and `export` commands require the automatic
-campaign task. The default CLI keeps the complete sequential research loop.
+campaign task. The default CLI runs the complete research loop in role groups.
+Continuous mixed-role execution and independent processes writing a shared
+notebook remain outside this interface.
 
 Released Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
 retained patches recorded in [provenance](vendor/pi/provenance.json).
@@ -324,7 +339,7 @@ bun run pack
 ```
 
 `check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
-and writes `dist/xean-5.0.0-dev.1.tgz`. `bun run check:distribution` checks packaging
+and writes `dist/xean-5.0.0-dev.2.tgz`. `bun run check:distribution` checks packaging
 without retaining an archive.
 
 ## Citing `xean`

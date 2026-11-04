@@ -40,24 +40,23 @@ import {
   createRoleRuntime,
   roleGenerationPolicy,
 } from "../src/role-runtime.ts";
-import {
-  coordinatorUpdate,
-  resolveCall,
-  type CallDescriptor,
-} from "../src/policy/prompts.ts";
-import { open, inspect } from "../src/host.ts";
-import { readReport } from "../src/report.ts";
-import { solveSettings, type PiRoleProfile } from "../src/policy/settings.ts";
+import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
+import type { PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 import {
   Notebook,
   initializeNotebook,
-  readNotebook,
-  saveNotebook,
+  appendNotes,
   project,
 } from "../src/state.ts";
 import provenance from "../vendor/pi/provenance.json";
 import historical from "./fixtures/v100-contracts.json";
+import {
+  fixture as workerFixture,
+  complete,
+  checks,
+  note,
+} from "./worker-fixture.ts";
 
 const context = BACKGROUND_CONTEXT;
 const notebookDirectories: string[] = [];
@@ -71,11 +70,22 @@ const descriptor: CallDescriptor = {
     task: { problem: "Prove 1 = 1.", completionCriteria: "Give a proof." },
     notes: [],
     explorerGuidance: "Prove the claim.",
+    namespace: "w1",
   },
 };
-const value = { notes: [{ text: "By reflexivity, 1 = 1.", support: [] }] };
+const value = {
+  notes: [
+    {
+      text: "By reflexivity, 1 = 1.",
+      summary: "Equality is reflexive.",
+      support: [],
+    },
+  ],
+};
 const submitted = (
-  input: { notes: { text: string; support: string[] }[] } = value,
+  input: {
+    notes: { text: string; support: string[]; summary?: string }[];
+  } = value,
 ) =>
   fauxAssistantMessage([fauxToolCall("submit_notes", input)], {
     stopReason: "toolUse",
@@ -121,6 +131,7 @@ function fixture(
       descriptor: CallDescriptor;
       previousTasks: TaskId[];
       profile: PiRoleProfile;
+      frozen: boolean;
     },
     { phase: "run" },
     JsonValue,
@@ -131,14 +142,19 @@ function fixture(
     initial: () => ({ phase: "run" }),
     phases: {
       async run(task, runtime, ctx) {
-        const result = await role.run(
-          runtime,
-          "role",
-          task.input.descriptor,
-          task.input.profile,
-          ctx,
-          task.input.previousTasks,
-        );
+        const prior = task.input.frozen
+          ? await role.peek(runtime, "role", ctx, task.input.previousTasks)
+          : undefined;
+        const result =
+          prior?.receipt ??
+          (await role.run(
+            runtime,
+            "role",
+            prior?.descriptor ?? task.input.descriptor,
+            prior?.profile ?? task.input.profile,
+            ctx,
+            task.input.previousTasks,
+          ));
         await runtime.commit(
           () => ({
             status: "terminal",
@@ -195,12 +211,13 @@ function fixture(
             model: "math",
             reasoning: "max",
           },
+          frozen = false,
         ) {
           return root.commit(
             (tx) =>
               tx.createTask(
                 Invoke,
-                { descriptor: input, previousTasks, profile },
+                { descriptor: input, previousTasks, profile, frozen },
                 { ownership: { kind: "conversation" } },
               ),
             context,
@@ -247,7 +264,7 @@ function wireReply(
 test("Responses Explorer nulls normalize, invalid summaries and support fail, and raw evidence survives", async () => {
   const supplied = {
     text: "Thus 1 squared = 1.",
-    support: ["n1"],
+    support: ["w1.1"],
     summary: "The square of 1 is 1.",
     detailedSummary: "In the real numbers, 1 squared = 1.",
   };
@@ -256,14 +273,17 @@ test("Responses Explorer nulls normalize, invalid summaries and support fail, an
       {
         text: "Reflexivity gives 1 = 1.",
         support: [],
-        summary: null,
+        summary: "Equality is reflexive.",
         detailedSummary: null,
       },
       supplied,
     ],
   };
   const expected = {
-    notes: [{ text: raw.notes[0]!.text, support: [] }, supplied],
+    notes: [
+      { text: raw.notes[0]!.text, summary: raw.notes[0]!.summary, support: [] },
+      supplied,
+    ],
   };
   const rejected = [
     { notes: [{ ...raw.notes[0]!, summary: " " }] },
@@ -273,7 +293,9 @@ test("Responses Explorer nulls normalize, invalid summaries and support fail, an
     ...rejected.map((value) => wireReply(value)),
     wireReply(raw, (tool, transcript) => {
       const item = tool.parameters.properties.notes.items;
-      for (const field of ["summary", "detailedSummary"]) {
+      expect(item.required).toContain("summary");
+      expect(item.properties.summary.type).toBe("string");
+      for (const field of ["detailedSummary"]) {
         expect(item.required).toContain(field);
         expect(item.properties[field].anyOf).toContainEqual({ type: "null" });
       }
@@ -512,13 +534,13 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
     const root = await harness.root(context);
     await root.commit(async (tx) => {
       const ref = await tx.doc(Notebook, ROOT_CONVERSATION_ID);
-      const book = readNotebook(ref);
-      book.notes = [
-        ...sources,
-        { id: "n3", text: "UNINDEXED_BODY", support: [] },
-      ];
       ref.checks = checks;
-      saveNotebook(tx, ref, book);
+      appendNotes(
+        tx,
+        ref,
+        [...sources, { id: "n3", text: "UNINDEXED_BODY", support: [] }],
+        "reader-fixture",
+      );
     }, context);
     expect(
       (await harness.waitForTask(await invoke([], input), context)).state
@@ -533,11 +555,12 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
   }
 });
 
-test("Coordinator disables provider constraints while retaining its prompt, schema and contextual validation", async () => {
+test("Selection disables provider constraints while retaining its prompt, schema and contextual validation", async () => {
   const input: CallDescriptor = {
-    kind: "coordinator",
+    kind: "selection",
     input: {
       task: descriptor.input.task,
+      claimed: [],
       notes: [
         {
           id: "n1",
@@ -554,7 +577,6 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
   };
   const call = await resolveCall(input);
   const coordination = {
-    filings: [],
     verify: [],
   };
   const assignmentMessages = [call.prompt];
@@ -570,7 +592,7 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
       expect(tools[0]?.parameters).toEqual(z.toJSONSchema(call.schema));
       expect(tools[0]?.constrainedSampling).toBe(false);
       expect(convertResponsesTools(tools)[0]).toMatchObject({
-        name: "submit_coordination",
+        name: "select_verification",
         parameters: z.toJSONSchema(call.schema),
         strict: false,
       });
@@ -604,10 +626,7 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
         transcript.messages
           .filter((message) => message.role !== "system")
           .map((message) => [message.role, message.content]),
-      ).toEqual([
-        ["user", call.prompt],
-        ["user", coordinatorUpdate(input.input, input.input)!],
-      ]);
+      ).toEqual([["user", call.prompt]]);
       return fauxAssistantMessage([fauxToolCall(call.tool, coordination)], {
         stopReason: "toolUse",
       });
@@ -630,343 +649,61 @@ test("Coordinator disables provider constraints while retaining its prompt, sche
   }
 });
 
-test("Coordinator rewinds whole input messages for corrections and size while preserving exact notebook state", async () => {
-  const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
-    kind: "coordinator",
-    input: {
-      task: { ...descriptor.input.task, problem: "Prove 1 = 1. ".repeat(50) },
-      notes: [
-        {
-          id: "n1",
-          text: "Reflexivity: x = x.",
-          support: [],
-          verdicts: [],
-          verified: true,
-          dead: false,
-          verification: { source: "Given premise", report: "Assumed correct." },
-        },
-      ],
-    },
-  };
-  const updated: typeof initial = {
-    ...initial,
-    input: {
-      ...initial.input,
-      notes: [
-        { ...initial.input.notes[0]!, summary: "Reflexivity holds." },
-        {
-          id: "n2",
-          text: "New partial argument.",
-          support: ["n1"],
-          verdicts: [],
-          verified: false,
-          dead: false,
-        },
-      ],
-    },
-  };
-  const dead: typeof initial = {
-    ...updated,
-    input: {
-      ...updated.input,
-      notes: updated.input.notes.map((note) => ({
-        ...note,
-        summary: note.summary ?? "New claim.",
-        dead: true,
-        verified: false,
-      })),
-    },
-  };
-  const corrected: typeof initial = {
-    ...dead,
-    input: {
-      ...dead.input,
-      notes: dead.input.notes.map((note) => ({
-        ...note,
-        summary:
-          note.id === "n1" ? "Corrected reflexivity claim." : note.summary,
-      })),
-    },
-  };
-  const incompatible: typeof initial = {
-    ...corrected,
-    input: {
-      ...corrected.input,
-      notes: corrected.input.notes.map((note) => ({
-        ...note,
-        text: "Changed base proof.",
-      })),
-    },
-  };
-  const differentTask: typeof initial = {
-    ...incompatible,
-    input: {
-      ...incompatible.input,
-      task: { problem: "Prove Q.", completionCriteria: "Prove Q fully." },
-    },
-  };
-  const assignments: CallDescriptor[] = [
-    initial,
-    updated,
-    dead,
-    corrected,
-    ...Array(12).fill(corrected),
-    incompatible,
-    differentTask,
-    differentTask,
-    descriptor,
-    updated,
-  ];
-  const fullSnapshotStart = 16;
-  const modelChangeIndex = assignments.length - 3;
-  const calls = await Promise.all(assignments.map(resolveCall));
-  const inputs = [
-    [calls[0]!.prompt],
-    [calls[0]!.prompt, coordinatorUpdate(initial.input, updated.input)!],
-    [
-      calls[0]!.prompt,
-      coordinatorUpdate(initial.input, updated.input)!,
-      coordinatorUpdate(updated.input, dead.input)!,
-    ],
-    [calls[0]!.prompt, coordinatorUpdate(initial.input, corrected.input)!],
-  ];
-  const headers = { "x-existing-header": "preserved" };
-  const requests: {
-    sessionId?: string;
-    headers?: Record<string, string | null>;
-    body: Record<string, unknown>;
-  }[] = [];
-  const capture: FauxResponseStep = async (
-    transcript,
-    options,
-    _state,
-    model,
-  ) => {
-    const index = requests.length,
-      call = calls[index]!;
-    expect(
-      transcript.messages.filter(
-        (message) =>
-          message.role === "assistant" || message.role === "toolResult",
-      ),
-    ).toHaveLength(0);
-    let body: Record<string, unknown> | undefined;
-    const captured = await responsesStream(
-      {
-        ...model,
-        api: "openai-responses",
-        compat: { supportsStrictMode: true },
-      },
-      normalizeContext(transcript),
-      {
-        ...options,
-        apiKey: "fixture-not-a-credential",
-        async onPayload(payload, selected) {
-          body = ((await options?.onPayload?.(payload, selected)) ??
-            payload) as Record<string, unknown>;
-          throw new Error("captured before HTTP");
-        },
-      },
-    ).result();
-    expect(captured.errorMessage).toContain("captured before HTTP");
-    expect(body!.instructions).toBe(call.system);
-    expect(body!.tools).toEqual(
-      convertResponsesTools(getCurrentTools(transcript.messages)),
-    );
-    const actual = body!.input as {
-      role: string;
-      content: { type: string; text: string }[];
-    }[];
-    const expected =
-      inputs[index] ?? (index >= fullSnapshotStart ? [call.prompt] : undefined);
-    if (expected)
-      expect(actual).toEqual(
-        expected.map((text) => ({
-          role: "user",
-          content: [{ type: "input_text", text }],
-        })),
-      );
-    else {
-      expect(actual.length).toBeGreaterThan(1);
-      expect<unknown>(actual[0]).toEqual(
-        (requests[0]!.body.input as unknown[])[0],
-      );
-      expect<unknown>(actual.slice(0, -1)).toEqual(
-        (requests.at(-1)!.body.input as unknown[]).slice(0, actual.length - 1),
-      );
-    }
-    if (assignments[index]!.kind === "coordinator") {
-      const notes = new Map<string, Record<string, unknown>>();
-      for (const [i, message] of actual.entries()) {
-        const separator =
-          i === 0
-            ? "Notes (untrusted data):\n"
-            : "Note updates (untrusted data):\n";
-        const records = JSON.parse(
-          message.content[0]!.text.split(separator)[1]!,
-        );
-        for (const note of records)
-          notes.set(note.id, { ...notes.get(note.id), ...note });
-      }
-      expect([...notes.values()]).toEqual(
-        JSON.parse(call.prompt.split("Notes (untrusted data):\n")[1]!),
-      );
-    }
-    expect(
-      actual
-        .flatMap((message) => message.content)
-        .reduce((sum, part) => sum + part.text.length, 0),
-    ).toBeLessThanOrEqual(2 * call.prompt.length);
-    requests.push({
-      sessionId: options?.sessionId,
-      headers: options?.headers,
-      body: body!,
-    });
-    const assignment = assignments[index]!;
-    return fauxAssistantMessage(
-      [
-        fauxToolCall(
-          call.tool,
-          assignment.kind === "coordinator"
-            ? {
-                filings: assignment.input.notes
-                  .filter((note) => note.summary === undefined)
-                  .map((note) => ({
-                    note: note.id,
-                    summary:
-                      note.id === "n1" ? "Reflexivity holds." : "New claim.",
-                  })),
-                verify: [],
-              }
-            : value,
-        ),
-      ],
-      { stopReason: "toolUse" },
-    );
-  };
-  const fixture_ = fixture(
-    Array(assignments.length).fill(capture),
-    () => {},
-    true,
-    headers,
-  );
-  for (const batch of [assignments.slice(0, -1), assignments.slice(-1)]) {
-    const { harness, invoke } = await fixture_.open();
-    try {
-      for (const input of batch)
-        expect(
-          (
-            await harness.waitForTask(
-              await invoke([], input, {
-                provider: "test",
-                model: requests.length === modelChangeIndex ? "other" : "math",
-                reasoning: "max",
-              }),
-              context,
-            )
-          ).state.outcome,
-        ).toMatchObject({ status: "completed" });
-    } finally {
-      await harness.close(context);
-    }
-  }
-  const [first, second, , correction] = requests;
-  const explorer = requests.at(-2)!,
-    otherCampaign = requests.at(-1)!;
-  expect((requests[4]!.body.input as unknown[]).length).toBe(
-    (requests[3]!.body.input as unknown[]).length + 1,
-  );
-  expect(
-    requests
-      .slice(4, fullSnapshotStart)
-      .some(
-        (request, index) =>
-          (request.body.input as unknown[]).length <=
-          (requests[index + 3]!.body.input as unknown[]).length,
-      ),
-  ).toBe(true);
-  expect(requests.map((request) => request.sessionId)).toEqual(
-    Array(assignments.length).fill(expect.any(String)),
-  );
-  expect(new Set(requests.map((request) => request.sessionId)).size).toBe(
-    assignments.length,
-  );
-  expect<unknown>(first!.headers).toEqual({
-    ...headers,
-    session_id: expect.any(String),
-    "x-client-request-id": first!.headers!.session_id,
-  });
-  expect(second!.headers).toEqual(first!.headers);
-  expect(correction!.headers).toEqual(first!.headers);
-  expect(otherCampaign!.headers!.session_id).not.toBe(
-    first!.headers!.session_id,
-  );
-  expect(otherCampaign!.headers!["x-client-request-id"]).toBe(
-    otherCampaign!.headers!.session_id,
-  );
-  expect(explorer!.headers).toEqual(headers);
-  expect((second!.body.input as unknown[])[0]).toEqual(
-    (first!.body.input as unknown[])[0],
-  );
-  const { input: _firstInput, ...settings } = first!.body;
-  for (const request of [second!, correction!, otherCampaign!]) {
-    const { input: _input, ...currentSettings } = request.body;
-    expect(currentSettings).toEqual(settings);
-  }
-});
-
-test("a failed Coordinator call never advances the notebook input boundary", async () => {
+test("selection reads an admitted note through its own fresh conversation", async () => {
+  const source = { id: "given.1", text: "Exact supplied proof.", support: [] };
   const input: CallDescriptor = {
-    kind: "coordinator",
+    kind: "selection",
     input: {
       task: descriptor.input.task,
-      notes: [
-        {
-          id: "n1",
-          text: "Uncommitted notebook input. ".repeat(30),
-          summary: "A claim.",
-          support: [],
-          verdicts: [],
-          verified: false,
-          dead: false,
-        },
-      ],
+      notes: [{ ...source, verdicts: [], verified: false, dead: false }],
+      claimed: [],
     },
   };
-  const call = await resolveCall(input);
-  const fixture_ = fixture([
-    fauxAssistantMessage("", {
-      stopReason: "error",
-      errorMessage: "Invalid API key",
-    }),
+  const selected = { verify: [{ note: source.id, verifiers: ["source"] }] };
+  const driver = fixture([
     (transcript) => {
       expect(
-        transcript.messages
-          .filter((message) => message.role !== "system")
-          .map((message) => [message.role, message.content]),
-      ).toEqual([["user", call.prompt]]);
+        getCurrentTools(transcript.messages).map((tool) => tool.name),
+      ).toEqual(["select_verification", "read_notes"]);
       return fauxAssistantMessage(
         [
-          fauxToolCall(call.tool, {
-            filings: [],
-            verify: [],
+          fauxToolCall("read_notes", {
+            ids: [source.id],
+            level: "full",
           }),
         ],
         { stopReason: "toolUse" },
       );
     },
+    (transcript) => {
+      const answer = transcript.messages.findLast(
+        (message) => message.role === "toolResult",
+      );
+      expect(answer).toMatchObject({
+        toolName: "read_notes",
+        isError: false,
+        content: [{ type: "text", text: JSON.stringify([source.text]) }],
+      });
+      return fauxAssistantMessage(
+        [fauxToolCall("select_verification", selected)],
+        { stopReason: "toolUse" },
+      );
+    },
   ]);
-  const { harness, invoke } = await fixture_.open();
+  const { harness, invoke } = await driver.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke([], input), context)).state
-        .outcome.status,
-    ).not.toBe("completed");
+    await harness.commit(async (tx) => {
+      appendNotes(
+        tx,
+        await tx.doc(Notebook, ROOT_CONVERSATION_ID),
+        [source],
+        "selection-input",
+      );
+    }, context);
     expect(
       (await harness.waitForTask(await invoke([], input), context)).state
         .outcome,
-    ).toMatchObject({ status: "completed" });
-    expect(fixture_.provider.state.callCount).toBe(2);
+    ).toMatchObject({ status: "completed", result: { value: selected } });
   } finally {
     await harness.close(context);
   }
@@ -1197,12 +934,8 @@ test.each(provenance.patches)(
   },
 );
 
-test("two successful submissions fail closed and resume starts a fresh conversation", async () => {
-  const provider = fauxProvider({
-    provider: "test",
-    models: [{ id: "math", reasoning: true }],
-  });
-  provider.setResponses([
+test("two successful submissions fail closed and a replacement starts a fresh conversation", async () => {
+  const driver = fixture([
     fauxAssistantMessage(
       [
         fauxToolCall("submit_notes", value),
@@ -1211,55 +944,22 @@ test("two successful submissions fail closed and resume starts a fresh conversat
       { stopReason: "toolUse" },
     ),
     submitted(),
-    fauxAssistantMessage(
-      [
-        fauxToolCall("submit_coordination", {
-          filings: [{ note: "n1", summary: "Equality is reflexive." }],
-          verify: [],
-        }),
-      ],
-      { stopReason: "toolUse" },
-    ),
   ]);
-  const models = createModels();
-  models.setProvider(provider.provider);
-  const directory = await mkdtemp(join(tmpdir(), "xean-duplicate-resume-"));
-  notebookDirectories.push(directory);
-  const path = join(directory, "campaign.sqlite");
-  const settings = solveSettings.parse({
-    ...Object.fromEntries(
-      ["explorer", "coordinator", ...verifierNames].map((name) => [
-        name,
-        { provider: "test", model: "math", reasoning: "max" },
-      ]),
-    ),
-    maxExplorerTurns: 1,
-  });
-  let owner = await open(path, {
-    models,
-    create: { task: descriptor.input.task, settings },
-  });
+  const { harness, invoke } = await driver.open();
   try {
-    await owner.root.waitForIdle(context);
-    const failed = await inspect(path, readReport);
-    expect(failed.status).toMatchObject({
-      outcome: "call-failure",
-      error: "submit_notes requires exactly one submission",
+    const first = await invoke();
+    expect(
+      (await harness.waitForTask(first, context)).state.outcome,
+    ).toMatchObject({
+      status: "faulted",
+      error: { message: "submit_notes requires exactly one submission" },
     });
-    expect(failed.notes).toEqual([]);
-    expect(provider.state.callCount).toBe(1);
-    await owner.close();
-    owner = await open(path, { models });
-    await owner.resume();
-    await owner.root.waitForIdle(context);
-    const resumed = await inspect(path, readReport);
-    expect(resumed.status.outcome).toBe("turn-limit");
-    expect(resumed.notes.map((note) => note.text)).toEqual([
-      value.notes[0]!.text,
-    ]);
-    expect(provider.state.callCount).toBe(3);
+    expect(
+      (await harness.waitForTask(await invoke([first]), context)).state.outcome,
+    ).toMatchObject({ status: "completed", result: { value, fresh: true } });
+    expect(driver.provider.state.callCount).toBe(2);
   } finally {
-    await owner.close();
+    await harness.close(context);
   }
 });
 
@@ -1283,91 +983,36 @@ test("schema repairs allow response thirty-two and block the next request", asyn
   }
 });
 
-test.each(["explorer", "coordinator"] as const)(
+test.each(["explorer", "selection"] as const)(
   "restart after %s receipt publication reuses the native conversation",
   async (role) => {
     const directory = await mkdtemp(join(tmpdir(), "xean-role-recovery-"));
-    const initial: Extract<CallDescriptor, { kind: "coordinator" }> = {
-      kind: "coordinator",
-      input: {
-        task: { ...descriptor.input.task, problem: "Prove 1 = 1. ".repeat(50) },
-        notes: [
-          {
-            id: "n1",
-            text: "Reflexivity: x = x.",
-            support: [],
-            verdicts: [],
-            verified: false,
-            dead: false,
-          },
-        ],
-      },
-    };
-    const updated: typeof initial = {
-      ...initial,
-      input: {
-        ...initial.input,
-        notes: [{ ...initial.input.notes[0]!, summary: "P holds." }],
-      },
-    };
-    const corrected: typeof initial = {
-      ...updated,
-      input: {
-        ...updated.input,
-        notes: [{ ...updated.input.notes[0]!, summary: "Corrected claim." }],
-      },
-    };
-    const coordination = {
-      filings: [],
-      verify: [],
-    };
-    const answer = (filings: { note: string; summary: string }[]) =>
-      fauxAssistantMessage(
-        [fauxToolCall("submit_coordination", { ...coordination, filings })],
-        { stopReason: "toolUse" },
-      );
-    const fixture_ = fixture(
-      role === "coordinator"
-        ? [
-            answer([{ note: "n1", summary: "P holds." }]),
-            answer([]),
-            async (transcript) => {
-              expect(
-                transcript.messages
-                  .filter((message) => message.role !== "system")
-                  .map((message) => [message.role, message.content]),
-              ).toEqual([
-                ["user", (await resolveCall(initial)).prompt],
-                ["user", coordinatorUpdate(initial.input, corrected.input)!],
-              ]);
-              return answer([]);
-            },
-          ]
-        : [submitted()],
-    );
+    const input: CallDescriptor =
+      role === "explorer"
+        ? descriptor
+        : {
+            kind: "selection",
+            input: { task: descriptor.input.task, notes: [], claimed: [] },
+          };
+    const result = role === "explorer" ? value : { verify: [] };
+    const driver = fixture([
+      fauxAssistantMessage([fauxToolCall(resolveCall(input).tool, result)], {
+        stopReason: "toolUse",
+      }),
+    ]);
     let harness: Harness | undefined;
     try {
-      const first = await fixture_.open(directory);
+      const first = await driver.open(directory);
       harness = first.harness;
-      if (role === "coordinator")
-        for (const input of [initial, updated])
-          expect(
-            (await harness.waitForTask(await first.invoke([], input), context))
-              .state.outcome.status,
-          ).toBe("completed");
       const closed = Promise.withResolvers<void>();
       let closing = false;
       harness.observeCommits({
         advance: ({ changes }) => {
           if (
             !closing &&
-            changes.some((change) =>
-              role === "coordinator"
-                ? change.type === "document" &&
-                  change.kind === "change" &&
-                  change.record.kind === "xean.coordinator.prefix" &&
-                  change.value?.latest !== undefined
-                : change.type === "entry" && ToolResultEntry.is(change.value),
+            changes.some(
+              (change) =>
+                change.type === "entry" && ToolResultEntry.is(change.value),
             )
           ) {
             closing = true;
@@ -1380,25 +1025,17 @@ test.each(["explorer", "coordinator"] as const)(
           if (end.kind === "listener_error") closed.reject(end.error);
         },
       });
-      const id = await first.invoke(
-        [],
-        role === "coordinator" ? corrected : descriptor,
-      );
+      const id = await first.invoke([], input);
       void harness.waitForTask(id, context).catch(() => {});
       await closed.promise;
-      harness = (await fixture_.open(directory)).harness;
+      harness = (await driver.open(directory)).harness;
       expect(
         (await harness.waitForTask(id, context)).state.outcome,
       ).toMatchObject({
         status: "completed",
-        result: {
-          value: role === "coordinator" ? coordination : value,
-          fresh: false,
-        },
+        result: { value: result, fresh: false },
       });
-      expect(fixture_.provider.state.callCount).toBe(
-        role === "coordinator" ? 3 : 1,
-      );
+      expect(driver.provider.state.callCount).toBe(1);
     } finally {
       await harness?.close(context);
       await rm(directory, { recursive: true, force: true });
@@ -1461,218 +1098,209 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
   }
 });
 
-test.each(["comparison failure", "comparison receipt"] as const)(
-  "native reconstruction batch recovers after %s without partial verdicts or repeated proof stages",
+test("frozen recovery finds a later completed receipt after an earlier interrupted assignment", async () => {
+  const driver = fixture(
+    [
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "Disconnected",
+      }),
+      submitted(),
+    ],
+    undefined,
+    false,
+  );
+  const { harness, invoke } = await driver.open();
+  try {
+    const first = await invoke();
+    expect(
+      (await harness.waitForTask(first, context)).state.outcome.status,
+    ).toBe("faulted");
+    const second = await invoke([first], descriptor, undefined, true);
+    const completed = (await harness.waitForTask(second, context)).state
+      .outcome;
+    expect(completed.status).toBe("completed");
+    const changed: CallDescriptor = {
+      ...descriptor,
+      input: { ...descriptor.input, explorerGuidance: "Later global advice." },
+    };
+    const recovered = (
+      await harness.waitForTask(
+        await invoke([first, second], changed, undefined, true),
+        context,
+      )
+    ).state.outcome;
+    expect(recovered).toMatchObject({
+      status: "completed",
+      result: { value, fresh: false },
+    });
+    expect((recovered.result as { call: number }).call).toBe(
+      (completed.result as { call: number }).call,
+    );
+    expect(driver.provider.state.callCount).toBe(2);
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test.each([
+  "comparison failure",
+  "comparison receipt",
+  "dead after comparison receipt",
+] as const)(
+  "verification preserves frozen stages and complete atomic evidence after %s",
   async (interruption) => {
-    const directory = await mkdtemp(join(tmpdir(), "xean-native-workflow-"));
-    const path = join(directory, "campaign.sqlite");
-    const provider = fauxProvider({
-      provider: "test",
-      models: [{ id: "math", reasoning: true }],
-    });
-    const models = createModels();
-    models.setProvider(provider.provider);
-    const pass = (ids: string[]) => ({
-      verdicts: ids.map((note) => ({
-        note,
-        verdict: "PASS" as const,
-        report: "The claim is established.",
-      })),
-    });
-    const batch = ["n1", "n2"];
-    const comparison = { statements: [], ...pass(batch) };
-    const responses: Record<string, JsonValue>[] = [
-      {
-        notes: [
-          { text: "ORIGINAL_LEMMA: equality is reflexive.", support: [] },
-          { text: "ORIGINAL_SOLUTION: hence 1 = 1.", support: ["n1"] },
-        ],
-      },
-      {
-        filings: batch.map((note) => ({ note, summary: `Claim ${note}.` })),
-        verify: [
-          { note: "n1", verifiers: ["source", "correctness"] },
-          { note: "n2", verifiers: [...verifierNames] },
-        ],
-      },
-      pass(batch),
-      pass(batch),
-      pass(["n2"]),
-      {
-        statements: batch.map((note) => ({
-          note,
-          statement: note === "n1" ? "Equality is reflexive." : "1 = 1.",
-        })),
-      },
-      { proof: "Equality is reflexive." },
-      comparison,
-    ];
-    const tools: string[] = [];
-    provider.setResponses([
-      ...responses.map((response, index) => (transcript: TranscriptContext) => {
-        const declaration = getCurrentTools(transcript.messages)[0]!;
-        const name = declaration.name;
-        const expected = Object.values(historical.contracts).find(
-          (contract) => contract.name === name,
-        );
-        expect<unknown>(declaration.constrainedSampling).toEqual(
-          name === "submit_coordination"
-            ? false
-            : expected?.constrainedSampling,
-        );
-        expect(convertResponsesTools([declaration])[0]).toMatchObject({
-          strict: name !== "submit_coordination",
-        });
-        tools.push(name);
-        if (name === "submit_proof") {
+    let disconnected = false;
+    const run = await workerFixture(
+      ({ descriptor, transcript }): ReturnType<typeof complete> => {
+        if (descriptor.kind === "explorer")
+          return {
+            notes: [
+              note("ORIGINAL_LEMMA: equality is reflexive."),
+              note("ORIGINAL_SOLUTION: hence P.", [
+                `${descriptor.input.namespace}.1`,
+              ]),
+            ],
+          };
+        if (descriptor.kind === "selection")
+          return {
+            verify: descriptor.input.notes.map((note, index) => ({
+              note: note.id,
+              verifiers:
+                index === 0 ? ["source", "correctness"] : [...verifierNames],
+            })),
+          };
+        if (descriptor.kind === "proof") {
           expect(JSON.stringify(transcript.messages)).not.toContain(
             "ORIGINAL_",
           );
-          expect(JSON.stringify(transcript.messages)).toContain(
-            "Equality is reflexive.",
-          );
-          expect(JSON.stringify(transcript.messages)).toContain("1 = 1.");
+          expect(
+            getCurrentTools(transcript.messages).map((tool) => tool.name),
+          ).toEqual(["submit_proof"]);
         }
-        if (
-          interruption === "comparison failure" &&
-          index === responses.length - 1
-        )
-          return fauxAssistantMessage("", {
-            stopReason: "error",
-            errorMessage: "provider disconnected",
-          });
-        return fauxAssistantMessage([fauxToolCall(name, response)], {
-          stopReason: "toolUse",
-        });
-      }),
-      (transcript) => {
-        const name = getCurrentTools(transcript.messages)[0]!.name;
-        tools.push(name);
-        expect(name).toBe("submit_verdict");
-        return fauxAssistantMessage([fauxToolCall(name, comparison)], {
-          stopReason: "toolUse",
-        });
+        if (descriptor.kind === "reconstruction") {
+          if (interruption === "comparison failure" && !disconnected) {
+            disconnected = true;
+            return new Error("Comparison disconnected");
+          }
+          const values = checks(descriptor.input.notes.map((note) => note.id));
+          if (interruption === "dead after comparison receipt")
+            values.verdicts[1]!.verdict = "FAIL";
+          return { statements: [], ...values };
+        }
+        return complete({ descriptor, transcript, signal: undefined });
       },
-    ]);
-    const settings = solveSettings.parse({
-      ...Object.fromEntries(
-        ["explorer", "coordinator", ...verifierNames].map((name) => [
-          name,
-          { provider: "test", model: "math", reasoning: "max" },
-        ]),
-      ),
-      maxExplorerTurns: 1,
-    });
-    let owner = await open(path, {
-      models,
-      create: { task: descriptor.input.task, settings },
-    });
-    try {
-      if (interruption === "comparison receipt") {
-        const closed = Promise.withResolvers<void>();
-        let closing = false;
-        owner.harness.observeCommits({
-          advance: ({ changes }) => {
-            if (
-              !closing &&
-              changes.some((change) => {
-                if (
-                  change.type !== "entry" ||
-                  !ToolResultEntry.is(change.value)
-                )
-                  return false;
-                const message = change.value.model?.[0];
-                return (
-                  message?.role === "toolResult" &&
-                  message.toolName === "submit_verdict" &&
-                  !message.isError &&
-                  typeof message.details === "object" &&
-                  message.details !== null &&
-                  !Array.isArray(message.details) &&
-                  "statements" in message.details &&
-                  Array.isArray(message.details.statements) &&
-                  message.details.statements.length === 0
-                );
-              })
-            ) {
-              closing = true;
-              void Promise.resolve()
-                .then(() => owner.close())
-                .then(closed.resolve, closed.reject);
-            }
-          },
-          end: (end) => {
-            if (end.kind === "listener_error") closed.reject(end.error);
-          },
-        });
-        void owner.root.waitForIdle(context).catch(() => {});
-        await closed.promise;
-      } else {
-        await owner.root.waitForIdle(context);
-      }
-      const before = await inspect(path, readReport);
-      if (interruption === "comparison failure")
-        expect(before.status).toMatchObject({
-          outcome: "call-failure",
-          error: "verifier failed: provider disconnected",
-        });
-      expect(before.accepted).toEqual([]);
-      expect(before.checks.map((check) => check.values.length)).toEqual([
-        2, 2, 1,
-      ]);
-      expect(
-        before.notes
-          .flatMap((note) => note.verdicts)
-          .every((verdict) => verdict.verifier !== "reconstruction"),
-      ).toBe(true);
-      expect(provider.state.callCount).toBe(8);
-      await owner.close();
-      owner = await open(path, { models });
-      if (interruption === "comparison failure") {
-        await owner.root.waitForIdle(context);
-        expect(provider.state.callCount).toBe(8);
-        await owner.resume();
-      }
-      await owner.root.waitForIdle(context);
-      const report = await inspect(path, readReport);
-      expect(report.status).toMatchObject({
-        outcome: "accepted",
-        accepted: "n2",
+    );
+    expect((await run.run({ kind: "explorer" })).outcome.status).toBe(
+      "completed",
+    );
+    const closed = Promise.withResolvers<void>();
+    let closing = false;
+    if (interruption !== "comparison failure")
+      run.owner.harness.observeCommits({
+        advance: ({ changes }) => {
+          if (
+            !closing &&
+            changes.some((change) => {
+              if (change.type !== "entry" || !ToolResultEntry.is(change.value))
+                return false;
+              const message = change.value.model?.[0];
+              return (
+                message?.role === "toolResult" &&
+                message.toolName === "submit_verdict" &&
+                !message.isError &&
+                message.details !== null &&
+                typeof message.details === "object" &&
+                !Array.isArray(message.details) &&
+                "statements" in message.details
+              );
+            })
+          ) {
+            closing = true;
+            void Promise.resolve()
+              .then(() => run.owner.close())
+              .then(closed.resolve, closed.reject);
+          }
+        },
+        end: (end) => {
+          if (end.kind === "listener_error") closed.reject(end.error);
+        },
       });
-      expect(
-        report.notes[1]?.verdicts.map((verdict) => verdict.verifier),
-      ).toEqual([...verifierNames]);
-      expect(
-        report.notes[0]?.verdicts.map((verdict) => verdict.verifier),
-      ).toEqual(["source", "correctness", "reconstruction"]);
-      expect(report.checks).toHaveLength(4);
-      expect(report.checks.at(-1)?.values).toEqual(
-        comparison.verdicts.map((verdict) => ({
-          ...verdict,
-          verifier: "reconstruction",
-        })),
-      );
-      expect(new Set(report.checks.map((check) => check.call)).size).toBe(4);
-      expect(new Set(report.checks.map((check) => check.candidate))).toEqual(
-        new Set(before.checks.map((check) => check.candidate)),
-      );
-      expect(tools).toEqual([
-        "submit_notes",
-        "submit_coordination",
-        "submit_verdict",
-        "submit_verdict",
-        "submit_verdict",
-        "submit_statement",
-        "submit_proof",
-        "submit_verdict",
-        ...(interruption === "comparison failure" ? ["submit_verdict"] : []),
-      ]);
-      expect(provider.state.callCount).toBe(
-        interruption === "comparison failure" ? 9 : 8,
-      );
-    } finally {
-      await owner.close();
-      await rm(directory, { recursive: true, force: true });
+    const first = await run.create({ kind: "verifier" });
+    const pending = run.wait(first).catch(() => undefined);
+    if (interruption === "comparison failure")
+      expect((await pending)?.state.outcome.status).toBe("faulted");
+    else {
+      await closed.promise;
+      await pending;
     }
+    const before = await run.book();
+    expect(before.checks.map((check) => check.values.length)).toEqual([
+      2, 2, 1,
+    ]);
+    const candidate = before.checks[0]!.candidate;
+    const originalComparison = run.requests.find(
+      (request) => request.descriptor.kind === "reconstruction",
+    )!.descriptor;
+    const count = run.provider.state.callCount;
+    await run.reopen();
+    await run.owner.root.commit(async (tx) => {
+      const ref = await tx.doc(Notebook, run.owner.root.id);
+      ref.checks.push({
+        candidate: 999,
+        call: 999,
+        values: [
+          {
+            note: before.notes[0]!.id,
+            verifier:
+              interruption === "dead after comparison receipt"
+                ? "source"
+                : "requirements",
+            verdict:
+              interruption === "dead after comparison receipt"
+                ? "FAIL"
+                : "INCONCLUSIVE",
+            report: "Evidence committed by another verification attempt.",
+          },
+        ],
+      });
+    }, context);
+    if (interruption === "comparison failure")
+      expect(
+        (await run.run({ kind: "retry", task: first })).outcome.status,
+      ).toBe("completed");
+    else expect((await run.wait(first)).state.outcome.status).toBe("completed");
+    const final = await run.book();
+    const own = final.checks.filter((check) => check.candidate === candidate);
+    expect(own).toHaveLength(4);
+    expect(own.slice(0, 3)).toEqual(before.checks);
+    expect(
+      own.at(-1)!.values.map((value) => [value.note, value.verdict]),
+    ).toEqual([
+      [before.notes[0]!.id, "PASS"],
+      [
+        before.notes[1]!.id,
+        interruption === "dead after comparison receipt" ? "FAIL" : "PASS",
+      ],
+    ]);
+    expect(
+      run.requests.filter((request) => request.descriptor.kind === "statement"),
+    ).toHaveLength(1);
+    expect(
+      run.requests.filter((request) => request.descriptor.kind === "proof"),
+    ).toHaveLength(1);
+    expect(
+      run.requests.findLast(
+        (request) => request.descriptor.kind === "reconstruction",
+      )!.descriptor,
+    ).toEqual(originalComparison);
+    expect(run.provider.state.callCount).toBe(
+      count + (interruption === "comparison failure" ? 1 : 0),
+    );
+    expect(project(final).accepted).toEqual(
+      interruption === "dead after comparison receipt"
+        ? []
+        : [before.notes[1]!.id],
+    );
   },
 );

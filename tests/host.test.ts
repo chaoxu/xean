@@ -24,14 +24,9 @@ const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
 const profile = { provider: "test", model: "test", reasoning: "high" };
 const settings = solveSettings.parse(
   Object.fromEntries(
-    [
-      "explorer",
-      "coordinator",
-      "source",
-      "correctness",
-      "requirements",
-      "reconstruction",
-    ].map((role) => [role, profile]),
+    ["explorer", "source", "correctness", "requirements", "reconstruction"].map(
+      (role) => [role, profile],
+    ),
   ),
 );
 const digest = async (path: string) =>

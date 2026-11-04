@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { open, inspect, readNotes, type WorkerRequest } from "../src/index.ts";
-import { coordinatorResultFor } from "../src/policy/index.ts";
 import { cliModels } from "../apps/cli/models.ts";
 
 const [taskPath, settingsPath, campaignPath] = process.argv.slice(2);
@@ -36,12 +35,7 @@ async function run(request: WorkerRequest) {
 
 try {
   await run({ kind: "explorer" });
-  const notes = await inspect(path, readNotes);
-  const plan = coordinatorResultFor(notes).parse(
-    await run({ kind: "coordinator" }),
-  );
-  // A verifier processes the prefix that fits the frozen verification window.
-  if (plan.verify.length) await run({ kind: "verifier", verify: plan.verify });
+  await run({ kind: "verifier" });
   console.log(JSON.stringify(await inspect(path, readNotes), null, 2));
 } finally {
   await owner.close();

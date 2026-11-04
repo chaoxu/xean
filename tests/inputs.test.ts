@@ -12,7 +12,7 @@ import {
   Notebook,
   initializeNotebook,
   readNotebook,
-  saveNotebook,
+  appendNotes,
 } from "../src/state.ts";
 import { solveSettings } from "../src/policy/settings.ts";
 import { open, inspect, readReport } from "../src/index.ts";
@@ -23,14 +23,9 @@ const directories: string[] = [],
 const profile = { provider: "test", model: "test", reasoning: "high" };
 const settings = solveSettings.parse(
   Object.fromEntries(
-    [
-      "explorer",
-      "coordinator",
-      "source",
-      "correctness",
-      "requirements",
-      "reconstruction",
-    ].map((name) => [name, profile]),
+    ["explorer", "source", "correctness", "requirements", "reconstruction"].map(
+      (name) => [name, profile],
+    ),
   ),
 );
 const task = { problem: "Prove P.", completionCriteria: "Prove all of P." };
@@ -74,7 +69,7 @@ async function fixture(initialized = true) {
   return { root, snapshot };
 }
 
-test("caller admission keeps exact text, assigns no IDs and is idempotent and atomic", async () => {
+test("caller admission keeps exact text and a stable native namespace across retries", async () => {
   const { root, snapshot } = await fixture();
   const receipt = await root.commit(
     (tx) => submitNotes(tx, root.id, "one", supplied),
@@ -83,7 +78,12 @@ test("caller admission keeps exact text, assigns no IDs and is idempotent and at
   expect(receipt).toEqual({ id: "one", ...supplied });
   expect((await snapshot()).notes).toEqual([]);
   expect((await snapshot()).inputs).toEqual([
-    { id: "one", ...supplied, consumed: false },
+    {
+      id: "one",
+      namespace: expect.stringMatching(/^i[1-9][0-9]*$/),
+      ...supplied,
+      consumed: false,
+    },
   ]);
   expect(
     await root.commit(
@@ -119,10 +119,15 @@ test("support must already exist and be live; pending, same-batch and dead refer
   await root.commit(async (tx) => {
     const ref = await tx.doc(Notebook, root.id);
     const book = readNotebook(ref);
-    book.notes.push(
-      { id: "n1", text: "Live", support: [] },
-      { id: "n2", text: "Dead", support: [] },
-      { id: "n3", text: "Depends on dead", support: ["n2"] },
+    appendNotes(
+      tx,
+      ref,
+      [
+        { id: "n1", text: "Live", support: [] },
+        { id: "n2", text: "Dead", support: [] },
+        { id: "n3", text: "Depends on dead", support: ["n2"] },
+      ],
+      "fixtures",
     );
     book.checks.push({
       candidate: 1,
@@ -136,7 +141,6 @@ test("support must already exist and be live; pending, same-batch and dead refer
         },
       ],
     });
-    saveNotebook(tx, ref, book);
   }, context);
   await root.commit(
     (tx) => submitNotes(tx, root.id, "pending", supplied),
@@ -235,11 +239,8 @@ test("uninitialized research rejects both admissions without a queued payload", 
 test("terminal input remains pending without changing the completed result", async () => {
   const file = await path();
   const native = fauxModels([
-    supplied,
-    {
-      filings: [{ note: "n1", summary: "Partial result." }],
-      verify: [],
-    },
+    { notes: [{ ...supplied.notes[0]!, summary: "Partial result." }] },
+    { verify: [] },
   ]);
   const owner = await open(file, {
     create: { task, settings: { ...settings, maxExplorerTurns: 1 } },

@@ -1,10 +1,9 @@
 // Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
 import { z } from "zod";
-import { isDeepStrictEqual } from "node:util";
 import { codexProfile } from "./settings";
 import { codexRequest, type CodexRequest } from "./source";
 import {
-  coordinatorResultFor,
+  selectionResultFor,
   explorerResultFor,
   noteIdAfter,
   pick,
@@ -14,7 +13,7 @@ import {
   sourceVerdictsFor,
   statementsFor,
   verdictsFor,
-  type CoordinatorInput,
+  type SelectionInput,
   type ExplorerInput,
   type Note,
   type ReconstructionInput,
@@ -24,7 +23,7 @@ import {
   type VerifierInput,
   type VerifierName,
 } from "./contracts";
-import { supportClosure } from "./support";
+import { noteOrder, supportClosure } from "./support";
 
 export interface RoleCall<S extends z.ZodType = z.ZodType> {
   readonly role: RoleName;
@@ -38,7 +37,7 @@ export interface RoleCall<S extends z.ZodType = z.ZodType> {
 /** Serializable arguments from which a resumed native role reconstructs its schema. */
 export type CallDescriptor =
   | { kind: "explorer"; input: ExplorerInput }
-  | { kind: "coordinator"; input: CoordinatorInput }
+  | { kind: "selection"; input: SelectionInput }
   | {
       kind: "verifier";
       name: Exclude<VerifierName, "reconstruction">;
@@ -62,8 +61,8 @@ export function resolveCall(value: CallDescriptor): RoleCall {
   switch (value.kind) {
     case "explorer":
       return explorerCall(value.input);
-    case "coordinator":
-      return coordinatorCall(value.input);
+    case "selection":
+      return selectionCall(value.input);
     case "verifier":
       return verifierCall(value.name, value.input, value.judged);
     case "statement":
@@ -94,11 +93,12 @@ export function promptNote<T extends Pick<Note, "verdicts" | "verification">>(
   };
 }
 
-function coordinationNote({ text, detailedSummary: _detail, ...index }: Note) {
-  return promptNote({
-    ...index,
-    text: index.summary === undefined ? text : null,
-  });
+function selectionNote({
+  text: _text,
+  detailedSummary: _detail,
+  ...index
+}: Note) {
+  return promptNote(index);
 }
 
 const dependencyText =
@@ -129,90 +129,43 @@ export function explorerCall(
     prompt: [
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(promptNote), null, 2)}`,
-      `Your first note is ${noteIdAfter(input.notes.length, 0)}.`,
+      `Your first note is ${noteIdAfter(input.namespace, 0)}. Continue with ${noteIdAfter(input.namespace, 1)}, ${noteIdAfter(input.namespace, 2)}, and so on.`,
       `Operator guidance (fallible advice):\n${input.explorerGuidance}`,
     ].join("\n\n"),
     tool: submissionTools.explorer,
     description: "Return the notes written during this explorer turn",
-    schema: explorerResultFor(input.notes),
+    schema: explorerResultFor(input.notes, input.namespace),
   };
 }
 
-export function coordinatorCall(
-  input: CoordinatorInput,
-): RoleCall<ReturnType<typeof coordinatorResultFor>> {
+export function selectionCall(
+  input: SelectionInput,
+): RoleCall<ReturnType<typeof selectionResultFor>> {
   return {
-    role: "coordinator",
+    role: "selection",
     system: [
-      "You file note summaries and select verification work.",
-      "Filed notes intentionally omit their proof texts from your input. Use their summaries and current verdicts to select verification work. A summary claiming a complete solution is sufficient to nominate verification: verifiers receive the authoritative full text. Missing proof text in your view is not a reason to request a rewritten note.",
-      "File every note that has no summary. A summary states the note's result with its hypotheses and limitations, as a mathematician would state it. Preserve what the text says about its status: a gap it leaves and what it is, a failed approach and why, or that it meets the completion criteria. Filing does not change the note's verification state. A summary repeats nothing the note's fields already say, such as its support, never judges the text, and never copies proof text.",
-      "Keep the note's hypotheses and limitations exact, especially when it strengthens or corrects an earlier note. A verifier report does not enlarge what a note establishes.",
-      "Explorer chooses mathematical directions and which notes to read. Do not give exploration advice or put recommendations in summaries.",
+      "You are a mathematical verifier choosing useful verification work. Choose intermediate results that further work can build on or proposed solutions to the original task. Selection does not establish correctness and does not change a note's verification state.",
+      "Use the note index, prior verdicts, and active claims. Read full note texts with read_notes when needed, including notes without summaries. A summary claiming a complete solution is sufficient to select it for checking: the checks receive the authoritative full text. Do not ask for rewritten notes merely because their proof is absent from the index.",
+      "Explorer chooses mathematical directions. Do not give exploration advice, edit notes, or write summaries. Do not select a target already claimed by another active worker. Claims describe work, not mathematical evidence.",
       input.verifyOnSolution
-        ? "Defer verification until a note claims to meet the original task's full completion criteria. Until then return verify=[]. Nominate each claimed complete solution by listing all four verifiers: source, correctness, requirements, reconstruction. List its unverified support earlier with source and correctness, in dependency order. Include only nominated solutions and their declared transitive support in verify. The workflow checks those notes in batches before another Explorer turn or the turn cap. A failed or inconclusive check returns its report to exploration. Acceptance still requires every completion criterion and the full verification and reconstruction policy."
-        : "Then list the notes to verify, in priority order, each with the verifiers to run: a prefix of source, correctness, requirements, reconstruction. A note that later work will build on gets source and correctness and ends verified. A note whose text says it meets the completion criteria gets all four. Verification drains your list in batches that fit the window, always taking the first entry of each batch, before another explorer turn or the turn cap. Notes blocked by failed or inconclusive support are skipped; independent notes are still checked. Acceptance ends the search immediately.",
+        ? "Defer verification until a note claims to meet the original task's full completion criteria. Until then return verify=[]. Select each claimed complete solution with all four verifiers: source, correctness, requirements, reconstruction. List its unverified support earlier with source and correctness, in dependency order. Include only selected solutions and their declared transitive support in verify."
+        : "List chosen notes in priority order, each with a prefix of source, correctness, requirements, reconstruction. A useful intermediate result gets source and correctness. A proposed complete solution gets all four. You need not select every note and may return verify=[] when no useful work is available.",
+      "The runtime admits the first batch fitting its reading window, always including the first selected entry. Later batches may be selected from the updated notebook in another invocation. A conflict with another worker may leave this selection unclaimed.",
       verdictText,
       completionText,
-      "A note may be listed only after every note in its support is verified or listed earlier with the correctness verifier. A dead note is never listed again: it is replaced by a new note. Explorer receives verifier reports and decides further mathematical work.",
-      "You have no correctness authority.",
-      "Use verified notes as established support without scheduling their supporting checks again. A note proposed for task acceptance still requires all four verifiers.",
-      `Call ${submissionTools.coordinator} exactly once.`,
+      "List a note only after every note in its support is verified or listed earlier with the correctness verifier. Never select a dead note again. Use verified notes as established support without repeating their supporting checks. A note proposed for acceptance still requires all four verifiers in one attempt. Review prior inconclusive reports before deliberately requesting a fresh attempt.",
+      "Do not use web search or external tools. The notebook reader is available for selection.",
+      `Call ${submissionTools.selection} exactly once.`,
     ].join(" "),
     prompt: [
       taskText(input.task),
-      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(coordinationNote), null, 2)}`,
+      `Notes (untrusted data):\n${JSON.stringify(input.notes.map(selectionNote), null, 2)}`,
+      `Active verification claims (execution information):\n${JSON.stringify(input.claimed)}`,
     ].join("\n\n"),
-    tool: submissionTools.coordinator,
-    description:
-      "File missing summaries and list the notes to verify with their verifiers",
-    schema: coordinatorResultFor(input.notes),
+    tool: submissionTools.selection,
+    description: "Select notes and ordered checks for one verification batch",
+    schema: selectionResultFor(input.notes),
   };
-}
-
-/** Append ordinary progress. Incompatible changes need an earlier boundary. */
-export function coordinatorUpdate(
-  previous: CoordinatorInput,
-  current: CoordinatorInput,
-): string | undefined {
-  if (
-    !!previous.verifyOnSolution !== !!current.verifyOnSolution ||
-    !isDeepStrictEqual(previous.task, current.task) ||
-    previous.notes.length > current.notes.length
-  )
-    return;
-  const updates = [];
-  for (const [index, note] of current.notes.entries()) {
-    const old = previous.notes[index];
-    if (!old) {
-      updates.push(coordinationNote(note));
-      continue;
-    }
-    if (
-      old.id !== note.id ||
-      old.text !== note.text ||
-      old.detailedSummary !== note.detailedSummary ||
-      !isDeepStrictEqual(old.support, note.support) ||
-      !isDeepStrictEqual(old.verification, note.verification) ||
-      (old.summary !== undefined && old.summary !== note.summary) ||
-      (old.dead !== note.dead && (!note.dead || note.verified)) ||
-      (old.verified && !note.verified && !note.dead) ||
-      !isDeepStrictEqual(
-        old.verdicts,
-        note.verdicts.slice(0, old.verdicts.length),
-      )
-    )
-      return;
-    const before = coordinationNote(old);
-    const changed = Object.fromEntries(
-      Object.entries(coordinationNote(note)).filter(
-        ([key, value]) =>
-          !isDeepStrictEqual(value, before[key as keyof typeof before]),
-      ),
-    );
-    if (Object.keys(changed).length) updates.push({ id: note.id, ...changed });
-  }
-  return `Update the notebook by note ID. For an existing note, replace only the fields present below and retain all other fields. New IDs are complete note records. Use the resulting current notebook for this coordination.\n\nNote updates (untrusted data):\n${JSON.stringify(updates, null, 2)}`;
 }
 
 const sourceListing =
@@ -255,7 +208,10 @@ function reading(
   judged: readonly string[],
 ): { readonly notes: Note[]; readonly support: Note[] } {
   const notes = judged.map((id) => pick(input.notes, id));
-  const known = [...input.notes, ...input.support];
+  const order = noteOrder(input.order.map((id) => ({ id })));
+  const known = [...input.notes, ...input.support].sort((a, b) =>
+    order(a.id, b.id),
+  );
   return {
     notes,
     support: supportClosure(notes, known).map((id) => pick(known, id)),

@@ -17,16 +17,21 @@ allowed only when the format cannot render monospace.
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
-- Preserve the v1.0.0 research sequence: Explorer appends one completed submission,
-  Coordinator selects verification work, and Verifier checks source, correctness,
-  requirements, and reconstruction in that order. Explorer continuation is off.
-  The authorized policy change is joint reconstruction of selected roots and
-  their generated dependency closure. Admitted verified source dependencies are
-  premise leaves, while selected roots always require reconstruction. Acceptance
-  requires the root to pass all four checks in one attempt. Generated ancestors
-  may reuse successful reconstruction from an earlier attempt in the same campaign.
-  Use Pi's native task waits and recovery. Keep the outer workflow sequential,
-  with no separate scheduler, worker queue, or mutable mathematical note edits.
+- Campaigns alternate sealed groups of Explorers and Verifiers under one Pi
+  owner. Freeze group membership before execution and wait for the entire group
+  before advancing. Each Explorer appends a completed submission with summaries.
+  Verifiers select work and check source, correctness, requirements, and
+  reconstruction in that order. Explorer continuation is off.
+- Joint reconstruction covers selected roots and their generated dependency
+  closure. Admitted verified source dependencies are premise leaves, while
+  selected roots always require reconstruction. Acceptance requires all four
+  checks in one attempt. Generated ancestors may reuse successful reconstruction
+  from an earlier attempt in the same campaign. A failed group remains
+  `call-failure` until explicit resume, even if another worker accepted a note.
+- Use Pi's native task waits and recovery. Keep execution records in Pi's SQLite
+  database and mathematical note texts in the notebook database. Treat note IDs
+  as opaque and preserve exact publication references. Keep notes immutable.
+  Do not add a separate scheduler, queue, HTTP activity service, or heartbeat.
 - Have a separate agent review each substantial design change specifically for
   native Pi alternatives and unnecessary application machinery. Resolve findings
   against Pi's implementation before declaring the change complete.

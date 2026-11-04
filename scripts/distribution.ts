@@ -70,6 +70,9 @@ assert.deepEqual(
   await Bun.file(join(root, "examples/task.json")).json(),
 );
 assert.deepEqual(report.notes, []);
+assert.equal(report.settings.explorers, 1);
+assert.equal(report.settings.verifiers, 1);
+assert.equal("coordinator" in report.settings, false);
 assert.equal(report.settings.verifyOnSolution, undefined);
 const deferredPath = join(temporary.path, "deferred.sqlite");
 await cli(

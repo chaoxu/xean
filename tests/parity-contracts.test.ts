@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { z } from "zod";
 import { note, verifierNames } from "../src/policy/contracts.ts";
 import {
-  coordinatorCall,
+  selectionCall,
   explorerCall,
   proofCall,
   reconstructionCall,
@@ -14,8 +14,8 @@ import historical from "./fixtures/v100-contracts.json";
 
 // These expected declarations were captured by the
 // archived 949a385 runtime with its own frozen dependencies, never by the port.
-// Coordinator advice/reading fields are deliberately retired; reconstruction
-// has an intentionally different batch contract below.
+// Namespaced IDs and selection intentionally change the old contracts;
+// verification retains the remaining captured schema fields.
 const { task, explorerGuidance } = historical.input;
 const support = note.parse(historical.input.support);
 const target = note.parse(historical.input.target);
@@ -23,6 +23,7 @@ const verification = {
   task,
   notes: [target],
   support: [support],
+  order: [support.id, target.id],
   verify: [{ note: target.id, verifiers: [...verifierNames] }],
 };
 const profile = {
@@ -37,50 +38,56 @@ function calls() {
     explorer: explorerCall({
       task,
       explorerGuidance,
+      namespace: "w7",
       notes: [heading],
     }),
-    coordinator: coordinatorCall({ task, notes: [support, target] }),
+    selection: selectionCall({ task, notes: [support, target], claimed: [] }),
     source: verifierCall("source", verification, [target.id]),
     correctness: verifierCall("correctness", verification, [target.id]),
     requirements: verifierCall("requirements", verification, [target.id]),
   };
 }
 
-test("contracts retain historical verification schemas while retiring Coordinator advice and adding optional Explorer summaries", () => {
+function opaqueIds(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value), (key, item: unknown) =>
+    key === "pattern" && item === "^n[1-9][0-9]*$" ? undefined : item,
+  );
+}
+
+test("verification schemas retain archived fields with opaque note IDs", () => {
   const current = calls();
-  for (const name of Object.keys(current) as (keyof typeof current)[]) {
+  for (const name of ["source", "correctness", "requirements"] as const) {
     const call = current[name],
       expected = historical.contracts[name];
-    const parameters = z.toJSONSchema(call.schema);
-    if (name === "explorer") {
-      const item = (
-        parameters.properties!.notes as z.core.JSONSchema.JSONSchema
-      ).items as z.core.JSONSchema.JSONSchema;
-      expect(item.required).toEqual(["text", "support"]);
-      for (const field of ["summary", "detailedSummary"]) {
-        expect(item.properties![field]).toEqual({ type: "string" });
-        delete item.properties![field];
-      }
-    }
-    const expectedParameters = structuredClone(
-      expected.parameters,
-    ) as z.core.JSONSchema.JSONSchema;
-    if (name === "coordinator") {
-      expect(call.description).toBe(
-        "File missing summaries and list the notes to verify with their verifiers",
-      );
-      delete expectedParameters.properties!.explorerGuidance;
-      delete expectedParameters.properties!.support;
-      expectedParameters.required = ["filings", "verify"];
-    } else {
-      expect(call.description, name).toBe(expected.description);
-    }
-    expect(call.tool, name).toBe(expected.name);
-    expect<unknown>(parameters, name).toEqual(expectedParameters);
+    expect(call.description).toBe(expected.description);
+    expect(call.tool).toBe(expected.name);
+    expect<unknown>(z.toJSONSchema(call.schema)).toEqual(
+      opaqueIds(expected.parameters),
+    );
   }
 });
 
-test("Codex source retains historical request fields except the unused protocol marker", () => {
+test("Explorer requires summaries and selection returns only ordered verification requests", () => {
+  const { explorer, selection } = calls();
+  const parameters = z.toJSONSchema(explorer.schema);
+  const item = (parameters.properties!.notes as z.core.JSONSchema.JSONSchema)
+    .items as z.core.JSONSchema.JSONSchema;
+  expect(item.required).toEqual(["summary", "text", "support"]);
+  expect(item.properties!.detailedSummary).toEqual({ type: "string" });
+  expect(explorer.prompt).toContain("Your first note is w7.1.");
+  expect(selection.tool).toBe("select_verification");
+  expect(selection.schema.safeParse({ verify: [] }).success).toBe(true);
+  expect(selection.schema.safeParse({ filings: [], verify: [] }).success).toBe(
+    false,
+  );
+  expect(
+    selection.schema.safeParse({
+      verify: [{ note: support.id, verifiers: ["correctness"] }],
+    }).success,
+  ).toBe(false);
+});
+
+test("Codex source retains historical request fields apart from protocol and opaque IDs", () => {
   for (const [name, search] of [
     ["online", true],
     ["offline", false],
@@ -88,12 +95,17 @@ test("Codex source retains historical request fields except the unused protocol 
     const call = sourceCall({ ...profile, search }, verification, [target.id]);
     const { developerInstructions, prompt, ...contract } = call;
     const { protocol, ...expected } = historical.codex[name];
-    expect<unknown>(contract, name).toEqual(expected);
+    expect<unknown>(contract, name).toEqual(opaqueIds(expected));
   }
 });
 
 test("batch reconstruction requires exact statement and verdict IDs and an atomic correction", () => {
-  const input = { task, notes: [support, target], support: [] };
+  const input = {
+    task,
+    notes: [support, target],
+    support: [],
+    order: [support.id, target.id],
+  };
   const value = {
     statements: [
       { note: support.id, statement: "The supporting claim holds." },

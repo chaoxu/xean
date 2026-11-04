@@ -37,15 +37,15 @@ export function codexSource(
   return profile.provider === "codex";
 }
 // The window caps the characters of note and support texts one verification
-// reads; the fold drains the coordinator's list in fitting batches, always
-// taking at least the first entry of each batch.
+// reads, always taking at least the first entry of the selected batch.
 export const solveSettings = z.strictObject({
   explorer: piRoleProfile,
-  coordinator: piRoleProfile,
   correctness: piRoleProfile,
   source: sourceProfile,
   requirements: piRoleProfile,
   reconstruction: piRoleProfile,
+  explorers: z.number().int().positive().default(1),
+  verifiers: z.number().int().positive().default(1),
   maxExplorerTurns: z.number().int().positive().default(10),
   window: z.number().int().positive().default(100_000),
   verifyOnSolution: z.boolean().optional(),

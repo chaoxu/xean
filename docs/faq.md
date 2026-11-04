@@ -40,7 +40,8 @@ work. Cost still depends on the problem, model, source preparation, and review.
 A note is mathematical working memory: a result and its proof, a source statement,
 a partial argument with explicit gaps, or a failed approach and its diagnosis.
 Its full `text` is authoritative. `support` names other notes whose results the
-argument uses. Optional summaries help agents find and apply relevant material.
+argument uses. Explorer supplies summaries for its generated notes. Imported
+notes may omit them and remain available through full reads.
 
 Keep exact hypotheses, conventions, conclusions, and limitations in the note.
 Put citations and URLs in its text. A paper title or link alone does not supply
@@ -86,8 +87,9 @@ full text through `read_notes`. Verification uses the supplied mathematical
 content. The controlling agent can read admitted notes, queued submissions, and
 checks through `inspect`.
 
-Use the campaign's `submit` interface for admission. Direct external notebook
-commits are not automatically admitted and can cause a version conflict.
+Use the campaign's `submit` interface for admission. Campaign reads stay pinned
+to exact admitted publications. External notebook commits require explicit
+admission before workers can use them.
 See [reading notes](../README.md#reading-notes) and
 [storage](../README.md#recovery-storage-and-usage).
 
@@ -126,9 +128,9 @@ remains distinct from a formal proof certificate. See the complete
 
 ## Is there a fixed time or cost budget?
 
-`maxExplorerTurns` limits completed Explorer submissions. The turn cap does not
-stop Coordinator or eligible verification work. It does not impose a wall-clock
-or monetary limit. The controlling agent manages its overall budget and scheduling.
+`maxExplorerTurns` limits completed Explorer submissions and leaves eligible
+verification work running. It imposes no wall-clock or monetary limit. The
+controlling agent manages its overall budget and scheduling.
 
 `inspect` reports Pi's recorded usage. Some failed or external calls have
 incomplete accounting. Include source preparation and independent review when
@@ -152,7 +154,9 @@ scope. Manuscript preparation also belongs to the outside agent.
 Use `status` for the outcome and error, and `inspect` for notes, checks, and usage.
 Ctrl-C closes the CLI owner while preserving recorded progress. `run` recovers
 unfinished native work. After `call-failure`, inspect the error and use `resume`.
-Accepted and turn-limit campaigns remain terminal.
+Accepted and turn-limit campaigns remain terminal. A group with a failed worker
+stays `call-failure` until resumed, even if another member's checks provisionally
+establish an accepted note.
 
 With the CLI owner closed, `guide` queues advice for the next fresh Explorer call,
 and `submit` queues additional notes. Neither changes an already frozen call.
@@ -167,25 +171,28 @@ and notebook databases. Their admitted notes, verification trust, and reconstruc
 proofs remain isolated. To reuse material, the caller prepares an explicit input
 packet for a fresh campaign and decides which premises it is admitting.
 
-Inside a campaign, the outer workflow remains sequential. The caller owns
-scheduling across problems. Keep historical campaigns with their pinned runtimes
-and preserve both databases when backing up a campaign.
+Inside a campaign, groups of Explorers alternate with groups of Verifiers.
+`explorers` and `verifiers` set their sizes and default to 1. Workers in a group
+may run concurrently, and the campaign waits for every member before advancing.
+The caller owns scheduling across problems. Keep historical campaigns with their
+pinned runtimes and preserve both databases when backing up a campaign.
 
 ## Can another agent call the workers directly?
 
-The library can create a root with `startCampaign: false` and invoke Explorer,
-Coordinator, and Verifier separately. Each worker publishes its own notes,
-summaries, or checks before completing. The caller chooses the sequence and waits
-on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted or
-aborted workers need a `{kind: "retry", task: id}` request, which preserves their
-frozen input and requires the same admitted notebook version.
-[The worker example](../examples/workers.ts) shows a pass through the roles and
-the first selected verification batch. [The library instructions](../README.md#library-and-development)
+The library can create a root with `startCampaign: false` and invoke Explorer
+and Verifier separately. Explorer publishes notes and summaries. Verifier selects
+work and records checks, or accepts an explicit `verify` selection. The caller
+waits on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted
+or aborted workers need `{kind: "retry", task: id}`, preserving their frozen
+input and exact publication references. [The worker example](../examples/workers.ts)
+runs an Explorer followed by a Verifier batch. [The library instructions](../README.md#library-and-development)
 explain queued-note intake and manual Explorer guidance.
 
-This interface retains a single database owner and sequential worker admission.
-The ordinary CLI still runs the full research loop. Independent workers do not
-enable concurrent notebook writers or transfer knowledge between campaigns.
+This interface retains a single database owner. Manual workers of the same role
+may overlap. Mixed-role admission is rejected until active workers settle, and an automatic
+campaign owns admission while running or awaiting recovery. The ordinary CLI
+runs the full research loop. Separate processes cannot write a shared notebook
+through this worker interface.
 
 ## Where can an agent inspect current work?
 

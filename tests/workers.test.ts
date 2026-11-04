@@ -1,190 +1,53 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { expect, spyOn, test } from "bun:test";
+import type { Respond } from "./worker-fixture.ts";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import {
-  fauxAssistantMessage,
-  fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
-import {
-  getCurrentSystemPrompt,
-  getCurrentTools,
-} from "@earendil-works/pi-ai/utils/transcript";
-import {
-  acceptedArgument,
   inspect,
-  Notebook,
-  open,
+  acceptedArgument,
   project,
-  readNotes,
-  solveSettings,
   submitNotes,
 } from "../src/index.ts";
-import { readNotebook } from "../src/state.ts";
-import { Assignment } from "../src/role-runtime.ts";
-import { verifierNames, type Verification } from "../src/policy/contracts.ts";
-import type { CallDescriptor } from "../src/policy/prompts.ts";
-import type { WorkerRequest } from "../src/workers.ts";
-import { fauxModels } from "./faux-models.ts";
+import {
+  fixture,
+  complete,
+  context,
+  note,
+  abortable,
+} from "./worker-fixture.ts";
 
-const task = { problem: "Prove P.", completionCriteria: "Prove P fully." };
-const profile = { provider: "test", model: "math", reasoning: "high" };
-const settings = solveSettings.parse(
-  Object.fromEntries(
-    ["explorer", "coordinator", ...verifierNames].map((name) => [
-      name,
-      profile,
-    ]),
-  ),
-);
-const proposal = { notes: [{ text: "Complete proof of P.", support: [] }] };
-const verification: Verification[] = [
-  { note: "n1", verifiers: [...verifierNames] },
-];
-const decision = {
-  filings: [{ note: "n1", summary: "P holds." }],
-  verify: verification,
-};
-const checked = {
-  verdicts: [{ note: "n1", verdict: "PASS", report: "Checked." }],
-};
-const verificationReplies: JsonValue[] = [
-  checked,
-  checked,
-  checked,
-  { statements: [{ note: "n1", statement: "P holds." }] },
-  { proof: "Independent proof of P." },
-  { statements: [], ...checked },
-];
-const directories: string[] = [];
-const owners: Awaited<ReturnType<typeof open>>[] = [];
-afterEach(async () => {
-  for (const owner of owners.splice(0).reverse()) await owner.close();
-  for (const directory of directories.splice(0))
-    await rm(directory, { recursive: true, force: true });
-});
-async function fixture(
-  values: (JsonValue | Error)[] = [],
-  startCampaign = false,
-) {
-  const directory = await mkdtemp(join(tmpdir(), "xean-workers-"));
-  directories.push(directory);
-  const path = join(directory, "research.sqlite");
-  const calls: {
-    descriptor: CallDescriptor;
-    system: string;
-    tools: string[];
-  }[] = [];
-  let owner: Awaited<ReturnType<typeof open>>;
-  const native = fauxModels(values, async (transcript) => {
-    const descriptor = await owner.root.commit(async (tx) => {
-      const child = (await tx.scanConversations({ order: "descending" }, 1))
-        .items[0]!;
-      return JSON.parse(
-        JSON.stringify((await tx.doc(Assignment, child.id)).descriptor),
-      ) as CallDescriptor;
-    }, context);
-    calls.push({
-      descriptor,
-      system: getCurrentSystemPrompt(transcript.messages),
-      tools: getCurrentTools(transcript.messages).map((tool) => tool.name),
-    });
-  });
-  owner = await open(path, {
-    create: { task, settings },
-    startCampaign,
-    models: native.models,
-  });
-  owners.push(owner);
-  return {
-    path,
-    native,
-    calls,
-    get owner() {
-      return owner;
-    },
-    create(request: WorkerRequest) {
-      return owner.root.commit(
-        (tx) => owner.workers.create(tx, owner.root.id, request),
-        context,
-      );
-    },
-    async run(request: WorkerRequest) {
-      const id = await this.create(request);
-      const settled = await owner.harness.waitForTask(id, context);
-      return { id, outcome: settled.state.outcome };
-    },
-    async reopen() {
-      await owner.close();
-      owner = await open(path, { models: native.models });
-      owners.push(owner);
-      return owner;
-    },
-    notes() {
-      return inspect(path, readNotes);
-    },
-    book() {
-      return inspect(
-        path,
-        async (tx, root) =>
-          JSON.parse(
-            JSON.stringify(readNotebook(await tx.doc(Notebook, root))),
-          ) as ReturnType<typeof readNotebook>,
-      );
-    },
-    tasks() {
-      return inspect(
-        path,
-        async (tx, root) =>
-          (await tx.scanTasks({ conversationId: root }, 128)).items,
-      );
-    },
-  };
-}
-
-test("manual workers publish each result and preserve the normal verified argument without creating a campaign", async () => {
-  const run = await fixture([proposal, decision, ...verificationReplies]);
-  expect(await run.tasks()).toEqual([]);
-  const first = await run.run({
+test("independent Explorer and Verifier publish knowledge without a campaign or Coordinator", async () => {
+  const run = await fixture();
+  const explored = await run.run({
     kind: "explorer",
     guidance: "Prove P directly.",
   });
-  expect(first.outcome).toEqual({ status: "completed", result: proposal });
+  expect(explored.outcome.status).toBe("completed");
+  const id = `w${explored.id}.1`;
   expect(await run.notes()).toMatchObject([
-    { id: "n1", text: proposal.notes[0]!.text, verified: false },
+    { id, summary: "Complete proof of P.", verified: false },
   ]);
-  expect((await run.notes())[0]!.summary).toBeUndefined();
-  expect(run.native.provider.state.callCount).toBe(1);
-  const coordination = await run.run({ kind: "coordinator" });
-  expect(coordination.outcome).toEqual({
-    status: "completed",
-    result: decision,
-  });
-  expect((await run.notes())[0]!.summary).toBe("P holds.");
-  expect((await run.notes())[0]!.verdicts).toEqual([]);
-  const verified = await run.run({ kind: "verifier", verify: verification });
-  expect(verified.outcome).toEqual({ status: "completed", result: null });
-  const notes = await run.notes();
+  const checked = await run.run({ kind: "verifier" });
+  expect(checked.outcome.status).toBe("completed");
   const book = await run.book();
-  expect(project(book).accepted).toEqual(["n1"]);
-  expect(notes[0]!.verdicts.map((verdict) => verdict.verifier)).toEqual([
-    ...verifierNames,
-  ]);
+  expect(project(book).accepted).toEqual([id]);
   expect(book.checks).toHaveLength(4);
-  expect(book.checks.every((check) => check.candidate === verified.id)).toBe(
-    true,
-  );
-  expect(acceptedArgument(notes, "n1")).toBe("## n1\n\nComplete proof of P.\n");
+  expect(new Set(book.checks.map((check) => check.candidate)).size).toBe(1);
+  const attempt = book.checks[0]!.candidate;
+  expect(attempt).not.toBe(checked.id);
   expect(
-    run.calls.map(({ descriptor }) =>
+    (await run.tasks()).find((task: { id: number }) => task.id === attempt)
+      .input.kind,
+  ).toBe("verify");
+  expect(acceptedArgument(await run.notes(), id)).toBe(
+    `## ${id}\n\nComplete proof of P.\n`,
+  );
+  expect(
+    run.requests.map(({ descriptor }) =>
       descriptor.kind === "verifier" ? descriptor.name : descriptor.kind,
     ),
   ).toEqual([
     "explorer",
-    "coordinator",
+    "selection",
     "source",
     "correctness",
     "requirements",
@@ -192,361 +55,453 @@ test("manual workers publish each result and preserve the normal verified argume
     "proof",
     "reconstruction",
   ]);
-  expect(
-    (await run.tasks()).some((task) => task.kind === "xean.campaign"),
-  ).toBe(false);
-  notes[0]!.text = "Local inspection mutation";
-  expect((await run.notes())[0]!.text).toBe(proposal.notes[0]!.text);
+  const calls = run.provider.state.callCount;
   await run.reopen();
   await run.owner.root.waitForIdle(context);
+  expect(run.provider.state.callCount).toBe(calls);
   expect(
-    (await run.tasks()).some((task) => task.kind === "xean.campaign"),
+    (await run.tasks()).some(
+      (task: { kind: string }) => task.kind === "xean.campaign",
+    ),
   ).toBe(false);
-  expect(run.native.provider.state.callCount).toBe(8);
-  expect(await run.notes()).toEqual(project(book).notes);
 });
 
 test.each([false, true])(
-  "manual admission rejects an existing root task, automatic=%s",
-  async (automatic) => {
-    const run = await fixture([], automatic);
-    if (!automatic) await run.create({ kind: "explorer" });
-    const before = await run.tasks();
-    await expect(run.create({ kind: "coordinator" })).rejects.toThrow();
-    expect(await run.tasks()).toEqual(before);
-    expect(run.native.provider.state.callCount).toBe(0);
+  "two Explorers retain independent IDs and prose when publication order reverses=%s",
+  async (reverse) => {
+    const arrived = Promise.withResolvers<void>();
+    const releases = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    const namespaces: string[] = [];
+    const run = await fixture(
+      async (request): Promise<Awaited<ReturnType<Respond>>> => {
+        const { descriptor } = request;
+        if (descriptor.kind !== "explorer") return complete(request);
+        const slot = namespaces.push(descriptor.input.namespace) - 1;
+        if (namespaces.length === 2) arrived.resolve();
+        await releases[slot]!.promise;
+        const lemma = `${descriptor.input.namespace}.1`;
+        return {
+          notes: [
+            note(`Lemma ${lemma}.`),
+            note(`Consequence cites ${lemma} verbatim.`, [lemma]),
+          ],
+        };
+      },
+    );
+    const ids = await Promise.all([
+      run.create({ kind: "explorer" }),
+      run.create({ kind: "explorer" }),
+    ]);
+    const pending = ids.map((id) => run.wait(id));
+    await arrived.promise;
+    expect(new Set(namespaces).size).toBe(2);
+    const first = reverse ? 1 : 0;
+    releases[first]!.resolve();
+    await pending[first];
+    releases[1 - first]!.resolve();
+    expect((await pending[1 - first])!.state.outcome.status).toBe("completed");
+    const notes = await run.notes();
+    expect(notes).toHaveLength(4);
+    for (const namespace of namespaces) {
+      expect(notes.find((n) => n.id === `${namespace}.2`)).toMatchObject({
+        text: `Consequence cites ${namespace}.1 verbatim.`,
+        support: [`${namespace}.1`],
+      });
+      expect(notes.findIndex((n) => n.id === `${namespace}.1`)).toBeLessThan(
+        notes.findIndex((n) => n.id === `${namespace}.2`),
+      );
+    }
   },
 );
 
-test("inspection observes a live and suspended worker without running it, then reopen recovers its frozen task", async () => {
-  const run = await fixture();
+test("inspection observes live and suspended native work without invoking a model", async () => {
   const started = Promise.withResolvers<void>();
-  run.native.provider.setResponses([
-    async (_transcript, options) => {
-      started.resolve();
-      await new Promise<void>((resolve) => {
-        if (options?.signal?.aborted) resolve();
-        else
-          options?.signal?.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-      });
-      return fauxAssistantMessage("", { stopReason: "aborted" });
+  let suspend = true;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (suspend) {
+        started.resolve();
+        await abortable(request.signal);
+        return new Error("Suspended");
+      }
+      return complete(request);
     },
-  ]);
+  );
   const id = await run.create({
     kind: "explorer",
     guidance: "Frozen direction.",
   });
-  const pending = run.owner.harness.waitForTask(id, context).catch(() => {});
+  const pending = run.wait(id).catch(() => {});
   await started.promise;
   const inspectWorker = () =>
-    inspect(run.path, async (tx) => {
-      const worker = await tx.task(id);
-      if (!worker) throw new Error("Worker is missing");
-      return {
-        id: worker.id,
-        kind: worker.kind,
-        input: JSON.parse(JSON.stringify(worker.input)) as JsonValue,
-        status: worker.state.status,
-      };
-    });
-  const count = run.native.provider.state.callCount;
+    inspect(run.path, async (tx) =>
+      JSON.parse(JSON.stringify(await tx.task(id))),
+    );
   const live = await inspectWorker();
   expect(live).toMatchObject({ id, kind: "xean.worker" });
-  expect(live.status).not.toBe("terminal");
-  expect(run.native.provider.state.callCount).toBe(count);
-  const frozen = live.input;
+  expect(live.state.status).not.toBe("terminal");
+  const calls = run.provider.state.callCount;
   await run.owner.close();
   await pending;
-  run.native.replies.push(proposal);
   const suspended = await inspectWorker();
-  expect(suspended).toMatchObject({ id, kind: "xean.worker", input: frozen });
-  expect(suspended.status).not.toBe("terminal");
+  expect(suspended.input).toEqual(live.input);
+  expect(suspended.state.status).not.toBe("terminal");
   expect(await inspectWorker()).toEqual(suspended);
-  expect(run.native.provider.state.callCount).toBe(count);
+  expect(run.provider.state.callCount).toBe(calls);
+  suspend = false;
   await run.reopen();
-  expect(
-    (await run.owner.harness.waitForTask(id, context)).state.outcome,
-  ).toEqual({ status: "completed", result: proposal });
-  expect((await run.tasks()).find((task) => task.id === id)!.input).toEqual(
-    frozen,
-  );
-  expect(await inspectWorker()).toEqual({ ...suspended, status: "terminal" });
-  expect(run.native.provider.state.callCount).toBe(count + 1);
-  expect((await run.notes()).map((note) => note.id)).toEqual(["n1"]);
-  expect(
-    (await run.tasks()).some((task) => task.kind === "xean.campaign"),
-  ).toBe(false);
+  expect((await run.wait(id)).state.outcome.status).toBe("completed");
+  expect((await inspectWorker()).input).toEqual(live.input);
+  expect(run.provider.state.callCount).toBe(calls + 1);
 });
 
-test("retry keeps the failed Explorer input and future note IDs while caller input remains queued", async () => {
-  const run = await fixture([new Error("Disconnected Explorer")]);
+test("retry retains Explorer namespace and input despite unrelated publication and queued caller notes", async () => {
+  let fail = true;
+  const run = await fixture((request) => {
+    if (request.descriptor.kind === "explorer" && fail) {
+      fail = false;
+      return new Error("Explorer disconnected");
+    }
+    return complete(request);
+  });
   const first = await run.run({
     kind: "explorer",
     guidance: "Frozen direction.",
   });
   expect(first.outcome.status).toBe("faulted");
+  await run.run({ kind: "explorer" });
   await run.owner.root.commit(
     (tx) =>
       submitNotes(tx, run.owner.root.id, "caller", {
-        notes: [{ text: "Caller result.", support: [] }],
+        notes: [note("Queued literature.")],
       }),
     context,
   );
-  const recovered = {
-    notes: [
-      { text: "Explorer lemma.", support: [] },
-      { text: "Explorer consequence.", support: ["n1"] },
-    ],
-  };
-  run.native.replies.push(recovered);
-  const retried = await run.run({ kind: "retry", task: first.id });
-  expect(retried.outcome).toEqual({ status: "completed", result: recovered });
-  expect(run.calls[1]!.descriptor).toEqual(run.calls[0]!.descriptor);
-  expect(
-    (await run.notes()).map(({ id, text, support }) => ({ id, text, support })),
-  ).toEqual(
-    recovered.notes.map((note, index) => ({ id: `n${index + 1}`, ...note })),
-  );
-  expect((await run.book()).inputs).toEqual([
-    {
-      id: "caller",
-      notes: [{ text: "Caller result.", support: [] }],
-      consumed: false,
-    },
-  ]);
-  const requests = await run.tasks();
-  expect(requests.find((task) => task.id === retried.id)!.input).toMatchObject({
-    previousTasks: [first.id],
-  });
+  const retry = await run.run({ kind: "retry", task: first.id });
+  expect(retry.outcome.status).toBe("completed");
+  expect(run.requests.at(-1)!.descriptor).toEqual(run.requests[0]!.descriptor);
+  expect((await run.notes()).some((n) => n.id === `w${first.id}.1`)).toBe(true);
+  expect((await run.book()).inputs[0]!.consumed).toBe(false);
 });
 
-test("verification retry reuses checked calls and keeps one candidate lineage", async () => {
-  const run = await fixture([
-    proposal,
-    decision,
-    ...verificationReplies.slice(0, -1),
-    new Error("Comparison disconnected"),
-  ]);
-  await run.run({ kind: "explorer" });
-  await run.run({ kind: "coordinator" });
-  const first = await run.run({ kind: "verifier", verify: verification });
-  expect(first.outcome.status).toBe("faulted");
-  const partial = await run.book();
-  expect(partial.checks).toHaveLength(3);
-  expect(project(partial).accepted).toEqual([]);
-  run.native.replies.push({ statements: [], ...checked });
-  const count = run.native.provider.state.callCount;
-  const retried = await run.run({ kind: "retry", task: first.id });
-  expect(retried.outcome).toEqual({ status: "completed", result: null });
-  expect(run.native.provider.state.callCount - count).toBe(1);
-  const final = await run.book();
-  expect(final.checks).toHaveLength(4);
-  expect(final.checks.slice(0, 3)).toEqual(partial.checks);
-  expect(final.checks.every((check) => check.candidate === first.id)).toBe(
-    true,
-  );
-  expect(new Set(final.checks.map((check) => check.call)).size).toBe(4);
-  expect(project(final).accepted).toEqual(["n1"]);
-});
-
-test("publication recovery reuses the role receipt after the note store committed before Pi settlement", async () => {
-  const run = await fixture([proposal]);
-  const original = NoteStore.prototype.commit;
-  let injected = false;
-  const writes = spyOn(NoteStore.prototype, "commit").mockImplementation(
-    function (this: NoteStore, expected, changes, receipt) {
-      const result = original.call(this, expected, changes, receipt);
-      if (!injected && changes.n1?.text === proposal.notes[0]!.text) {
-        injected = true;
-        throw new Error("Interrupted after notebook commit");
+test("completed statement and proof receipts survive abort and verifier retry", async () => {
+  const started = Promise.withResolvers<void>();
+  let hold = true;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (request.descriptor.kind === "reconstruction" && hold) {
+        started.resolve();
+        await abortable(request.signal);
+        return new Error("Aborted");
       }
-      return result;
+      return complete(request);
+    },
+  );
+  await run.run({ kind: "explorer" });
+  const first = await run.create({ kind: "verifier" });
+  const pending = run.wait(first);
+  await started.promise;
+  const before = await run.book();
+  expect(before.checks).toHaveLength(3);
+  await run.owner.harness.abortTask(first, context);
+  expect((await pending).state.outcome.status).toBe("aborted");
+  hold = false;
+  const count = run.provider.state.callCount;
+  const retry = await run.run({ kind: "retry", task: first });
+  expect(retry.outcome.status).toBe("completed");
+  expect(run.provider.state.callCount - count).toBe(1);
+  const after = await run.book();
+  expect(after.checks.slice(0, 3)).toEqual(before.checks);
+  expect(
+    after.checks.every(
+      (check) => check.candidate === before.checks[0]!.candidate,
+    ),
+  ).toBe(true);
+  expect(project(after).accepted).toHaveLength(1);
+  expect(
+    run.requests.filter(({ descriptor }) => descriptor.kind === "statement"),
+  ).toHaveLength(1);
+  expect(
+    run.requests.filter(({ descriptor }) => descriptor.kind === "proof"),
+  ).toHaveLength(1);
+});
+
+test("two Verifiers cannot claim the same target after selecting it concurrently", async () => {
+  const selected = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let selections = 0;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (request.descriptor.kind === "selection") {
+        if (++selections === 2) selected.resolve();
+        await release.promise;
+      }
+      return complete(request);
+    },
+  );
+  await run.run({ kind: "explorer" });
+  const ids = await Promise.all([
+    run.create({ kind: "verifier" }),
+    run.create({ kind: "verifier" }),
+  ]);
+  const pending = ids.map((id) => run.wait(id));
+  await selected.promise;
+  release.resolve();
+  const results = (await Promise.all(pending)).map(
+    (task) => task.state.outcome,
+  );
+  expect(results.every((result) => result.status === "completed")).toBe(true);
+  expect(
+    results
+      .map(
+        (result) =>
+          result.status === "completed" &&
+          (result.result as { status: string }).status,
+      )
+      .sort(),
+  ).toEqual(["busy", "completed"]);
+  expect(
+    run.requests.filter(
+      ({ descriptor }) =>
+        descriptor.kind === "verifier" && descriptor.name === "source",
+    ),
+  ).toHaveLength(1);
+  expect((await run.book()).checks).toHaveLength(4);
+});
+
+test("queued caller literature gets stable admission IDs before fresh exploration", async () => {
+  const run = await fixture();
+  const supplied = { notes: [note("Supplied literature.")] };
+  await run.owner.root.commit(
+    (tx) => submitNotes(tx, run.owner.root.id, "literature", supplied),
+    context,
+  );
+  expect(await run.notes()).toEqual([]);
+  await run.run({ kind: "explorer" });
+  const descriptor = run.requests[0]!.descriptor;
+  if (descriptor.kind !== "explorer") throw new Error("Expected Explorer");
+  expect(descriptor.input.notes).toHaveLength(1);
+  expect(descriptor.input.notes[0]!.id).toMatch(/^i[0-9]+\.1$/);
+  expect((await run.book()).inputs[0]!.consumed).toBe(true);
+  expect(await run.notes()).toHaveLength(2);
+});
+
+test("current adverse evidence invalidates a root even when another check finishes later", async () => {
+  const run = await fixture();
+  const explored = await run.run({ kind: "explorer" });
+  const target = `w${explored.id}.1`;
+  await run.run({ kind: "verifier" });
+  const previous = await run.book();
+  expect(project(previous).accepted).toEqual([target]);
+  await run.owner.root.commit(async (tx) => {
+    const { Notebook } = await import("../src/state.ts");
+    const book = await tx.doc(Notebook, run.owner.root.id);
+    book.checks.push({
+      candidate: 999,
+      call: 999,
+      values: [
+        {
+          verifier: "correctness",
+          note: target,
+          verdict: "FAIL",
+          report: "Counterexample.",
+        },
+      ],
+    });
+  }, context);
+  expect(project(await run.book()).accepted).toEqual([]);
+  expect((await run.notes())[0]!.dead).toBe(true);
+});
+
+test("another publisher can finish between an append and its Pi rollback recovery", async () => {
+  const run = await fixture((request) =>
+    request.descriptor.kind === "explorer"
+      ? { notes: [note(`Proof ${request.descriptor.input.explorerGuidance}.`)] }
+      : complete(request),
+  );
+  const original = NoteStore.prototype.append;
+  let interrupted = false;
+  const append = spyOn(NoteStore.prototype, "append").mockImplementation(
+    function (this: NoteStore, requestId, notes) {
+      const version = original.call(this, requestId, notes);
+      if (
+        !interrupted &&
+        Object.values(notes).some((note) => note.text === "Proof A.")
+      ) {
+        interrupted = true;
+        throw new Error("Interrupted after append before Pi commit");
+      }
+      return version;
     },
   );
   let first: Awaited<ReturnType<typeof run.run>>;
   try {
-    first = await run.run({ kind: "explorer" });
+    first = await run.run({ kind: "explorer", guidance: "A" });
   } finally {
-    writes.mockRestore();
+    append.mockRestore();
   }
-  expect(injected).toBe(true);
   expect(first!.outcome.status).toBe("faulted");
   expect(await run.notes()).toEqual([]);
+  const second = await run.run({ kind: "explorer", guidance: "B" });
+  expect(second.outcome.status).toBe("completed");
+  expect((await run.notes()).map((note) => note.id)).toEqual([
+    `w${second.id}.1`,
+  ]);
   using store = new NoteStore(`${run.path}.notes.sqlite`);
-  expect(store.snapshot()).toBe(1);
-  expect(store.read().notes.n1?.text).toBe(proposal.notes[0]!.text);
-  expect(run.native.provider.state.callCount).toBe(1);
-  await expect(run.create({ kind: "explorer" })).rejects.toThrow();
+  expect(store.snapshot()).toBe(2);
   store.commit(
-    1,
-    { n1: { id: "n1", text: "Later external revision.", support: [] } },
+    2,
+    { [`w${first!.id}.1`]: { text: "External edit." } },
     "external",
   );
+  const count = run.provider.state.callCount;
   await run.reopen();
-  const retried = await run.run({ kind: "retry", task: first!.id });
-  expect(retried.outcome).toEqual({ status: "completed", result: proposal });
-  expect(run.native.provider.state.callCount).toBe(1);
-  expect(store.snapshot()).toBe(2);
-  expect((await run.notes()).map((note) => note.id)).toEqual(["n1"]);
-  expect((await run.notes())[0]!.text).toBe(proposal.notes[0]!.text);
-  expect(store.read().notes.n1?.text).toBe("Later external revision.");
-});
-
-test("external notebook advancement rejects worker admission before a model call", async () => {
-  const run = await fixture([proposal]);
-  using store = new NoteStore(`${run.path}.notes.sqlite`);
-  store.commit(0, { external: { text: "External knowledge." } }, "external");
-  await expect(run.create({ kind: "explorer" })).rejects.toThrow();
-  expect(await run.tasks()).toEqual([]);
-  expect(run.native.provider.state.callCount).toBe(0);
-  expect(await run.notes()).toEqual([]);
-  expect(store.read().notes).toEqual({
-    external: { text: "External knowledge." },
-  });
-});
-
-test("external advancement during a producer cannot be overwritten by worker publication", async () => {
-  const run = await fixture();
-  using store = new NoteStore(`${run.path}.notes.sqlite`);
-  run.native.provider.setResponses([
-    () => {
-      store.commit(
-        0,
-        { external: { text: "Concurrent knowledge." } },
-        "external",
-      );
-      return fauxAssistantMessage([fauxToolCall("submit_notes", proposal)], {
-        stopReason: "toolUse",
-      });
-    },
+  expect(
+    (await run.run({ kind: "retry", task: first!.id })).outcome.status,
+  ).toBe("completed");
+  expect(run.provider.state.callCount).toBe(count);
+  expect(store.snapshot()).toBe(3);
+  expect((await run.notes()).map(({ id, text }) => ({ id, text }))).toEqual([
+    { id: `w${first!.id}.1`, text: "Proof A." },
+    { id: `w${second.id}.1`, text: "Proof B." },
   ]);
-  const result = await run.run({ kind: "explorer" });
-  expect(result.outcome.status).toBe("faulted");
-  expect(run.native.provider.state.callCount).toBe(1);
-  expect(await run.notes()).toEqual([]);
-  expect(store.snapshot()).toBe(1);
-  expect(store.read().notes).toEqual({
-    external: { text: "Concurrent knowledge." },
-  });
+  expect(store.read().notes[`w${first!.id}.1`]!.text).toBe("External edit.");
 });
 
-test("retry rejects an obsolete notebook snapshot after another worker publishes", async () => {
-  const run = await fixture([new Error("First Explorer failed"), proposal]);
-  const first = await run.run({ kind: "explorer" });
-  expect(first.outcome.status).toBe("faulted");
-  expect((await run.run({ kind: "explorer" })).outcome.status).toBe(
-    "completed",
-  );
-  const before = await run.notes();
-  const calls = run.native.provider.state.callCount;
-  await expect(run.create({ kind: "retry", task: first.id })).rejects.toThrow();
-  expect(await run.notes()).toEqual(before);
-  expect(run.native.provider.state.callCount).toBe(calls);
-});
-
-test.each(["explorer", "coordinator"] as const)(
-  "fresh %s admits queued literature before freezing its input",
-  async (kind) => {
-    const response: JsonValue =
-      kind === "explorer"
-        ? {
+test.each(["PASS", "FAIL"] as const)(
+  "an in-flight claim keeps its positive evidence frozen but respects a concurrent ancestor %s",
+  async (outsideVerdict) => {
+    let ancestor = "",
+      root = "";
+    const rootStarted = Promise.withResolvers<void>();
+    const releaseRoot = Promise.withResolvers<void>();
+    const run = await fixture(
+      async (request): Promise<Awaited<ReturnType<Respond>>> => {
+        const { descriptor } = request;
+        if (descriptor.kind === "explorer") {
+          ancestor = `${descriptor.input.namespace}.1`;
+          root = `${descriptor.input.namespace}.2`;
+          return {
             notes: [
-              { text: "Consequence of the supplied result.", support: ["n1"] },
+              note("Generated lemma."),
+              note("Candidate from lemma.", [ancestor]),
             ],
-          }
-        : {
-            filings: [{ note: "n1", summary: "Supplied lemma holds." }],
-            verify: [],
           };
-    const run = await fixture([response]);
-    const supplied = {
-      notes: [
-        {
-          text: "Supplied literature lemma.",
-          support: [],
-          verification: {
-            source: "Caller supplied reference",
-            report: "Exact result checked.",
+        }
+        if (
+          descriptor.kind === "verifier" &&
+          descriptor.name === "source" &&
+          descriptor.judged.includes(root)
+        ) {
+          rootStarted.resolve();
+          await releaseRoot.promise;
+        }
+        if (
+          descriptor.kind === "verifier" &&
+          descriptor.name === "correctness" &&
+          descriptor.judged.includes(ancestor)
+        )
+          return {
+            verdicts: [
+              {
+                note: ancestor,
+                verdict: outsideVerdict,
+                report: "Concurrent assessment.",
+              },
+            ],
+          };
+        return complete(request);
+      },
+    );
+    await run.run({ kind: "explorer" });
+    await run.owner.root.commit(async (tx) => {
+      const { Notebook } = await import("../src/state.ts");
+      (await tx.doc(Notebook, run.owner.root.id)).checks.push({
+        candidate: 1000,
+        call: 1000,
+        values: [
+          {
+            note: ancestor,
+            verifier: "source",
+            verdict: "PASS",
+            report: "Prior source.",
           },
+          {
+            note: ancestor,
+            verifier: "correctness",
+            verdict: "PASS",
+            report: "Prior correctness.",
+          },
+        ],
+      });
+    }, context);
+    const first = await run.create({
+      kind: "verifier",
+      verify: [
+        {
+          note: root,
+          verifiers: ["source", "correctness"],
         },
       ],
-    };
-    await run.owner.root.commit(
-      (tx) => submitNotes(tx, run.owner.root.id, "literature", supplied),
-      context,
-    );
-    expect(await run.notes()).toEqual([]);
-    const worker = await run.run({ kind });
-    expect(worker.outcome).toEqual({ status: "completed", result: response });
-    const descriptor = run.calls[0]!.descriptor;
-    expect(descriptor.kind).toBe(kind);
-    if (descriptor.kind !== "explorer" && descriptor.kind !== "coordinator")
-      throw new Error("Expected a producing role");
-    expect(descriptor.input.notes).toMatchObject([
-      { id: "n1", verification: supplied.notes[0]!.verification },
-    ]);
-    const book = await run.book();
-    expect(book.inputs).toEqual([
-      { id: "literature", ...supplied, consumed: true },
-    ]);
-    expect(book.notes[0]).toMatchObject({ id: "n1", ...supplied.notes[0]! });
-    expect(book.notes.map((note) => note.id)).toEqual(
-      kind === "explorer" ? ["n1", "n2"] : ["n1"],
-    );
+    });
+    const pending = run.wait(first);
+    await rootStarted.promise;
+    expect(
+      (
+        await run.run({
+          kind: "verifier",
+          verify: [
+            {
+              note: ancestor,
+              verifiers: [
+                "source",
+                "correctness",
+                "requirements",
+                "reconstruction",
+              ],
+            },
+          ],
+        })
+      ).outcome,
+    ).toMatchObject({ status: "completed", result: { status: "completed" } });
+    releaseRoot.resolve();
+    expect((await pending).state.outcome.status).toBe("completed");
+    if (outsideVerdict === "FAIL") {
+      expect((await run.notes()).find((note) => note.id === root)!.dead).toBe(
+        true,
+      );
+      expect(
+        run.requests.some(
+          ({ descriptor }) =>
+            descriptor.kind === "verifier" &&
+            descriptor.name === "correctness" &&
+            descriptor.judged.includes(root),
+        ),
+      ).toBe(false);
+      expect(project(await run.book()).accepted).toEqual([]);
+    } else {
+      const correctness = run.requests.find(
+        ({ descriptor }) =>
+          descriptor.kind === "verifier" &&
+          descriptor.name === "correctness" &&
+          descriptor.judged.includes(root),
+      )!.descriptor;
+      if (correctness.kind !== "verifier")
+        throw new Error("Missing correctness call");
+      expect(correctness.input.support.map((note) => note.id)).toEqual([
+        ancestor,
+      ]);
+      expect(
+        correctness.input.support[0]!.verdicts.some(
+          (value) => value.verifier === "reconstruction",
+        ),
+      ).toBe(false);
+      expect(
+        (await run.notes()).find((note) => note.id === root)!.verified,
+      ).toBe(true);
+    }
   },
 );
-
-test("retry of an aborted verifier reuses completed statement and proof receipts", async () => {
-  const run = await fixture([
-    proposal,
-    decision,
-    ...verificationReplies.slice(0, -1),
-  ]);
-  const comparisonStarted = Promise.withResolvers<void>();
-  run.native.provider.appendResponses([
-    async (_transcript, options) => {
-      comparisonStarted.resolve();
-      await new Promise<void>((resolve) => {
-        if (options?.signal?.aborted) resolve();
-        else
-          options?.signal?.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-      });
-      return fauxAssistantMessage("", { stopReason: "aborted" });
-    },
-  ]);
-  await run.run({ kind: "explorer" });
-  await run.run({ kind: "coordinator" });
-  const first = await run.create({ kind: "verifier", verify: verification });
-  const pending = run.owner.harness.waitForTask(first, context);
-  await comparisonStarted.promise;
-  const partial = await run.book();
-  expect(partial.checks).toHaveLength(3);
-  expect(run.calls.slice(-2).map(({ descriptor }) => descriptor.kind)).toEqual([
-    "statement",
-    "proof",
-  ]);
-  await run.owner.harness.abortTask(first, context);
-  expect((await pending).state.outcome.status).toBe("aborted");
-  expect(project(await run.book()).accepted).toEqual([]);
-  run.native.replies.push({ statements: [], ...checked });
-  const count = run.native.provider.state.callCount;
-  const retried = await run.run({ kind: "retry", task: first });
-  expect(retried.outcome).toEqual({ status: "completed", result: null });
-  expect(run.native.provider.state.callCount - count).toBe(1);
-  expect(run.calls.at(-1)!.descriptor.kind).toBe("reconstruction");
-  expect(
-    run.calls.filter(({ descriptor }) => descriptor.kind === "statement"),
-  ).toHaveLength(1);
-  expect(
-    run.calls.filter(({ descriptor }) => descriptor.kind === "proof"),
-  ).toHaveLength(1);
-  const final = await run.book();
-  expect(final.checks.slice(0, 3)).toEqual(partial.checks);
-  expect(final.checks).toHaveLength(4);
-  expect(final.checks.every((check) => check.candidate === first)).toBe(true);
-  expect(project(final).accepted).toEqual(["n1"]);
-});

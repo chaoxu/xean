@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { definition, Notebook, project, readNotebook } from "./state.ts";
 import { pick, type Note } from "./policy/contracts.ts";
-import { byId, supportClosure } from "./policy/support.ts";
+import { noteOrder, supportClosure } from "./policy/support.ts";
 
 import {
   lastCampaign,
@@ -79,6 +79,8 @@ export async function readReport(tx: Tx, root: ConversationId) {
 export function acceptedArgument(notes: Note[], candidateId: string): string {
   const candidate = notes.find((note) => note.id === candidateId);
   if (!candidate) throw new Error("Accepted candidate is missing");
-  const ids = [...supportClosure([candidate], notes), candidateId].sort(byId);
+  const ids = [...supportClosure([candidate], notes), candidateId].sort(
+    noteOrder(notes),
+  );
   return ids.map((id) => `## ${id}\n\n${pick(notes, id).text}\n`).join("\n");
 }
