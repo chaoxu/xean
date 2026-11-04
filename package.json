@@ -31,8 +31,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./policy": "./src/policy/index.ts",
-    "./activity": "./src/activity.ts"
+    "./policy": "./src/policy/index.ts"
   },
   "scripts": {
     "check": "bun scripts/dev.ts check",

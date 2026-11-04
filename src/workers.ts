@@ -36,7 +36,6 @@ import { supportClosure } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
 import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import { verify } from "./verification.ts";
-import type { ActivityOptions } from "./activity.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
 export type SourceExecutor = (
@@ -77,10 +76,8 @@ function currentVersion(ref: { version: number }, input: WorkerInput) {
 }
 
 /** Independently invoked roles retain Pi's native execution and recovery. */
-export function createWorkers(
-  options: { source?: SourceExecutor; activity?: ActivityOptions } = {},
-) {
-  const roles = createRoleRuntime(options.activity);
+export function createWorkers(options: { source?: SourceExecutor } = {}) {
+  const roles = createRoleRuntime();
   const Worker = defineTask<WorkerInput, { phase: "run" }, JsonValue>({
     name: "xean.worker",
     version: 1,

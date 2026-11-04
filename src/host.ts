@@ -34,7 +34,6 @@ import { createWorkflow, type SourceExecutor } from "./workflow.ts";
 import { acceptedArgument, readStatus } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
 import { roleGenerationPolicy } from "./role-runtime.ts";
-import type { ActivityOptions } from "./activity.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -48,7 +47,6 @@ export type OpenOptions = {
   startCampaign?: boolean;
   models?: Models;
   source?: SourceExecutor;
-  activity?: ActivityOptions;
 };
 
 function validateDefinition(value: unknown): Definition {
@@ -163,7 +161,6 @@ export async function open(path: string, options: OpenOptions = {}) {
     storage = await openOwnedStorage(canonical);
     const workflow = createWorkflow({
       source: options.source ?? codexExec(),
-      activity: options.activity,
     });
     const registry = createRegistry();
     registry.install(workflow.extension);

@@ -186,3 +186,11 @@ explain queued-note intake and manual Explorer guidance.
 This interface retains a single database owner and sequential worker admission.
 The ordinary CLI still runs the full research loop. Independent workers do not
 enable concurrent notebook writers or transfer knowledge between campaigns.
+
+## Where can an agent inspect current work?
+
+Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite file.
+Use the library's `inspect` with Pi's `tx.scanTasks` or `tx.task` to read those
+records without starting models. Stored status is the last committed state,
+which can outlast the process that wrote it. Note texts remain in the separate
+notebook database. See the [library examples](../README.md#library-and-development).

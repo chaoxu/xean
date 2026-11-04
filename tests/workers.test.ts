@@ -218,7 +218,7 @@ test.each([false, true])(
   },
 );
 
-test("closing a live native worker recovers the same task and frozen role on ordinary reopen", async () => {
+test("inspection observes a live and suspended worker without running it, then reopen recovers its frozen task", async () => {
   const run = await fixture();
   const started = Promise.withResolvers<void>();
   run.native.provider.setResponses([
@@ -240,10 +240,31 @@ test("closing a live native worker recovers the same task and frozen role on ord
   });
   const pending = run.owner.harness.waitForTask(id, context).catch(() => {});
   await started.promise;
-  const frozen = (await run.tasks()).find((task) => task.id === id)!.input;
+  const inspectWorker = () =>
+    inspect(run.path, async (tx) => {
+      const worker = await tx.task(id);
+      if (!worker) throw new Error("Worker is missing");
+      return {
+        id: worker.id,
+        kind: worker.kind,
+        input: JSON.parse(JSON.stringify(worker.input)) as JsonValue,
+        status: worker.state.status,
+      };
+    });
+  const count = run.native.provider.state.callCount;
+  const live = await inspectWorker();
+  expect(live).toMatchObject({ id, kind: "xean.worker" });
+  expect(live.status).not.toBe("terminal");
+  expect(run.native.provider.state.callCount).toBe(count);
+  const frozen = live.input;
   await run.owner.close();
   await pending;
   run.native.replies.push(proposal);
+  const suspended = await inspectWorker();
+  expect(suspended).toMatchObject({ id, kind: "xean.worker", input: frozen });
+  expect(suspended.status).not.toBe("terminal");
+  expect(await inspectWorker()).toEqual(suspended);
+  expect(run.native.provider.state.callCount).toBe(count);
   await run.reopen();
   expect(
     (await run.owner.harness.waitForTask(id, context)).state.outcome,
@@ -251,6 +272,8 @@ test("closing a live native worker recovers the same task and frozen role on ord
   expect((await run.tasks()).find((task) => task.id === id)!.input).toEqual(
     frozen,
   );
+  expect(await inspectWorker()).toEqual({ ...suspended, status: "terminal" });
+  expect(run.native.provider.state.callCount).toBe(count + 1);
   expect((await run.notes()).map((note) => note.id)).toEqual(["n1"]);
   expect(
     (await run.tasks()).some((task) => task.kind === "xean.campaign"),

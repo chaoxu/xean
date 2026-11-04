@@ -31,9 +31,6 @@ const { open, inspect, readStatus, readNotes, createWorkers } = await import(
 assert.equal(typeof open, "function");
 assert.equal(typeof readNotes, "function");
 assert.equal(typeof createWorkers, "function");
-const { ActivityClient, createActivityHandler } = await import("xean/activity");
-assert.equal(typeof ActivityClient, "function");
-assert.equal(typeof createActivityHandler, "function");
 await using temporary = await mkdtempDisposable(
   join(tmpdir(), "xean-distribution-"),
 );

@@ -74,48 +74,6 @@ bun run xean export .xean/demo.sqlite > accepted.md
 
 Acceptance ends the campaign. A different target requires a new campaign.
 
-## Shared activity
-
-Explorer can observe other agents' directions and announce its own through an
-HTTP service. Each agent chooses its work. The service keeps announcements in
-memory. Mathematical results stay in notebooks. Start the service in a terminal:
-
-```sh
-bun run xean activity-serve
-```
-
-Connect campaigns using a scope identifying the exact shared problem and conditions:
-
-```sh
-bun run xean run .xean/demo.sqlite \
-  --activity-url http://127.0.0.1:3480 \
-  --activity-scope problem:demo:v1 --activity-owner explorer-a
-```
-
-`resume` accepts the same flags. Activity is optional per invocation, outside
-frozen settings. The owner label defaults to the campaign filename.
-`XEAN_ACTIVITY_TOKEN` supplies the client and service bearer token.
-`activity-serve --hostname <host> --port <port>` changes the listen address.
-Binding beyond loopback requires the token.
-
-Explorer receives observations through recorded Pi prompt sections and uses
-`announce_activity` to state or revise its direction. Coordinator and Verifier
-receive neither. Observations contain intentions, freshness times, and opaque
-references. `xean` note references identify their campaign and notebook revision.
-References do not import knowledge or transfer verification trust.
-
-Announcements expire after 120 seconds without renewal. The host renews while
-Explorer runs and tries to remove its announcement when the invocation ends.
-Renewal shows host supervision. `intentAt` records the last explicit announcement,
-without detecting progress or unannounced direction changes. After interruption,
-Explorer must announce again. A lost creation response may leave an extra record
-until expiry. Restarting the service clears records. Observation failures appear
-as unavailable. Advisory announcements cannot prevent overlapping work.
-
-Library callers pass `activity: {url, scope, owner, token?}` to `open`.
-Other runtimes can use the Pi-independent `ActivityClient` and
-`createActivityHandler` exports from `xean/activity`.
-
 ## Supply papers and notes
 
 `submit` accepts JSON text notes. Save relevant paper passages as `notes.json`
@@ -333,6 +291,21 @@ It does not add parallel writers or share notes between processes.
 existing tasks. Waiting on the same task ID recovers unfinished work. For a
 faulted or aborted worker, create `{kind: "retry", task: id}`. A retry preserves
 the frozen input and requires the same admitted notebook version.
+
+Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite
+file. Other agents can read those records without starting work:
+
+```ts
+const page = await inspect(path, (tx, root) =>
+  tx.scanTasks({ conversationId: root }, 128),
+);
+const worker = await inspect(path, (tx) => tx.task(id));
+```
+
+Pass `page.next` as the third argument to `scanTasks` for the next page.
+Stored status reports the last committed state. A `running` record can remain
+after its process dies. Mathematical note texts stay in the separate notebook
+database.
 
 Fresh Explorer and Coordinator workers admit notes queued through `submitNotes`.
 Verifier workers and retries leave queued notes for a later intake. For manual

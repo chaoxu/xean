@@ -22,7 +22,6 @@ import {
   type Verification,
 } from "./policy/contracts.ts";
 import { supportClosure } from "./policy/support.ts";
-import type { ActivityOptions } from "./activity.ts";
 import {
   createWorkers,
   type SourceExecutor,
@@ -66,9 +65,7 @@ export async function lastCampaign(tx: Tx, root: ConversationId) {
 }
 
 /** Pi owns execution and recovery. These tasks retain v1's research decisions. */
-export function createWorkflow(
-  options: { source?: SourceExecutor; activity?: ActivityOptions } = {},
-) {
+export function createWorkflow(options: { source?: SourceExecutor } = {}) {
   const workers = createWorkers(options);
   const Campaign = defineTask<
     { resume?: CampaignState },
@@ -95,7 +92,7 @@ export function createWorkflow(
           const config = await definition(tx, task.conversationId);
           const ref = await tx.doc(Notebook, task.conversationId);
           const book = readNotebook(ref);
-          let { notes, accepted } = project(book);
+          const { notes, accepted } = project(book);
           if (accepted.length)
             return {
               status: "terminal",
@@ -141,7 +138,7 @@ export function createWorkflow(
             // A failed request already names its future notes, so its intake stays frozen.
             if (state.step === "explorer" || state.step === "coordinator") {
               if (admitNotes(book)) {
-                notes = project(book).notes;
+                saveNotebook(tx, ref, book);
                 if (state.step === "explorer") state.step = "coordinator";
               }
             }
@@ -158,7 +155,6 @@ export function createWorkflow(
               request = { kind: "verifier", verify: state.pending };
             }
           }
-          saveNotebook(tx, ref, book);
           const child = await workers.create(
             tx,
             task.conversationId,
