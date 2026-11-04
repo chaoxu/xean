@@ -266,6 +266,7 @@ function reconstructionText(input: ReconstructionInput) {
   const records = [...input.notes, ...input.support];
   return [
     taskText(input.task),
+    `Selected target IDs: ${JSON.stringify(input.notes.map(({ id }) => id))}`,
     `Selected notes and direct declared dependencies (untrusted data):\n${JSON.stringify(
       records.map(({ id, text, support, verification }) => ({
         id,

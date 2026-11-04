@@ -425,6 +425,7 @@ test("initial and corrected blind calls contain scoped statements without any or
     "INDEPENDENT_OLD_ARGUMENT",
   );
   for (const call of [extract, comparison]) {
+    expect(call.prompt).toContain('Selected target IDs: ["n2","n3"]');
     for (const generatedNote of generated)
       expect(call.prompt).toContain(generatedNote.text);
     expect(call.system).toContain(

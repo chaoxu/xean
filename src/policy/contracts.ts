@@ -364,7 +364,7 @@ export function reconstructionResultFor(
       value.statements.length
         ? exactIds(value.statements, statements)
         : exactIds(value.verdicts, roots),
-    "one entry per note under reconstruction",
+    `Return verdicts only for selected target IDs: ${roots.join(", ")}. Statement corrections must cover IDs: ${statements.join(", ")}.`,
   );
 }
 

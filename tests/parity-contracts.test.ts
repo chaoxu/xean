@@ -130,6 +130,17 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
     report: "Checked.",
   });
   const verdicts = [verdict(support.id), verdict(target.id)];
+  const conditional = reconstructionCall(
+    { ...input, notes: [target], support: [support] },
+    value,
+    "Conditional target proof.",
+  );
+  const extra = conditional.schema.safeParse({ statements: [], verdicts });
+  expect(extra.success).toBe(false);
+  if (!extra.success)
+    expect(extra.error.issues[0]!.message).toBe(
+      `Return verdicts only for selected target IDs: ${target.id}. Statement corrections must cover IDs: ${support.id}, ${target.id}.`,
+    );
   expect(compare.schema.safeParse({ statements: [], verdicts }).success).toBe(
     true,
   );
