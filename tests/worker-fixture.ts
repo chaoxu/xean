@@ -17,6 +17,7 @@ import { Assignment } from "../src/role-runtime.ts";
 import { Notebook, readNotebook } from "../src/state.ts";
 import type { CallDescriptor } from "../src/policy/prompts.ts";
 import type { WorkerRequest } from "../src/workers.ts";
+import { reconstructionStatementIds } from "../src/policy/contracts.ts";
 
 export { context };
 export const problem = {
@@ -73,9 +74,9 @@ export const complete: Respond = ({ descriptor }): JsonValue => {
       return checks(descriptor.judged);
     case "statement":
       return {
-        statements: descriptor.input.notes.map((note) => ({
-          note: note.id,
-          statement: `Exact claim ${note.id}.`,
+        statements: reconstructionStatementIds(descriptor.input).map((id) => ({
+          note: id,
+          statement: `Exact claim ${id}.`,
         })),
       };
     case "proof":

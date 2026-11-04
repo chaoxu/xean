@@ -63,7 +63,6 @@ export const Assignment = defineDoc({
   initial: (): Assignment => ({}),
 });
 type Receipt = { call: EntryId; value: JsonValue; fresh: boolean };
-type AllowNew = (frozen: CallDescriptor) => Promise<boolean>;
 async function receipt(
   tx: Tx,
   conversationId: ConversationId,
@@ -310,23 +309,6 @@ export function createRoleRuntime() {
     ],
   });
 
-  function run(
-    runtime: Runtime,
-    key: string,
-    descriptor: CallDescriptor,
-    profile: PiRoleProfile,
-    context: Context,
-    previousTasks?: readonly number[],
-  ): Promise<Receipt>;
-  function run(
-    runtime: Runtime,
-    key: string,
-    descriptor: CallDescriptor,
-    profile: PiRoleProfile,
-    context: Context,
-    previousTasks: readonly number[] | undefined,
-    allowNew: AllowNew,
-  ): Promise<Receipt | undefined>;
   async function run(
     runtime: Runtime,
     key: string,
@@ -334,8 +316,7 @@ export function createRoleRuntime() {
     profile: PiRoleProfile,
     context: Context,
     previousTasks: readonly number[] = [],
-    allowNew?: AllowNew,
-  ): Promise<Receipt | undefined> {
+  ): Promise<Receipt> {
     const requested = copyJson(
       { key, descriptor, profile },
       { omitUndefinedProperties: true },
@@ -344,7 +325,6 @@ export function createRoleRuntime() {
       descriptor.kind === "explorer" || descriptor.kind === "selection";
     let assignment = requested;
     let frozen = false,
-      admitted = false,
       fresh = true;
     let conversationId: ConversationId | undefined;
     let conversation: ConversationHandle | undefined;
@@ -395,9 +375,9 @@ export function createRoleRuntime() {
               }
               if (current) {
                 conversationId = child.id;
-                admitted =
-                  (await tx.submissionByRequest(child.id, key)) !== undefined;
-                fresh = strict ? result === undefined : !admitted;
+                fresh = strict
+                  ? result === undefined
+                  : (await tx.submissionByRequest(child.id, key)) === undefined;
                 return;
               }
               if (result) {
@@ -410,9 +390,6 @@ export function createRoleRuntime() {
         }
       }, context);
       if (recovered) return recovered;
-      // Existing native submissions settle before adverse evidence can stop a NEW call.
-      if (!admitted && allowNew && !(await allowNew(assignment.descriptor)))
-        return;
       const call = resolveCall(assignment.descriptor);
       if (conversationId === undefined)
         await runtime.commit(async (tx) => {

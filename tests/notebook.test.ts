@@ -216,19 +216,40 @@ test("read-only inspection rejects append before changing either database", asyn
 
 test("external edits cannot retarget accepted text, support or verdicts in admitted snapshots", async () => {
   const f = await fixture();
-  const note = { id: "w9.1", text: "Original proof of P.", support: [] };
+  const premise = { id: "w8.1", text: "Original lemma.", support: [] };
+  const note = {
+    id: "w9.1",
+    text: "Original proof of P.",
+    support: [premise.id],
+  };
+  await f.publish([premise], "worker/8");
   await f.publish([note], "worker/9");
   await f.root.commit(async (tx) => {
-    (await tx.doc(Notebook, f.root.id)).checks.push({
-      candidate: 9,
-      call: 20,
-      values: verifierNames.map((verifier) => ({
-        note: note.id,
-        verifier,
-        verdict: "PASS",
-        report: "Checked.",
-      })),
-    });
+    const ref = await tx.doc(Notebook, f.root.id);
+    ref.checks.push(
+      {
+        candidate: 8,
+        call: 19,
+        values: verifierNames
+          .filter((name) => name !== "requirements")
+          .map((verifier) => ({
+            note: premise.id,
+            verifier,
+            verdict: "PASS",
+            report: "Checked lemma.",
+          })),
+      },
+      {
+        candidate: 9,
+        call: 20,
+        values: verifierNames.map((verifier) => ({
+          note: note.id,
+          verifier,
+          verdict: "PASS",
+          report: "Checked.",
+        })),
+      },
+    );
   }, context);
   const before = project(await f.snapshot());
   const proof = acceptedArgument(before.notes, note.id);
@@ -237,6 +258,11 @@ test("external edits cannot retarget accepted text, support or verdicts in admit
   store.commit(
     store.snapshot(),
     {
+      [premise.id]: {
+        ...premise,
+        text: "Changed lemma.",
+        support: ["unknown"],
+      },
       [note.id]: {
         ...note,
         text: "Different false claim.",

@@ -1,6 +1,5 @@
-// Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
+// Conditional local verification policy derived from Xean v1.0.0 (949a385).
 import { z } from "zod";
-import { noteOrder } from "./support";
 
 export const nonblank = z.string().refine((value) => value.trim().length > 0, {
   message: "must contain non-whitespace text",
@@ -11,6 +10,7 @@ export const applicationId = "xean-solve";
 
 export type RoleName = "explorer" | "selection" | "verifier";
 const establishingVerifiers = ["source", "correctness"] as const;
+const localVerifiers = ["source", "correctness", "reconstruction"] as const;
 /** The verifiers in the order they run; selection asks for a prefix of this order. */
 export const verifierNames = [
   ...establishingVerifiers,
@@ -19,7 +19,7 @@ export const verifierNames = [
 ] as const;
 export type VerifierName = (typeof verifierNames)[number];
 export const establishes = (passed: (name: VerifierName) => boolean) =>
-  establishingVerifiers.every(passed);
+  localVerifiers.every(passed);
 /** The submit tool for each mathematical assignment. */
 export const submissionTools = {
   explorer: "submit_notes",
@@ -52,11 +52,13 @@ const supportIds = z
     message: "support ids must be distinct",
   });
 // The projection derives the flags from verifier evidence, caller attestations,
-// and support edges. A note is verified after source and correctness pass or
-// external verification is supplied, over verified support, and is not dead.
-// It is dead when correctness, source, or reconstruction failed it or its support
-// is dead, so it can never be verified. A note is accepted when one
-// verification passed every verifier.
+// and support edges. `checked` means that source, correctness, and
+// reconstruction passed for the note in one attempt (or an external
+// attestation supplied the result). `verified` additionally requires every
+// declared support note to be verified and the note not to be dead. A note is
+// dead when its own source, correctness, or reconstruction check failed, or a
+// support note is dead. Acceptance still requires all four verifiers in one
+// attempt.
 export const externalVerification = z.strictObject({
   source: nonblank,
   report: nonblank,
@@ -86,6 +88,7 @@ export const note = z.strictObject({
   text: nonblank,
   support: supportIds,
   verdicts: z.array(verdict),
+  checked: z.boolean(),
   verified: z.boolean(),
   dead: z.boolean(),
   verification: externalVerification.optional(),
@@ -166,7 +169,7 @@ export type SelectionInput = {
   verifyOnSolution?: boolean;
 };
 
-/** One entry of a verify list: a note and the verifiers to run on it, a prefix of the verifier order. */
+/** One entry of a verify list: a note and a local-check prefix. */
 const verification = z
   .strictObject({
     note: noteId,
@@ -174,9 +177,10 @@ const verification = z
   })
   .refine(
     (value) =>
-      value.verifiers.every((name, index) => name === verifierNames[index]),
+      value.verifiers.every((name, index) => name === verifierNames[index]) ||
+      value.verifiers.every((name, index) => name === localVerifiers[index]),
     {
-      message: `verifiers must be a prefix of ${verifierNames.join(", ")}`,
+      message: "verifiers must be a valid local-check prefix",
       path: ["verifiers"],
     },
   );
@@ -190,9 +194,6 @@ export function selectionResultFor(
   notes: readonly Pick<Note, "id" | "support" | "verified" | "dead">[],
 ) {
   const known = new Set(notes.map(({ id }) => id));
-  const verified = new Set(
-    notes.filter(({ verified }) => verified).map(({ id }) => id),
-  );
   return selectionResult.superRefine((value, ctx) => {
     distinctKnown(
       known,
@@ -200,10 +201,6 @@ export function selectionResultFor(
       ctx,
       ["verify"],
     );
-    // A note is verified only over verified support: every note in its
-    // support is verified already or listed earlier with the correctness
-    // verifier, so it is verified in the same verification first.
-    const listedWithCorrectness = new Set<string>();
     for (const [index, entry] of value.verify.entries()) {
       const target = notes.find(({ id }) => id === entry.note);
       if (target === undefined) continue;
@@ -213,21 +210,6 @@ export function selectionResultFor(
           message: "a dead note is not verified again",
           path: ["verify", index, "note"],
         });
-      }
-      if (
-        target.support.some(
-          (id) => !verified.has(id) && !listedWithCorrectness.has(id),
-        )
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            "a note is verified only after every note in its support is verified or listed earlier with the correctness verifier",
-          path: ["verify", index, "note"],
-        });
-      }
-      if (establishes((name) => entry.verifiers.includes(name))) {
-        listedWithCorrectness.add(entry.note);
       }
     }
   });
@@ -240,12 +222,18 @@ export type VerifierInput = {
   support: Note[];
   order: string[];
 };
-export type ReconstructionPremise = Statement["statements"][number] &
-  Pick<Note, "support">;
 export type ReconstructionInput = Pick<
   VerifierInput,
   "task" | "notes" | "support" | "order"
-> & { premises?: ReconstructionPremise[] };
+>;
+
+/** IDs extracted as exact claims: selected roots followed by direct premises. */
+export function reconstructionStatementIds(
+  input: ReconstructionInput,
+): string[] {
+  const known = new Set([...input.notes, ...input.support].map(({ id }) => id));
+  return input.order.filter((id) => known.has(id));
+}
 
 export function pick<T extends { readonly id: string }>(
   notes: readonly T[],
@@ -257,9 +245,9 @@ export function pick<T extends { readonly id: string }>(
 }
 
 /**
- * Requested roots whose preceding checks and support permit the next verifier.
- * Joint reconstruction expands these roots separately, so supporting lemmas
- * need no requirements PASS or explicit reconstruction request.
+ * Requested roots whose own preceding checks permit the next verifier.
+ * Declared support is conditional input for local checks; dependency status is
+ * resolved by projection after the local receipt rather than gating this call.
  */
 export function judgedBy(
   input: Pick<VerifierInput, "verify" | "notes" | "support" | "order">,
@@ -269,10 +257,13 @@ export function judgedBy(
   const known = new Map(
     [...input.notes, ...input.support].map((note) => [note.id, note]),
   );
-  const preceding = verifierNames.slice(0, verifierNames.indexOf(verifier));
-  const supportChecks = establishingVerifiers.filter((name) =>
-    preceding.includes(name),
-  );
+  const preceding =
+    verifier === "reconstruction"
+      ? (["source", "correctness"] as readonly VerifierName[])
+      : (verifierNames.slice(
+          0,
+          verifierNames.indexOf(verifier),
+        ) as readonly VerifierName[]);
   const passes = new Set<string>();
   const failures = new Set<string>();
   for (const value of recorded) {
@@ -280,35 +271,15 @@ export function judgedBy(
     if (value.verdict === "PASS") passes.add(`${value.note}/${value.verifier}`);
     if (invalidatesNote(value)) failures.add(value.note);
   }
-  const dead = new Set<string>(),
-    supported = new Set<string>();
-  const order = noteOrder(input.order.map((id) => ({ id })));
-  for (const note of [...known.values()].sort((a, b) => order(a.id, b.id))) {
-    if (
-      note.dead ||
-      failures.has(note.id) ||
-      note.support.some((id) => dead.has(id))
-    )
-      dead.add(note.id);
-    if (
-      !dead.has(note.id) &&
-      note.support.every(
-        (id) =>
-          !dead.has(id) &&
-          (known.get(id)?.verified === true ||
-            (supported.has(id) &&
-              supportChecks.every((name) => passes.has(`${id}/${name}`)))),
-      )
-    )
-      supported.add(note.id);
-  }
+  const dead = new Set<string>();
+  for (const note of known.values())
+    if (note.dead || failures.has(note.id)) dead.add(note.id);
   return input.verify
     .filter(
       (entry) =>
         entry.verifiers.includes(verifier) &&
         preceding.every((name) => passes.has(`${entry.note}/${name}`)) &&
-        !dead.has(entry.note) &&
-        supported.has(entry.note),
+        !dead.has(entry.note),
     )
     .map(({ note }) => note);
 }
@@ -384,18 +355,20 @@ export const reconstructionResult = z
     "return either all verdicts or a complete statement correction",
   );
 
-export function reconstructionResultFor(judged: readonly string[]) {
+export function reconstructionResultFor(
+  roots: readonly string[],
+  statements: readonly string[] = roots,
+) {
   return reconstructionResult.refine(
     (value) =>
-      exactIds(
-        value.statements.length ? value.statements : value.verdicts,
-        judged,
-      ),
+      value.statements.length
+        ? exactIds(value.statements, statements)
+        : exactIds(value.verdicts, roots),
     "one entry per note under reconstruction",
   );
 }
 
-/** Joint proof from the statement batch and admitted source premises. */
+/** Separately scoped conditional proofs for the selected statement batch. */
 export const proof = z.strictObject({ proof: nonblank });
 
 /** What the source verifier confirmed: one entry per external result the text invokes. */

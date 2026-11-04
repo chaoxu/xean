@@ -46,7 +46,8 @@ notes may omit them and remain available through full reads.
 Keep exact hypotheses, conventions, conclusions, and limitations in the note.
 Put citations and URLs in its text. A paper title or link alone does not supply
 the mathematical content. Generated arguments declare their dependencies so
-verification can check the supporting chain.
+each proof can be checked conditionally on those exact statements. Dependencies
+can be selected and checked independently.
 
 ## Should literature search happen before a run?
 
@@ -97,13 +98,11 @@ See [reading notes](../README.md#reading-notes) and
 
 Ordinary submitted notes receive normal checks when selected for verification.
 The caller can explicitly admit an established result through the optional
-`verification` attestation. That grants source and correctness trust when the
-note serves as support. It is a deliberate premise grant, not a flag indicating
-that a citation is present. Preserve conjectures, gaps, and uncertain source
-matches as unresolved.
+`verification` attestation. That supplies local trust for `checked`, unless the
+note has an invalidating FAIL. Dependencies must still verify before the note is
+`verified`. Preserve conjectures, gaps, and uncertain source matches as unresolved.
 
-A directly nominated candidate still receives its requested checks and
-reconstruction. [The README](../README.md#supply-papers-and-notes) specifies the
+A candidate still requires all four checks in one attempt. [The README](../README.md#supply-papers-and-notes) specifies the
 attestation and dependency rules.
 
 ## Can a run produce useful work without solving the problem?
@@ -117,9 +116,16 @@ support.
 ## What does an accepted result mean?
 
 The candidate passed source, correctness, requirements, and reconstruction in
-the same verification attempt. Generated dependencies
-also require reconstruction, with reuse of successful supporting reconstructions
-from the same campaign. Admitted verified source dependencies are premise leaves.
+the same attempt and is `verified`. A note is `checked` after source, correctness,
+and reconstruction pass together, or through a caller attestation, unless it has
+an invalidating FAIL. It becomes `verified` when all declared dependencies are
+verified and none is dead.
+
+A local proof check treats exact dependency statements as assumptions. Each
+dependency needs local proof checks or a caller attestation. If a dependency
+receives an invalidating FAIL, the dependent note becomes dead while retaining
+its local `checked` evidence. An in-flight conditional check may finish. Changed premises require
+new notes and new checks.
 
 Acceptance is an internal model assessment. The controlling agent should arrange
 independent review before treating a result as established. Model review also

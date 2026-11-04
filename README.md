@@ -24,7 +24,7 @@ below describe the current CLI and library.
 
 ## Start a campaign
 
-This checkout is `5.0.0-dev.2` and requires fresh campaign databases. Use Bun
+This checkout is `5.0.0-dev.3` and requires fresh campaign databases. Use Bun
 1.4.2 or later on macOS or Linux. From an extracted archive or source checkout:
 
 ```sh
@@ -124,10 +124,11 @@ as a premise, the caller may add:
 }
 ```
 
-This attestation grants source and correctness trust when the note serves as
-support. A directly nominated candidate still requires its requested checks and
-reconstruction. Admit results only at their exact scope, retain conjectures and
-gaps as such, and check applications. `verified` is derived, not a submitted field.
+This attestation supplies local trust for `checked`, unless the note has an
+invalidating FAIL. Its dependencies must still verify before it becomes
+`verified`. A candidate still requires all four checks in one attempt. Admit
+results only at their exact scope, retain conjectures and gaps as such, and check
+applications. `checked` and `verified` are derived, not submitted fields.
 
 Mathematical text is append-only. Corrections use new notes. For short, fallible
 advice to the next fresh Explorer call, close the owner and use:
@@ -180,27 +181,40 @@ until a Verifier selects a claimed complete solution, initialize with:
 bun run xean init task.json .xean/deferred.sqlite settings.json --verify-on-solution
 ```
 
-The flag sets `verifyOnSolution: true`, also accepted in settings. All checks,
-including source search, wait until that selection. Only selected candidates and
-their declared dependency closure are checked. Verification timing is frozen at
-`init`. If no solution is accepted, exploration continues while turns remain.
+The flag sets `verifyOnSolution: true`, also accepted in settings. Selection must
+include a claimed solution with all four checks. It may also explicitly select
+that solution's dependencies for source, correctness, and reconstruction checks.
+Checks are limited to explicitly selected notes that are claimed solutions or
+ancestors of those solutions. Dependencies are never added to the batch implicitly.
+Verification timing is frozen at `init`. If no solution is accepted, exploration
+continues while turns remain.
 
-Acceptance requires source, correctness, requirements, and reconstruction PASS
-in one attempt. Joint reconstruction covers the candidate and generated dependency
-closure. Selected candidates receive fresh reconstruction. Supporting notes may
-reuse successful reconstruction from the same campaign, and admitted verified
-source dependencies are premise leaves. Blind proof input contains extracted
-statements, declared support IDs, and admitted or reused premises. Extraction and
-comparison see the original texts. The blind proof request omits the original
-target proof fields and verifier reports, but extracted statements can still
-disclose proof methods. `verified` establishes source and correctness
-over verified support, rather than task completion.
+Verification checks selected notes conditionally on their exact frozen dependency
+statements. Those statements are assumptions even when their proofs are unresolved.
+Selected notes are claimed together. Dependencies are checked and claimed only
+when separately selected. A useful lemma needs source, correctness, and
+reconstruction PASS in one attempt. Requirements checking is optional for lemmas.
+A candidate needs all four checks in one attempt.
+
+`checked` records successful local proof checks or a caller attestation, provided
+the note itself has no invalidating FAIL. `verified` additionally requires every
+declared dependency to be verified and the note not to be dead. Acceptance
+requires `verified` and all four PASS results in one attempt.
+
+Statement extraction handles selected notes and their direct dependencies together.
+Blind reconstruction receives only scoped statements, without original candidate
+or dependency proof texts or verifier reports. The proof model is asked to
+establish each selected conclusion from that note's declared premises. Extraction
+and comparison see the original texts, and extracted statements can still disclose
+proof methods.
 
 Source, correctness, or reconstruction FAIL makes a note and its dependents dead.
-Requirements FAIL can leave a useful partial result verified. INCONCLUSIVE leaves
-the check unresolved without marking the note defective. Models can make mistakes.
-Acceptance and independent model review are separate assessments, neither a formal
-proof certificate.
+A dependency failure preserves the dependent note's local `checked` evidence, and
+an in-flight conditional check may finish. Requirements FAIL does not invalidate
+a local proof. INCONCLUSIVE leaves the check unresolved. Changing a premise
+statement requires new notes and new dependent checks, without reviving old
+notes. Acceptance and independent model review remain separate assessments,
+neither a formal proof certificate.
 
 ### Source verification
 
@@ -273,7 +287,8 @@ for destroying rigidity, matroid t-connectivity, and First Proof P10. The
 comparison. This bounded validation does not establish general mathematical
 nonregression or formal certification.
 
-A `gpt-6-luna` live smoke at `d475f1c` showed overlapping requests within Explorer
+Before conditional verification, a `gpt-6-luna` live smoke at `d475f1c` showed
+overlapping requests within Explorer
 and explicitly assigned Verifier groups and produced correct elementary proofs.
 Independent review passed manual blind reconstruction but found that the automatic
 run's extraction model included the original proof method and its comparison model
@@ -299,10 +314,13 @@ These results add no checks. Wait on the returned native task ID with
 `owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
 the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
 
-Default Verifiers created together receive separate subsets of note IDs, each
-expanded to include all ancestor notes and frozen at admission. An empty view
-returns `no-work` without a model call. Shared ancestors can still cause `busy`,
-and equivalent mathematics can appear under different note IDs.
+Default Verifiers created together receive separate subsets of target notes,
+frozen at admission. With `verifyOnSolution`, selection views also include all
+declared ancestors so Verifiers can explicitly select dependency checks.
+Checking supplies each target's direct dependency statements. An empty selection view returns
+`no-work` without a model call. Only selected targets can cause `busy`. Shared
+dependencies are assumptions, and equivalent mathematics can still appear under
+different note IDs.
 
 [The worker example](examples/workers.ts) runs an Explorer followed by a default
 Verifier:
@@ -356,7 +374,7 @@ bun run pack
 ```
 
 `check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
-and writes `dist/xean-5.0.0-dev.2.tgz`. `bun run check:distribution` checks packaging
+and writes `dist/xean-5.0.0-dev.3.tgz`. `bun run check:distribution` checks packaging
 without retaining an archive.
 
 ## Citing `xean`

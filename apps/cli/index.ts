@@ -17,7 +17,7 @@ import { cliModels } from "./models.ts";
 const print = (value: unknown) =>
   Bun.write(Bun.stdout, JSON.stringify(value, null, 2) + "\n");
 const program = new Command("xean")
-  .description("Mathematical research with joint dependency reconstruction")
+  .description("Mathematical research with conditional note verification")
   .version(version);
 program
   .command("init <task> <campaign> <settings>")

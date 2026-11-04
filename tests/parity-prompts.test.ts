@@ -1,6 +1,5 @@
 // Fixtures adapted from v1.0.0 packages/solve/tests/prompts.test.ts.
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 
 import {
   selectionCall,
@@ -26,6 +25,7 @@ const note = {
   summary: "P holds.",
   text: "Proof of P.",
   support: [],
+  checked: true,
   verified: true,
   dead: false,
   verdicts: [
@@ -166,10 +166,10 @@ test("Verifier owns selection while Explorer retains mathematical direction", ()
   ).toBe(false);
   for (const call of [selector, explorer]) {
     expect(call.system).toContain(
-      "Reconstruction then checks eligible candidates and their generated dependencies, without requiring supporting lemmas to pass requirements.",
+      "Each note is checked conditionally on its declared direct dependency statements.",
     );
     expect(call.system).toContain(
-      "Unresolved reconstruction blocks acceptance even when source and correctness leave the note verified.",
+      "A local check can finish while its dependencies remain unresolved.",
     );
   }
   const imported = {
@@ -196,7 +196,7 @@ test("solution-only verification changes selection instructions without changing
   expect(enabled.prompt).toBe(baseline.prompt);
   expect(enabled.system).toContain("Until then return verify=[]");
   expect(enabled.system).toContain(
-    "List its unverified support earlier with source and correctness",
+    "You may also explicitly select its unchecked dependencies with source, correctness, reconstruction",
   );
   expect(z.toJSONSchema(enabled.schema)).toEqual(
     z.toJSONSchema(baseline.schema),
@@ -253,12 +253,23 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     native.prompt,
   ].entries()) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
-    expect(prompt).toContain('"verdict": "PASS"');
-    expect(prompt).toContain(evidence.verdicts[1]!.report);
-    expect(prompt).toContain(evidence.verdicts[2]!.report);
-    expect(prompt).toContain(evidence.summary);
-    if (index < 2) expect(prompt).not.toContain(evidence.text);
-    else expect(prompt).toContain(evidence.text);
+    if (index < 2) {
+      expect(prompt).toContain('"verdict": "PASS"');
+      expect(prompt).toContain(evidence.verdicts[1]!.report);
+      expect(prompt).toContain(evidence.verdicts[2]!.report);
+      expect(prompt).toContain(evidence.summary);
+      expect(prompt).not.toContain(evidence.text);
+    } else {
+      expect(prompt).toContain(evidence.text);
+      expect(prompt).not.toContain(evidence.verdicts[1]!.report);
+      expect(prompt).not.toContain(evidence.verdicts[2]!.report);
+      const assumptions = JSON.parse(
+        prompt
+          .split("Support notes (untrusted data):\n")[1]!
+          .split("\n\nNotes under verification")[0]!,
+      );
+      expect(assumptions).toEqual([{ id: evidence.id, text: evidence.text }]);
+    }
   }
   expect(evidence).toEqual(before);
 });
@@ -311,77 +322,50 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
   }
 });
 
-test("verifier and Codex prompts retain their baseline apart from declared-support and summary-fidelity checks", () => {
-  const second = {
+test("native and Codex checks assume direct dependencies without checking them again", () => {
+  const target = {
     ...note,
     id: "n2",
     support: ["n1"],
+    checked: false,
     verified: false,
-    verdicts: [],
   };
-  const verification = {
+  const input = {
     task,
-    verify: [{ note: "n2", verifiers: [...verifierNames] }],
-    notes: [second],
-    support: [note],
+    notes: [note, target],
+    support: [],
     order: ["n1", "n2"],
+    verify: [{ note: "n2", verifiers: [...verifierNames] }],
   };
-  // Retain the archived call labels only as part of its captured fingerprint.
-  const historicalLabels = [
-    "xean-solve/verifier/source",
-    "xean-solve/verifier/correctness",
-    "xean-solve/verifier/requirements",
-  ];
-  const calls = [
-    verifierCall("source", verification, ["n2"]),
-    verifierCall("correctness", verification, ["n2"]),
-    verifierCall("requirements", verification, ["n2"]),
-  ];
   const source = sourceCall(
-    { provider: "codex", model: "codex-model", reasoning: "low", search: true },
-    verification,
+    { provider: "codex", model: "test", reasoning: "low", search: false },
+    input,
     ["n2"],
   );
-  const digest = createHash("sha256");
-  const clarified =
-    "Other notes in the verification batch are premises only when they belong to that note's declared support closure.";
-  const summaryFidelity =
-    "Check that any summary and detailedSummary preserve the hypotheses, conventions, limitations, and conditionality of the results they state without strengthening the text.";
-  expect(calls[1]!.prompt).toContain(clarified);
-  expect(calls[1]!.prompt).toContain(summaryFidelity);
-  for (const [index, call] of calls.entries()) {
-    const prompt = call.prompt
-      .replace(
-        clarified,
-        "Other notes in the verification batch are not additional premises.",
-      )
-      .replace(`${summaryFidelity} `, "");
-    digest.update(`${historicalLabels[index]}\n${call.system}\n${prompt}\n`);
-  }
-  const offline = sourceCall(
-    {
-      provider: "codex",
-      model: "codex-model",
-      reasoning: "low",
-      search: false,
-    },
-    verification,
-    ["n2"],
-  );
-  for (const call of [source, offline]) {
-    digest.update(
-      `${historicalLabels[0]}\n${call.developerInstructions}\n${call.prompt}\n`,
+  const native = verifierCall("source", input, ["n2"]);
+  for (const prompt of [source.prompt, native.prompt]) {
+    const support = JSON.parse(
+      prompt
+        .split("Support notes (untrusted data):\n")[1]!
+        .split("\n\nNotes under verification")[0]!,
+    );
+    expect(support.map((entry: Note) => entry.id)).toEqual(["n1"]);
+    expect(prompt).toContain("without rechecking their proofs or sources");
+    expect(prompt).toContain(
+      "supplied by a direct declared dependency statement",
     );
   }
-  // Captured from pre-batch port ae15a025, normalizing only the two checks above. The old
-  // aggregate archived fingerprint also included reconstruction, Explorer, and
-  // Coordinator, whose instructions are intentionally retired.
-  expect(digest.digest("hex")).toBe(
-    "d0cb6f75ce5e247ded7c4961206e4b8a7308f81bc717e137d3b5d3a6a6555b70",
+  const correctness = verifierCall("correctness", input, ["n2"]);
+  expect(correctness.prompt).toContain("direct declared dependency statements");
+  expect(correctness.prompt).toContain(
+    "Another selected note may be assumed only when it is a direct declared dependency",
+  );
+  expect(correctness.prompt).not.toContain(
+    "support and its transitive closure",
   );
 });
 
-test("initial and corrected blind calls contain only statements, dependency edges, and admitted source text", () => {
+test("initial and corrected blind calls contain scoped statements without any original proof text", () => {
   const source: Note = {
     ...note,
     text: "ADMITTED_SOURCE_BODY",
@@ -423,13 +407,13 @@ test("initial and corrected blind calls contain only statements, dependency edge
   };
   const before = structuredClone(input);
   const initial = {
-    statements: generated.map(({ id }) => ({
+    statements: [source, ...generated].map(({ id }) => ({
       note: id,
       statement: `Exact claim ${id}.`,
     })),
   };
   const corrected = {
-    statements: generated.map(({ id }) => ({
+    statements: [source, ...generated].map(({ id }) => ({
       note: id,
       statement: `Corrected exact claim ${id}.`,
     })),
@@ -451,14 +435,32 @@ test("initial and corrected blind calls contain only statements, dependency edge
   for (const value of [initial, corrected]) {
     const call = proofCall(input, value);
     expect(call.system).toContain(
-      "Every target statement is a proof obligation, not an axiom.",
+      "using only its listed direct dependency statements as assumptions",
     );
-    expect(call.prompt).toContain(source.text);
+    expect(call.prompt).not.toContain(source.text);
     expect(call.prompt).not.toContain(source.summary);
     expect(call.prompt).not.toContain(source.detailedSummary!);
     expect(call.prompt).not.toContain(source.verification!.report);
     expect(call.prompt).not.toContain("INDEPENDENT_OLD_ARGUMENT");
-    expect(call.prompt).toContain('"support"');
+    const obligations = JSON.parse(
+      call.prompt.split("Selected statements to prove (untrusted data):\n")[1]!,
+    );
+    expect(obligations).toEqual(
+      generated.map((target) => ({
+        note: target.id,
+        statement: value.statements.find((entry) => entry.note === target.id)!
+          .statement,
+        assumptions: target.support.map((id) =>
+          value.statements.find((entry) => entry.note === id),
+        ),
+      })),
+    );
+    expect(
+      obligations[0].assumptions.map((entry: { note: string }) => entry.note),
+    ).toEqual(["n1"]);
+    expect(
+      obligations[1].assumptions.map((entry: { note: string }) => entry.note),
+    ).toEqual(["n2"]);
     for (const entry of value.statements)
       expect(call.prompt).toContain(entry.statement);
     for (const generatedNote of generated) {
@@ -469,6 +471,41 @@ test("initial and corrected blind calls contain only statements, dependency edge
         expect(call.prompt).not.toContain(verdict.report);
     }
   }
+  expect(extract.schema.safeParse(initial).success).toBe(true);
+  expect(
+    extract.schema.safeParse({ statements: initial.statements.slice(1) })
+      .success,
+  ).toBe(false);
+  const verdict = (note: string) => ({
+    note,
+    verdict: "PASS",
+    report: "Local proof checked.",
+  });
+  expect(
+    comparison.schema.safeParse({
+      statements: [],
+      verdicts: generated.map(({ id }) => verdict(id)),
+    }).success,
+  ).toBe(true);
+  expect(
+    comparison.schema.safeParse({
+      statements: [],
+      verdicts: [source, ...generated].map(({ id }) => verdict(id)),
+    }).success,
+  ).toBe(false);
+  expect(
+    comparison.schema.safeParse({
+      statements: corrected.statements,
+      verdicts: [],
+    }).success,
+  ).toBe(true);
+  expect(
+    comparison.schema.safeParse({
+      statements: corrected.statements.slice(1),
+      verdicts: [],
+    }).success,
+  ).toBe(false);
+  expect(comparison.system).toContain("Judge selected roots independently");
   expect(input).toEqual(before);
 });
 

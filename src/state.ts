@@ -28,7 +28,10 @@ export const DefinitionDoc = defineDoc({
     settings: null,
   }),
 });
-export type StoredNote = Omit<Note, "verdicts" | "verified" | "dead">;
+export type StoredNote = Omit<
+  Note,
+  "verdicts" | "checked" | "verified" | "dead"
+>;
 export type Check = { candidate: number; call: number; values: Verdict[] };
 export type NotebookState = {
   notes: StoredNote[];
@@ -156,26 +159,25 @@ export function appendNotes(
   return version;
 }
 
-/** Reconstruction can use earlier successful proofs of immutable dependencies. */
+/** Local proof checks establish a note once its immutable dependencies verify. */
 export function project(book: NotebookState): {
   notes: Note[];
   accepted: string[];
-  reconstructed: Record<string, number>;
 } {
-  const reports: Record<string, Verdict[]> = {};
-  const passes: Record<string, Record<number, Map<string, number>>> = {};
-  for (const [index, check] of book.checks.entries())
+  const reports: Record<string, Verdict[]> = Object.create(null);
+  const passes: Record<string, Record<number, Set<string>>> = Object.create(
+    null,
+  );
+  for (const check of book.checks)
     for (const verdict of check.values) {
       (reports[verdict.note] ??= []).push(verdict);
       if (verdict.verdict !== "PASS") continue;
       const attempts = (passes[verdict.note] ??= {});
-      const passed = (attempts[check.candidate] ??= new Map());
-      passed.set(verdict.verifier, index);
+      const passed = (attempts[check.candidate] ??= new Set());
+      passed.add(verdict.verifier);
     }
   const notes = new Map<string, Note>(),
     accepted: string[] = [];
-  const first = new Map<string, number>();
-  const reconstructed: Record<string, number> = {};
   const order = noteOrder(book.notes);
   for (const entry of book.notes) {
     for (const parent of entry.support)
@@ -183,50 +185,30 @@ export function project(book: NotebookState): {
         throw new Error(`support ${parent} must precede ${entry.id}`);
     const support = entry.support.map((id) => notes.get(id));
     const attempts = Object.values(passes[entry.id] ?? {});
-    const established =
-      entry.verification !== undefined ||
-      attempts.some((p) => establishes((name) => p.has(name)));
-    const dead =
-      reports[entry.id]?.some(invalidatesNote) ||
-      support.some((note) => note?.dead);
+    const failed = reports[entry.id]?.some(invalidatesNote) ?? false;
+    const checked =
+      !failed &&
+      (entry.verification !== undefined ||
+        attempts.some((p) => establishes((name) => p.has(name))));
+    const dead = failed || support.some((note) => note?.dead);
     const verified =
-      established && !dead && support.every((note) => note?.verified);
+      checked && !dead && support.every((note) => note?.verified);
     const note = noteSchema.parse({
       ...entry,
       support: [...entry.support].sort(order),
       verdicts: reports[entry.id] ?? [],
+      checked,
       dead,
       verified,
     });
     notes.set(note.id, note);
-    // Each candidate records one joint reconstruction batch. Parents must pass
-    // before that batch or within it; later evidence cannot repair its verdict.
-    for (const passed of attempts)
-      if (
-        !verified ||
-        !support.every(
-          (parent) =>
-            parent &&
-            (parent.verification !== undefined ||
-              (first.get(parent.id) ?? Infinity) <=
-                passed.get("reconstruction")!),
-        )
-      )
-        passed.delete("reconstruction");
-    const receipts = attempts.flatMap((p) =>
-      p.has("reconstruction") ? [p.get("reconstruction")!] : [],
-    );
-    if (receipts.length) {
-      first.set(note.id, Math.min(...receipts));
-      reconstructed[note.id] = book.checks[Math.max(...receipts)]!.call;
-    }
     if (
       verified &&
       attempts.some((p) => verifierNames.every((name) => p.has(name)))
     )
       accepted.push(note.id);
   }
-  return { notes: [...notes.values()], accepted, reconstructed };
+  return { notes: [...notes.values()], accepted };
 }
 
 export async function definition(

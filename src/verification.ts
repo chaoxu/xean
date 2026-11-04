@@ -5,6 +5,7 @@ import {
   missingVerdicts,
   proof,
   reconstructionResultFor,
+  reconstructionStatementIds,
   sourceVerdicts,
   sourceVerdictsFor,
   statementsFor,
@@ -24,25 +25,20 @@ import {
 import type { CodexRequest } from "./policy/source.ts";
 
 export interface VerificationDependencies {
-  premises?: Readonly<Record<string, string>>;
-  /** Replay completed receipts first; undefined stops before a new call on adverse evidence. */
+  /** Replay completed native receipts before making another model call. */
   call(
     key: string,
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
-  ): Promise<{ call: number; value: JsonValue; fresh: boolean } | undefined>;
+  ): Promise<{ call: number; value: JsonValue; fresh: boolean }>;
   /** The source runtime validates the structured Codex result. */
   source?(
     key: string,
     request: CodexRequest,
     judged: readonly string[],
-  ): Promise<
-    { call: number; value: z.output<typeof sourceVerdicts> } | undefined
-  >;
+  ): Promise<{ call: number; value: z.output<typeof sourceVerdicts> }>;
   recorded(): Promise<Verdict[]>;
   record(call: number, verdicts: Verdict[]): Promise<void>;
-  /** Add only this attempt's own evidence to its frozen input. */
-  refresh?(input: VerifierInput, have: Verdict[]): Promise<VerifierInput>;
 }
 
 async function reconstruct(
@@ -57,8 +53,8 @@ async function reconstruct(
     { kind: "statement", input },
     profile,
   );
-  if (!statement) return;
-  let value = statementsFor(ids).parse(statement.value);
+  const statementIds = reconstructionStatementIds(input);
+  let value = statementsFor(statementIds).parse(statement.value);
   let previous: number | undefined;
   let corrections = 0;
   for (;;) {
@@ -68,7 +64,6 @@ async function reconstruct(
       { kind: "proof", input, statement: value },
       profile,
     );
-    if (!answer) return;
     const proofValue = proof.parse(answer.value).proof;
     const result = await dependencies.call(
       `${key}/comparison/${suffix}`,
@@ -80,8 +75,9 @@ async function reconstruct(
       },
       profile,
     );
-    if (!result) return;
-    const parsed = reconstructionResultFor(ids).parse(result.value);
+    const parsed = reconstructionResultFor(ids, statementIds).parse(
+      result.value,
+    );
     if (parsed.statements.length > 0) {
       value = { statements: parsed.statements };
       previous = result.call;
@@ -105,7 +101,6 @@ export async function verify(
 ): Promise<void> {
   for (const name of verifierNames) {
     const have = await dependencies.recorded();
-    input = (await dependencies.refresh?.(input, have)) ?? input;
     if (name === "reconstruction") {
       // A comparison publishes its entire batch in one commit. Do not regroup
       // that frozen assignment from the outcomes it has already published.
@@ -113,11 +108,10 @@ export async function verify(
       const roots = judgedBy(input, have, name);
       if (roots.length === 0) continue;
       const result = await reconstruct(
-        reconstructionInput(input, roots, dependencies.premises),
+        reconstructionInput(input, roots),
         settings.reconstruction,
         dependencies,
       );
-      if (!result) return;
       await dependencies.record(
         result.call,
         result.verdicts.map((value) => ({ ...value, verifier: name })),
@@ -134,7 +128,6 @@ export async function verify(
         throw new Error("Codex source runtime is unavailable");
       const request = sourceCall(settings.source, input, judged);
       const result = await dependencies.source(key, request, judged);
-      if (!result) return;
       call = result.call;
       values = sourceVerdictsFor(judged).parse(result.value).verdicts;
     } else {
@@ -145,7 +138,6 @@ export async function verify(
         { kind: "verifier", name, input, judged },
         profile,
       );
-      if (!result) return;
       call = result.call;
       values = verdictsFor(judged).parse(result.value).verdicts;
     }

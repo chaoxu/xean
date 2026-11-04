@@ -4,13 +4,12 @@ import {
   defineExtension,
   defineTask,
   type ConversationId,
-  type EntryId,
   type TaskId,
   type TaskRecord,
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { createRoleRuntime, Assignment } from "./role-runtime.ts";
+import { createRoleRuntime } from "./role-runtime.ts";
 import {
   Notebook,
   admitNotes,
@@ -20,9 +19,7 @@ import {
   readNotebook,
 } from "./state.ts";
 import {
-  establishes,
   explorerResultFor,
-  invalidatesNote,
   noteIdAfter,
   pick,
   selectionResultFor,
@@ -34,9 +31,8 @@ import {
   type VerifierInput,
   type Verdict,
 } from "./policy/contracts.ts";
-import type { CallDescriptor } from "./policy/prompts.ts";
 import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
-import { reconstructionInput, supportClosure } from "./policy/support.ts";
+import { directSupport, supportClosure } from "./policy/support.ts";
 import { verificationPrefix } from "./policy/verification.ts";
 import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import { verify } from "./verification.ts";
@@ -51,8 +47,6 @@ type Claim = {
   kind: "verify";
   input: VerifierInput;
   settings: SolveSettings;
-  reconstruction: { note: string; call: number }[];
-  targets: string[];
 };
 export type WorkerInput = (
   | {
@@ -72,10 +66,6 @@ export type WorkerRequest =
   | { kind: "explorer"; guidance?: string }
   | { kind: "verifier"; verify?: Verification[] }
   | { kind: "retry"; task: number };
-export type VerifierResult = {
-  status: "completed" | "no-work" | "busy";
-  verify: Verification[];
-};
 type WorkerState = { phase: "run" } | { phase: "collect"; child: number };
 const workerKind = "xean.worker";
 const campaignKind = "xean.campaign";
@@ -113,60 +103,37 @@ function claims(records: readonly NativeTask[]) {
     return task.kind === workerKind &&
       task.state.status !== "terminal" &&
       input.kind === "verify"
-      ? input.targets
+      ? input.input.verify.map((entry) => entry.note)
       : [];
   });
-}
-
-/** Only this attempt's evidence changes a frozen verification input. */
-function refreshAttempt(
-  input: VerifierInput,
-  recorded: Verdict[],
-): VerifierInput {
-  const refreshed = copy(input);
-  const known = new Map(
-    [...refreshed.notes, ...refreshed.support].map((note) => [note.id, note]),
-  );
-  for (const id of refreshed.order) {
-    const note = known.get(id)!;
-    const values = recorded.filter((value) => value.note === id);
-    note.verdicts.push(...values);
-    note.dead ||=
-      values.some(invalidatesNote) ||
-      note.support.some((parent) => known.get(parent)?.dead);
-    note.verified =
-      !note.dead &&
-      (note.verified ||
-        establishes((name) =>
-          values.some(
-            (value) => value.verifier === name && value.verdict === "PASS",
-          ),
-        )) &&
-      note.support.every((parent) => known.get(parent)?.verified);
-  }
-  return refreshed;
 }
 
 function claimFor(
   input: Extract<WorkerInput, { kind: "verifier" }>,
   selected: Verification[],
   notes: Note[],
-  reconstructed: Record<string, number>,
 ): Claim | undefined {
   if (input.input.verifyOnSolution) {
     const roots = selected
-      .filter((entry) => entry.verifiers.includes("reconstruction"))
+      .filter(
+        (entry) =>
+          entry.verifiers.includes("requirements") &&
+          entry.verifiers.includes("reconstruction"),
+      )
       .map((entry) => pick(notes, entry.note));
-    const needed = new Set([
+    const related = new Set([
       ...roots.map((note) => note.id),
       ...supportClosure(roots, notes),
     ]);
-    selected = selected.filter((entry) => needed.has(entry.note));
+    selected = selected.filter((entry) => related.has(entry.note));
   }
   const batch = verificationPrefix(selected, notes, input.settings.window);
   if (!batch.length) return;
   const listed = batch.map((entry) => pick(notes, entry.note));
-  const support = supportClosure(listed, notes).map((id) => pick(notes, id));
+  const selectedIds = new Set(listed.map((note) => note.id));
+  const support = directSupport(listed, notes).filter(
+    (note) => !selectedIds.has(note.id),
+  );
   const included = new Set([...listed, ...support].map((note) => note.id));
   const verifier: VerifierInput = {
     task: input.input.task,
@@ -175,37 +142,7 @@ function claimFor(
     support,
     order: notes.filter((note) => included.has(note.id)).map((note) => note.id),
   };
-  const reconstruction = [...listed, ...support].flatMap((note) =>
-    reconstructed[note.id] === undefined
-      ? []
-      : [{ note: note.id, call: reconstructed[note.id]! }],
-  );
-  const roots = batch
-    .filter((entry) => entry.verifiers.includes("reconstruction"))
-    .map((entry) => entry.note);
-  const targets = new Set(batch.map((entry) => entry.note));
-  // Claims cover potential work after preceding checks pass. An attested
-  // premise may become usable during this batch; execution keeps its real flags.
-  const potentialPremise = (note: Note) =>
-    note.verification === undefined ? note : { ...note, verified: true };
-  // Shared admitted premises need no claim. Generated proof obligations do.
-  for (const note of reconstructionInput(
-    {
-      ...verifier,
-      notes: verifier.notes.map(potentialPremise),
-      support: verifier.support.map(potentialPremise),
-    },
-    roots,
-    Object.fromEntries(reconstruction.map((ref) => [ref.note, "reusable"])),
-  ).notes)
-    targets.add(note.id);
-  return {
-    kind: "verify",
-    input: verifier,
-    settings: input.settings,
-    reconstruction,
-    targets: [...targets],
-  };
+  return { kind: "verify", input: verifier, settings: input.settings };
 }
 
 /** Independently invoked roles retain Pi's native execution and recovery. */
@@ -271,7 +208,7 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
           }
           await runtime.commit(async (tx) => {
             const records = await tasks(tx, task.conversationId);
-            const { notes, reconstructed } = project(
+            const { notes } = project(
               readNotebook(await tx.doc(Notebook, task.conversationId)),
             );
             const parsed = selectionResultFor(notes).safeParse({
@@ -279,15 +216,10 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
             });
             if (!parsed.success)
               return completed({ status: "no-work", verify: [] });
-            const claim = claimFor(
-              input,
-              parsed.data.verify,
-              notes,
-              reconstructed,
-            );
+            const claim = claimFor(input, parsed.data.verify, notes);
             if (!claim) return completed({ status: "no-work", verify: [] });
             const occupied = new Set(claims(records));
-            if (claim.targets.some((id) => occupied.has(id))) {
+            if (claim.input.verify.some((entry) => occupied.has(entry.note))) {
               return completed({ status: "busy", verify: [] });
             }
             const child = await tx.createTask(Worker, claim, {
@@ -304,59 +236,18 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
           return;
         }
         const input = task.input;
-        const known = input.input.order.map((id) =>
-          pick([...input.input.notes, ...input.input.support], id),
-        );
-        const snapshot = async () => {
+        const recorded = async (): Promise<Verdict[]> => {
           const book = await runtime.snapshot(
             Notebook,
             task.conversationId,
             context,
           );
           if (!book) throw new Error("Campaign notebook is missing");
-          return book;
-        };
-        const recorded = async (): Promise<Verdict[]> => {
-          const book = await snapshot();
           return book.checks
             .filter((check) => check.candidate === origin)
             .flatMap((check) => check.values);
         };
-        const allowed = async (ids: readonly string[]) => {
-          const book = await snapshot();
-          const roots = ids.map((id) => pick(known, id));
-          const relevant = new Set([...ids, ...supportClosure(roots, known)]);
-          return !book.checks.some((check) =>
-            check.values.some(
-              (value) => relevant.has(value.note) && invalidatesNote(value),
-            ),
-          );
-        };
-        const relevant = (descriptor: CallDescriptor) => {
-          return descriptor.kind === "verifier"
-            ? descriptor.judged
-            : descriptor.input.notes.map((note) => note.id);
-        };
-        const premises: Record<string, string> = {};
-        await runtime.commit(async (tx) => {
-          for (const ref of input.reconstruction) {
-            const entry = await tx.entry(ref.call as EntryId);
-            if (!entry) throw new Error("Missing reconstruction receipt");
-            const { descriptor } = await tx.doc(
-              Assignment,
-              entry.conversationId,
-            );
-            if (descriptor?.kind !== "reconstruction")
-              throw new Error("Missing reconstruction assignment");
-            const statement = descriptor.statement.statements.find(
-              (value) => value.note === ref.note,
-            );
-            if (!statement) throw new Error("Missing reconstructed statement");
-            premises[ref.note] = statement.statement;
-          }
-        }, context);
         await verify(input.input, input.settings, {
-          premises,
           call: (key, descriptor, profile) =>
             roles.run(
               runtime,
@@ -365,10 +256,8 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
               profile,
               context,
               input.previousTasks,
-              (frozen) => allowed(relevant(frozen)),
             ),
           recorded,
-          refresh: async (_input, have) => refreshAttempt(input.input, have),
           record: async (id, values) => {
             await runtime.commit(async (tx) => {
               const book = await tx.doc(Notebook, task.conversationId);
@@ -397,7 +286,6 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
                 );
               return value;
             };
-            if (!(await allowed(judged))) return;
             const output = await options.source(request, runtime.signal);
             let value: ReturnType<typeof validate> | undefined;
             let error: unknown;
@@ -534,12 +422,12 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
     const occupied = new Set(claims(records));
     for (const input of prepared)
       if (typeof input !== "number" && input.kind === "verify")
-        for (const target of input.targets) {
-          if (occupied.has(target))
+        for (const { note } of input.input.verify) {
+          if (occupied.has(note))
             throw new Error(
               "Verification claim is busy; retry after competing work settles",
             );
-          occupied.add(target);
+          occupied.add(note);
         }
     for (const task of live.filter((task) => task.id !== owner)) {
       if (task.kind !== workerKind)
@@ -585,12 +473,15 @@ export function createWorkers(options: { source?: SourceExecutor } = {}) {
       (request) => request.kind === "verifier" && request.verify === undefined,
     ).length;
     const views = Array.from({ length: selectors }, (_, slot) => {
-      const roots = available.filter((_, index) => index % selectors === slot);
-      const included = new Set([
-        ...roots.map((note) => note.id),
-        ...supportClosure(roots, notes),
+      const targets = available.filter(
+        (_, index) => index % selectors === slot,
+      );
+      if (!config.settings.verifyOnSolution) return targets;
+      const related = new Set([
+        ...targets.map((note) => note.id),
+        ...supportClosure(targets, notes),
       ]);
-      return notes.filter((note) => included.has(note.id));
+      return notes.filter((note) => related.has(note.id));
     });
     let slot = 0;
     const inputs = prepared.map((request): WorkerInput | TaskId<JsonValue> => {

@@ -11,7 +11,12 @@ import {
   type Verification,
 } from "../src/policy/contracts.ts";
 import { explorerCall } from "../src/policy/prompts.ts";
-import { noteOrder, supportClosure } from "../src/policy/support.ts";
+import {
+  directSupport,
+  noteOrder,
+  reconstructionInput,
+  supportClosure,
+} from "../src/policy/support.ts";
 import { verificationPrefix } from "../src/policy/verification.ts";
 
 // Cases taken from v1.0.0's workflow, continuation, support and recovery tests.
@@ -26,6 +31,7 @@ const note = (
   summary: `Summary ${id}.`,
   support,
   verdicts: [],
+  checked: false,
   verified: false,
   dead: false,
 });
@@ -100,7 +106,7 @@ test("Explorer can append notes using live prior support but cannot edit or choo
   ).toBe(true);
 });
 
-test("Verifier selection requests verifier prefixes and orders support before its consumers", () => {
+test("Verifier selection requests valid local prefixes without dependency ordering", () => {
   const schema = selectionResultFor([note("n1"), note("n2", ["n1"])]);
   const base = {};
   for (const field of ["explorerGuidance", "support"]) {
@@ -124,16 +130,37 @@ test("Verifier selection requests verifier prefixes and orders support before it
   for (const verify of [
     [{ note: "n1", verifiers: ["correctness"] }],
     [{ note: "n1", verifiers: ["source", "requirements"] }],
-    [
-      { note: "n2", verifiers: all },
-      { note: "n1", verifiers: lemma },
-    ],
-    [
-      { note: "n1", verifiers: ["source"] },
-      { note: "n2", verifiers: all },
-    ],
   ])
     expect(schema.safeParse({ ...base, verify }).success).toBe(false);
+  expect(
+    schema.safeParse({
+      ...base,
+      verify: [
+        { note: "n2", verifiers: all },
+        { note: "n1", verifiers: lemma },
+      ],
+    }).success,
+  ).toBe(true);
+  expect(
+    schema.safeParse({
+      ...base,
+      verify: [
+        { note: "n1", verifiers: ["source"] },
+        { note: "n2", verifiers: all },
+      ],
+    }).success,
+  ).toBe(true);
+  expect(
+    schema.safeParse({
+      ...base,
+      verify: [
+        {
+          note: "n1",
+          verifiers: ["source", "correctness", "reconstruction"],
+        },
+      ],
+    }).success,
+  ).toBe(true);
   const imported = { ...note("n1"), summary: undefined };
   const unfiled = selectionResultFor([imported]);
   expect(unfiled.safeParse({ verify: [] }).success).toBe(true);
@@ -163,7 +190,7 @@ test("source then correctness then requirements then reconstruction gate reachab
     verdict("correctness", "n2"),
   ];
   expect(judgedBy(input, correct, "requirements")).toEqual(["n2"]);
-  expect(judgedBy(input, correct, "reconstruction")).toEqual([]);
+  expect(judgedBy(input, correct, "reconstruction")).toEqual(["n2"]);
   const required = [...correct, verdict("requirements", "n2")];
   const reachable = judgedBy(input, required, "reconstruction");
   expect(reachable).toEqual(["n2"]);
@@ -183,15 +210,15 @@ test("source then correctness then requirements then reconstruction gate reachab
       [...correct, verdict("requirements", "n2", "FAIL")],
       "reconstruction",
     ),
-  ).toEqual([]);
+  ).toEqual(["n2"]);
   const failed = [verdict("source", "n1", "FAIL"), verdict("source", "n2")];
-  expect(judgedBy(input, failed, "correctness")).toEqual([]);
+  expect(judgedBy(input, failed, "correctness")).toEqual(["n2"]);
   expect(judgedBy(input, failed, "requirements")).toEqual([]);
   expect(judgedBy(input, failed, "reconstruction")).toEqual([]);
 });
 
 test.each(["source", "correctness"] as const)(
-  "%s failure blocks descendants through verified support but leaves unrelated roots eligible",
+  "%s failure does not gate a dependent root's in-flight local check",
   (stage) => {
     const input = {
       notes: [note("n1"), note("n3", ["n2"]), note("n4")],
@@ -219,11 +246,11 @@ test.each(["source", "correctness"] as const)(
         [...passed, verdict(stage, "n1", "FAIL")],
         "reconstruction",
       ),
-    ).toEqual(["n4"]);
+    ).toEqual(["n3", "n4"]);
   },
 );
 
-test("verification receives the complete ordered support closure and counts shared texts once", () => {
+test("verification windows count direct support text once without transitive expansion", () => {
   const notes = [
     note("n1", [], "a".repeat(100)),
     note("n2", ["n1"], "b".repeat(10)),
@@ -242,9 +269,9 @@ test("verification receives the complete ordered support closure and counts shar
     "duplicate note",
   );
   for (const [window, selected] of [
-    [125, ["n3"]],
-    [130, ["n3", "n4"]],
-    [1, ["n3"]],
+    [125, ["n3", "n4"]],
+    [30, ["n3", "n4"]],
+    [29, ["n3"]],
   ] as const)
     expect(
       verificationPrefix(verify, notes, window).map((entry) => entry.note),
@@ -258,6 +285,31 @@ test("verification receives the complete ordered support closure and counts shar
       ...notes.slice(1),
     ]),
   ).toThrow("must precede");
+});
+
+test("narrowed local checks retain only direct assumptions from the original assignment", () => {
+  const notes = [note("a"), note("b", ["a"]), note("c", ["b"])];
+  expect(directSupport([notes[2]!], notes).map(({ id }) => id)).toEqual(["b"]);
+  const input = {
+    task,
+    notes,
+    support: [],
+    order: notes.map(({ id }) => id),
+  };
+  expect(reconstructionInput(input, ["c"]).notes.map(({ id }) => id)).toEqual([
+    "c",
+  ]);
+  expect(reconstructionInput(input, ["c"]).support.map(({ id }) => id)).toEqual(
+    ["b"],
+  );
+  expect(
+    reconstructionInput(input, ["a", "b"]).support.map(({ id }) => id),
+  ).toEqual([]);
+  // If A's own check drops out of the roots, B still gets A's statement as a
+  // conditional assumption from the original assignment.
+  expect(reconstructionInput(input, ["b"]).support.map(({ id }) => id)).toEqual(
+    ["a"],
+  );
 });
 
 test("opaque identities follow notebook order and namespace positions, not spelling", () => {
@@ -284,7 +336,7 @@ test("opaque identities follow notebook order and namespace positions, not spell
   ).toBe(false);
 });
 
-test("new adverse evidence gates dead roots and their closure despite this attempt's passes", () => {
+test("new adverse evidence gates directly dead roots without propagating during local checks", () => {
   const notes = [
     note("ancestor"),
     note("middle", ["ancestor"]),
@@ -306,12 +358,16 @@ test("new adverse evidence gates dead roots and their closure despite this attem
     verdict("requirements", note),
   ]);
   input.notes[0]!.dead = true;
-  expect(judgedBy(input, passes, "source")).toEqual(["independent"]);
-  expect(judgedBy(input, passes, "reconstruction")).toEqual(["independent"]);
+  expect(judgedBy(input, passes, "source")).toEqual(["target", "independent"]);
+  expect(judgedBy(input, passes, "reconstruction")).toEqual([
+    "target",
+    "independent",
+  ]);
   input.notes[0]!.dead = false;
   input.support[0]!.dead = true;
   expect(judgedBy(input, passes, "reconstruction")).toEqual([
     "ancestor",
+    "target",
     "independent",
   ]);
 });

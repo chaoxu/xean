@@ -208,18 +208,25 @@ test.each(["fault", "abort"])(
     await run.run({
       kind: "verifier",
       verify: [
-        { note: ancestor, verifiers: ["source", "correctness"] },
+        {
+          note: ancestor,
+          verifiers: ["source", "correctness", "reconstruction"],
+        },
         { note: initialRoot, verifiers: all },
       ],
     });
     const initial = project(await run.book());
     expect(initial.accepted).toEqual([]);
-    expect(initial.reconstructed[ancestor]).toBeDefined();
+    expect(
+      initial.notes.find((note) => note.id === ancestor)!.verdicts,
+    ).toContainEqual(
+      expect.objectContaining({ verifier: "reconstruction", verdict: "PASS" }),
+    );
     const campaign = await run.owner.root.commit(
       (tx) => createWorkflow().initialize(tx, run.owner.root.id),
       context,
     );
-    // Fix these adversarial assignments explicitly: focus distribution is
+    // Fix these adversarial assignments explicitly: assigned views is
     // tested separately, while the actual campaign still owns and seals them.
     const createGroup = run.owner.workers.createGroup.bind(run.owner.workers);
     const assignments = spyOn(
@@ -422,4 +429,73 @@ test("native abort retains completed, unpublished, and unfinished Explorer membe
   } finally {
     append.mockRestore();
   }
+});
+
+test("solution-only cohorts allow explicit supporting-lemma checks with a complete root nomination", async () => {
+  let a = "",
+    b = "";
+  const run = await fixture(
+    (request): ReturnType<Respond> => {
+      const { descriptor } = request;
+      if (descriptor.kind === "explorer") {
+        a = `${descriptor.input.namespace}.1`;
+        b = `${descriptor.input.namespace}.2`;
+        return {
+          notes: [
+            {
+              text: "Supporting lemma.",
+              summary: "Partial prerequisite.",
+              support: [],
+            },
+            {
+              text: "Complete conditional solution.",
+              summary: "Meets the task if the lemma holds.",
+              support: [a],
+            },
+          ],
+        };
+      }
+      if (descriptor.kind === "selection")
+        return {
+          verify: [
+            { note: a, verifiers: ["source", "correctness", "reconstruction"] },
+            ...(descriptor.input.notes.some((note) => note.id === b)
+              ? [{ note: b, verifiers: all }]
+              : []),
+          ],
+        };
+      return complete(request);
+    },
+    {
+      automatic: true,
+      settings: {
+        explorers: 1,
+        verifiers: 2,
+        maxExplorerTurns: 1,
+        verifyOnSolution: true,
+      },
+    },
+  );
+  await run.owner.root.waitForIdle(context);
+  expect(await inspect(run.path, readStatus)).toMatchObject({
+    status: "terminal",
+    outcome: "accepted",
+    accepted: b,
+  });
+  const selections = run.requests.filter(
+    ({ descriptor }) => descriptor.kind === "selection",
+  );
+  expect(selections).toHaveLength(2);
+  expect(
+    selections.map(({ descriptor }) => descriptor.input.notes.length).sort(),
+  ).toEqual([1, 2]);
+  const book = await run.book();
+  expect(
+    book.checks
+      .flatMap((check) => check.values)
+      .filter((value) => value.note === a)
+      .map((value) => value.verifier),
+  ).toEqual(["source", "correctness", "reconstruction"]);
+  expect(new Set(book.checks.map((check) => check.candidate)).size).toBe(1);
+  expect(project(book).accepted).toEqual([b]);
 });

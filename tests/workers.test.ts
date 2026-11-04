@@ -485,35 +485,40 @@ test("another publisher can finish between an append and its Pi rollback recover
   expect(store.read().notes[`w${first!.id}.1`]!.text).toBe("External edit.");
 });
 
-test.each(["PASS", "FAIL"] as const)(
-  "an in-flight claim keeps its positive evidence frozen but respects a concurrent ancestor %s",
-  async (outsideVerdict) => {
+test.each(["pending", "failed"] as const)(
+  "B and C verify concurrently assuming A while A is %s",
+  async (dependencyState) => {
     let ancestor = "",
-      root = "";
-    const rootStarted = Promise.withResolvers<void>();
-    const releaseRoot = Promise.withResolvers<void>();
+      b = "",
+      c = "";
+    const checking = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let started = 0;
     const run = await fixture(
       async (request): Promise<Awaited<ReturnType<Respond>>> => {
         const { descriptor } = request;
         if (descriptor.kind === "explorer") {
           ancestor = `${descriptor.input.namespace}.1`;
-          root = `${descriptor.input.namespace}.2`;
+          b = `${descriptor.input.namespace}.2`;
+          c = `${descriptor.input.namespace}.3`;
           return {
             notes: [
-              note("Generated lemma."),
-              note("Candidate from lemma.", [ancestor]),
+              note("PRIVATE_BODY_A"),
+              note("Proof of B conditional on A.", [ancestor]),
+              note("Proof of C conditional on A.", [ancestor]),
             ],
           };
         }
         if (
           descriptor.kind === "verifier" &&
           descriptor.name === "source" &&
-          descriptor.judged.includes(root)
+          descriptor.judged.some((id) => id === b || id === c)
         ) {
-          rootStarted.resolve();
-          await releaseRoot.promise;
+          if (++started === 2) checking.resolve();
+          await release.promise;
         }
         if (
+          dependencyState === "failed" &&
           descriptor.kind === "verifier" &&
           descriptor.name === "correctness" &&
           descriptor.judged.includes(ancestor)
@@ -522,8 +527,8 @@ test.each(["PASS", "FAIL"] as const)(
             verdicts: [
               {
                 note: ancestor,
-                verdict: outsideVerdict,
-                report: "Concurrent assessment.",
+                verdict: "FAIL",
+                report: "LATE_A_COUNTEREXAMPLE",
               },
             ],
           };
@@ -531,96 +536,117 @@ test.each(["PASS", "FAIL"] as const)(
       },
     );
     await run.run({ kind: "explorer" });
-    await run.owner.root.commit(async (tx) => {
-      const { Notebook } = await import("../src/state.ts");
-      (await tx.doc(Notebook, run.owner.root.id)).checks.push({
-        candidate: 1000,
-        call: 1000,
-        values: [
+    const ids = await run.owner.root.commit(
+      (tx) =>
+        run.owner.workers.createGroup(
+          tx,
+          run.owner.root.id,
+          [b, c].map((note) => ({
+            kind: "verifier",
+            verify: [
+              {
+                note,
+                verifiers: [
+                  "source",
+                  "correctness",
+                  "requirements",
+                  "reconstruction",
+                ],
+              },
+            ],
+          })),
+        ),
+      context,
+    );
+    const pending = ids.map((id) => run.wait(id));
+    await checking.promise;
+    expect(started).toBe(2);
+    if (dependencyState === "failed") {
+      const result = await run.run({
+        kind: "verifier",
+        verify: [
           {
             note: ancestor,
-            verifier: "source",
-            verdict: "PASS",
-            report: "Prior source.",
-          },
-          {
-            note: ancestor,
-            verifier: "correctness",
-            verdict: "PASS",
-            report: "Prior correctness.",
+            verifiers: ["source", "correctness", "reconstruction"],
           },
         ],
       });
-    }, context);
-    const first = await run.create({
-      kind: "verifier",
-      verify: [
-        {
-          note: root,
-          verifiers: ["source", "correctness"],
-        },
-      ],
-    });
-    const pending = run.wait(first);
-    await rootStarted.promise;
-    expect(
-      (
-        await run.run({
-          kind: "verifier",
-          verify: [
-            {
-              note: ancestor,
-              verifiers: [
-                "source",
-                "correctness",
-                "requirements",
-                "reconstruction",
-              ],
-            },
-          ],
-        })
-      ).outcome,
-    ).toMatchObject({ status: "completed", result: { status: "completed" } });
-    releaseRoot.resolve();
-    expect((await pending).state.outcome.status).toBe("completed");
-    if (outsideVerdict === "FAIL") {
-      expect((await run.notes()).find((note) => note.id === root)!.dead).toBe(
-        true,
-      );
+      expect(result.outcome).toMatchObject({
+        status: "completed",
+        result: { status: "completed" },
+      });
       expect(
-        run.requests.some(
-          ({ descriptor }) =>
-            descriptor.kind === "verifier" &&
-            descriptor.name === "correctness" &&
-            descriptor.judged.includes(root),
+        (await run.notes()).find((note) => note.id === ancestor)!.dead,
+      ).toBe(true);
+    }
+    release.resolve();
+    for (const result of await Promise.all(pending))
+      expect(result.state.outcome).toMatchObject({
+        status: "completed",
+        result: { status: "completed" },
+      });
+    const book = await run.book();
+    expect(project(book).accepted).toEqual([]);
+    for (const root of [b, c]) {
+      const checks = book.checks.filter((check) =>
+        check.values.some((value) => value.note === root),
+      );
+      expect(new Set(checks.map((check) => check.candidate)).size).toBe(1);
+      expect(
+        checks.flatMap((check) =>
+          check.values
+            .filter((value) => value.note === root)
+            .map((value) => value.verifier),
         ),
-      ).toBe(false);
-      expect(project(await run.book()).accepted).toEqual([]);
-    } else {
-      const correctness = run.requests.find(
+      ).toEqual(["source", "correctness", "requirements", "reconstruction"]);
+      const proof = run.requests.find(
         ({ descriptor }) =>
-          descriptor.kind === "verifier" &&
-          descriptor.name === "correctness" &&
-          descriptor.judged.includes(root),
-      )!.descriptor;
-      if (correctness.kind !== "verifier")
-        throw new Error("Missing correctness call");
-      expect(correctness.input.support.map((note) => note.id)).toEqual([
+          descriptor.kind === "proof" &&
+          descriptor.input.notes.some((note) => note.id === root),
+      )!;
+      if (proof.descriptor.kind !== "proof")
+        throw new Error("Missing local proof");
+      expect(proof.descriptor.input.notes.map((note) => note.id)).toEqual([
+        root,
+      ]);
+      expect(proof.descriptor.input.support.map((note) => note.id)).toEqual([
         ancestor,
       ]);
+      expect(JSON.stringify(proof.transcript)).toContain(
+        `Exact claim ${ancestor}.`,
+      );
+      expect(JSON.stringify(proof.transcript)).not.toContain("PRIVATE_BODY_A");
+      expect(JSON.stringify(proof.transcript)).not.toContain(
+        "LATE_A_COUNTEREXAMPLE",
+      );
+    }
+    if (dependencyState === "pending") {
       expect(
-        correctness.input.support[0]!.verdicts.some(
-          (value) => value.verifier === "reconstruction",
+        book.checks.some((check) =>
+          check.values.some((value) => value.note === ancestor),
         ),
       ).toBe(false);
+      await run.run({
+        kind: "verifier",
+        verify: [
+          {
+            note: ancestor,
+            verifiers: ["source", "correctness", "reconstruction"],
+          },
+        ],
+      });
+      expect(project(await run.book()).accepted).toEqual([b, c]);
+    } else {
       expect(
-        (await run.notes()).find((note) => note.id === root)!.verified,
+        (await run.notes())
+          .filter((note) => note.id === b || note.id === c)
+          .every((note) => note.dead),
       ).toBe(true);
     }
   },
 );
 
-test("assigned selector views retain complete support in notebook order", async () => {
+test("selector views partition targets and the checker receives direct dependencies separately", async () => {
   const run = await fixture((request) => {
     if (request.descriptor.kind === "explorer") {
       const first = `${request.descriptor.input.namespace}.1`;
@@ -634,7 +660,7 @@ test("assigned selector views retain complete support in notebook order", async 
     }
     return complete(request);
   });
-  const explored = await run.run({ kind: "explorer" });
+  await run.run({ kind: "explorer" });
   const ids = await run.owner.root.commit(
     (tx) =>
       run.owner.workers.createGroup(tx, run.owner.root.id, [
@@ -647,23 +673,31 @@ test("assigned selector views retain complete support in notebook order", async 
   const views = ids.map(
     (id) =>
       tasks.find((task: { id: number }) => task.id === id).input.input
-        .notes as { id: string; support: string[] }[],
+        .notes as { id: string }[],
   );
   const original = (await run.notes()).map((note) => note.id);
-  expect(
-    new Set(views.flatMap((notes) => notes.map((note) => note.id))),
-  ).toEqual(new Set(original));
-  for (const view of views) {
+  const listed = views.flatMap((notes) => notes.map((note) => note.id));
+  expect(new Set(listed).size).toBe(listed.length);
+  expect(new Set(listed)).toEqual(new Set(original));
+  for (const view of views)
     expect(view.map((note) => note.id)).toEqual(
       original.filter((id) => view.some((note) => note.id === id)),
     );
-    expect(view.some((note) => note.id === `w${explored.id}.1`)).toBe(true);
-    for (const [index, note] of view.entries())
-      for (const support of note.support)
-        expect(
-          view.slice(0, index).some((parent) => parent.id === support),
-        ).toBe(true);
-  }
+  for (const result of await Promise.all(ids.map((id) => run.wait(id))))
+    expect(result.state.outcome).toMatchObject({
+      status: "completed",
+      result: { status: "completed" },
+    });
+  const proof = run.requests.find(
+    ({ descriptor }) =>
+      descriptor.kind === "proof" && descriptor.input.support.length,
+  )!;
+  expect(proof).toBeDefined();
+  if (proof.descriptor.kind !== "proof")
+    throw new Error("Missing conditional proof");
+  expect(proof.descriptor.input.support.map((note) => note.id)).toEqual([
+    original[0]!,
+  ]);
 });
 
 test("retry returns a completed child's receipt when its aborted parent has a busy sibling", async () => {
@@ -728,4 +762,120 @@ test("retry returns a completed child's receipt when its aborted parent has a bu
   await expect(run.create({ kind: "retry", task: child.id })).rejects.toThrow();
   releaseSource.resolve();
   expect((await siblingPending).state.outcome.status).toBe("completed");
+});
+
+test("solution-only selection defers a local lemma checklist until a full root is nominated", async () => {
+  const run = await fixture(
+    (request): ReturnType<Respond> => {
+      if (request.descriptor.kind === "selection")
+        return {
+          verify: request.descriptor.input.notes.map((note) => ({
+            note: note.id,
+            verifiers: ["source", "correctness", "reconstruction"],
+          })),
+        };
+      return complete(request);
+    },
+    { settings: { verifyOnSolution: true } },
+  );
+  const explored = await run.run({ kind: "explorer" });
+  expect((await run.run({ kind: "verifier" })).outcome).toMatchObject({
+    status: "completed",
+    result: { status: "no-work", verify: [] },
+  });
+  expect((await run.book()).checks).toEqual([]);
+  expect(run.requests.map(({ descriptor }) => descriptor.kind)).toEqual([
+    "explorer",
+    "selection",
+  ]);
+  expect(
+    (
+      await run.run({
+        kind: "verifier",
+        verify: [
+          {
+            note: `w${explored.id}.1`,
+            verifiers: [
+              "source",
+              "correctness",
+              "requirements",
+              "reconstruction",
+            ],
+          },
+        ],
+      })
+    ).outcome.status,
+  ).toBe("completed");
+  expect(project(await run.book()).accepted).toEqual([`w${explored.id}.1`]);
+});
+
+test("overlapping selected sets conflict atomically without reserving their nonoverlapping notes", async () => {
+  let b = "",
+    c = "",
+    d = "";
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (request.descriptor.kind === "explorer") {
+        const namespace = request.descriptor.input.namespace;
+        [b, c, d] = [1, 2, 3].map((n) => `${namespace}.${n}`) as [
+          string,
+          string,
+          string,
+        ];
+        return { notes: [note("B."), note("C."), note("D.")] };
+      }
+      if (
+        request.descriptor.kind === "verifier" &&
+        request.descriptor.name === "source" &&
+        request.descriptor.judged.includes(b)
+      ) {
+        started.resolve();
+        await release.promise;
+      }
+      return complete(request);
+    },
+  );
+  await run.run({ kind: "explorer" });
+  const both = await run.create({
+    kind: "verifier",
+    verify: [b, c].map((note) => ({
+      note,
+      verifiers: ["source", "correctness", "requirements", "reconstruction"],
+    })),
+  });
+  const pending = run.wait(both);
+  await started.promise;
+  const conflict = await run.run({
+    kind: "verifier",
+    verify: [c, d].map((note) => ({
+      note,
+      verifiers: ["source", "correctness", "requirements", "reconstruction"],
+    })),
+  });
+  expect(conflict.outcome).toMatchObject({
+    status: "completed",
+    result: { status: "busy" },
+  });
+  expect(
+    (
+      await run.run({
+        kind: "verifier",
+        verify: [{ note: d, verifiers: ["source"] }],
+      })
+    ).outcome,
+  ).toMatchObject({ status: "completed", result: { status: "completed" } });
+  release.resolve();
+  expect((await pending).state.outcome.status).toBe("completed");
+  expect(
+    run.requests
+      .filter(
+        ({ descriptor }) =>
+          descriptor.kind === "verifier" && descriptor.name === "source",
+      )
+      .map(({ descriptor }) =>
+        descriptor.kind === "verifier" ? descriptor.judged : [],
+      ),
+  ).toEqual([[b, c], [d]]);
 });

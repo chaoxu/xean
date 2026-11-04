@@ -17,8 +17,8 @@ import historical from "./fixtures/v100-contracts.json";
 // Namespaced IDs and selection intentionally change the old contracts;
 // verification retains the remaining captured schema fields.
 const { task, explorerGuidance } = historical.input;
-const support = note.parse(historical.input.support);
-const target = note.parse(historical.input.target);
+const support = note.parse({ ...historical.input.support, checked: true });
+const target = note.parse({ ...historical.input.target, checked: false });
 const verification = {
   task,
   notes: [target],

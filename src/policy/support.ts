@@ -1,9 +1,5 @@
-// Policy derived from Xean v1.0.0 (949a385), with closure reconstruction.
-import type {
-  Note,
-  ReconstructionInput,
-  ReconstructionPremise,
-} from "./contracts";
+// Support-order helpers for conditional local verification.
+import type { Note, ReconstructionInput } from "./contracts";
 
 /** Compare opaque note IDs by their authoritative notebook order. */
 export function noteOrder(known: readonly Pick<Note, "id">[]) {
@@ -48,45 +44,30 @@ export function supportClosure(
   return [...seen].filter((id) => !roots.has(id)).sort(order);
 }
 
-/** Reconstruct roots and unproved support; retain earlier certified statements as premises. */
+/** Immediate declared dependencies of selected roots, without transitive traversal. */
+export function directSupport(
+  roots: readonly Pick<Note, "support">[],
+  known: readonly Note[],
+): Note[] {
+  const selected = new Set(roots.flatMap(({ support }) => support));
+  return known.filter(({ id }) => selected.has(id));
+}
+
+/** Keep selected roots and their direct declared assumptions for one local check. */
 export function reconstructionInput(
   input: ReconstructionInput,
   roots: readonly string[],
-  reusable: Readonly<Record<string, string>> = {},
 ): ReconstructionInput {
-  const needed = new Set(roots),
-    notes: Note[] = [],
-    support: Note[] = [],
-    premises: ReconstructionPremise[] = [];
-  const order = noteOrder(input.order.map((id) => ({ id })));
-  const known = [...input.notes, ...input.support].sort((a, b) =>
-    order(a.id, b.id),
-  );
-  // A selected root cannot return as an assumption inside a reused descendant.
-  const fresh = new Set(roots);
-  for (const note of known)
-    if (note.support.some((id) => fresh.has(id))) fresh.add(note.id);
-  // Validated dependencies occur earlier in notebook order; visit consumers first.
-  for (const note of known.reverse()) {
-    if (!needed.has(note.id)) continue;
-    if (note.dead) throw new Error(`dead reconstruction note ${note.id}`);
-    if (!roots.includes(note.id) && note.verification !== undefined) {
-      if (!note.verified)
-        throw new Error(`unverified source premise ${note.id}`);
-      support.push(note);
-    } else {
-      const statement = reusable[note.id];
-      if (statement !== undefined && note.verified && !fresh.has(note.id))
-        premises.push({ note: note.id, statement, support: note.support });
-      else notes.push(note);
-      for (const id of note.support) needed.add(id);
-    }
-  }
+  const selected = new Set(roots);
+  const known = [...input.notes, ...input.support];
+  const assumptions = directSupport(
+    input.notes.filter(({ id }) => selected.has(id)),
+    known,
+  ).filter(({ id }) => !selected.has(id));
   return {
     task: input.task,
     order: [...input.order],
-    notes: notes.reverse(),
-    support: support.reverse(),
-    ...(premises.length ? { premises: premises.reverse() } : {}),
+    notes: input.notes.filter(({ id }) => selected.has(id)),
+    support: assumptions,
   };
 }

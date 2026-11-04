@@ -1,7 +1,7 @@
 {
   "name": "xean",
-  "version": "5.0.0-dev.2",
-  "description": "Mathematical research on native Pi Durable with joint dependency reconstruction",
+  "version": "5.0.0-dev.3",
+  "description": "Mathematical research on native Pi Durable with conditional note verification",
   "license": "MIT",
   "private": true,
   "type": "module",

@@ -22,11 +22,20 @@ allowed only when the format cannot render monospace.
   before advancing. Each Explorer appends a completed submission with summaries.
   Verifiers select work and check source, correctness, requirements, and
   reconstruction in that order. Explorer continuation is off.
-- Joint reconstruction covers selected roots and their generated dependency
-  closure. Admitted verified source dependencies are premise leaves, while
-  selected roots always require reconstruction. Acceptance requires all four
-  checks in one attempt. Generated ancestors may reuse successful reconstruction
-  from an earlier attempt in the same campaign. A failed group remains
+- Claim selected notes atomically. Check them conditionally on their exact frozen
+  dependency statements. Dependencies are checked and claimed only when separately
+  selected. Useful lemmas require source, correctness, and reconstruction PASS in
+  one attempt. Candidates require all four checks in one attempt.
+- `checked` records successful local proof checks or a caller attestation, unless
+  the note itself has an invalidating FAIL. `verified` additionally requires all
+  parents verified and no dead dependency. Acceptance requires `verified` and all
+  four checks in one attempt. An invalidating dependency FAIL propagates `dead`
+  while retaining local check receipts. In-flight conditional checks may finish. Changed premise
+  statements require new notes and rechecking, without revival or migration.
+- Extract selected statements and direct dependency statements together. Blind
+  reconstruction receives scoped statements without original candidate or
+  dependency proofs. Preserve dependency scope and require each selected proof
+  to establish its conclusion from its own premises. A failed group remains
   `call-failure` until explicit resume, even if another worker accepted a note.
 - Use Pi's native task waits and recovery. Keep execution records in Pi's SQLite
   database and mathematical note texts in the notebook database. Treat note IDs

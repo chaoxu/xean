@@ -131,7 +131,6 @@ function fixture(
       descriptor: CallDescriptor;
       previousTasks: TaskId[];
       profile: PiRoleProfile;
-      allowNew: boolean;
     },
     { phase: "run" },
     JsonValue,
@@ -149,12 +148,11 @@ function fixture(
           task.input.profile,
           ctx,
           task.input.previousTasks,
-          async () => task.input.allowNew,
         );
         await runtime.commit(
           () => ({
             status: "terminal",
-            outcome: { status: "completed", result: result ?? null },
+            outcome: { status: "completed", result },
           }),
           ctx,
         );
@@ -207,13 +205,12 @@ function fixture(
             model: "math",
             reasoning: "max",
           },
-          allowNew = true,
         ) {
           return root.commit(
             (tx) =>
               tx.createTask(
                 Invoke,
-                { descriptor: input, previousTasks, profile, allowNew },
+                { descriptor: input, previousTasks, profile },
                 { ownership: { kind: "conversation" } },
               ),
             context,
@@ -564,6 +561,7 @@ test("Selection disables provider constraints while retaining its prompt, schema
           summary: "P holds.",
           support: [],
           verdicts: [],
+          checked: true,
           verified: true,
           dead: false,
           verification: { source: "Given premise", report: "Assumed correct." },
@@ -651,7 +649,15 @@ test("selection reads an admitted note through its own fresh conversation", asyn
     kind: "selection",
     input: {
       task: descriptor.input.task,
-      notes: [{ ...source, verdicts: [], verified: false, dead: false }],
+      notes: [
+        {
+          ...source,
+          verdicts: [],
+          checked: false,
+          verified: false,
+          dead: false,
+        },
+      ],
       claimed: [],
     },
   };
@@ -1094,7 +1100,7 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
   }
 });
 
-test("frozen recovery finds a later completed receipt after an earlier interrupted assignment", async () => {
+test("frozen verification reuses its original assignment and receipt after later dependency evidence", async () => {
   const input: CallDescriptor = {
     kind: "verifier",
     name: "correctness",
@@ -1106,14 +1112,25 @@ test("frozen recovery finds a later completed receipt after an earlier interrupt
         {
           id: "n1",
           text: "Equality is reflexive.",
-          support: [],
+          support: ["n0"],
           verdicts: [],
+          checked: false,
           verified: false,
           dead: false,
         },
       ],
-      support: [],
-      order: ["n1"],
+      support: [
+        {
+          id: "n0",
+          text: "Declared prerequisite.",
+          support: [],
+          verdicts: [],
+          checked: false,
+          verified: false,
+          dead: false,
+        },
+      ],
+      order: ["n0", "n1"],
     },
   };
   const result = {
@@ -1127,7 +1144,7 @@ test("frozen recovery finds a later completed receipt after an earlier interrupt
       }),
       (transcript) => {
         expect(JSON.stringify(transcript.messages)).not.toContain(
-          "Later global evidence.",
+          "Later dependency evidence.",
         );
         return fauxAssistantMessage([fauxToolCall("submit_verdict", result)], {
           stopReason: "toolUse",
@@ -1147,14 +1164,15 @@ test("frozen recovery finds a later completed receipt after an earlier interrupt
       ...input,
       input: {
         ...input.input,
-        notes: input.input.notes.map((note) => ({
+        support: input.input.support.map((note) => ({
           ...note,
+          dead: true,
           verdicts: [
             {
               note: note.id,
-              verifier: "requirements",
-              verdict: "INCONCLUSIVE",
-              report: "Later global evidence.",
+              verifier: "source",
+              verdict: "FAIL",
+              report: "Later dependency evidence.",
             },
           ],
         })),
@@ -1165,10 +1183,7 @@ test("frozen recovery finds a later completed receipt after an earlier interrupt
       .outcome;
     expect(completed.status).toBe("completed");
     const recovered = (
-      await harness.waitForTask(
-        await invoke([first, second], changed, undefined, false),
-        context,
-      )
+      await harness.waitForTask(await invoke([first, second], changed), context)
     ).state.outcome;
     expect(recovered).toMatchObject({
       status: "completed",
@@ -1178,28 +1193,6 @@ test("frozen recovery finds a later completed receipt after an earlier interrupt
       (completed.result as { call: number }).call,
     );
     expect(driver.provider.state.callCount).toBe(2);
-  } finally {
-    await harness.close(context);
-  }
-});
-
-test("a rejected new-call gate creates no conversation or model request", async () => {
-  const driver = fixture([]);
-  const { harness, invoke } = await driver.open();
-  try {
-    const id = await invoke([], descriptor, undefined, false);
-    expect((await harness.waitForTask(id, context)).state.outcome).toEqual({
-      status: "completed",
-      result: null,
-    });
-    expect(
-      await harness.commit(
-        async (tx) =>
-          (await tx.scanConversations({ ownerTaskId: id }, 1)).items.length,
-        context,
-      ),
-    ).toBe(0);
-    expect(driver.provider.state.callCount).toBe(0);
   } finally {
     await harness.close(context);
   }
@@ -1226,10 +1219,9 @@ test.each([
           };
         if (descriptor.kind === "selection")
           return {
-            verify: descriptor.input.notes.map((note, index) => ({
+            verify: descriptor.input.notes.map((note) => ({
               note: note.id,
-              verifiers:
-                index === 0 ? ["source", "correctness"] : [...verifierNames],
+              verifiers: [...verifierNames],
             })),
           };
         if (descriptor.kind === "proof") {
@@ -1298,7 +1290,7 @@ test.each([
     }
     const before = await run.book();
     expect(before.checks.map((check) => check.values.length)).toEqual([
-      2, 2, 1,
+      2, 2, 2,
     ]);
     const candidate = before.checks[0]!.candidate;
     const originalComparison = run.requests.find(
@@ -1362,7 +1354,7 @@ test.each([
     expect(project(final).accepted).toEqual(
       interruption === "dead after comparison receipt"
         ? []
-        : [before.notes[1]!.id],
+        : before.notes.map((note) => note.id),
     );
   },
 );
