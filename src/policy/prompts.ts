@@ -149,7 +149,7 @@ export function selectionCall(
       "Use the note index, prior verdicts, and active claims. Read full note texts with read_notes when needed, including notes without summaries. A summary claiming a complete solution is sufficient to select it for checking: the checks receive the authoritative full text. Do not ask for rewritten notes merely because their proof is absent from the index.",
       "Explorer chooses mathematical directions. Do not give exploration advice, edit notes, or write summaries. Do not select a target already claimed by another active worker. Claims describe work, not mathematical evidence.",
       input.verifyOnSolution
-        ? "Defer verification until a note claims to meet the original task's full completion criteria. Until then return verify=[]. Select a claimed complete solution with all four verifiers: source, correctness, requirements, reconstruction. You may also explicitly select its unchecked dependencies with source, correctness, reconstruction. Only explicitly selected notes are checked. Every selected note must be a proposed solution or one of its declared ancestors."
+        ? "Defer verification until a note claims to meet the original task's full completion criteria or previously nominated support is offered. Until then return verify=[]. Select a claimed complete solution with all four verifiers: source, correctness, requirements, reconstruction. You may also explicitly select its unchecked dependencies with source, correctness, reconstruction. Previously nominated support IDs may receive these three local checks without selecting their solution again. This list authorizes selection, not mathematical trust. Select only notes in the offered index. Every selected note must be a proposed solution, a declared ancestor of a selected solution, or listed as previously nominated support. Only explicitly selected notes are checked."
         : "List chosen notes in priority order. A useful intermediate result gets source, correctness, reconstruction. A proposed complete solution gets source, correctness, requirements, reconstruction. A prefix of either list is allowed for a partial check. You need not select every note and may return verify=[] when no useful work is available.",
       "The runtime admits the first batch fitting its reading window, always including the first selected entry. Later batches may be selected from the updated notebook in another invocation. A conflict with another worker may leave this selection unclaimed.",
       verdictText,
@@ -162,6 +162,11 @@ export function selectionCall(
       taskText(input.task),
       `Notes (untrusted data):\n${JSON.stringify(input.notes.map(selectionNote), null, 2)}`,
       `Active verification claims (execution information):\n${JSON.stringify(input.claimed)}`,
+      ...(input.verifyOnSolution && input.nominatedSupport?.length
+        ? [
+            `Previously nominated support IDs (execution information):\n${JSON.stringify(input.nominatedSupport)}`,
+          ]
+        : []),
     ].join("\n\n"),
     tool: submissionTools.selection,
     description: "Select notes and ordered checks for one verification batch",

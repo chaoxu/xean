@@ -167,6 +167,8 @@ export type SelectionInput = {
   notes: Note[];
   claimed: string[];
   verifyOnSolution?: boolean;
+  /** Support eligible after an earlier solution nomination, without rechecking that root. */
+  nominatedSupport?: string[];
 };
 
 /** One entry of a verify list: a note and a local-check prefix. */

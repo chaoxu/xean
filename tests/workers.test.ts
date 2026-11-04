@@ -353,6 +353,89 @@ test("an empty assigned view completes without calling the selector model", asyn
   ).toEqual([0, 1]);
 });
 
+test("pending selectors reserve their offered notes and release unselected notes when checking begins", async () => {
+  const selecting = Promise.withResolvers<void>();
+  const releaseSelection = Promise.withResolvers<void>();
+  const firstSource = Promise.withResolvers<void>();
+  const secondSource = Promise.withResolvers<void>();
+  const releaseSources = Promise.withResolvers<void>();
+  const views: string[][] = [];
+  let sourceCalls = 0;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      const { descriptor } = request;
+      if (descriptor.kind === "explorer")
+        return { notes: [note("First candidate."), note("Second candidate.")] };
+      if (descriptor.kind === "selection") {
+        views.push(descriptor.input.notes.map((note) => note.id));
+        if (views.length === 1) {
+          selecting.resolve();
+          await Promise.race([
+            releaseSelection.promise,
+            abortable(request.signal),
+          ]);
+        }
+        return {
+          verify: [
+            {
+              note: descriptor.input.notes[0]!.id,
+              verifiers: [
+                "source",
+                "correctness",
+                "requirements",
+                "reconstruction",
+              ],
+            },
+          ],
+        };
+      }
+      if (descriptor.kind === "verifier" && descriptor.name === "source") {
+        if (++sourceCalls === 1) firstSource.resolve();
+        if (sourceCalls === 2) secondSource.resolve();
+        await Promise.race([releaseSources.promise, abortable(request.signal)]);
+      }
+      return complete(request);
+    },
+    { settings: { maxWorkers: 2 } },
+  );
+  await run.run({ kind: "explorer" });
+  const notes = (await run.notes()).map((note) => note.id);
+  const first = await run.create({ kind: "verifier" });
+  const pending = run.wait(first);
+  let second: ReturnType<typeof run.wait> | undefined;
+  try {
+    await selecting.promise;
+    await expect(
+      run.owner.root.commit(
+        (tx) =>
+          run.owner.workers.createGroup(tx, run.owner.root.id, [
+            { kind: "explorer" },
+            { kind: "explorer" },
+          ]),
+        context,
+      ),
+    ).rejects.toThrow("maxWorkers");
+    const empty = await run.run({ kind: "verifier" });
+    expect(empty.outcome).toMatchObject({
+      status: "completed",
+      result: { status: "no-work" },
+    });
+    expect(views).toEqual([notes]);
+    releaseSelection.resolve();
+    await firstSource.promise;
+    second = run.wait(await run.create({ kind: "verifier" }));
+    await secondSource.promise;
+    expect(views).toEqual([notes, [notes[1]!]]);
+  } finally {
+    releaseSelection.resolve();
+    releaseSources.resolve();
+    await pending;
+    if (second) await second;
+  }
+  expect(sourceCalls).toBe(2);
+  expect(project(await run.book()).accepted).toEqual(notes);
+});
+
 test("retry keeps the selector's original note view after unrelated notes are published", async () => {
   let fail = true;
   const run = await fixture((request) => {
@@ -515,7 +598,7 @@ test.each(["pending", "failed"] as const)(
           descriptor.judged.some((id) => id === b || id === c)
         ) {
           if (++started === 2) checking.resolve();
-          await release.promise;
+          await Promise.race([release.promise, abortable(request.signal)]);
         }
         if (
           dependencyState === "failed" &&
@@ -534,6 +617,7 @@ test.each(["pending", "failed"] as const)(
           };
         return complete(request);
       },
+      { settings: { maxWorkers: dependencyState === "failed" ? 3 : 2 } },
     );
     await run.run({ kind: "explorer" });
     const ids = await run.owner.root.commit(
@@ -878,4 +962,57 @@ test("overlapping selected sets conflict atomically without reserving their nono
         descriptor.kind === "verifier" ? descriptor.judged : [],
       ),
   ).toEqual([[b, c], [d]]);
+});
+
+test("one native admission can start an Explorer and Verifier over the same frozen notebook", async () => {
+  const both = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let explorers = 0,
+    liveCalls = 0;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      const { descriptor } = request;
+      const exploring = descriptor.kind === "explorer" && ++explorers > 1;
+      const checking =
+        descriptor.kind === "verifier" && descriptor.name === "source";
+      if (exploring || checking) {
+        if (++liveCalls === 2) both.resolve();
+        await Promise.race([release.promise, abortable(request.signal)]);
+      }
+      return complete(request);
+    },
+    { settings: { maxWorkers: 2 } },
+  );
+  const seed = await run.run({ kind: "explorer" });
+  const ids = await run.owner.root.commit(
+    (tx) =>
+      run.owner.workers.createGroup(tx, run.owner.root.id, [
+        { kind: "explorer" },
+        { kind: "verifier" },
+      ]),
+    context,
+  );
+  const pending = ids.map((id) => run.wait(id));
+  try {
+    await both.promise;
+    expect(liveCalls).toBe(2);
+    expect((await run.notes()).map((note) => note.id)).toEqual([
+      `w${seed.id}.1`,
+    ]);
+    const selection = run.requests.find(
+      ({ descriptor }) => descriptor.kind === "selection",
+    )!.descriptor;
+    expect(selection.input.notes.map((note) => note.id)).toEqual([
+      `w${seed.id}.1`,
+    ]);
+  } finally {
+    release.resolve();
+    for (const task of await Promise.all(pending))
+      expect(task.state.outcome.status).toBe("completed");
+  }
+  expect((await run.notes()).map((note) => note.id)).toEqual([
+    `w${seed.id}.1`,
+    `w${ids[0]}.1`,
+  ]);
+  expect(project(await run.book()).accepted).toEqual([`w${seed.id}.1`]);
 });

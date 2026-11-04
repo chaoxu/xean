@@ -8,9 +8,9 @@ review of the result.
 
 Inside `xean`, Explorers choose mathematical directions and append notes with
 summaries. Verifiers select work and check sources, correctness, task requirements,
-and blind reconstruction. Campaigns alternate groups of Explorers and Verifiers,
-waiting for each group to settle before advancing. Pi Durable manages execution
-and recovery. A valid Explorer submission ends its turn.
+and blind reconstruction. Explorers and Verifiers can run together under a shared
+worker limit. Each completion frees capacity for more work. Pi Durable manages
+execution and recovery. A valid Explorer submission ends its turn.
 
 The design keeps research policy small and aims to reduce repeated reasoning
 costs. Explorer works from prepared notes and the model's learned mathematical
@@ -24,7 +24,7 @@ below describe the current CLI and library.
 
 ## Start a campaign
 
-This checkout is `5.0.0-dev.3` and requires fresh campaign databases. Use Bun
+This checkout is `5.0.0-dev.4` and requires fresh campaign databases. Use Bun
 1.4.2 or later on macOS or Linux. From an extracted archive or source checkout:
 
 ```sh
@@ -163,16 +163,23 @@ Settings select provider, model, and reasoning level for `explorer`, `source`,
 `correctness` profile. Pi runs each role except the special Codex source profile
 below. OpenAI models have been exercised. Other Pi providers remain unqualified.
 
-`explorers` and `verifiers` are positive integer group sizes, both defaulting to
-`1`. Set `"explorers": 2` and `"verifiers": 2` before `init` to run up to two workers
-of each role concurrently. Each group's membership is fixed before it starts.
-The campaign waits for every member before starting the next group.
+`maxWorkers` is a positive integer, defaulting to `1`. Set `"maxWorkers": 2`
+before `init` to allow two Explorer or Verifier invocations in total, including
+Verifiers still selecting work. A Verifier's checking task occupies its existing
+slot. The limit applies to automatic campaigns and manual worker calls.
 
-`maxExplorerTurns` defaults to 10 completed Explorer submissions. The final
-configured Verifier group finishes before the campaign stops at `turn-limit`.
-Eligible notes may remain unchecked and require later worker invocations.
-The cap imposes no time or cost limit. `window` defaults to 100,000 characters
-per verification batch, always admitting its first entry.
+After any worker completes, the campaign fills available slots with eligible,
+unclaimed verification work first, then new Explorer turns. `maxExplorerTurns`
+defaults to 10. Admission counts completed and in-flight Explorers against that
+cap. After exploration stops, remaining eligible verification batches can finish.
+The campaign reaches `turn-limit` when admitted work has settled and no eligible
+offer remains. These limits impose no wall-clock or monetary bound.
+
+`window` defaults to 100,000 characters per verification batch, always admitting
+its first entry. Automatic admission consumes only the batch's selected note IDs
+for the current publication. A `no-work` selection is reoffered when a new
+publication or new solution nomination changes its eligibility. The campaign
+keeps `busy` work eligible after competing claims settle.
 
 By default, Verifiers can select intermediate notes for checks. To defer checks
 until a Verifier selects a claimed complete solution, initialize with:
@@ -181,13 +188,14 @@ until a Verifier selects a claimed complete solution, initialize with:
 bun run xean init task.json .xean/deferred.sqlite settings.json --verify-on-solution
 ```
 
-The flag sets `verifyOnSolution: true`, also accepted in settings. Selection must
-include a claimed solution with all four checks. It may also explicitly select
-that solution's dependencies for source, correctness, and reconstruction checks.
-Checks are limited to explicitly selected notes that are claimed solutions or
-ancestors of those solutions. Dependencies are never added to the batch implicitly.
-Verification timing is frozen at `init`. If no solution is accepted, exploration
-continues while turns remain.
+The flag sets `verifyOnSolution: true`, also accepted in settings. A solution must
+first be nominated with all four checks. Selection may explicitly include that
+solution's dependencies for source, correctness, and reconstruction.
+Later batches may select still-eligible dependencies without selecting the
+solution again. Checks are limited to
+explicitly selected solutions and their eligible ancestors. Dependencies are never
+added to the batch implicitly. Verification timing is frozen at `init`. If no
+solution is accepted, exploration continues while turns remain.
 
 Verification checks selected notes conditionally on their exact frozen dependency
 statements. Those statements are assumptions even when their proofs are unresolved.
@@ -258,8 +266,13 @@ bun run xean resume .xean/demo.sqlite
 resume skips that ambiguous result to make a fresh call. Reconstruction can correct its
 statement batch and retry automatically once. A repeated fresh correction stops
 with `call-failure`, and explicit `resume` uses the latest corrected batch.
-A group with a failed worker remains `call-failure` until resumed, even when
-another member's checks provisionally establish an accepted note.
+The campaign pauses new admission while a candidate is provisionally accepted
+or a worker has failed. Final acceptance waits for all admitted workers to settle
+and requires the latest checks still to establish the candidate. If later checks
+invalidate it and no worker has failed, normal admission can resume before other
+workers settle. Failed work remains `call-failure` until explicitly resumed, even
+if another worker provisionally establishes an accepted note. Resume preserves
+frozen inputs and recorded receipts.
 
 The independent `@chaoxu/notebook-store` package is bundled and installs with
 `xean`. A campaign at `campaign.sqlite` creates `campaign.sqlite.notes.sqlite`.
@@ -315,9 +328,9 @@ These results add no checks. Wait on the returned native task ID with
 the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
 
 Default Verifiers created together receive separate subsets of target notes,
-frozen at admission. With `verifyOnSolution`, selection views also include all
-declared ancestors so Verifiers can explicitly select dependency checks.
-Checking supplies each target's direct dependency statements. An empty selection view returns
+frozen at admission. With `verifyOnSolution`, selection views may also include
+eligible declared ancestors for explicit dependency checks. Checking supplies all
+of each target's direct dependency statements. An empty selection view returns
 `no-work` without a model call. Only selected targets can cause `busy`. Shared
 dependencies are assumptions, and equivalent mathematics can still appear under
 different note IDs.
@@ -329,15 +342,16 @@ Verifier:
 bun examples/workers.ts task.json settings.json .xean/workers.sqlite
 ```
 
-This interface uses the existing database owner. Manual workers of the same
-role may overlap, while mixed Explorer and Verifier work is rejected until the
-active workers settle. An automatic campaign owns admission while it runs or
-awaits recovery. `startCampaign: false` only omits initial campaign creation.
+This interface uses the existing database owner. Manual Explorers and Verifiers
+may overlap within `maxWorkers`. An automatic campaign owns admission while it
+runs or awaits recovery. `startCampaign: false` only omits initial campaign creation.
 Reopening preserves existing tasks. Waiting on the same task ID recovers
 unfinished work. For a faulted or aborted worker, create
 `{kind: "retry", task: id}`. A retry preserves the frozen input and its exact
 publication references. If an aborted Verifier's verification child has already
-completed, retry can return that child's existing task ID.
+completed, retry can return that child's existing task ID. Running roles keep
+their note IDs and texts frozen. New roles see later publications, while reads
+can update verification status for already-known notes.
 
 Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite
 file. Other agents can read those records without starting work:
@@ -361,9 +375,8 @@ For manual exploration, pass advice as `{kind: "explorer", guidance: "..."}`.
 The `guide` queue is consumed by the automatic campaign controller.
 
 Campaign `status`, `inspect`, `resume`, and `export` commands require the automatic
-campaign task. The default CLI runs the complete research loop in role groups.
-Continuous mixed-role execution and independent processes writing a shared
-notebook remain outside this interface.
+campaign task. The default CLI runs the complete research loop with mixed workers.
+Independent processes writing a shared notebook remain outside this interface.
 
 Released Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
 retained patches recorded in [provenance](vendor/pi/provenance.json).
@@ -374,7 +387,7 @@ bun run pack
 ```
 
 `check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
-and writes `dist/xean-5.0.0-dev.3.tgz`. `bun run check:distribution` checks packaging
+and writes `dist/xean-5.0.0-dev.4.tgz`. `bun run check:distribution` checks packaging
 without retaining an archive.
 
 ## Citing `xean`

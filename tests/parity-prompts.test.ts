@@ -203,6 +203,40 @@ test("solution-only verification changes selection instructions without changing
   );
 });
 
+test("prior solution support can be selected without offering or rechecking its root", () => {
+  const input = {
+    task,
+    notes: [note],
+    claimed: [],
+    nominatedSupport: [note.id, "outside-view"],
+  };
+  const deferred = selectionCall({ ...input, verifyOnSolution: true });
+  expect(deferred.prompt).toContain(
+    `Previously nominated support IDs (execution information):\n${JSON.stringify(input.nominatedSupport)}`,
+  );
+  expect(deferred.system).toContain(
+    "these three local checks without selecting their solution again",
+  );
+  expect(deferred.system).toContain("Select only notes in the offered index");
+  const verify = [
+    { note: note.id, verifiers: ["source", "correctness", "reconstruction"] },
+  ];
+  expect(deferred.schema.safeParse({ verify }).success).toBe(true);
+  expect(
+    deferred.schema.safeParse({
+      verify: [{ ...verify[0], note: "outside-view" }],
+    }).success,
+  ).toBe(false);
+  expect(deferred.schema.safeParse({ verify: [] }).success).toBe(true);
+  const ordinary = selectionCall(input);
+  expect(ordinary.prompt).toBe(
+    selectionCall({ ...input, nominatedSupport: undefined }).prompt,
+  );
+  expect(z.toJSONSchema(deferred.schema)).toEqual(
+    z.toJSONSchema(ordinary.schema),
+  );
+});
+
 test("role prompts omit PASS reports without changing evidence or hiding failed checks", () => {
   const evidence = {
     ...note,

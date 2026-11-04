@@ -32,6 +32,7 @@ export const defaultSettings = () =>
     correctness: profile,
     requirements: profile,
     reconstruction: profile,
+    maxWorkers: 2,
   });
 export type Request = {
   descriptor: CallDescriptor;

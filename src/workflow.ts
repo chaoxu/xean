@@ -15,19 +15,29 @@ import {
   readNotebook,
 } from "./state.ts";
 import {
-  createWorkers,
+  campaignKind,
   completed,
+  createWorkers,
+  nominatedSupport,
+  readWorkers,
+  workerKind,
+  type NativeTask,
   type SourceExecutor,
   type WorkerRequest,
+  type WorkerTask,
 } from "./workers.ts";
 
 type Runtime = TaskRuntime<any, any, any, any>;
+export { campaignKind } from "./workers.ts";
 export type { SourceExecutor } from "./workers.ts";
-export type CampaignState = ({ phase: "next" } | { phase: "collect" }) & {
-  step: "explorer" | "verifier";
+export type CampaignState = (
+  { phase: "run" } | { phase: "wait" } | { phase: "retry" }
+) & {
   turns: number;
   guidanceThrough: number;
-  children?: number[];
+  children: number[];
+  publicationCount: number;
+  afterWorkerId: number;
 };
 export type CampaignResult = {
   outcome: "accepted" | "turn-limit" | "call-failure";
@@ -36,35 +46,68 @@ export type CampaignResult = {
   error?: string;
   resume?: CampaignState;
 };
-export const campaignKind = "xean.campaign";
-async function collectGroup(tx: Tx, state: CampaignState) {
-  const failed: number[] = [];
-  const errors: string[] = [];
-  for (const id of state.children!) {
-    const child = (await tx.task(id as TaskId))!;
-    if (child.state.status !== "terminal")
-      throw new Error(`Worker ${id} has not settled`);
-    const outcome = child.state.outcome;
-    if (outcome.status === "completed") {
-      if (state.step === "explorer") state.turns++;
-    } else {
-      failed.push(id);
-      errors.push(outcome.error?.message ?? `Worker ${id} did not complete`);
+
+/** Account for a completed job once, retaining unfinished and failed identities. */
+function reconcile(state: CampaignState, records: readonly NativeTask[]) {
+  const active: WorkerTask[] = [],
+    failed: WorkerTask[] = [];
+  for (const id of state.children) {
+    const child = records.find((task) => task.id === id) as
+      WorkerTask | undefined;
+    if (!child) throw new Error("Worker " + id + " is missing");
+    if (child.state.status !== "terminal") active.push(child);
+    else if (child.state.outcome.status !== "completed") failed.push(child);
+    else if (child.input.kind === "explorer") state.turns++;
+  }
+  state.children = [...active, ...failed].map(({ id }) => id);
+  return { active, failed };
+}
+
+/** Retries keep the publication frontier of their original public invocation. */
+function admissionId(job: WorkerTask, records: readonly NativeTask[]): number {
+  const previous = job.input.previousTasks?.[0] ?? job.owner;
+  const parent = records.find((task) => task.id === previous);
+  return parent?.kind === workerKind
+    ? admissionId(parent as WorkerTask, records)
+    : job.id;
+}
+
+/** Completed selections consume actual batches; empty selections consume their offer. */
+function consumed(
+  records: readonly NativeTask[],
+  after: number,
+  nominated: ReadonlySet<string>,
+) {
+  const ids = new Set<string>();
+  for (const record of records) {
+    if (record.kind !== workerKind) continue;
+    const job = record as WorkerTask;
+    if (job.input.kind === "explorer" || admissionId(job, records) <= after)
+      continue;
+    if (job.input.kind === "verify") {
+      for (const entry of job.input.input.verify) ids.add(entry.note);
+    } else if (
+      job.input.kind === "verifier" &&
+      job.state.outcome?.status === "completed" &&
+      (job.state.outcome.result as { status?: string })?.status === "no-work"
+    ) {
+      for (const id of job.input.verify?.map((entry) => entry.note) ??
+        job.input.input.notes.map((note) => note.id))
+        if (
+          !nominated.has(id) ||
+          job.input.input.nominatedSupport?.includes(id)
+        )
+          ids.add(id);
     }
   }
-  if (failed.length) state.children = failed;
-  else {
-    delete state.children;
-    state.step = state.step === "explorer" ? "verifier" : "explorer";
-  }
-  state.phase = "next";
-  return { state, errors };
+  return ids;
 }
+
 const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
   await runtime.commit(async (tx, task) => {
     const state = { ...task.state.checkpoint } as CampaignState;
-    // Pi aborts ordinary descendants before reserving their parent's handler.
-    if (state.phase === "collect") await collectGroup(tx, state);
+    // Pi settles ordinary descendants before invoking their owner's abort handler.
+    reconcile(state, (await readWorkers(tx, task.conversationId)).records);
     return {
       status: "terminal",
       outcome: {
@@ -89,7 +132,7 @@ export async function lastCampaign(tx: Tx, root: ConversationId) {
   ).items[0];
 }
 
-/** Native ownership and waits seal each group before another is admitted. */
+/** Refill shared capacity after any native worker completion. */
 export function createWorkflow(options: { source?: SourceExecutor } = {}) {
   const workers = createWorkers(options);
   const Campaign = defineTask<
@@ -99,98 +142,156 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
   >({
     name: campaignKind,
     version: 1,
-    initial: (input) =>
-      input.resume ?? {
-        phase: "next",
-        step: "explorer",
-        turns: 0,
-        guidanceThrough: 0,
-      },
+    initial: ({ resume }) =>
+      resume
+        ? { ...resume, phase: resume.children.length ? "retry" : "run" }
+        : {
+            phase: "run",
+            turns: 0,
+            guidanceThrough: 0,
+            children: [],
+            publicationCount: -1,
+            afterWorkerId: 0,
+          },
     abort,
     phases: {
-      async next(task, runtime, context) {
+      async retry(task, runtime, context) {
         await runtime.commit(async (tx) => {
           const state = { ...task.state.checkpoint };
-          const config = await definition(tx, task.conversationId);
-          let requests: WorkerRequest[];
-          // Settle interrupted members before considering a provisional acceptance.
-          if (state.children?.length) {
-            requests = state.children.map((task) => ({ kind: "retry", task }));
-          } else {
-            const book = readNotebook(
-              await tx.doc(Notebook, task.conversationId),
-            );
-            const { accepted } = project(book);
-            if (accepted.length)
-              return completed<CampaignResult>({
-                outcome: "accepted",
-                turns: state.turns,
-                accepted: accepted[0]!,
-              });
-            if (
-              state.step === "explorer" &&
-              state.turns >= config.settings.maxExplorerTurns
-            )
-              return completed<CampaignResult>({
-                outcome: "turn-limit",
-                turns: state.turns,
-              });
-            if (await admitNotes(tx, task.conversationId))
-              state.step = "verifier";
-            if (state.step === "explorer") {
-              const guidance = book.guidance
-                .slice(state.guidanceThrough)
-                .map((entry) => entry.text)
-                .join("\n\n");
-              state.guidanceThrough = book.guidance.length;
-              requests = Array.from(
-                {
-                  length: Math.min(
-                    config.settings.explorers,
-                    config.settings.maxExplorerTurns - state.turns,
-                  ),
-                },
-                () => ({ kind: "explorer", guidance }),
-              );
-            } else {
-              requests = Array.from(
-                { length: config.settings.verifiers },
-                () => ({ kind: "verifier" }),
-              );
-            }
-          }
-          const children = await workers.createGroup(
+          state.children = await workers.createGroup(
             tx,
             task.conversationId,
-            requests,
+            state.children.map((task) => ({ kind: "retry", task })),
             task.id,
           );
-          return {
-            status: "waiting",
-            on: children,
-            policy: "allSettled",
-            checkpoint: { ...state, phase: "collect", children },
-          };
+          return { status: "running", checkpoint: { ...state, phase: "run" } };
         }, context);
       },
-      async collect(task, runtime, context) {
+      async run(task, runtime, context) {
         await runtime.commit(async (tx) => {
-          const { state, errors } = await collectGroup(tx, {
-            ...task.state.checkpoint,
-          });
-          if (state.children?.length)
+          const state = { ...task.state.checkpoint };
+          const history = await readWorkers(tx, task.conversationId);
+          const { active, failed } = reconcile(state, history.records);
+          const config = await definition(tx, task.conversationId);
+          await admitNotes(tx, task.conversationId);
+          const ref = await tx.doc(Notebook, task.conversationId);
+          const book = readNotebook(ref),
+            { notes, accepted } = project(book);
+          if (state.publicationCount !== ref.publications.length) {
+            state.publicationCount = ref.publications.length;
+            state.afterWorkerId = history.jobs.at(-1)?.id ?? 0;
+          }
+          // Never freeze acceptance before admitted workers and adverse receipts settle.
+          if (failed.length || accepted.length) {
+            if (active.length)
+              return {
+                status: "running",
+                checkpoint: { ...state, phase: "wait" },
+              };
+            if (failed.length)
+              return completed<CampaignResult>({
+                outcome: "call-failure",
+                turns: state.turns,
+                error: failed
+                  .map(
+                    (child) =>
+                      child.state.outcome?.error?.message ??
+                      "Worker " + child.id + " did not complete",
+                  )
+                  .join("\n"),
+                resume: state,
+              });
             return completed<CampaignResult>({
-              outcome: "call-failure",
+              outcome: "accepted",
               turns: state.turns,
-              error: errors.join("\n"),
-              resume: state,
+              accepted: accepted[0]!,
             });
-          return { status: "running", checkpoint: state };
+          }
+          const unavailable = consumed(
+            history.records,
+            state.afterWorkerId,
+            new Set(
+              config.settings.verifyOnSolution
+                ? nominatedSupport(history.records, notes)
+                : [],
+            ),
+          );
+          for (const id of [...history.claimed, ...history.offered])
+            unavailable.add(id);
+          const eligible = notes
+            .filter((note) => !note.dead && !unavailable.has(note.id))
+            .map((note) => note.id);
+          const free = config.settings.maxWorkers - active.length;
+          const verifying = Math.min(free, eligible.length);
+          const exploring = Math.min(
+            free - verifying,
+            config.settings.maxExplorerTurns -
+              state.turns -
+              active.filter((job) => job.input.kind === "explorer").length,
+          );
+          const guidance = book.guidance
+            .slice(state.guidanceThrough)
+            .map((entry) => entry.text)
+            .join("\n\n");
+          const requests: WorkerRequest[] = [
+            ...Array.from({ length: verifying }, () => ({
+              kind: "verifier" as const,
+            })),
+            ...Array.from({ length: exploring }, () => ({
+              kind: "explorer" as const,
+              guidance,
+            })),
+          ];
+          if (exploring) state.guidanceThrough = book.guidance.length;
+          if (requests.length)
+            state.children = [
+              ...state.children,
+              ...(await workers.createGroup(
+                tx,
+                task.conversationId,
+                requests,
+                task.id,
+                eligible,
+              )),
+            ];
+          if (!state.children.length)
+            return completed<CampaignResult>({
+              outcome: "turn-limit",
+              turns: state.turns,
+            });
+          return { status: "running", checkpoint: { ...state, phase: "wait" } };
         }, context);
+      },
+      async wait(task, runtime, context) {
+        const children = await Promise.all(
+          task.state.checkpoint.children.map((id) =>
+            runtime.getTask(id as TaskId, context),
+          ),
+        );
+        const active = children.filter(
+          (child) => child && child.state.status !== "terminal",
+        );
+        if (
+          active.length &&
+          !children.some(
+            (child) =>
+              child?.state.status === "terminal" &&
+              child.state.outcome.status === "completed",
+          )
+        )
+          await Promise.race(
+            active.map((child) => runtime.waitForTask(child!.id, context)),
+          );
+        await runtime.commit(
+          (_tx, current) => ({
+            status: "running",
+            checkpoint: { ...current.state.checkpoint, phase: "run" },
+          }),
+          context,
+        );
       },
     },
   });
-
   const extension = defineExtension({
     ...workers.extension,
     tasks: [...workers.extension.tasks!, Campaign],

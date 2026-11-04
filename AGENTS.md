@@ -17,11 +17,18 @@ allowed only when the format cannot render monospace.
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
-- Campaigns alternate sealed groups of Explorers and Verifiers under one Pi
-  owner. Freeze group membership before execution and wait for the entire group
-  before advancing. Each Explorer appends a completed submission with summaries.
-  Verifiers select work and check source, correctness, requirements, and
-  reconstruction in that order. Explorer continuation is off.
+- Run Explorers and Verifiers under one Pi owner and a shared `maxWorkers` cap.
+  Refill on any completion, offering eligible unclaimed verification before new
+  exploration. Count completed and in-flight Explorers against `maxExplorerTurns`.
+  Freeze running role inputs and preserve immutable publication references.
+  Each Explorer appends a completed submission with summaries. Verifiers select
+  work and check source, correctness, requirements, and reconstruction in that
+  order. Explorer continuation is off.
+- After exploration stops, drain remaining eligible verification work. A batch
+  consumes only its selected IDs. Reoffer `no-work` when a new publication or
+  solution nomination changes eligibility. Retain `busy` work for later claim
+  availability. Preserve nominated solution
+  dependencies across verification windows when `verifyOnSolution` is enabled.
 - Claim selected notes atomically. Check them conditionally on their exact frozen
   dependency statements. Dependencies are checked and claimed only when separately
   selected. Useful lemmas require source, correctness, and reconstruction PASS in
@@ -35,8 +42,11 @@ allowed only when the format cannot render monospace.
 - Extract selected statements and direct dependency statements together. Blind
   reconstruction receives scoped statements without original candidate or
   dependency proofs. Preserve dependency scope and require each selected proof
-  to establish its conclusion from its own premises. A failed group remains
-  `call-failure` until explicit resume, even if another worker accepted a note.
+  to establish its conclusion from its own premises. Pause new admission while
+  a candidate is provisionally accepted or a worker has failed. Final acceptance
+  requires all admitted workers to settle and the latest projection still to
+  accept the candidate. Failed work remains `call-failure` until explicit resume,
+  even if another worker provisionally accepted a note.
 - Use Pi's native task waits and recovery. Keep execution records in Pi's SQLite
   database and mathematical note texts in the notebook database. Treat note IDs
   as opaque and preserve exact publication references. Keep notes immutable.

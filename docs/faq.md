@@ -134,10 +134,11 @@ remains distinct from a formal proof certificate. See the complete
 
 ## Is there a fixed time or cost budget?
 
-`maxExplorerTurns` limits completed Explorer submissions. The final configured
-Verifier group finishes before `turn-limit`, but eligible notes may remain
-unchecked and need later worker invocations. The cap imposes no wall-clock or
-monetary limit. The controlling agent manages its overall budget and scheduling.
+`maxExplorerTurns` limits Explorer submissions, counting completed and in-flight
+turns during admission. Eligible verification work continues after that cap.
+`maxWorkers` caps concurrent Explorer and Verifier invocations in total and
+defaults to `1`. Neither limit imposes a wall-clock or monetary bound. The
+controlling agent manages its overall budget and scheduling.
 
 `inspect` reports Pi's recorded usage. Some failed or external calls have
 incomplete accounting. Include source preparation and independent review when
@@ -161,9 +162,12 @@ scope. Manuscript preparation also belongs to the outside agent.
 Use `status` for the outcome and error, and `inspect` for notes, checks, and usage.
 Ctrl-C closes the CLI owner while preserving recorded progress. `run` recovers
 unfinished native work. After `call-failure`, inspect the error and use `resume`.
-Accepted and turn-limit campaigns remain terminal. A group with a failed worker
-stays `call-failure` until resumed, even if another member's checks provisionally
-establish an accepted note.
+Accepted and turn-limit campaigns remain terminal. New admission pauses while a
+candidate is provisionally accepted or a worker has failed. Final acceptance
+requires all admitted workers to settle and the latest checks still to establish
+the candidate. If it is invalidated and no worker has failed, admission may resume
+before other workers settle. Failed work stays `call-failure` until resumed, even
+if another worker provisionally establishes an accepted note.
 
 With the CLI owner closed, `guide` queues advice for the next fresh Explorer call,
 and `submit` queues additional notes. Neither changes an already frozen call.
@@ -178,11 +182,12 @@ and notebook databases. Their admitted notes, verification trust, and reconstruc
 proofs remain isolated. To reuse material, the caller prepares an explicit input
 packet for a fresh campaign and decides which premises it is admitting.
 
-Inside a campaign, groups of Explorers alternate with groups of Verifiers.
-`explorers` and `verifiers` set their sizes and default to 1. Workers in a group
-may run concurrently, and the campaign waits for every member before advancing.
-The caller owns scheduling across problems. Keep historical campaigns with their
-pinned runtimes and preserve both databases when backing up a campaign.
+Inside a campaign, Explorers and Verifiers may run together under `maxWorkers`.
+Each completion allows new admissions, prioritizing eligible verification work
+before another Explorer. Running roles retain their note IDs and texts, and new
+roles see later publications. The caller owns scheduling across problems. Keep
+historical campaigns with their pinned runtimes and preserve both databases
+when backing up a campaign.
 
 ## Can another agent call the workers directly?
 
@@ -196,11 +201,11 @@ input and exact publication references. [The worker example](../examples/workers
 runs an Explorer followed by a default Verifier. [The library instructions](../README.md#library-and-development)
 explain queued-note intake and manual Explorer guidance.
 
-This interface retains a single database owner. Manual workers of the same role
-may overlap. Mixed-role admission is rejected until active workers settle, and an automatic
-campaign owns admission while running or awaiting recovery. The ordinary CLI
-runs the full research loop. Separate processes cannot write a shared notebook
-through this worker interface.
+This interface retains a single database owner. Manual Explorer and Verifier
+calls share the `maxWorkers` limit and may overlap. An automatic campaign owns
+admission while running or awaiting recovery. The ordinary CLI runs the full
+research loop. Separate processes cannot write a shared notebook through this
+worker interface.
 
 ## Where can an agent inspect current work?
 
