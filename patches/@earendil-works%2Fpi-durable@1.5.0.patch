@@ -389,10 +389,33 @@ index a70aedb..d47bf84 100644
      taskId: TaskId;
      /** The run's placed inputs, settled when it ends; `[]` once it answered and runs only its `afterRun` tasks. */
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index 365ea3a..3ddaf26 100644
+index 365ea3a..64fdb2e 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
-@@ -2607,7 +2607,7 @@ export class TaskScheduler {
+@@ -325,12 +325,9 @@
+             const state = record.state;
+             if (state.status === "completing")
+                 continue;
+-            if (state.status === "waiting" && !record.abortRequested && state.on.some((id) => this.#live.has(id)))
++            if (this.#waitingOn(record, true).length > 0)
+                 continue;
+             if (state.status === "sleeping" && !record.abortRequested && state.until > now)
+-                continue;
+-            // An abort invocation waits for the live work below it, which counts itself.
+-            if (record.abortRequested && this.#waitingOn(record, true).length > 0)
+                 continue;
+             // A task no definition can take waits for a registry change, except an abort-marked one, which is orphaned.
+             if (!record.abortRequested || record.abortReason !== undefined) {
+@@ -1872,6 +1869,8 @@
+         if (record.abortRequested)
+             return this.#ownedLive(record.id, { first });
+         if (record.state.status !== "waiting")
++            return [];
++        if (record.state.policy === "anySettled" && record.state.on.some((id) => !this.#live.has(id)))
+             return [];
+         if (!first)
+             return record.state.on.filter((id) => this.#live.has(id));
+@@ -2607,7 +2606,7 @@
              }),
              entries: (query, limit, cursor, context) => this.#read(invocation, () => this.#session.readOnLine((storage) => storage.scanEntries(conversationEntries(invocation.conversationId, query), limit, cursor, context))),
              context: (conversationId, context, options) => this.#read(invocation, async () => {
@@ -579,10 +602,10 @@ index 890f142..0059cab 100644
  //# sourceMappingURL=storage.js.map
 \ No newline at end of file
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b43143c..e75ed74 100644
+index b43143c..95e479c 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -3,7 +3,7 @@ import type { Op } from "@earendil-works/chord/delta";
+@@ -3,7 +3,7 @@
  import type { Message, Models } from "@earendil-works/pi-ai";
  import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
  import type { ExecutionEnv } from "./env/index.ts";
@@ -591,7 +614,7 @@ index b43143c..e75ed74 100644
  /** JSON object used as the root of every durable document. */
  export type JsonObject = {
      [key: string]: JsonValue;
-@@ -289,6 +289,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
+@@ -289,6 +289,7 @@
      /** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
      context(conversationId: ConversationId, context: Context, options?: {
          readonly at?: EntryId;
@@ -599,3 +622,25 @@ index b43143c..e75ed74 100644
      }): Promise<ContextView>;
      /** The Harness clock. */
      now(): number;
+@@ -350,8 +351,10 @@
+     readonly kind: "task";
+     readonly taskId: TaskId;
+ };
+-/** How a waiting task treats the tasks it waits on (spec §5.5). */
+-export type JoinPolicy = "failFast" | "allSettled";
++/** How a waiting task treats the tasks it waits on (spec §5.5).
++ * `anySettled` resumes after one task is terminal without aborting others. Empty waits resume immediately.
++ */
++export type JoinPolicy = "failFast" | "allSettled" | "anySettled";
+ /** Creation options for a durable task. */
+ export type TaskOptions = {
+     /** Omitted: inherit the creator's carrier. "root": start at the adapter root without a stored carrier. */
+@@ -600,7 +603,7 @@
+     readonly checkpoint: S;
+     readonly outcome?: never;
+ } | {
+-    /** Parked without an invocation until every task in `on` is terminal; then resumes at `checkpoint`. */
++    /** Parked without an invocation until the join policy is satisfied; then resumes at `checkpoint`. */
+     readonly status: "waiting";
+     readonly checkpoint: S;
+     readonly on: readonly TaskId[];

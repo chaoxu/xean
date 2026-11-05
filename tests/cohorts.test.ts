@@ -835,7 +835,11 @@ test("a busy result does not spin while its only target remains claimed", async 
     expect(
       records.find((task: { kind: string }) => task.kind === "xean.campaign")
         .state,
-    ).toMatchObject({ status: "running", checkpoint: { phase: "wait" } });
+    ).toMatchObject({
+      status: "waiting",
+      policy: "anySettled",
+      checkpoint: { phase: "run" },
+    });
   } finally {
     release.resolve();
     observation.detach();
@@ -897,8 +901,9 @@ test("an in-flight Explorer consumes the remaining exploration allowance after n
       (task: { kind: string }) => task.kind === "xean.campaign",
     );
     expect(campaign.state).toMatchObject({
-      status: "running",
-      checkpoint: { phase: "wait" },
+      status: "waiting",
+      policy: "anySettled",
+      checkpoint: { phase: "run" },
     });
   } finally {
     release.resolve();
@@ -910,96 +915,6 @@ test("an in-flight Explorer consumes the remaining exploration allowance after n
     outcome: "turn-limit",
     turns: 2,
   });
-});
-
-test("a child completed before wait snapshots is reconciled without waiting for its hung peer", async () => {
-  const waitEntered = Promise.withResolvers<void>();
-  const resumeWait = Promise.withResolvers<void>();
-  const bothExplorers = Promise.withResolvers<void>();
-  const releaseFirst = Promise.withResolvers<void>();
-  const releaseSecond = Promise.withResolvers<void>();
-  const verificationStarted = Promise.withResolvers<void>();
-  let explorerCalls = 0,
-    firstNamespace = "",
-    intercepted = false;
-  let restorePhase = () => {};
-  const originalFactory = workflow.createWorkflow;
-  const factory = spyOn(workflow, "createWorkflow").mockImplementation(
-    (options) => {
-      const value = originalFactory(options);
-      const phases = value.extension.tasks!.find(
-        (task) => task.definition.name === "xean.campaign",
-      )!.definition.phases as CampaignPhases;
-      const original = phases.wait;
-      const wait = spyOn(phases, "wait").mockImplementation(
-        async (task, runtime, ctx) => {
-          if (!intercepted) {
-            intercepted = true;
-            waitEntered.resolve();
-            await Promise.race([resumeWait.promise, abortable(runtime.signal)]);
-            runtime.signal.throwIfAborted();
-          }
-          return original(task, runtime, ctx);
-        },
-      );
-      restorePhase = () => wait.mockRestore();
-      return value;
-    },
-  );
-  try {
-    const run = await fixture(
-      async (request): Promise<Awaited<ReturnType<Respond>>> => {
-        if (request.descriptor.kind === "explorer") {
-          const first = ++explorerCalls === 1;
-          if (first) firstNamespace = request.descriptor.input.namespace;
-          if (explorerCalls === 2) bothExplorers.resolve();
-          await Promise.race([
-            (first ? releaseFirst : releaseSecond).promise,
-            abortable(request.signal),
-          ]);
-        }
-        if (
-          request.descriptor.kind === "verifier" &&
-          request.descriptor.name === "source"
-        )
-          verificationStarted.resolve();
-        return complete(request);
-      },
-      { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
-    );
-    factory.mockRestore();
-    const done = run.owner.root.waitForIdle(context);
-    try {
-      await observed(
-        waitEntered.promise,
-        "Campaign wait phase before its child snapshots",
-      );
-      await observed(bothExplorers.promise, "both blocked Explorers");
-      releaseFirst.resolve();
-      const first = (await run.tasks()).find(
-        (task: { id: number }) => `w${task.id}` === firstNamespace,
-      );
-      expect((await run.wait(first.id)).state.outcome.status).toBe("completed");
-      resumeWait.resolve();
-      await observed(
-        verificationStarted.promise,
-        "verification before the second Explorer finishes",
-      );
-      expect((await inspect(run.path, readStatus)).status).not.toBe("terminal");
-    } finally {
-      releaseFirst.resolve();
-      releaseSecond.resolve();
-      resumeWait.resolve();
-      await done;
-    }
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      outcome: "accepted",
-      turns: 2,
-    });
-  } finally {
-    factory.mockRestore();
-    restorePhase();
-  }
 });
 
 test("an abort before worker admission resumes from an empty child list", async () => {
@@ -1280,59 +1195,4 @@ test("a later solution nomination reoffers support declined earlier in the same 
   expect(
     run.requests.filter(({ descriptor }) => descriptor.kind === "explorer"),
   ).toHaveLength(1);
-});
-
-test("a completing child with an outcome still waits for its owned work to settle", async () => {
-  const phases = createWorkflow().extension.tasks!.find(
-    (task) => task.definition.name === "xean.campaign",
-  )!.definition.phases as CampaignPhases;
-  const finished = Promise.withResolvers<void>();
-  const waits: number[] = [];
-  let commits = 0;
-  const current = {
-    state: {
-      checkpoint: {
-        phase: "wait",
-        children: [11, 12],
-        turns: 0,
-        guidanceThrough: 0,
-        publicationCount: 0,
-        afterWorkerId: 0,
-      },
-    },
-  } as Parameters<typeof phases.wait>[0];
-  const runtime = {
-    async getTask(id: number) {
-      return id === 11
-        ? {
-            id,
-            state: {
-              status: "completing",
-              outcome: { status: "completed", result: null },
-            },
-          }
-        : { id, state: { status: "running", checkpoint: {} } };
-    },
-    async waitForTask(id: number) {
-      waits.push(id);
-      await finished.promise;
-    },
-    async commit(advance: (tx: unknown, task: typeof current) => unknown) {
-      commits++;
-      expect(advance(undefined, current)).toMatchObject({
-        status: "running",
-        checkpoint: { phase: "run" },
-      });
-    },
-  } as unknown as Parameters<typeof phases.wait>[1];
-  const pending = phases.wait(current, runtime, context);
-  try {
-    await Bun.sleep(0);
-    expect(waits).toEqual([11, 12]);
-    expect(commits).toBe(0);
-  } finally {
-    finished.resolve();
-    await pending;
-  }
-  expect(commits).toBe(1);
 });

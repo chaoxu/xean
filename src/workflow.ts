@@ -30,9 +30,7 @@ import {
 type Runtime = TaskRuntime<any, any, any, any>;
 export { campaignKind } from "./workers.ts";
 export type { SourceExecutor } from "./workers.ts";
-export type CampaignState = (
-  { phase: "run" } | { phase: "wait" } | { phase: "retry" }
-) & {
+export type CampaignState = ({ phase: "run" } | { phase: "retry" }) & {
   turns: number;
   guidanceThrough: number;
   children: number[];
@@ -185,8 +183,10 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
           if (failed.length || accepted.length) {
             if (active.length)
               return {
-                status: "running",
-                checkpoint: { ...state, phase: "wait" },
+                status: "waiting",
+                on: active.map(({ id }) => id),
+                policy: "anySettled",
+                checkpoint: state,
               };
             if (failed.length)
               return completed<CampaignResult>({
@@ -259,36 +259,13 @@ export function createWorkflow(options: { source?: SourceExecutor } = {}) {
               outcome: "turn-limit",
               turns: state.turns,
             });
-          return { status: "running", checkpoint: { ...state, phase: "wait" } };
+          return {
+            status: "waiting",
+            on: state.children as TaskId[],
+            policy: "anySettled",
+            checkpoint: state,
+          };
         }, context);
-      },
-      async wait(task, runtime, context) {
-        const children = await Promise.all(
-          task.state.checkpoint.children.map((id) =>
-            runtime.getTask(id as TaskId, context),
-          ),
-        );
-        const active = children.filter(
-          (child) => child && child.state.status !== "terminal",
-        );
-        if (
-          active.length &&
-          !children.some(
-            (child) =>
-              child?.state.status === "terminal" &&
-              child.state.outcome.status === "completed",
-          )
-        )
-          await Promise.race(
-            active.map((child) => runtime.waitForTask(child!.id, context)),
-          );
-        await runtime.commit(
-          (_tx, current) => ({
-            status: "running",
-            checkpoint: { ...current.state.checkpoint, phase: "run" },
-          }),
-          context,
-        );
       },
     },
   });

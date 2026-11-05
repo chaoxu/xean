@@ -34,7 +34,7 @@
     {
       "package": "@earendil-works/pi-durable",
       "path": "patches/@earendil-works%2Fpi-durable@1.5.0.patch",
-      "sha256": "b89b8e53f96ac5f06155cad4f249f07f09b9d6a484eea2e3b2c9ee79508c3ffe",
+      "sha256": "28e343d6410a0daa4f12dc96d1dc1518d500b23e4dcc4a4e217f00e02fbefe97",
       "files": {
         "dist/harness/agent.js": "19fcaabe028db2f498413c785abe13e5e5cadcca4fd6ff8a1388ccc1f9aecddf",
         "dist/harness/context.d.ts": "d8f9f186aabddcb77b14c00cb2ee95ed735088d55c80401082afa5afc8a7916f",
@@ -42,14 +42,14 @@
         "dist/harness/generation.js": "df0a6eea46458b19dbf3810b5c2ce1c97893353286f1fb709d6d0b0ff3c7ef12",
         "dist/harness/harness.js": "802592e1a2a880d29e1feb4068c69806084e9909e61cfee4928f66429e980742",
         "dist/harness/live.d.ts": "cf31fd5014b32124d0d8c71a6d64ff944dc52ee7fbe83629769564f485b8baca",
-        "dist/harness/scheduler.js": "c2cd1170427f8e375106244f10e699e0af9b0a07c02bc2d579c93e4f7193e0da",
+        "dist/harness/scheduler.js": "fb8a1843335ddd6faba69dbb392c97d34505729526807a389094aed435da894a",
         "dist/harness/types.d.ts": "359045a8ea54247362e0ebd30b27c50fb1d0a3aa752154e3497ca2dc7a3d66b3",
         "dist/index.d.ts": "55d1b3298eda3dcd38ef3f92db07a0b5273354496dac8eeb00c2c0ffc3447750",
         "dist/storage/sqlite/storage.d.ts": "d2d9d20a3769594b2ec88eafa10c50649b967b779329972190bed2f2b3892247",
         "dist/storage/sqlite/storage.js": "51195f3823f430b3aa398dfc8705c6c326bb9dcc1d903c44573b92af3344a498",
-        "dist/types.d.ts": "47d50fe09e3d315a6a34424ad4c5499d38c725ad56eb0b27520bf740a3f8469d"
+        "dist/types.d.ts": "dfcc1d6b68dac80f626245cec89f0e98283e43afa922694538bfb8b238e23255"
       },
-      "reason": "Preserve stream and context hooks, bounded response and recovery policies, completed-reasoning retry projection, read-only SQLite inspection on the native schema."
+      "reason": "Preserve stream and context hooks, bounded response and recovery policies, completed-reasoning retry projection, read-only SQLite inspection on the native schema, and durable any-settled task joins without sibling cancellation."
     }
   ]
 }
