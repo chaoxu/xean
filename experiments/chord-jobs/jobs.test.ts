@@ -51,6 +51,12 @@ async function until<T>(
     await Bun.sleep(5);
   }
 }
+const selection = (ids: string[]) => ({
+  verify: ids.map((note) => ({
+    note,
+    verifiers: ["source", "correctness", "requirements", "reconstruction"],
+  })),
+});
 const stage = ({ descriptor }: Request) =>
   descriptor.kind === "verifier" ? descriptor.name : descriptor.kind;
 
@@ -109,7 +115,9 @@ async function fixture(respond: Respond = complete, maxWorkers = 2) {
       );
     }),
   );
-  let jobs = await openJobs(directory, definition, models);
+  const reports: unknown[] = [];
+  const report = (event: unknown) => reports.push(event);
+  let jobs = await openJobs(directory, definition, models, report);
   pi = jobs.pi;
   ready.resolve();
   let watch = await jobs.running.watch(context);
@@ -136,8 +144,17 @@ async function fixture(respond: Respond = complete, maxWorkers = 2) {
     definition,
     models,
     provider,
+    reports,
     requests,
     sizes,
+    async start(kind: "explorer" | "verifier") {
+      const job = await jobs.start(kind);
+      const entry = jobs.running.value.find((entry) => entry.id === job.id);
+      if (entry?.phase === "blocked")
+        throw new Error("New native job is blocked");
+      const ref = entry?.args.ref ?? (await job.outcome(context)).args.ref;
+      return { id: job.id, ref };
+    },
     finished(ref: number) {
       return until(() => jobs.history().find((row) => row.ref === ref));
     },
@@ -181,7 +198,7 @@ async function fixture(respond: Respond = complete, maxWorkers = 2) {
           })
         : undefined;
       try {
-        jobs = await openJobs(directory, definition, models);
+        jobs = await openJobs(directory, definition, models, report);
         pi = jobs.pi;
       } finally {
         hook?.mockRestore();
@@ -196,40 +213,41 @@ async function fixture(respond: Respond = complete, maxWorkers = 2) {
 test("Chord refills a shared slot with verification while another Explorer is held", async () => {
   const releaseExplorer = gate(),
     releaseChecks = gate();
-  let heldExplorer = -1;
+  let explorers = 0;
   const checking = new Set<string>();
   const run = await fixture(async (request) => {
     const d = request.descriptor;
-    if (d.kind === "explorer" && d.input.namespace === `w${heldExplorer}`)
+    if (d.kind === "explorer" && explorers++ === 1)
       await Promise.race([releaseExplorer.promise, abortable(request.signal)]);
     if (d.kind === "verifier" && d.name === "source") {
       d.judged.forEach((id) => checking.add(id));
       await Promise.race([releaseChecks.promise, abortable(request.signal)]);
     }
+    if (d.kind === "selection")
+      return selection(
+        d.input.notes
+          .filter((note) => !d.input.claimed.includes(note.id))
+          .map((note) => note.id),
+      );
     return complete(request);
   });
-  const first = await run.pi.prepare("explorer");
-  heldExplorer = await run.pi.prepare("explorer");
-  await run.jobs.start(first);
-  await run.jobs.start(heldExplorer);
+  const { ref: first } = await run.start("explorer");
+  const { ref: heldExplorer } = await run.start("explorer");
   expect((await run.finished(first)).status).toBe("done");
   const firstId = `w${first}.1`,
     secondId = `w${heldExplorer}.1`;
-  const v1 = await run.pi.prepare("verifier", [firstId]);
-  await run.jobs.start(v1);
+  const { ref: v1 } = await run.start("verifier");
   await until(() => (checking.has(firstId) ? true : undefined));
   expect(run.jobs.history().some((row) => row.ref === heldExplorer)).toBe(
     false,
   );
   expect(run.jobs.running.value.length).toBe(2);
-  const excess = await run.pi.prepare("explorer");
-  await expect(run.jobs.start(excess)).rejects.toThrow(
+  await expect(run.jobs.start("explorer")).rejects.toThrow(
     /busy|concurrency|limit/i,
   );
   releaseExplorer.resolve();
   expect((await run.finished(heldExplorer)).status).toBe("done");
-  const v2 = await run.pi.prepare("verifier", [secondId]);
-  await run.jobs.start(v2);
+  const { ref: v2 } = await run.start("verifier");
   await until(() => (checking.has(secondId) ? true : undefined));
   expect(
     run.jobs
@@ -242,13 +260,23 @@ test("Chord refills a shared slot with verification while another Explorer is he
   expect((await run.finished(v2)).status).toBe("done");
   const book = await run.pi.book();
   expect(book.accepted.sort()).toEqual([firstId, secondId].sort());
+  const selectors = run.requests
+    .map((request) => request.descriptor)
+    .filter((descriptor) => descriptor.kind === "selection");
+  expect(selectors).toHaveLength(2);
+  expect(selectors[1]!.input.claimed).toEqual([firstId]);
+  expect(selectors[1]!.input.notes.map((note) => note.id)).toEqual([
+    firstId,
+    secondId,
+  ]);
   for (const id of [firstId, secondId]) {
     const calls = run.requests.filter(
       ({ descriptor: d }) =>
-        d.kind !== "explorer" && d.input.notes.some((note) => note.id === id),
+        d.kind !== "explorer" &&
+        d.kind !== "selection" &&
+        d.input.notes.some((note) => note.id === id),
     );
     expect(calls.map(stage)).toEqual([
-      "selection",
       "source",
       "correctness",
       "requirements",
@@ -278,8 +306,8 @@ test("overlapping selector batches claim atomically without reserving the losing
   const firstSelection = gate(),
     secondSelection = gate(),
     releaseChecks = gate();
-  const selected = new Set<string>(),
-    checking = new Set<string>();
+  let selections = 0;
+  const checking = new Set<string>();
   let b = "",
     c = "",
     d = "";
@@ -288,13 +316,13 @@ test("overlapping selector batches claim atomically without reserving the losing
     if (descriptor.kind === "explorer")
       return { notes: [note("B"), note("C"), note("D")] };
     if (descriptor.kind === "selection") {
-      const ids = descriptor.input.notes.map((note) => note.id);
-      selected.add(ids.join(","));
-      if (ids.length === 2)
+      const index = selections++;
+      if (index < 2)
         await Promise.race([
-          ids.includes(b) ? firstSelection.promise : secondSelection.promise,
+          index === 0 ? firstSelection.promise : secondSelection.promise,
           abortable(request.signal),
         ]);
+      return selection(index === 0 ? [b, c] : index === 1 ? [c, d] : [d]);
     }
     if (descriptor.kind === "verifier" && descriptor.name === "source") {
       descriptor.judged.forEach((id) => checking.add(id));
@@ -302,40 +330,51 @@ test("overlapping selector batches claim atomically without reserving the losing
     }
     return complete(request);
   });
-  const explorer = await run.pi.prepare("explorer");
-  await run.jobs.start(explorer);
+  const { ref: explorer } = await run.start("explorer");
   await run.finished(explorer);
   [b, c, d] = [1, 2, 3].map((index) => `w${explorer}.${index}`) as [
     string,
     string,
     string,
   ];
-  const bc = await run.pi.prepare("verifier", [b, c]);
-  const cd = await run.pi.prepare("verifier", [c, d]);
-  await run.jobs.start(bc);
-  await run.jobs.start(cd);
-  await until(() => (selected.size === 2 ? true : undefined));
+  const { ref: bc } = await run.start("verifier");
+  const { ref: cd } = await run.start("verifier");
+  await until(() => (selections === 2 ? true : undefined));
   firstSelection.resolve();
   await until(() => (checking.has(b) ? true : undefined));
   secondSelection.resolve();
   expect(await run.finished(cd)).toMatchObject({ status: "busy", ids: [] });
   expect(run.jobs.claims().map((row) => row.ids)).toEqual([[b, c]]);
-  const onlyD = await run.pi.prepare("verifier", [d]);
-  await run.jobs.start(onlyD);
+  const { ref: onlyD } = await run.start("verifier");
   await until(() => (checking.has(d) ? true : undefined));
   expect(run.jobs.claims().map((row) => row.ids)).toEqual([[b, c], [d]]);
+  const selectors = run.requests
+    .map((request) => request.descriptor)
+    .filter((descriptor) => descriptor.kind === "selection");
+  expect(
+    selectors.map((descriptor) =>
+      descriptor.input.notes.map((note) => note.id),
+    ),
+  ).toEqual([
+    [b, c, d],
+    [b, c, d],
+    [b, c, d],
+  ]);
+  expect(selectors[2]!.input.claimed).toEqual([b, c]);
   releaseChecks.resolve();
   expect((await run.finished(bc)).status).toBe("done");
   expect((await run.finished(onlyD)).status).toBe("done");
-  const loserCalls = (await run.assignments()).filter(
-    ({ descriptor }) =>
-      descriptor.kind !== "explorer" &&
-      descriptor.input.notes.map((note) => note.id).join(",") ===
-        [c, d].join(","),
-  );
-  expect(loserCalls.map(({ descriptor }) => descriptor.kind)).toEqual([
-    "selection",
-  ]);
+  expect(
+    run.requests
+      .filter(
+        (request) =>
+          request.descriptor.kind === "verifier" &&
+          request.descriptor.name === "source",
+      )
+      .map((request) =>
+        request.descriptor.kind === "verifier" ? request.descriptor.judged : [],
+      ),
+  ).toEqual([[b, c], [d]]);
   expect((await run.pi.book()).accepted.sort()).toEqual([b, c, d].sort());
 });
 
@@ -356,11 +395,10 @@ test("close and reopen keep the Chord job and pending Pi proof, reusing all comp
     }
     return complete(request);
   });
-  const explorer = await run.pi.prepare("explorer");
-  await run.jobs.start(explorer);
+  const { ref: explorer } = await run.start("explorer");
   await run.finished(explorer);
-  const verifier = await run.pi.prepare("verifier");
-  const job = await run.jobs.start(verifier);
+  const job = await run.start("verifier");
+  const verifier = job.ref;
   await proofPending.promise;
   const before = await run.tasks();
   const proofConversation = run.requests.find(
@@ -433,8 +471,8 @@ test("publication before Chord settlement replays its completed Pi call without 
       throw new Error("Owner closed after publication before job settlement");
     },
   );
-  const explorer = await firstPi.prepare("explorer");
-  const job = await run.jobs.start(explorer);
+  const job = await run.start("explorer");
+  const explorer = job.ref;
   await published.promise;
   const before = (await run.tasks()).filter(
     (task) => task.kind === GenerationTask.definition.name,
@@ -491,14 +529,11 @@ test("a frozen selection invalidated before claiming does not start any check", 
       return checks(descriptor.judged, "FAIL");
     return complete(request);
   });
-  const explorer = await run.pi.prepare("explorer");
-  await run.jobs.start(explorer);
+  const { ref: explorer } = await run.start("explorer");
   await run.finished(explorer);
-  const stale = await run.pi.prepare("verifier");
-  await run.jobs.start(stale);
+  const { ref: stale } = await run.start("verifier");
   await selecting.promise;
-  const invalidating = await run.pi.prepare("verifier");
-  await run.jobs.start(invalidating);
+  const { ref: invalidating } = await run.start("verifier");
   expect((await run.finished(invalidating)).status).toBe("done");
   expect((await run.pi.book()).notes[0]!.dead).toBe(true);
   expect((await run.pi.work(stale)).input.notes[0]!.dead).toBe(false);
@@ -538,8 +573,7 @@ test("exclusive ownership survives a competing open and is released after failed
   ).rejects.toThrow("Frozen definition changed");
   await run.reopen();
   expect(await run.pi.book()).toMatchObject({ notes: [], checks: [] });
-  const ref = await run.pi.prepare("explorer");
-  expect((await run.pi.work(ref)).kind).toBe("explorer");
+  expect(run.jobs.running.value).toEqual([]);
   expect(run.requests).toEqual([]);
   const files = await readdir(run.directory);
   expect(files).toContain("execution.sqlite");
@@ -558,18 +592,15 @@ test("maxWorkers 1 completes Explorer then Verifier with native sequential capac
     }
     return complete(request);
   }, 1);
-  const explorer = await run.pi.prepare("explorer");
-  await run.jobs.start(explorer);
+  const { ref: explorer } = await run.start("explorer");
   await exploring.promise;
-  const excess = await run.pi.prepare("explorer");
-  await expect(run.jobs.start(excess)).rejects.toThrow(
+  await expect(run.jobs.start("explorer")).rejects.toThrow(
     /busy|concurrency|limit/i,
   );
   expect(run.jobs.running.value).toHaveLength(1);
   releaseExplorer.resolve();
   expect((await run.finished(explorer)).status).toBe("done");
-  const verifier = await run.pi.prepare("verifier");
-  await run.jobs.start(verifier);
+  const { ref: verifier } = await run.start("verifier");
   expect((await run.finished(verifier)).status).toBe("done");
   expect((await run.pi.book()).accepted).toEqual([`w${explorer}.1`]);
   expect(Math.max(...run.sizes)).toBe(1);
@@ -594,8 +625,7 @@ test("terminal Pi failure survives interrupted Chord settlement without another 
       }
     },
   );
-  const ref = await firstPi.prepare("explorer");
-  await run.jobs.start(ref);
+  const { ref } = await run.start("explorer");
   await failed.promise;
   expect(run.provider.state.callCount).toBe(1);
   expect(run.jobs.history()).toEqual([]);
@@ -610,6 +640,14 @@ test("terminal Pi failure survives interrupted Chord settlement without another 
   interrupted.mockRestore();
   await run.reopen();
   expect(await run.finished(ref)).toMatchObject({ status: "failed", ids: [] });
+  expect(run.reports).toContainEqual(
+    expect.objectContaining({
+      kind: "job_failed",
+      error: expect.objectContaining({
+        message: "explorer failed: 401 upstream_unavailable",
+      }),
+    }),
+  );
   expect(run.provider.state.callCount).toBe(1);
   expect(
     await run.pi.root.commit(
@@ -619,4 +657,54 @@ test("terminal Pi failure survives interrupted Chord settlement without another 
     ),
   ).toEqual(original);
   expect((await run.pi.book()).notes).toEqual([]);
+});
+
+test("selection sees the full dependency chain while only selected notes are checked", async () => {
+  let a = "",
+    b = "",
+    c = "";
+  const run = await fixture((request) => {
+    const descriptor = request.descriptor;
+    if (descriptor.kind === "explorer") {
+      [a, b, c] = [1, 2, 3].map(
+        (index) => `${descriptor.input.namespace}.${index}`,
+      ) as [string, string, string];
+      return {
+        notes: [
+          note("A"),
+          note("B assuming A", [a]),
+          note("C assuming B", [b]),
+        ],
+      };
+    }
+    if (descriptor.kind === "selection") return selection([b, c]);
+    return complete(request);
+  });
+  const { ref: explorer } = await run.start("explorer");
+  await run.finished(explorer);
+  const { ref: verifier } = await run.start("verifier");
+  expect((await run.finished(verifier)).status).toBe("done");
+  const descriptors = run.requests.map((request) => request.descriptor);
+  const selected = descriptors.find(
+    (descriptor) => descriptor.kind === "selection",
+  )!;
+  expect(selected.input.notes.map((note) => note.id)).toEqual([a, b, c]);
+  const reconstructed = descriptors.find(
+    (descriptor) => descriptor.kind === "proof",
+  )!;
+  expect(reconstructed.input.notes.map((note) => note.id)).toEqual([b, c]);
+  expect(reconstructed.input.support.map((note) => note.id)).toEqual([a]);
+  const book = await run.pi.book();
+  expect(
+    book.notes.map((note) => ({
+      id: note.id,
+      checked: note.checked,
+      verified: note.verified,
+    })),
+  ).toEqual([
+    { id: a, checked: false, verified: false },
+    { id: b, checked: true, verified: false },
+    { id: c, checked: true, verified: false },
+  ]);
+  expect(book.accepted).toEqual([]);
 });

@@ -21,7 +21,6 @@ import {
   type SingletonHandle,
   type Static,
   type Store,
-  type StoreSelf,
 } from "@earendil-works/chord/next";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import {
@@ -82,6 +81,7 @@ export async function openJobs(
   directory: string,
   definition: Definition,
   models: Models,
+  report: (error: unknown) => void = console.error,
 ) {
   definition = copy(definition);
   const { settings } = definition;
@@ -111,9 +111,7 @@ export async function openJobs(
   let store: Store | undefined;
   let pi!: Pi;
   let host: ReturnType<typeof createHost> | undefined;
-  const errors: unknown[] = [];
   let ledger!: SingletonHandle<Static<typeof ledgerSchema>>;
-  let self!: StoreSelf;
   let job!: JobHandle<
     { ref: number; kind: Static<typeof kind> },
     Static<typeof result>,
@@ -150,17 +148,16 @@ export async function openJobs(
       ),
       context,
     );
-    pi = await openPi(store, directory, definition, models);
+    pi = await openPi(store, directory, definition, models, report);
     if ((await pi.book()).inputs.length)
       throw new Error("The Chord spike does not support imported inputs");
-    host = createHost({ store, onError: (error) => errors.push(error) });
+    host = createHost({ store, onError: report });
     await host.load(
       [
         {
           name: "xean.chord",
           facet: defineFacet((h) => {
             h.serve(Owner, (_, owner) => {
-              self = owner;
               ledger = owner.state(Ledger);
               job = owner.job(Research, {
                 run: async ({ ref }, ctx) => {
@@ -289,18 +286,15 @@ export async function openJobs(
   }
   return {
     pi,
-    errors,
     running: job.running,
     history: () => copy(ledger.value.history),
     claims,
-    async start(ref: number) {
-      const work = await pi.work(ref);
-      return self.tx(async (tx) => {
-        const draft = await tx.draft(ledger);
-        if (draft.history.some((entry) => entry.ref === ref))
-          throw new Error("Work reference is already settled");
-        return tx.start(job, { ref, kind: work.kind }, { key: String(ref) });
-      }, context);
+    async start(kind: "explorer" | "verifier") {
+      const ref = await pi.prepare(
+        kind,
+        claims().flatMap(({ ids }) => ids),
+      );
+      return job.start({ ref, kind }, context);
     },
     close,
   };

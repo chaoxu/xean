@@ -32,7 +32,6 @@ import type {
   SelectionInput,
   Verdict,
 } from "../../src/policy/contracts.ts";
-import { directSupport } from "../../src/policy/support.ts";
 
 export type Work =
   | { kind: "explorer"; input: ExplorerInput }
@@ -46,12 +45,11 @@ export async function openPi(
   directory: string,
   definition: Definition,
   models: Models,
+  report: (error: unknown) => void,
 ) {
-  definition = copy(definition);
   const storage = await StoreStorage.open(store, "pi", context);
   let close = () => storage.close(context);
   try {
-    const errors: unknown[] = [];
     const roles = createRoleRuntime();
     const registry = createRegistry();
     registry.install(roles.extension);
@@ -70,7 +68,7 @@ export async function openPi(
           contextRetentionMs: 0,
           documentRetentionMs: 0,
         },
-        onReport: (value) => errors.push(value),
+        onReport: report,
       },
       context,
     );
@@ -95,25 +93,15 @@ export async function openPi(
         return copy({ ...saved, ...project(saved) });
       }, context);
     return {
-      definition,
       harness,
       root,
-      errors,
       book,
       close,
-      async prepare(kind: Work["kind"], ids?: string[]) {
+      async prepare(kind: Work["kind"], claimed: string[] = []) {
         return root.commit(async (tx) => {
-          let { notes } = project(
+          const { notes } = project(
             readNotebook(await tx.doc(Notebook, root.id)),
           );
-          if (ids) {
-            const targets = notes.filter((note) => ids.includes(note.id));
-            const selected = new Set([
-              ...ids,
-              ...directSupport(targets, notes).map((note) => note.id),
-            ]);
-            notes = notes.filter((note) => selected.has(note.id));
-          }
           const work: Work =
             kind === "explorer"
               ? {
@@ -128,7 +116,7 @@ export async function openPi(
                     ),
                   },
                 }
-              : { kind, input: { task: definition.task, notes, claimed: [] } };
+              : { kind, input: { task: definition.task, notes, claimed } };
           return (
             await tx.appendEntry(WorkEntry, root.id, {
               data: { work: copy(work) as JsonValue },
@@ -152,15 +140,7 @@ export async function openPi(
         profile: PiRoleProfile,
         ctx: Context,
       ) {
-        return roles.call(
-          harness,
-          ref,
-          key,
-          descriptor,
-          profile,
-          ctx,
-          (error) => errors.push(error),
-        );
+        return roles.call(harness, ref, key, descriptor, profile, ctx, report);
       },
       publish: (ref: number, notes: StoredNote[]) =>
         root.commit(async (tx) => {
@@ -171,10 +151,16 @@ export async function openPi(
             `chord/${ref}`,
           );
         }, context),
-      recorded: async (ref: number): Promise<Verdict[]> =>
-        (await book()).checks
-          .filter((check) => check.candidate === ref)
-          .flatMap((check) => check.values),
+      recorded: (ref: number): Promise<Verdict[]> =>
+        root.commit(
+          async (tx) =>
+            copy(
+              (await tx.doc(Notebook, root.id)).checks
+                .filter((check) => check.candidate === ref)
+                .flatMap((check) => check.values),
+            ),
+          context,
+        ),
       record: (ref: number, call: number, values: Verdict[]) =>
         root.commit(async (tx) => {
           const saved = await tx.doc(Notebook, root.id);

@@ -51,7 +51,6 @@ export const roleGenerationPolicy = {
   retryContent: "completed-reasoning" as const,
 };
 type Assignment = {
-  key?: string;
   descriptor?: CallDescriptor;
   profile?: PiRoleProfile;
 };
@@ -331,7 +330,7 @@ export function createRoleRuntime() {
   ): Promise<Receipt> {
     const owned = "taskId" in host;
     const requested = copyJson(
-      { key, descriptor, profile },
+      { descriptor, profile },
       { omitUndefinedProperties: true },
     ) as Required<Assignment>;
     const strict =
@@ -365,9 +364,7 @@ export function createRoleRuntime() {
           );
           if (stage.conversation === undefined) continue;
           const id = stage.conversation as ConversationId;
-          const saved = await tx.doc(Assignment, id);
-          if (saved.key !== key || !saved.descriptor || !saved.profile)
-            continue;
+          const saved = (await tx.doc(Assignment, id)) as Required<Assignment>;
           if ((!owned || strict) && !isDeepStrictEqual(saved, requested)) {
             if (current)
               throw new Error(
