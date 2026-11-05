@@ -4,7 +4,7 @@ import { project } from "../src/state.ts";
 import { acceptedArgument } from "../src/report.ts";
 import { submitNotes } from "../src/inputs.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
-import { fixture, complete, note, checks, context } from "./worker-fixture.ts";
+import { fixture, complete, note, checks } from "./worker-fixture.ts";
 
 const all = [...verifierNames];
 const local = ["source", "correctness", "reconstruction"] as const;
@@ -153,20 +153,18 @@ test("an externally attested direct premise supplies a statement without leaking
     }
     return complete(request);
   });
-  await run.owner.root.commit(
-    (tx) =>
-      submitNotes(tx, run.owner.root.id, "theorem", {
-        notes: [
-          {
-            ...note("PRIVATE_IMPORTED_PROOF"),
-            verification: {
-              source: "Checked theorem",
-              report: "Exact scope checked.",
-            },
+  await run.owner.change((data) =>
+    submitNotes(data, "theorem", {
+      notes: [
+        {
+          ...note("PRIVATE_IMPORTED_PROOF"),
+          verification: {
+            source: "Checked theorem",
+            report: "Exact scope checked.",
           },
-        ],
-      }),
-    context,
+        },
+      ],
+    }),
   );
   const explored = await run.run({ kind: "explorer" });
   const root = `w${explored.id}.1`;
@@ -223,7 +221,7 @@ test("a same-batch source failure leaves the dependency statement available for 
       { note: b, verifiers: all },
     ],
   });
-  expect(result.outcome.status).toBe("completed");
+  expect(result.outcome.kind).toBe("done");
   const book = await run.book();
   expect(
     book.checks

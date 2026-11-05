@@ -1,19 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
+import * as roleRuntime from "../src/role-runtime.ts";
 import type { Respond } from "./worker-fixture.ts";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
-import {
-  inspect,
-  acceptedArgument,
-  project,
-  submitNotes,
-} from "../src/index.ts";
-import {
-  fixture,
-  complete,
-  context,
-  note,
-  abortable,
-} from "./worker-fixture.ts";
+import { acceptedArgument, project, submitNotes } from "../src/index.ts";
+import { fixture, complete, note, abortable } from "./worker-fixture.ts";
 
 test("independent Explorer and Verifier publish knowledge without a campaign or Coordinator", async () => {
   const run = await fixture();
@@ -21,23 +11,22 @@ test("independent Explorer and Verifier publish knowledge without a campaign or 
     kind: "explorer",
     guidance: "Prove P directly.",
   });
-  expect(explored.outcome.status).toBe("completed");
+  expect(explored.outcome.kind).toBe("done");
   const id = `w${explored.id}.1`;
   expect(await run.notes()).toMatchObject([
     { id, summary: "Complete proof of P.", verified: false },
   ]);
   const checked = await run.run({ kind: "verifier" });
-  expect(checked.outcome.status).toBe("completed");
+  expect(checked.outcome.kind).toBe("done");
   const book = await run.book();
   expect(project(book).accepted).toEqual([id]);
   expect(book.checks).toHaveLength(4);
   expect(new Set(book.checks.map((check) => check.candidate)).size).toBe(1);
   const attempt = book.checks[0]!.candidate;
-  expect(attempt).not.toBe(checked.id);
+  expect(attempt).toBe(checked.origin);
   expect(
-    (await run.tasks()).find((task: { id: number }) => task.id === attempt)
-      .input.kind,
-  ).toBe("verify");
+    run.history().find((row) => row.id === checked.id)?.state.claim?.verify,
+  ).toHaveLength(1);
   expect(acceptedArgument(await run.notes(), id)).toBe(
     `## ${id}\n\nComplete proof of P.\n`,
   );
@@ -57,7 +46,6 @@ test("independent Explorer and Verifier publish knowledge without a campaign or 
   ]);
   const calls = run.provider.state.callCount;
   await run.reopen();
-  await run.owner.root.waitForIdle(context);
   expect(run.provider.state.callCount).toBe(calls);
   expect(
     (await run.tasks()).some(
@@ -92,8 +80,8 @@ test.each([false, true])(
       },
     );
     const ids = await Promise.all([
-      run.create({ kind: "explorer" }),
-      run.create({ kind: "explorer" }),
+      run.start({ kind: "explorer" }),
+      run.start({ kind: "explorer" }),
     ]);
     const pending = ids.map((id) => run.wait(id));
     await arrived.promise;
@@ -102,7 +90,7 @@ test.each([false, true])(
     releases[first]!.resolve();
     await pending[first];
     releases[1 - first]!.resolve();
-    expect((await pending[1 - first])!.state.outcome.status).toBe("completed");
+    expect((await pending[1 - first])!.kind).toBe("done");
     const notes = await run.notes();
     expect(notes).toHaveLength(4);
     for (const namespace of namespaces) {
@@ -117,45 +105,44 @@ test.each([false, true])(
   },
 );
 
-test("inspection observes live and suspended native work without invoking a model", async () => {
+test("inspection and passive reopen observe suspended native work without executing it", async () => {
   const started = Promise.withResolvers<void>();
   let suspend = true;
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (suspend) {
-        started.resolve();
-        await abortable(request.signal);
-        return new Error("Suspended");
-      }
-      return complete(request);
-    },
-  );
-  const id = await run.create({
+  const run = await fixture(async (request) => {
+    if (suspend) {
+      started.resolve();
+      await abortable(request.signal);
+    }
+    return complete(request);
+  });
+  const job = await run.start({
     kind: "explorer",
     guidance: "Frozen direction.",
   });
-  const pending = run.wait(id).catch(() => {});
   await started.promise;
-  const inspectWorker = () =>
-    inspect(run.path, async (tx) =>
-      JSON.parse(JSON.stringify(await tx.task(id))),
-    );
-  const live = await inspectWorker();
-  expect(live).toMatchObject({ id, kind: "xean.worker" });
-  expect(live.state.status).not.toBe("terminal");
-  const calls = run.provider.state.callCount;
+  const live = run.running().find((row) => row.id === job.id)!;
+  const tasks = await run.tasks();
+  expect(live.phase).toBe("running");
+  if (live.phase === "blocked") throw new Error("Unexpected blocked job");
+  expect((await run.data()).history).toEqual([]);
+  const count = run.provider.state.callCount;
   await run.owner.close();
-  await pending;
-  const suspended = await inspectWorker();
-  expect(suspended.input).toEqual(live.input);
-  expect(suspended.state.status).not.toBe("terminal");
-  expect(await inspectWorker()).toEqual(suspended);
-  expect(run.provider.state.callCount).toBe(calls);
+  const suspended = await run.tasks();
+  expect(suspended.map((task: { id: number }) => task.id)).toEqual(
+    tasks.map((task: { id: number }) => task.id),
+  );
+  await run.reopen(false);
+  expect((await run.data()).history).toEqual([]);
+  expect(run.provider.state.callCount).toBe(count);
+  expect(await run.tasks()).toEqual(suspended);
   suspend = false;
   await run.reopen();
-  expect((await run.wait(id)).state.outcome.status).toBe("completed");
-  expect((await inspectWorker()).input).toEqual(live.input);
-  expect(run.provider.state.callCount).toBe(calls + 1);
+  await run.finished(job.id);
+  expect(run.history().find((row) => row.id === job.id)?.args).toEqual(
+    live.args,
+  );
+  expect(run.provider.state.callCount).toBe(count + 1);
+  expect((await run.notes())[0]!.id).toBe(`w${job.id}.1`);
 });
 
 test("retry retains Explorer namespace and input despite unrelated publication and queued caller notes", async () => {
@@ -171,63 +158,42 @@ test("retry retains Explorer namespace and input despite unrelated publication a
     kind: "explorer",
     guidance: "Frozen direction.",
   });
-  expect(first.outcome.status).toBe("faulted");
+  expect(first.outcome.kind).toBe("failed");
   await run.run({ kind: "explorer" });
-  await run.owner.root.commit(
-    (tx) =>
-      submitNotes(tx, run.owner.root.id, "caller", {
-        notes: [note("Queued literature.")],
-      }),
-    context,
+  await run.owner.change((data) =>
+    submitNotes(data, "caller", { notes: [note("Queued literature.")] }),
   );
-  const retry = await run.run({ kind: "retry", task: first.id });
-  expect(retry.outcome.status).toBe("completed");
+  const retry = await run.run({ kind: "retry", job: first.id });
+  expect(retry.outcome.kind).toBe("done");
   expect(run.requests.at(-1)!.descriptor).toEqual(run.requests[0]!.descriptor);
   expect((await run.notes()).some((n) => n.id === `w${first.id}.1`)).toBe(true);
   expect((await run.book()).inputs[0]!.consumed).toBe(false);
 });
 
-test("completed statement and proof receipts survive abort and verifier retry", async () => {
-  const started = Promise.withResolvers<void>();
-  let hold = true;
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (request.descriptor.kind === "reconstruction" && hold) {
-        started.resolve();
-        await abortable(request.signal);
-        return new Error("Aborted");
-      }
-      return complete(request);
-    },
-  );
+test("completed statement and proof receipts survive a failed comparison and explicit retry", async () => {
+  let fail = true;
+  const run = await fixture((request) => {
+    if (request.descriptor.kind === "reconstruction" && fail) {
+      fail = false;
+      return new Error("401 comparison interrupted");
+    }
+    return complete(request);
+  });
   await run.run({ kind: "explorer" });
-  const first = await run.create({ kind: "verifier" });
-  const pending = run.wait(first);
-  await started.promise;
+  const first = await run.run({ kind: "verifier" });
+  expect(first.outcome.kind).toBe("failed");
   const before = await run.book();
   expect(before.checks).toHaveLength(3);
-  await run.owner.harness.abortTask(first, context);
-  expect((await pending).state.outcome.status).toBe("aborted");
-  const child = (await run.tasks()).find(
-    (task: { owner?: number; input: { kind: string } }) =>
-      task.owner === first && task.input.kind === "verify",
-  );
-  expect(child.state.outcome.status).toBe("aborted");
-  await expect(run.create({ kind: "retry", task: child.id })).rejects.toThrow(
-    "belong",
-  );
-  hold = false;
   const count = run.provider.state.callCount;
-  const retry = await run.run({ kind: "retry", task: first });
-  expect(retry.outcome.status).toBe("completed");
+  const retry = await run.run({ kind: "retry", job: first.id });
+  expect(retry.outcome.kind).toBe("done");
+  expect(retry.origin).toBe(first.id);
   expect(run.provider.state.callCount - count).toBe(1);
   const after = await run.book();
   expect(after.checks.slice(0, 3)).toEqual(before.checks);
-  expect(
-    after.checks.every(
-      (check) => check.candidate === before.checks[0]!.candidate,
-    ),
-  ).toBe(true);
+  expect(after.checks.every((check) => check.candidate === first.id)).toBe(
+    true,
+  );
   expect(project(after).accepted).toHaveLength(1);
   expect(
     run.requests.filter(({ descriptor }) => descriptor.kind === "statement"),
@@ -235,6 +201,9 @@ test("completed statement and proof receipts survive abort and verifier retry", 
   expect(
     run.requests.filter(({ descriptor }) => descriptor.kind === "proof"),
   ).toHaveLength(1);
+  await expect(run.start({ kind: "retry", job: first.id })).rejects.toThrow(
+    "superseded",
+  );
 });
 
 test("explicit duplicate verification claims still produce one busy result", async () => {
@@ -264,41 +233,35 @@ test("explicit duplicate verification claims still produce one busy result", asy
       ] as const,
     },
   ];
-  const ids = await run.owner.root.commit(
-    (tx) =>
-      run.owner.workers.createGroup(tx, run.owner.root.id, [
-        {
-          kind: "verifier",
-          verify: verify.map((entry) => ({
-            ...entry,
-            verifiers: [...entry.verifiers],
-          })),
-        },
-        {
-          kind: "verifier",
-          verify: verify.map((entry) => ({
-            ...entry,
-            verifiers: [...entry.verifiers],
-          })),
-        },
-      ]),
-    context,
-  );
+  const ids = await run.startGroup([
+    {
+      kind: "verifier",
+      verify: verify.map((entry) => ({
+        ...entry,
+        verifiers: [...entry.verifiers],
+      })),
+    },
+    {
+      kind: "verifier",
+      verify: verify.map((entry) => ({
+        ...entry,
+        verifiers: [...entry.verifiers],
+      })),
+    },
+  ]);
   const pending = ids.map((id) => run.wait(id));
   await checking.promise;
-  expect((await Promise.race(pending)).state.outcome).toMatchObject({
-    status: "completed",
+  expect(await Promise.race(pending)).toMatchObject({
+    kind: "done",
     result: { status: "busy" },
   });
   release.resolve();
-  const results = (await Promise.all(pending)).map(
-    (task) => task.state.outcome,
-  );
+  const results = await Promise.all(pending);
   expect(
     results
       .map(
         (result) =>
-          result.status === "completed" &&
+          result.kind === "done" &&
           (result.result as { status: string }).status,
       )
       .sort(),
@@ -318,22 +281,16 @@ test("explicit duplicate verification claims still produce one busy result", asy
 test("an empty assigned view completes without calling the selector model", async () => {
   const run = await fixture();
   await run.run({ kind: "explorer" });
-  const ids = await run.owner.root.commit(
-    (tx) =>
-      run.owner.workers.createGroup(tx, run.owner.root.id, [
-        { kind: "verifier" },
-        { kind: "verifier" },
-      ]),
-    context,
-  );
-  const results = (await Promise.all(ids.map((id) => run.wait(id)))).map(
-    (task) => task.state.outcome,
-  );
+  const ids = await run.startGroup([
+    { kind: "verifier" },
+    { kind: "verifier" },
+  ]);
+  const results = await Promise.all(ids.map((id) => run.wait(id)));
   expect(
     results
       .map(
         (result) =>
-          result.status === "completed" &&
+          result.kind === "done" &&
           (result.result as { status: string }).status,
       )
       .sort(),
@@ -341,14 +298,15 @@ test("an empty assigned view completes without calling the selector model", asyn
   expect(
     run.requests.filter(({ descriptor }) => descriptor.kind === "selection"),
   ).toHaveLength(1);
-  const workers = await run.tasks();
+  const workers = run.history();
   expect(
     ids
-      .map(
-        (id) =>
-          workers.find((task: { id: number }) => task.id === id).input.input
-            .notes.length,
-      )
+      .map((job) => {
+        const work = workers.find((row) => row.id === job.id)!.args.work;
+        if (work.kind !== "selector")
+          throw new Error("Expected selector input");
+        return work.input.notes.length;
+      })
       .sort(),
   ).toEqual([0, 1]);
 });
@@ -400,30 +358,23 @@ test("pending selectors reserve their offered notes and release unselected notes
   );
   await run.run({ kind: "explorer" });
   const notes = (await run.notes()).map((note) => note.id);
-  const first = await run.create({ kind: "verifier" });
+  const first = await run.start({ kind: "verifier" });
   const pending = run.wait(first);
   let second: ReturnType<typeof run.wait> | undefined;
   try {
     await selecting.promise;
     await expect(
-      run.owner.root.commit(
-        (tx) =>
-          run.owner.workers.createGroup(tx, run.owner.root.id, [
-            { kind: "explorer" },
-            { kind: "explorer" },
-          ]),
-        context,
-      ),
+      run.startGroup([{ kind: "explorer" }, { kind: "explorer" }]),
     ).rejects.toThrow("maxWorkers");
     const empty = await run.run({ kind: "verifier" });
     expect(empty.outcome).toMatchObject({
-      status: "completed",
+      kind: "done",
       result: { status: "no-work" },
     });
     expect(views).toEqual([notes]);
     releaseSelection.resolve();
     await firstSource.promise;
-    second = run.wait(await run.create({ kind: "verifier" }));
+    second = run.wait(await run.start({ kind: "verifier" }));
     await secondSource.promise;
     expect(views).toEqual([notes, [notes[1]!]]);
   } finally {
@@ -447,7 +398,7 @@ test("retry keeps the selector's original note view after unrelated notes are pu
   });
   const firstNote = await run.run({ kind: "explorer" });
   const first = await run.run({ kind: "verifier" });
-  expect(first.outcome.status).toBe("faulted");
+  expect(first.outcome.kind).toBe("failed");
   const before = run.requests.find(
     ({ descriptor }) => descriptor.kind === "selection",
   )!.descriptor;
@@ -456,9 +407,9 @@ test("retry keeps the selector's original note view after unrelated notes are pu
     `w${firstNote.id}.1`,
   ]);
   const added = await run.run({ kind: "explorer" });
-  expect(
-    (await run.run({ kind: "retry", task: first.id })).outcome.status,
-  ).toBe("completed");
+  expect((await run.run({ kind: "retry", job: first.id })).outcome.kind).toBe(
+    "done",
+  );
   const selections = run.requests.filter(
     ({ descriptor }) => descriptor.kind === "selection",
   );
@@ -472,16 +423,13 @@ test("retry keeps the selector's original note view after unrelated notes are pu
 test("queued caller literature gets stable admission IDs before fresh exploration", async () => {
   const run = await fixture();
   const supplied = { notes: [note("Supplied literature.")] };
-  await run.owner.root.commit(
-    (tx) => submitNotes(tx, run.owner.root.id, "literature", supplied),
-    context,
-  );
+  await run.owner.change((data) => submitNotes(data, "literature", supplied));
   expect(await run.notes()).toEqual([]);
   await run.run({ kind: "explorer" });
   const descriptor = run.requests[0]!.descriptor;
   if (descriptor.kind !== "explorer") throw new Error("Expected Explorer");
   expect(descriptor.input.notes).toHaveLength(1);
-  expect(descriptor.input.notes[0]!.id).toMatch(/^i[0-9]+\.1$/);
+  expect(descriptor.input.notes[0]!.id).toMatch(/^i[^.]+\.1$/);
   expect((await run.book()).inputs[0]!.consumed).toBe(true);
   expect(await run.notes()).toHaveLength(2);
 });
@@ -493,11 +441,10 @@ test("current adverse evidence invalidates a root even when another check finish
   await run.run({ kind: "verifier" });
   const previous = await run.book();
   expect(project(previous).accepted).toEqual([target]);
-  await run.owner.root.commit(async (tx) => {
-    const { Notebook } = await import("../src/state.ts");
-    const book = await tx.doc(Notebook, run.owner.root.id);
+  await run.owner.change((data) => {
+    const book = data.notebook;
     book.checks.push({
-      candidate: 999,
+      candidate: "external",
       call: 999,
       values: [
         {
@@ -508,12 +455,12 @@ test("current adverse evidence invalidates a root even when another check finish
         },
       ],
     });
-  }, context);
+  });
   expect(project(await run.book()).accepted).toEqual([]);
   expect((await run.notes())[0]!.dead).toBe(true);
 });
 
-test("another publisher can finish between an append and its Pi rollback recovery", async () => {
+test("another publisher can finish between an append and its Chord rollback recovery", async () => {
   const run = await fixture((request) =>
     request.descriptor.kind === "explorer"
       ? { notes: [note(`Proof ${request.descriptor.input.explorerGuidance}.`)] }
@@ -529,7 +476,7 @@ test("another publisher can finish between an append and its Pi rollback recover
         Object.values(notes).some((note) => note.text === "Proof A.")
       ) {
         interrupted = true;
-        throw new Error("Interrupted after append before Pi commit");
+        throw new Error("Interrupted after append before Chord commit");
       }
       return version;
     },
@@ -540,10 +487,10 @@ test("another publisher can finish between an append and its Pi rollback recover
   } finally {
     append.mockRestore();
   }
-  expect(first!.outcome.status).toBe("faulted");
+  expect(first!.outcome.kind).toBe("failed");
   expect(await run.notes()).toEqual([]);
   const second = await run.run({ kind: "explorer", guidance: "B" });
-  expect(second.outcome.status).toBe("completed");
+  expect(second.outcome.kind).toBe("done");
   expect((await run.notes()).map((note) => note.id)).toEqual([
     `w${second.id}.1`,
   ]);
@@ -556,9 +503,9 @@ test("another publisher can finish between an append and its Pi rollback recover
   );
   const count = run.provider.state.callCount;
   await run.reopen();
-  expect(
-    (await run.run({ kind: "retry", task: first!.id })).outcome.status,
-  ).toBe("completed");
+  expect((await run.run({ kind: "retry", job: first!.id })).outcome.kind).toBe(
+    "done",
+  );
   expect(run.provider.state.callCount).toBe(count);
   expect(store.snapshot()).toBe(3);
   expect((await run.notes()).map(({ id, text }) => ({ id, text }))).toEqual([
@@ -620,27 +567,21 @@ test.each(["pending", "failed"] as const)(
       { settings: { maxWorkers: dependencyState === "failed" ? 3 : 2 } },
     );
     await run.run({ kind: "explorer" });
-    const ids = await run.owner.root.commit(
-      (tx) =>
-        run.owner.workers.createGroup(
-          tx,
-          run.owner.root.id,
-          [b, c].map((note) => ({
-            kind: "verifier",
-            verify: [
-              {
-                note,
-                verifiers: [
-                  "source",
-                  "correctness",
-                  "requirements",
-                  "reconstruction",
-                ],
-              },
+    const ids = await run.startGroup(
+      [b, c].map((note) => ({
+        kind: "verifier",
+        verify: [
+          {
+            note,
+            verifiers: [
+              "source",
+              "correctness",
+              "requirements",
+              "reconstruction",
             ],
-          })),
-        ),
-      context,
+          },
+        ],
+      })),
     );
     const pending = ids.map((id) => run.wait(id));
     await checking.promise;
@@ -656,7 +597,7 @@ test.each(["pending", "failed"] as const)(
         ],
       });
       expect(result.outcome).toMatchObject({
-        status: "completed",
+        kind: "done",
         result: { status: "completed" },
       });
       expect(
@@ -665,8 +606,8 @@ test.each(["pending", "failed"] as const)(
     }
     release.resolve();
     for (const result of await Promise.all(pending))
-      expect(result.state.outcome).toMatchObject({
-        status: "completed",
+      expect(result).toMatchObject({
+        kind: "done",
         result: { status: "completed" },
       });
     const book = await run.book();
@@ -745,20 +686,19 @@ test("selector views partition targets and the checker receives direct dependenc
     return complete(request);
   });
   await run.run({ kind: "explorer" });
-  const ids = await run.owner.root.commit(
-    (tx) =>
-      run.owner.workers.createGroup(tx, run.owner.root.id, [
-        { kind: "verifier" },
-        { kind: "verifier" },
-      ]),
-    context,
-  );
-  const tasks = await run.tasks();
-  const views = ids.map(
-    (id) =>
-      tasks.find((task: { id: number }) => task.id === id).input.input
-        .notes as { id: string }[],
-  );
+  const ids = await run.startGroup([
+    { kind: "verifier" },
+    { kind: "verifier" },
+  ]);
+  const entries = [...run.running(), ...run.history()];
+  const views = ids.map((job) => {
+    const entry = entries.find((row) => row.id === job.id)!;
+    if ("phase" in entry && entry.phase === "blocked")
+      throw new Error("Blocked selector");
+    const work = entry.args.work;
+    if (work.kind !== "selector") throw new Error("Expected selector");
+    return work.input.notes;
+  });
   const original = (await run.notes()).map((note) => note.id);
   const listed = views.flatMap((notes) => notes.map((note) => note.id));
   expect(new Set(listed).size).toBe(listed.length);
@@ -768,8 +708,8 @@ test("selector views partition targets and the checker receives direct dependenc
       original.filter((id) => view.some((note) => note.id === id)),
     );
   for (const result of await Promise.all(ids.map((id) => run.wait(id))))
-    expect(result.state.outcome).toMatchObject({
-      status: "completed",
+    expect(result).toMatchObject({
+      kind: "done",
       result: { status: "completed" },
     });
   const proof = run.requests.find(
@@ -782,70 +722,6 @@ test("selector views partition targets and the checker receives direct dependenc
   expect(proof.descriptor.input.support.map((note) => note.id)).toEqual([
     original[0]!,
   ]);
-});
-
-test("retry returns a completed child's receipt when its aborted parent has a busy sibling", async () => {
-  let holdSource = false;
-  const checking = Promise.withResolvers<void>();
-  const releaseSource = Promise.withResolvers<void>();
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (
-        holdSource &&
-        request.descriptor.kind === "verifier" &&
-        request.descriptor.name === "source"
-      ) {
-        checking.resolve();
-        await releaseSource.promise;
-      }
-      return complete(request);
-    },
-  );
-  const explored = await run.run({ kind: "explorer" });
-  const verify = [
-    { note: `w${explored.id}.1`, verifiers: ["source"] as ["source"] },
-  ];
-  const collected = Promise.withResolvers<void>();
-  const phases = run.owner.workers.Worker.definition.phases;
-  const original = phases.collect;
-  let holdCollect = true;
-  const collect = spyOn(phases, "collect").mockImplementation(
-    async (task, runtime, ctx) => {
-      if (holdCollect) {
-        holdCollect = false;
-        collected.resolve();
-        await abortable(runtime.signal);
-        runtime.signal.throwIfAborted();
-      }
-      return original(task, runtime, ctx);
-    },
-  );
-  const parent = await run.create({ kind: "verifier", verify });
-  const pending = run.wait(parent);
-  await collected.promise;
-  const child = (await run.tasks()).find(
-    (task: { owner?: number; input: { kind: string } }) =>
-      task.owner === parent && task.input.kind === "verify",
-  );
-  expect(child.state.outcome.status).toBe("completed");
-  try {
-    await run.owner.harness.abortTask(parent, context);
-    expect((await pending).state.outcome.status).toBe("aborted");
-  } finally {
-    collect.mockRestore();
-  }
-  holdSource = true;
-  const sibling = await run.create({ kind: "verifier", verify });
-  const siblingPending = run.wait(sibling);
-  await checking.promise;
-  const calls = run.provider.state.callCount;
-  const retry = await run.create({ kind: "retry", task: parent });
-  expect(retry).toBe(child.id);
-  expect((await run.wait(retry)).state.outcome).toEqual(child.state.outcome);
-  expect(run.provider.state.callCount).toBe(calls);
-  await expect(run.create({ kind: "retry", task: child.id })).rejects.toThrow();
-  releaseSource.resolve();
-  expect((await siblingPending).state.outcome.status).toBe("completed");
 });
 
 test("solution-only selection defers a local lemma checklist until a full root is nominated", async () => {
@@ -864,7 +740,7 @@ test("solution-only selection defers a local lemma checklist until a full root i
   );
   const explored = await run.run({ kind: "explorer" });
   expect((await run.run({ kind: "verifier" })).outcome).toMatchObject({
-    status: "completed",
+    kind: "done",
     result: { status: "no-work", verify: [] },
   });
   expect((await run.book()).checks).toEqual([]);
@@ -888,8 +764,8 @@ test("solution-only selection defers a local lemma checklist until a full root i
           },
         ],
       })
-    ).outcome.status,
-  ).toBe("completed");
+    ).outcome.kind,
+  ).toBe("done");
   expect(project(await run.book()).accepted).toEqual([`w${explored.id}.1`]);
 });
 
@@ -922,7 +798,7 @@ test("overlapping selected sets conflict atomically without reserving their nono
     },
   );
   await run.run({ kind: "explorer" });
-  const both = await run.create({
+  const both = await run.start({
     kind: "verifier",
     verify: [b, c].map((note) => ({
       note,
@@ -939,7 +815,7 @@ test("overlapping selected sets conflict atomically without reserving their nono
     })),
   });
   expect(conflict.outcome).toMatchObject({
-    status: "completed",
+    kind: "done",
     result: { status: "busy" },
   });
   expect(
@@ -949,9 +825,9 @@ test("overlapping selected sets conflict atomically without reserving their nono
         verify: [{ note: d, verifiers: ["source"] }],
       })
     ).outcome,
-  ).toMatchObject({ status: "completed", result: { status: "completed" } });
+  ).toMatchObject({ kind: "done", result: { status: "completed" } });
   release.resolve();
-  expect((await pending).state.outcome.status).toBe("completed");
+  expect((await pending).kind).toBe("done");
   expect(
     run.requests
       .filter(
@@ -984,14 +860,10 @@ test("one native admission can start an Explorer and Verifier over the same froz
     { settings: { maxWorkers: 2 } },
   );
   const seed = await run.run({ kind: "explorer" });
-  const ids = await run.owner.root.commit(
-    (tx) =>
-      run.owner.workers.createGroup(tx, run.owner.root.id, [
-        { kind: "explorer" },
-        { kind: "verifier" },
-      ]),
-    context,
-  );
+  const ids = await run.startGroup([
+    { kind: "explorer" },
+    { kind: "verifier" },
+  ]);
   const pending = ids.map((id) => run.wait(id));
   try {
     await both.promise;
@@ -1008,11 +880,154 @@ test("one native admission can start an Explorer and Verifier over the same froz
   } finally {
     release.resolve();
     for (const task of await Promise.all(pending))
-      expect(task.state.outcome.status).toBe("completed");
+      expect(task.kind).toBe("done");
   }
   expect((await run.notes()).map((note) => note.id)).toEqual([
     `w${seed.id}.1`,
-    `w${ids[0]}.1`,
+    `w${ids[0]!.id}.1`,
   ]);
   expect(project(await run.book()).accepted).toEqual([`w${seed.id}.1`]);
+});
+
+test("pending proof resumes the same Chord job and native generation without repeating earlier roles", async () => {
+  const entered = Promise.withResolvers<void>(),
+    recovered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  let resuming = false;
+  const run = await fixture(async (request) => {
+    if (request.descriptor.kind === "proof") {
+      if (!resuming) {
+        entered.resolve();
+        await abortable(request.signal);
+      } else {
+        recovered.resolve();
+        await Promise.race([release.promise, abortable(request.signal)]);
+      }
+    }
+    return complete(request);
+  });
+  await run.run({ kind: "explorer" });
+  const job = await run.start({ kind: "verifier" });
+  await entered.promise;
+  const original = (await run.tasks()).findLast(
+    (task: { kind: string; state: { status: string } }) =>
+      task.kind === "pi.generation" && task.state.status !== "terminal",
+  );
+  const before = run.running().find((row) => row.id === job.id)!;
+  await run.owner.close();
+  resuming = true;
+  await run.reopen();
+  await recovered.promise;
+  expect(run.running().map((row) => row.id)).toEqual([job.id]);
+  const after = run.running().find((row) => row.id === job.id)!;
+  if (before.phase === "blocked" || after.phase === "blocked")
+    throw new Error("Unexpected blocked job");
+  expect(after.state.claim).toEqual(before.state.claim);
+  expect(
+    (await run.tasks())
+      .filter(
+        (task: { conversationId: number; kind: string }) =>
+          task.conversationId === original.conversationId &&
+          task.kind === "pi.generation",
+      )
+      .map((task: { id: number }) => task.id),
+  ).toEqual([original.id]);
+  expect(
+    run.requests.map(({ descriptor }) =>
+      descriptor.kind === "verifier" ? descriptor.name : descriptor.kind,
+    ),
+  ).toEqual([
+    "explorer",
+    "selection",
+    "source",
+    "correctness",
+    "requirements",
+    "statement",
+    "proof",
+    "proof",
+  ]);
+  release.resolve();
+  expect((await run.finished(job.id)).status).toBe("completed");
+  expect(project(await run.book()).accepted).toHaveLength(1);
+});
+
+test("a terminal Pi failure interrupted before Chord settlement stays failed on reopen", async () => {
+  const failed = Promise.withResolvers<void>();
+  const original = roleRuntime.createRoleRuntime;
+  const factory = spyOn(roleRuntime, "createRoleRuntime").mockImplementation(
+    (...args) => {
+      const roles = original(...args),
+        call = roles.call.bind(roles);
+      return {
+        ...roles,
+        call: async (...input) => {
+          try {
+            return await call(...input);
+          } catch (error) {
+            failed.resolve();
+            await input[0].closed;
+            throw error;
+          }
+        },
+      };
+    },
+  );
+  let run: Awaited<ReturnType<typeof fixture>>;
+  try {
+    run = await fixture(() => new Error("401 upstream_unavailable"));
+  } finally {
+    factory.mockRestore();
+  }
+  const job = await run.start({ kind: "explorer" });
+  await failed.promise;
+  expect(run.history()).toEqual([]);
+  expect(run.provider.state.callCount).toBe(1);
+  const tasks = await run.tasks();
+  await run.reopen();
+  expect((await run.finished(job.id)).status).toBe("failed");
+  expect(run.provider.state.callCount).toBe(1);
+  expect(await run.tasks()).toEqual(tasks);
+  expect(await run.notes()).toEqual([]);
+});
+
+test("a selection invalidated while its model is running finishes without checking dead notes", async () => {
+  const selecting = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const run = await fixture(async (request) => {
+    const d = request.descriptor;
+    if (d.kind === "selection") {
+      selecting.resolve();
+      await Promise.race([release.promise, abortable(request.signal)]);
+    }
+    if (d.kind === "verifier" && d.name === "source")
+      return {
+        verdicts: d.judged.map((note) => ({
+          note,
+          verdict: "FAIL",
+          report: "Counterexample before claim.",
+        })),
+      };
+    return complete(request);
+  });
+  const explorer = await run.run({ kind: "explorer" }),
+    id = `w${explorer.id}.1`;
+  const stale = await run.start({ kind: "verifier" });
+  await selecting.promise;
+  await run.run({
+    kind: "verifier",
+    verify: [{ note: id, verifiers: ["source"] }],
+  });
+  expect((await run.notes())[0]!.dead).toBe(true);
+  const frozen = run.requests.find(
+    (request) => request.descriptor.kind === "selection",
+  )!.descriptor;
+  expect(frozen.input.notes[0]!.dead).toBe(false);
+  release.resolve();
+  expect(await run.wait(stale)).toMatchObject({
+    kind: "done",
+    result: { status: "no-work" },
+  });
+  expect(
+    run.requests.filter(({ descriptor }) => descriptor.kind === "verifier"),
+  ).toHaveLength(1);
 });

@@ -27,7 +27,8 @@ It does not establish performance across arbitrary open problems.
 
 Models choose mathematical directions and judge arguments. `xean` supplies a
 consistent workflow, explicit dependencies, and recorded verification evidence.
-Pi supplies execution and recovery. Keeping literature discovery, computation,
+Chord supplies research jobs, atomic state changes, and recovery. Pi supplies
+model conversations, tools, and call receipts. Keeping literature discovery, computation,
 and cross-problem scheduling with the caller limits the operational machinery
 inside the solver.
 
@@ -191,13 +192,15 @@ when backing up a campaign.
 
 ## Can another agent call the workers directly?
 
-The library can create a root with `startCampaign: false` and invoke Explorer
-and Verifier separately. Explorer publishes notes and summaries. Verifier selects
+Open a fresh campaign with `execute: true, startCampaign: false` to invoke
+Explorer and Verifier separately through `owner.start` or `owner.startGroup`.
+Explorer publishes notes and summaries. Verifier selects
 work for checks, or accepts an explicit `verify` selection. A default Verifier
 can complete with `no-work` or `busy` in its result without adding checks. The
-caller waits on Pi's native task IDs. Unfinished tasks recover under the same ID. Faulted
-or aborted workers need `{kind: "retry", task: id}`, preserving their frozen
-input and exact publication references. [The worker example](../examples/workers.ts)
+caller receives native Chord runs with string IDs and awaits `run.outcome(context)`.
+Reopening with execution enabled recovers unfinished jobs under the same IDs.
+Failed manual workers need `{kind: "retry", job: id}`, preserving frozen inputs,
+publication references, and recorded receipts. [The worker example](../examples/workers.ts)
 runs an Explorer followed by a default Verifier. [The library instructions](../README.md#library-and-development)
 explain queued-note intake and manual Explorer guidance.
 
@@ -209,8 +212,10 @@ worker interface.
 
 ## Where can an agent inspect current work?
 
-Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite file.
-Use the library's `inspect` with Pi's `tx.scanTasks` or `tx.task` to read those
-records without starting models. Stored status is the last committed state,
-which can outlast the process that wrote it. Note texts remain in the separate
-notebook database. See the [library examples](../README.md#library-and-development).
+An executing owner's `running` is Chord's native `Watchable` of unsettled jobs.
+Its `history` contains terminal job receipts. Chord research state and Pi model
+conversations share the campaign SQLite file. `inspect(path, (data, session) => ...)`
+reads that state and Pi receipts without starting work. `open` is also passive by
+default. Stored status is the last committed state, not process liveness. Note
+texts remain in the separate notebook database. See the
+[library examples](../README.md#library-and-development).

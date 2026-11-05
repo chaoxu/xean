@@ -1,8 +1,3 @@
-import {
-  defineDoc,
-  type ConversationId,
-  type Tx,
-} from "@earendil-works/pi-durable";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import type { Task, Note, Verdict } from "./policy/contracts.ts";
 import {
@@ -16,23 +11,15 @@ import type { SolveSettings } from "./policy/settings.ts";
 import { noteOrder } from "./policy/support.ts";
 
 export type Definition = { task: Task; settings: SolveSettings };
-export const DefinitionDoc = defineDoc({
-  kind: "xean.v4.definition",
-  version: 1,
-  checkpointWhen: () => false,
-  scope: "conversation",
-  history: "latest",
-  fork: "current",
-  initial: (): Definition | { task: null; settings: null } => ({
-    task: null,
-    settings: null,
-  }),
-});
 export type StoredNote = Omit<
   Note,
   "verdicts" | "checked" | "verified" | "dead"
 >;
-export type Check = { candidate: number; call: number; values: Verdict[] };
+export type Check = {
+  candidate: string;
+  call: number | string;
+  values: Verdict[];
+};
 export type NotebookState = {
   notes: StoredNote[];
   checks: Check[];
@@ -46,15 +33,10 @@ export type NotebookState = {
 };
 
 /** Intake publishes each queued submission under its original native identity. */
-export async function admitNotes(
-  tx: Tx,
-  root: ConversationId,
-): Promise<boolean> {
-  const ref = await tx.doc(Notebook, root);
+export function admitNotes(ref: NotebookReference): boolean {
   const pending = ref.inputs.filter((input) => !input.consumed);
   for (const input of pending) {
     appendNotes(
-      tx,
       ref,
       input.notes.map((note, index) => ({
         ...note,
@@ -71,36 +53,14 @@ export type NotebookReference = Omit<NotebookState, "notes"> & {
   path: string;
   publications: Publication[];
 };
-export const Notebook = defineDoc({
-  kind: "xean.notebook-reference",
-  version: 1,
-  checkpointWhen: () => false,
-  scope: "conversation",
-  history: "latest",
-  fork: "current",
-  initial: (): NotebookReference => ({
-    path: "",
-    publications: [],
-    checks: [],
-    guidance: [],
-    inputs: [],
-  }),
-});
-const readOnly = new WeakSet<Tx>();
-export const readonlyNotebook = (tx: Tx) => readOnly.add(tx);
+const readOnly = new WeakSet<NotebookReference>();
+export const readonlyNotebook = (ref: NotebookReference) => readOnly.add(ref);
 
-export async function initializeNotebook(
-  tx: Tx,
-  root: ConversationId,
-  path: string,
-) {
-  if (readOnly.has(tx))
-    throw new Error("Cannot initialize a read-only notebook");
-  const ref = await tx.doc(Notebook, root);
+export function initializeNotebook(path: string): NotebookReference {
   using store = new NoteStore(path);
   if (store.snapshot() !== 0)
     throw new Error("New campaigns require an empty notebook");
-  ref.path = path;
+  return { path, publications: [], checks: [], guidance: [], inputs: [] };
 }
 
 export function readNotebook(ref: NotebookReference) {
@@ -126,14 +86,13 @@ export function readNotebook(ref: NotebookReference) {
   };
 }
 
-/** Store receipts survive Pi rollback; every admitted batch keeps its exact snapshot. */
+/** Store receipts survive transaction rollback; each batch keeps its exact snapshot. */
 export function appendNotes(
-  tx: Tx,
   ref: NotebookReference,
   notes: StoredNote[],
   requestId: string,
 ) {
-  if (readOnly.has(tx)) throw new Error("Cannot change a read-only notebook");
+  if (readOnly.has(ref)) throw new Error("Cannot change a read-only notebook");
   if (!ref.path) throw new Error("External notebook is not initialized");
   const ids = notes.map((note) => note.id);
   if (!ids.length || new Set(ids).size !== ids.length)
@@ -165,7 +124,7 @@ export function project(book: NotebookState): {
   accepted: string[];
 } {
   const reports: Record<string, Verdict[]> = Object.create(null);
-  const passes: Record<string, Record<number, Set<string>>> = Object.create(
+  const passes: Record<string, Record<string, Set<string>>> = Object.create(
     null,
   );
   for (const check of book.checks)
@@ -211,12 +170,9 @@ export function project(book: NotebookState): {
   return { notes: [...notes.values()], accepted };
 }
 
-export async function definition(
-  tx: Tx,
-  root: ConversationId,
-): Promise<Definition> {
-  const value = await tx.doc(DefinitionDoc, root);
-  if (!value.task || !value.settings)
-    throw new Error("Campaign is not initialized");
-  return value as Definition;
+export function definition(value: {
+  definition: Definition | null;
+}): Definition {
+  if (!value.definition) throw new Error("Campaign is not initialized");
+  return value.definition;
 }

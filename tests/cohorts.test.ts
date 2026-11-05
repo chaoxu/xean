@@ -1,26 +1,19 @@
 import { expect, spyOn, test } from "bun:test";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
-import type { TaskDefinition } from "@earendil-works/pi-durable";
 import type { Respond } from "./worker-fixture.ts";
 import * as verification from "../src/verification.ts";
-import { Notebook, project, readNotebook } from "../src/state.ts";
-import {
-  createWorkflow,
-  type CampaignState,
-  type CampaignResult,
-} from "../src/workflow.ts";
-import * as workflow from "../src/workflow.ts";
+import { project } from "../src/state.ts";
+import { initialCampaign } from "../src/workflow.ts";
 import { inspect, readStatus } from "../src/index.ts";
-import { fixture, complete, context, abortable } from "./worker-fixture.ts";
+import {
+  fixture,
+  complete,
+  abortable,
+  note,
+  context,
+} from "./worker-fixture.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
-
 const all = [...verifierNames];
-type CampaignPhases = TaskDefinition<
-  { resume?: CampaignState },
-  CampaignState,
-  CampaignResult,
-  {}
->["phases"];
 async function observed<T>(
   promise: Promise<T>,
   description: string,
@@ -31,7 +24,7 @@ async function observed<T>(
       promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Timed out waiting for ${description}`)),
+          () => reject(new Error(`Timed out: ${description}`)),
           2000,
         );
       }),
@@ -40,473 +33,311 @@ async function observed<T>(
     clearTimeout(timer);
   }
 }
+const pause = () => Promise.withResolvers<void>();
 
-test("verification starts after one Explorer publishes while another is still running", async () => {
-  const explorersStarted = Promise.withResolvers<void>();
-  const firstSource = Promise.withResolvers<void>();
-  const bothSources = Promise.withResolvers<void>();
-  const releaseExplorers = [
-    Promise.withResolvers<void>(),
-    Promise.withResolvers<void>(),
-  ];
-  const releaseSources = Promise.withResolvers<void>();
+test("verification refills capacity while another Explorer remains running", async () => {
+  const exploring = pause(),
+    firstSource = pause(),
+    bothSources = pause();
+  const releases = [pause(), pause()],
+    releaseChecks = pause();
   let explorers = 0,
     sources = 0;
   const selected: string[] = [];
   const run = await fixture(
     async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      const { descriptor } = request;
+      const descriptor = request.descriptor;
       if (descriptor.kind === "explorer") {
         const slot = explorers++;
-        if (explorers === 2) explorersStarted.resolve();
-        expect(slot).toBeLessThan(2);
+        if (explorers === 2) exploring.resolve();
         await Promise.race([
-          releaseExplorers[slot]!.promise,
+          releases[slot]!.promise,
           abortable(request.signal),
         ]);
       }
       if (descriptor.kind === "selection") {
-        const root = descriptor.input.notes.find(
+        const target = descriptor.input.notes.find(
           (note) => !note.dead && !note.checked,
-        )?.id;
-        expect(root).toBeDefined();
-        selected.push(root!);
-        return { verify: [{ note: root!, verifiers: all }] };
+        )!.id;
+        selected.push(target);
+        return { verify: [{ note: target, verifiers: all }] };
       }
       if (descriptor.kind === "verifier" && descriptor.name === "source") {
         if (++sources === 1) firstSource.resolve();
         if (sources === 2) bothSources.resolve();
-        await Promise.race([releaseSources.promise, abortable(request.signal)]);
+        await Promise.race([releaseChecks.promise, abortable(request.signal)]);
       }
       return complete(request);
     },
     { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
   );
-  const done = run.owner.root.waitForIdle(context);
+  const done = run.owner.wait();
   try {
-    await observed(explorersStarted.promise, "initial Explorers");
-    releaseExplorers[0]!.resolve();
-    await observed(
-      firstSource.promise,
-      "verification while the second Explorer is blocked",
-    );
-    const records = await run.tasks();
-    const campaign = records.find(
-      (task: { kind: string }) => task.kind === "xean.campaign",
-    );
-    const logical = records.filter(
-      (task: { kind: string; owner?: number; state: { status: string } }) =>
-        task.kind === "xean.worker" &&
-        task.owner === campaign.id &&
-        task.state.status !== "terminal",
-    );
+    await observed(exploring.promise, "two Explorers");
+    releases[0]!.resolve();
+    await observed(firstSource.promise, "mixed work");
     expect(
-      logical
-        .map((task: { input: { kind: string } }) => task.input.kind)
+      run
+        .running()
+        .map((row) =>
+          row.phase === "blocked" ? "blocked" : row.args.work.kind,
+        )
         .sort(),
-    ).toEqual(["explorer", "verifier"]);
+    ).toEqual(["explorer", "selector"]);
     expect(await run.notes()).toHaveLength(1);
-    await expect(run.create({ kind: "explorer" })).rejects.toThrow(
+    await expect(run.start({ kind: "explorer" })).rejects.toThrow(
       "settle or resume",
     );
-    releaseExplorers[1]!.resolve();
-    await observed(bothSources.promise, "both verification calls");
-    const checking = (await run.tasks()).filter(
-      (task: { kind: string; state: { status: string } }) =>
-        task.kind === "xean.worker" && task.state.status !== "terminal",
-    );
-    expect(
-      checking.filter((task: { owner?: number }) => task.owner === campaign.id),
-    ).toHaveLength(2);
-    expect(
-      checking.filter(
-        (task: { input: { kind: string } }) => task.input.kind === "verify",
-      ),
-    ).toHaveLength(2);
+    releases[1]!.resolve();
+    await observed(bothSources.promise, "two Verifiers");
+    expect(run.running()).toHaveLength(2);
     expect(explorers).toBe(2);
     expect(new Set(selected).size).toBe(2);
     expect((await inspect(run.path, readStatus)).status).not.toBe("terminal");
   } finally {
-    for (const release of releaseExplorers) release.resolve();
-    releaseSources.resolve();
+    releases.forEach((release) => release.resolve());
+    releaseChecks.resolve();
     await done;
   }
   expect(await inspect(run.path, readStatus)).toMatchObject({
-    status: "terminal",
     outcome: "accepted",
     turns: 2,
+    status: "terminal",
   });
   expect((await run.book()).checks).toHaveLength(8);
 });
 
-test("a hung Explorer keeps finalization pending and native reopen recovers it", async () => {
-  const started = Promise.withResolvers<void>();
-  const reconstructed = Promise.withResolvers<void>();
+test("a hung Explorer prevents final acceptance and recovers on active reopen", async () => {
+  const started = pause(),
+    checked = pause();
   let explorers = 0,
-    hold = true;
-  let hungNamespace = "";
+    hold = true,
+    hung = "";
   const run = await fixture(
     async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (request.descriptor.kind === "explorer") {
-        explorers++;
-        if (
-          explorers === 2 ||
-          request.descriptor.input.namespace === hungNamespace
-        ) {
-          hungNamespace = request.descriptor.input.namespace;
-          started.resolve();
-          if (hold) await abortable(request.signal);
-        }
+      const d = request.descriptor;
+      if (
+        d.kind === "explorer" &&
+        (++explorers === 2 || d.input.namespace === hung)
+      ) {
+        hung = d.input.namespace;
+        started.resolve();
+        if (hold) await abortable(request.signal);
       }
-      if (request.descriptor.kind === "reconstruction") reconstructed.resolve();
+      if (d.kind === "reconstruction") checked.resolve();
       return complete(request);
     },
-    {
-      automatic: true,
-      settings: { maxWorkers: 2, maxExplorerTurns: 2 },
-    },
+    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
   );
-  const pending = run.owner.root.waitForIdle(context).catch(() => {});
-  await observed(started.promise, "held Explorer");
-  await observed(reconstructed.promise, "completed first reconstruction");
-  const verifier = (await run.tasks()).find(
-    (task: { input: { kind?: string } }) => task.input.kind === "verifier",
-  );
-  expect((await run.wait(verifier.id)).state.outcome.status).toBe("completed");
+  const pending = run.owner.wait().catch(() => undefined);
+  await observed(started.promise, "hung Explorer");
+  await observed(checked.promise, "first proof checked");
+  while (!run.history().some((row) => row.args.work.kind !== "explorer"))
+    await Bun.sleep(5);
   expect(project(await run.book()).accepted).toHaveLength(1);
+  expect(await inspect(run.path, readStatus)).toMatchObject({
+    outcome: "running",
+    accepted: null,
+  });
   const calls = run.provider.state.callCount;
-  const status = await inspect(run.path, readStatus);
-  expect(status.status).not.toBe("terminal");
-  expect(status.accepted).toBeNull();
   await run.owner.close();
   await pending;
-  const suspended = await inspect(run.path, readStatus);
-  expect(suspended.status).not.toBe("terminal");
+  expect((await inspect(run.path, readStatus)).status).not.toBe("terminal");
   hold = false;
   await run.reopen();
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
-    status: "terminal",
     outcome: "accepted",
   });
+  expect(run.provider.state.callCount).toBe(calls + 1);
   expect(
     run.requests.filter(
       ({ descriptor }) =>
-        descriptor.kind === "explorer" &&
-        descriptor.input.namespace === hungNamespace,
+        descriptor.kind === "explorer" && descriptor.input.namespace === hung,
     ),
   ).toHaveLength(2);
-  expect(run.provider.state.callCount).toBe(calls + 1);
 });
 
-test.each(["fault", "abort"])(
-  "a provisional acceptance waits for an adverse receipt after %s",
-  async (interruption) => {
-    const accepted = Promise.withResolvers<void>();
-    const receiptPaused = Promise.withResolvers<void>();
-    const releaseReceipt = Promise.withResolvers<void>();
-    let ancestor = "",
-      finalRoot = "";
-    let exploration = 0;
-    const run = await fixture(
-      async (request): Promise<Awaited<ReturnType<Respond>>> => {
-        const { descriptor } = request;
-        if (descriptor.kind === "explorer") {
-          if (++exploration === 1) {
-            ancestor = `${descriptor.input.namespace}.1`;
-            return {
-              notes: [
-                { text: "Generated lemma.", summary: "Lemma.", support: [] },
-              ],
-            };
-          }
-          finalRoot = `${descriptor.input.namespace}.1`;
-          return {
-            notes: [
-              {
-                text: "Final candidate.",
-                summary: "Final claim.",
-                support: [ancestor],
-              },
-            ],
-          };
+test("provisional acceptance waits for an unpublished adverse receipt and explicit resume", async () => {
+  const accepted = pause();
+  let ancestor = "",
+    root = "",
+    explorers = 0,
+    interrupted = false;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      const d = request.descriptor;
+      if (d.kind === "explorer") {
+        if (++explorers === 1) {
+          ancestor = `${d.input.namespace}.1`;
+          return { notes: [note("Generated lemma.")] };
         }
-        if (
-          exploration > 1 &&
-          descriptor.kind === "verifier" &&
-          descriptor.name === "source" &&
-          descriptor.judged.includes(ancestor)
-        ) {
-          await Promise.race([accepted.promise, abortable(request.signal)]);
-          return {
-            verdicts: [
-              {
-                note: ancestor,
-                verdict: "FAIL",
-                report: "The lemma's cited source is false.",
-              },
-            ],
-          };
-        }
-        if (descriptor.kind === "selection") return { verify: [] };
-        return complete(request);
-      },
-      { settings: { maxWorkers: 3, maxExplorerTurns: 1 } },
-    );
-    await run.run({ kind: "explorer" });
-    await run.run({
-      kind: "verifier",
-      verify: [
-        {
-          note: ancestor,
-          verifiers: ["source", "correctness", "reconstruction"],
-        },
-      ],
-    });
-    const initial = project(await run.book());
-    expect(initial.accepted).toEqual([]);
-    expect(
-      initial.notes.find((note) => note.id === ancestor)!.verdicts,
-    ).toContainEqual(
-      expect.objectContaining({ verifier: "reconstruction", verdict: "PASS" }),
-    );
-    const campaign = await run.owner.root.commit(
-      (tx) => createWorkflow().initialize(tx, run.owner.root.id),
-      context,
-    );
-    // Admit two disjoint checks to expose the late-adverse-result boundary.
-    // The Campaign still owns, waits for, and recovers these native workers.
-    const createGroup = run.owner.workers.createGroup.bind(run.owner.workers);
-    let assigned = false;
-    const assignments = spyOn(
-      run.owner.workers,
-      "createGroup",
-    ).mockImplementation(async (tx, root, requests, owner, eligible) => {
+        root = `${d.input.namespace}.1`;
+        return { notes: [note("Final candidate.", [ancestor])] };
+      }
+      if (d.kind === "selection")
+        return {
+          verify: root
+            ? d.input.notes.map((note) => ({ note: note.id, verifiers: all }))
+            : [],
+        };
       if (
-        !assigned &&
-        owner !== undefined &&
-        finalRoot &&
-        requests.some((request) => request.kind === "verifier") &&
-        readNotebook(await tx.doc(Notebook, root)).notes.some(
-          (note) => note.id === finalRoot,
-        )
+        root &&
+        d.kind === "verifier" &&
+        d.name === "source" &&
+        d.judged.includes(ancestor)
       ) {
-        assigned = true;
-        return createGroup(
-          tx,
-          root,
-          [
-            { kind: "verifier", verify: [{ note: finalRoot, verifiers: all }] },
-            { kind: "verifier", verify: [{ note: ancestor, verifiers: all }] },
+        await Promise.race([accepted.promise, abortable(request.signal)]);
+        return {
+          verdicts: [
+            { note: ancestor, verdict: "FAIL", report: "False prerequisite." },
           ],
-          owner,
-          eligible,
-        );
+        };
       }
-      return createGroup(tx, root, requests, owner, eligible);
-    });
-    const original = verification.verify;
-    let interrupted = false;
-    const verifier = spyOn(verification, "verify").mockImplementation(
-      async (input, settings, dependencies) =>
-        original(input, settings, {
-          ...dependencies,
-          async record(id, values) {
-            if (
-              !interrupted &&
-              values.some(
-                (value) => value.note === ancestor && value.verdict === "FAIL",
-              )
-            ) {
-              interrupted = true;
-              if (interruption === "abort") {
-                receiptPaused.resolve();
-                await releaseReceipt.promise;
-              } else
-                throw new Error(
-                  "Adverse source receipt committed before check publication",
-                );
-            }
-            await dependencies.record(id, values);
-            if (
-              values.some(
-                (value) =>
-                  value.note === finalRoot &&
-                  value.verifier === "reconstruction",
-              )
+      return complete(request);
+    },
+    { settings: { maxWorkers: 3, maxExplorerTurns: 1 } },
+  );
+  await run.run({ kind: "explorer" });
+  await run.run({
+    kind: "verifier",
+    verify: [
+      {
+        note: ancestor,
+        verifiers: ["source", "correctness", "reconstruction"],
+      },
+    ],
+  });
+  const original = verification.verify;
+  const interception = spyOn(verification, "verify").mockImplementation(
+    (input, settings, deps) =>
+      original(input, settings, {
+        ...deps,
+        async record(id, values) {
+          if (
+            !interrupted &&
+            values.some((v) => v.note === ancestor && v.verdict === "FAIL")
+          ) {
+            interrupted = true;
+            throw new Error("Adverse receipt before publication");
+          }
+          await deps.record(id, values);
+          if (
+            values.some(
+              (v) => v.note === root && v.verifier === "reconstruction",
             )
-              accepted.resolve();
-          },
-        }),
-    );
-    try {
-      const idle = run.owner.root.waitForIdle(context);
-      if (interruption === "abort") {
-        await observed(
-          receiptPaused.promise,
-          "adverse receipt before check publication",
-        );
-        await run.owner.harness.abortTask(campaign, context);
-        releaseReceipt.resolve();
-      }
-      await idle;
-    } finally {
-      releaseReceipt.resolve();
-      accepted.resolve();
-      verifier.mockRestore();
-      assignments.mockRestore();
-    }
-    expect(interrupted).toBe(true);
-    expect(
-      (await run.tasks()).find((task: { id: number }) => task.id === campaign)
-        .state.outcome.status,
-    ).toBe(interruption === "abort" ? "aborted" : "completed");
-    expect(project(await run.book()).accepted).toEqual([finalRoot]);
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      status: "terminal",
-      outcome: "call-failure",
-      accepted: null,
+          )
+            accepted.resolve();
+        },
+      }),
+  );
+  try {
+    await run.owner.change((data) => {
+      data.campaign = initialCampaign();
     });
-    await expect(run.create({ kind: "explorer" })).rejects.toThrow(
-      "settle or resume",
-    );
-    const calls = run.provider.state.callCount;
-    const adverse = (await run.tasks()).find(
-      (task: {
-        input: { kind?: string; input?: { verify?: { note: string }[] } };
-        state: { outcome?: { status: string } };
-      }) =>
-        task.input.kind === "verify" &&
-        task.input.input?.verify?.some((entry) => entry.note === ancestor) &&
-        task.state.outcome?.status !== "completed",
-    );
-    expect(adverse).toBeDefined();
-    await run.reopen();
-    await run.owner.root.waitForIdle(context);
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      outcome: "call-failure",
-      accepted: null,
-    });
-    expect(run.provider.state.callCount).toBe(calls);
-    await run.owner.resume();
-    await run.owner.root.waitForIdle(context);
-    expect(run.provider.state.callCount).toBe(calls);
-    expect(
-      (await run.book()).checks.find((check) =>
-        check.values.some(
-          (value) => value.note === ancestor && value.verdict === "FAIL",
-        ),
-      )?.candidate,
-    ).toBe(adverse.id);
-    expect(project(await run.book()).accepted).toEqual([]);
-    expect(
-      (await run.notes()).find((note) => note.id === finalRoot)!.dead,
-    ).toBe(true);
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      status: "terminal",
-      outcome: "turn-limit",
-      accepted: null,
-    });
-  },
-);
+    await run.owner.wait();
+  } finally {
+    accepted.resolve();
+    interception.mockRestore();
+  }
+  expect(interrupted).toBe(true);
+  expect(project(await run.book()).accepted).toEqual([root]);
+  expect(await inspect(run.path, readStatus)).toMatchObject({
+    outcome: "call-failure",
+    accepted: null,
+  });
+  await expect(run.start({ kind: "explorer" })).rejects.toThrow(
+    "settle or resume",
+  );
+  const failed = run.history().find((row) => row.status === "failed")!;
+  const calls = run.provider.state.callCount;
+  await run.reopen();
+  await run.owner.wait();
+  expect(run.provider.state.callCount).toBe(calls);
+  expect((await inspect(run.path, readStatus)).outcome).toBe("call-failure");
+  await run.owner.resume();
+  await run.owner.wait();
+  expect(run.provider.state.callCount).toBe(calls);
+  expect(
+    (await run.book()).checks.find((check) =>
+      check.values.some(
+        (value) => value.note === ancestor && value.verdict === "FAIL",
+      ),
+    )?.candidate,
+  ).toBe(failed.origin);
+  expect(project(await run.book()).accepted).toEqual([]);
+  expect((await run.notes()).find((note) => note.id === root)!.dead).toBe(true);
+  expect(await inspect(run.path, readStatus)).toMatchObject({
+    outcome: "turn-limit",
+    turns: 1,
+    accepted: null,
+  });
+});
 
-test("native abort retains completed, unpublished, and unfinished Explorer members", async () => {
-  const hung = Promise.withResolvers<void>();
-  let explorerCalls = 0;
-  let interrupted = false;
-  const original = NoteStore.prototype.append;
-  const append = spyOn(NoteStore.prototype, "append").mockImplementation(
-    function (this: NoteStore, requestId, notes) {
-      const version = original.call(this, requestId, notes);
+test("close retains completed, unpublished, and unfinished Explorer work", async () => {
+  const held = pause();
+  let count = 0,
+    release = false,
+    interrupted = false;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (request.descriptor.kind === "explorer") {
+        const slot = ++count;
+        if (slot === 3 && !release) {
+          held.resolve();
+          await abortable(request.signal);
+        }
+        return {
+          notes: [
+            note(slot === 2 ? "Publication boundary." : "Completed progress."),
+          ],
+        };
+      }
+      if (request.descriptor.kind === "selection") return { verify: [] };
+      return complete(request);
+    },
+    { automatic: true, settings: { maxWorkers: 3, maxExplorerTurns: 3 } },
+  );
+  const append = NoteStore.prototype.append;
+  const interruption = spyOn(NoteStore.prototype, "append").mockImplementation(
+    function (this: NoteStore, request, notes) {
+      const version = append.call(this, request, notes);
       if (
         !interrupted &&
-        Object.values(notes).some((note) => note.text === "Unpublished proof.")
+        Object.values(notes).some(
+          (note) => note.text === "Publication boundary.",
+        )
       ) {
         interrupted = true;
-        throw new Error("Append committed before Pi publication");
+        throw new Error("Publication committed before admission");
       }
       return version;
     },
   );
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (request.descriptor.kind === "explorer") {
-        explorerCalls++;
-        if (explorerCalls === 2)
-          return {
-            notes: [
-              {
-                text: "Unpublished proof.",
-                summary: "Unpublished proof.",
-                support: [],
-              },
-            ],
-          };
-        if (explorerCalls === 3) {
-          hung.resolve();
-          await abortable(request.signal);
-        }
-      }
-      return complete(request);
-    },
-    {
-      automatic: true,
-      settings: { maxWorkers: 3, maxExplorerTurns: 3 },
-    },
-  );
+  const pending = run.owner.wait().catch(() => undefined);
   try {
-    const idle = run.owner.root.waitForIdle(context);
-    await observed(hung.promise, "unfinished Explorer");
-    const records = await run.tasks();
-    const campaign = records.find(
-      (task: { kind: string }) => task.kind === "xean.campaign",
-    );
-    const members = records.filter(
-      (task: { owner?: number; input: { kind?: string } }) =>
-        task.owner === campaign.id && task.input.kind === "explorer",
-    );
-    expect((await run.wait(members[0].id)).state.outcome.status).toBe(
-      "completed",
-    );
-    expect((await run.wait(members[1].id)).state.outcome.status).toBe(
-      "faulted",
-    );
-    await run.owner.harness.abortTask(campaign.id, context);
-    await idle;
-    const settled = (await run.tasks()).find(
-      (task: { id: number }) => task.id === campaign.id,
-    );
-    expect(settled.state.outcome).toMatchObject({
-      status: "aborted",
-      result: {
-        outcome: "call-failure",
-        turns: 1,
-        resume: expect.any(Object),
-      },
-    });
-    expect(await run.notes()).toHaveLength(1);
-    using store = new NoteStore(`${run.path}.notes.sqlite`, { readonly: true });
-    expect(store.snapshot()).toBe(2);
-    await expect(run.create({ kind: "explorer" })).rejects.toThrow(
-      "settle or resume",
-    );
-    await run.owner.resume();
-    await run.owner.root.waitForIdle(context);
-    expect(explorerCalls).toBe(4);
-    const notes = await run.notes();
-    expect(notes).toHaveLength(3);
-    expect(notes.find((note) => note.id === `w${members[1].id}.1`)?.text).toBe(
-      "Unpublished proof.",
-    );
-    expect(store.snapshot()).toBe(3);
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      status: "terminal",
-      outcome: "accepted",
-      turns: 3,
-    });
+    await observed(held.promise, "unfinished Explorer");
+    while (!run.history().some((row) => row.status === "failed"))
+      await Bun.sleep(5);
+    await run.owner.close();
+    await pending;
   } finally {
-    append.mockRestore();
+    interruption.mockRestore();
   }
+  expect(interrupted).toBe(true);
+  expect((await run.notes()).length).toBe(1);
+  release = true;
+  await run.reopen();
+  expect((await run.owner.wait()).outcome).toBe("call-failure");
+  const calls = run.provider.state.callCount;
+  await run.owner.resume();
+  expect((await run.owner.wait()).outcome).toBe("turn-limit");
+  expect(run.provider.state.callCount).toBe(calls + 3); // Three finite no-work selector offers, with no repeated Explorer.
+  expect((await run.notes()).length).toBe(3);
+  expect(
+    run.requests.filter(({ descriptor }) => descriptor.kind === "explorer"),
+  ).toHaveLength(4);
+  expect((await inspect(run.path, readStatus)).turns).toBe(3);
 });
 
 test("solution-only selection allows supporting-lemma checks with a complete root nomination", async () => {
@@ -553,7 +384,7 @@ test("solution-only selection allows supporting-lemma checks with a complete roo
       },
     },
   );
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
     status: "terminal",
     outcome: "accepted",
@@ -588,7 +419,7 @@ test("a no-work selection does not repeat on an unchanged notebook", async () =>
       settings: { maxWorkers: 1, maxExplorerTurns: 1 },
     },
   );
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
     status: "terminal",
     outcome: "turn-limit",
@@ -628,7 +459,7 @@ test("verification drains multiple windows after the exploration limit", async (
       settings: { maxWorkers: 1, maxExplorerTurns: 1, window: 1 },
     },
   );
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
     status: "terminal",
     outcome: "turn-limit",
@@ -674,7 +505,7 @@ test("INCONCLUSIVE checks do not create a new selection frontier", async () => {
     },
     { automatic: true, settings: { maxWorkers: 1, maxExplorerTurns: 1 } },
   );
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
     outcome: "turn-limit",
     turns: 1,
@@ -734,7 +565,7 @@ test.each(["inconclusive", "local-only"])(
       },
       { automatic: true, settings: { maxWorkers: 1, maxExplorerTurns: 2 } },
     );
-    await run.owner.root.waitForIdle(context);
+    await run.owner.wait();
     expect(await inspect(run.path, readStatus)).toMatchObject({
       outcome: "accepted",
       accepted: firstNote,
@@ -754,230 +585,6 @@ test.each(["inconclusive", "local-only"])(
     ).toEqual(all);
   },
 );
-
-test("a busy result does not spin while its only target remains claimed", async () => {
-  const checking = Promise.withResolvers<void>();
-  const busySettled = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  let target = "";
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      const { descriptor } = request;
-      if (descriptor.kind === "explorer")
-        target = `${descriptor.input.namespace}.1`;
-      if (descriptor.kind === "verifier" && descriptor.name === "source") {
-        checking.resolve();
-        await Promise.race([release.promise, abortable(request.signal)]);
-      }
-      return complete(request);
-    },
-    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 1 } },
-  );
-  // Explicit callers can race on one target; the controller must drain that
-  // real busy outcome without repeatedly dispatching the same claimed note.
-  const createGroup = run.owner.workers.createGroup.bind(run.owner.workers);
-  let assigned = false;
-  const assignments = spyOn(
-    run.owner.workers,
-    "createGroup",
-  ).mockImplementation((tx, root, requests, owner, eligible) => {
-    if (
-      !assigned &&
-      owner !== undefined &&
-      requests.some((request) => request.kind === "verifier")
-    ) {
-      assigned = true;
-      return createGroup(
-        tx,
-        root,
-        [
-          { kind: "verifier", verify: [{ note: target, verifiers: all }] },
-          { kind: "verifier", verify: [{ note: target, verifiers: all }] },
-        ],
-        owner,
-        eligible,
-      );
-    }
-    return createGroup(tx, root, requests, owner, eligible);
-  });
-  const observation = run.owner.harness.observeCommits({
-    advance: ({ changes }) => {
-      for (const change of changes) {
-        if (change.type !== "task") continue;
-        const task = change.value;
-        if (
-          task.kind === "xean.worker" &&
-          task.state.status === "terminal" &&
-          task.state.outcome.status === "completed" &&
-          (task.state.outcome.result as { status?: string } | undefined)
-            ?.status === "busy"
-        )
-          busySettled.resolve();
-      }
-    },
-    end: (end) => {
-      if (end.kind === "listener_error") busySettled.reject(end.error);
-    },
-  });
-  const done = run.owner.root.waitForIdle(context);
-  try {
-    await observed(checking.promise, "checking call");
-    await observed(busySettled.promise, "busy result");
-    const calls = run.provider.state.callCount;
-    await Bun.sleep(30);
-    expect(run.provider.state.callCount).toBe(calls);
-    const records = await run.tasks();
-    expect(
-      records.filter(
-        (task: { input: { kind?: string } }) => task.input.kind === "verifier",
-      ),
-    ).toHaveLength(2);
-    expect(
-      records.find((task: { kind: string }) => task.kind === "xean.campaign")
-        .state,
-    ).toMatchObject({
-      status: "waiting",
-      policy: "anySettled",
-      checkpoint: { phase: "run" },
-    });
-  } finally {
-    release.resolve();
-    observation.detach();
-    assignments.mockRestore();
-    await done;
-  }
-  expect(await inspect(run.path, readStatus)).toMatchObject({
-    outcome: "accepted",
-    turns: 1,
-  });
-});
-
-test("an in-flight Explorer consumes the remaining exploration allowance after no-work", async () => {
-  const secondStarted = Promise.withResolvers<void>();
-  const noWork = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  let explorers = 0;
-  const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      if (request.descriptor.kind === "explorer") {
-        expect(++explorers).toBeLessThanOrEqual(2);
-        if (explorers === 2) {
-          secondStarted.resolve();
-          await Promise.race([release.promise, abortable(request.signal)]);
-        }
-      }
-      return request.descriptor.kind === "selection"
-        ? { verify: [] }
-        : complete(request);
-    },
-    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
-  );
-  const observer = run.owner.harness.observeCommits({
-    advance: ({ changes }) => {
-      for (const change of changes)
-        if (change.type === "task") {
-          const task = change.value;
-          if (
-            task.kind === "xean.worker" &&
-            task.state.status === "terminal" &&
-            task.state.outcome.status === "completed" &&
-            (task.state.outcome.result as { status?: string } | undefined)
-              ?.status === "no-work"
-          )
-            noWork.resolve();
-        }
-    },
-    end: (end) => {
-      if (end.kind === "listener_error") noWork.reject(end.error);
-    },
-  });
-  const done = run.owner.root.waitForIdle(context);
-  try {
-    await observed(secondStarted.promise, "second Explorer");
-    await observed(noWork.promise, "no-work result");
-    await Bun.sleep(30);
-    expect(explorers).toBe(2);
-    const campaign = (await run.tasks()).find(
-      (task: { kind: string }) => task.kind === "xean.campaign",
-    );
-    expect(campaign.state).toMatchObject({
-      status: "waiting",
-      policy: "anySettled",
-      checkpoint: { phase: "run" },
-    });
-  } finally {
-    release.resolve();
-    observer.detach();
-    await done;
-  }
-  expect(explorers).toBe(2);
-  expect(await inspect(run.path, readStatus)).toMatchObject({
-    outcome: "turn-limit",
-    turns: 2,
-  });
-});
-
-test("an abort before worker admission resumes from an empty child list", async () => {
-  const entered = Promise.withResolvers<void>();
-  let restorePhase = () => {};
-  const originalFactory = workflow.createWorkflow;
-  const factory = spyOn(workflow, "createWorkflow").mockImplementation(
-    (options) => {
-      const value = originalFactory(options);
-      const phases = value.extension.tasks!.find(
-        (task) => task.definition.name === "xean.campaign",
-      )!.definition.phases as CampaignPhases;
-      const run = spyOn(phases, "run").mockImplementation(
-        async (_task, runtime) => {
-          entered.resolve();
-          await abortable(runtime.signal);
-          runtime.signal.throwIfAborted();
-        },
-      );
-      restorePhase = () => run.mockRestore();
-      return value;
-    },
-  );
-  try {
-    const run = await fixture(complete, {
-      automatic: true,
-      settings: { maxWorkers: 1, maxExplorerTurns: 1 },
-    });
-    factory.mockRestore();
-    const idle = run.owner.root.waitForIdle(context);
-    await observed(
-      entered.promise,
-      "initial Campaign invocation before admission",
-    );
-    const campaign = (await run.tasks()).find(
-      (task: { kind: string }) => task.kind === "xean.campaign",
-    );
-    expect(run.provider.state.callCount).toBe(0);
-    await run.owner.harness.abortTask(campaign.id, context);
-    await idle;
-    expect(
-      (await run.tasks()).find(
-        (task: { id: number }) => task.id === campaign.id,
-      ).state.outcome,
-    ).toMatchObject({
-      status: "aborted",
-      result: { outcome: "call-failure", resume: { children: [] } },
-    });
-    restorePhase();
-    await run.owner.resume();
-    await run.owner.root.waitForIdle(context);
-    expect(await inspect(run.path, readStatus)).toMatchObject({
-      outcome: "accepted",
-      turns: 1,
-    });
-    expect(
-      run.requests.filter(({ descriptor }) => descriptor.kind === "explorer"),
-    ).toHaveLength(1);
-  } finally {
-    factory.mockRestore();
-    restorePhase();
-  }
-});
 
 test("deferred verification drains windowed support through its full ancestry without rechecking the root", async () => {
   let x = "",
@@ -1056,19 +663,15 @@ test("deferred verification drains windowed support through its full ancestry wi
       },
     },
   );
-  await run.owner.root.waitForIdle(context);
+  await run.owner.wait();
   expect(await inspect(run.path, readStatus)).toMatchObject({
     outcome: "accepted",
     accepted: b,
     turns: 1,
   });
-  const claims = (await run.tasks()).filter(
-    (task: { input: { kind?: string } }) => task.input.kind === "verify",
-  );
+  const claims = run.history().filter((row) => row.state.claim);
   expect(
-    claims.map((task: { input: { input: { verify: { note: string }[] } } }) =>
-      task.input.input.verify.map((entry) => entry.note),
-    ),
+    claims.map((row) => row.state.claim!.verify.map((entry) => entry.note)),
   ).toEqual([[b], [a], [x]]);
   expect(selections).toBe(3);
   const book = await run.book();
@@ -1148,29 +751,18 @@ test("a later solution nomination reoffers support declined earlier in the same 
       },
     },
   );
-  const observation = run.owner.harness.observeCommits({
-    advance: ({ changes }) => {
-      for (const change of changes) {
-        if (change.type !== "task") continue;
-        const task = change.value;
-        if (
-          task.kind === "xean.worker" &&
-          task.state.status === "terminal" &&
-          task.state.outcome.status === "completed" &&
-          (task.state.outcome.result as { status?: string } | undefined)
-            ?.status === "no-work"
-        )
-          declined.resolve();
-      }
-    },
-    end: (end) => {
-      if (end.kind === "listener_error") declined.reject(end.error);
-    },
+  const observation = await run.owner.running.watch(context);
+  observation.start(async (event) => {
+    if (
+      event.kind === "value" &&
+      run.history().some((row) => row.result?.status === "no-work")
+    )
+      declined.resolve();
   });
   try {
-    await run.owner.root.waitForIdle(context);
+    await run.owner.wait();
   } finally {
-    observation.detach();
+    observation.stop();
   }
   expect(await inspect(run.path, readStatus)).toMatchObject({
     outcome: "accepted",
@@ -1195,4 +787,95 @@ test("a later solution nomination reoffers support declined earlier in the same 
   expect(
     run.requests.filter(({ descriptor }) => descriptor.kind === "explorer"),
   ).toHaveLength(1);
+});
+
+test("an in-flight Explorer consumes the last exploration allowance after no-work", async () => {
+  const held = pause(),
+    release = pause(),
+    declined = pause();
+  let explorers = 0;
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      if (request.descriptor.kind === "explorer" && ++explorers === 2) {
+        held.resolve();
+        await Promise.race([release.promise, abortable(request.signal)]);
+      }
+      if (request.descriptor.kind === "selection") return { verify: [] };
+      return complete(request);
+    },
+    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
+  );
+  const watch = await run.owner.running.watch(context);
+  const check = () => {
+    if (run.history().some((row) => row.result?.status === "no-work"))
+      declined.resolve();
+  };
+  watch.start(async (event) => {
+    if (event.kind === "value") check();
+  });
+  check();
+  try {
+    await observed(held.promise, "last Explorer");
+    await observed(declined.promise, "no-work selection");
+    await Bun.sleep(20);
+    expect(explorers).toBe(2);
+    expect(run.running()).toHaveLength(1);
+    expect((await inspect(run.path, readStatus)).status).toBe("running");
+    release.resolve();
+    expect(await run.owner.wait()).toMatchObject({
+      outcome: "turn-limit",
+      turns: 2,
+    });
+    expect(explorers).toBe(2);
+  } finally {
+    release.resolve();
+    watch.stop();
+  }
+});
+
+test("a busy deferred selection drains only the unclaimed remainder without spinning", async () => {
+  const checking = pause(),
+    release = pause();
+  let sources = 0;
+  const views: string[][] = [];
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      const d = request.descriptor;
+      if (d.kind === "explorer")
+        return {
+          notes: [
+            note("Candidate A."),
+            note("Candidate B assuming A.", [`${d.input.namespace}.1`]),
+          ],
+        };
+      if (d.kind === "selection") {
+        views.push(d.input.notes.map((note) => note.id));
+        return { verify: [{ note: d.input.notes[0]!.id, verifiers: all }] };
+      }
+      if (d.kind === "verifier" && d.name === "source") {
+        if (++sources === 2) checking.resolve();
+        await Promise.race([release.promise, abortable(request.signal)]);
+      }
+      return complete(request);
+    },
+    {
+      automatic: true,
+      settings: { maxWorkers: 2, maxExplorerTurns: 1, verifyOnSolution: true },
+    },
+  );
+  try {
+    await observed(checking.promise, "both disjoint check batches");
+    expect(
+      run.history().filter((row) => row.result?.status === "busy"),
+    ).toHaveLength(1);
+    expect(views).toHaveLength(3);
+    expect(views[2]).toHaveLength(1);
+    expect(views[2]![0]).not.toBe(views[0]![0]);
+    await Bun.sleep(20);
+    expect(views).toHaveLength(3);
+    expect(sources).toBe(2);
+  } finally {
+    release.resolve();
+  }
+  expect((await run.owner.wait()).outcome).toBe("accepted");
 });

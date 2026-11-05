@@ -5,35 +5,52 @@ import { DatabaseSync } from "node:sqlite";
 import { Database } from "bun:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+  createHost,
+  defineFacet,
+  findDocument,
+  loadDocument,
+  openStore,
+  sqliteBackend,
+  type SingletonHandle,
+  type Store,
+} from "@earendil-works/chord/next";
+import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   createRegistry,
   createSession,
   Harness,
-  ROOT_CONVERSATION_ID,
-  type ConversationId,
-  type Storage,
+  type Conversation,
   type Session,
-  type Tx,
+  type Storage,
 } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { StoreStorage } from "@earendil-works/pi-durable/storage/store";
 import { task as taskSchema } from "./policy/contracts.ts";
 import { solveSettings } from "./policy/settings.ts";
 import {
-  DefinitionDoc,
-  Notebook,
   project,
   initializeNotebook,
   readNotebook,
   readonlyNotebook,
   type Definition,
 } from "./state.ts";
-import { createWorkflow, type SourceExecutor } from "./workflow.ts";
+import { createWorkflow, initialCampaign } from "./workflow.ts";
+import {
+  createWorkers,
+  type SourceExecutor,
+  type WorkerRequest,
+} from "./workers.ts";
+import {
+  ResearchState,
+  ResearchType,
+  copy,
+  type ResearchData,
+} from "./records.ts";
 import { acceptedArgument, readStatus } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
-import { roleGenerationPolicy } from "./role-runtime.ts";
+import { createRoleRuntime, roleGenerationPolicy } from "./role-runtime.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -43,18 +60,23 @@ export class ResearchOwnedError extends Error {
 }
 export type OpenOptions = {
   create?: Definition;
-  /** Create the sequential campaign task with a new root. Existing tasks are preserved. */
+  /** Initialize an automatic campaign. False leaves manual worker admission available. */
   startCampaign?: boolean;
+  /** Activate jobs and native call recovery. Passive openings only read or change state. */
+  execute?: boolean;
   models?: Models;
   source?: SourceExecutor;
+  report?: (error: unknown) => void;
 };
 
 function validateDefinition(value: unknown): Definition {
   if (!value || typeof value !== "object")
     throw new Error("Not an initialized xean campaign");
   const input = value as Definition;
-  const settings = solveSettings.parse(input.settings);
-  return { task: taskSchema.parse(input.task), settings };
+  return {
+    task: taskSchema.parse(input.task),
+    settings: solveSettings.parse(input.settings),
+  };
 }
 
 async function canonicalPath(path: string, create: boolean) {
@@ -96,15 +118,15 @@ function openReadDatabase(path: string) {
     strict: true,
   });
   try {
-    database.exec("PRAGMA query_only = ON");
-    return database;
+    database.exec("PRAGMA query_only = ON; BEGIN");
+    return new NodeSqliteDatabase(database, { readOnly: true });
   } catch (error) {
     database.close();
     throw error;
   }
 }
 
-async function openOwnedStorage(path: string) {
+async function openOwnedStore(path: string) {
   const database = new NodeSqliteDatabase(
     new Database(path, { create: true, strict: true }),
   );
@@ -112,34 +134,49 @@ async function openOwnedStorage(path: string) {
     await database.exec(
       "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 0",
     );
-    return await SqliteStorage.open(database);
+    return await openStore(sqliteBackend(database), context);
   } catch (error) {
     await database.close().catch(() => {});
     throw error;
   }
 }
 
-/** Own one native Harness. Closing suspends work; reopening recovers its checkpoints. */
+/** Own the shared Chord store; only execute:true restores workers and model calls. */
 export async function open(path: string, options: OpenOptions = {}) {
   const requested = options.create && validateDefinition(options.create);
   const canonical = await canonicalPath(path, requested !== undefined);
   const release = acquireOwnership(canonical);
+  const report = options.report ?? console.error;
+  let store: Store | undefined;
   let storage: Storage | undefined;
   let harness: Harness | undefined;
+  let root: Conversation | undefined;
+  let host: ReturnType<typeof createHost> | undefined;
+  let data!: SingletonHandle<ResearchData>;
+  let workers: ReturnType<typeof createWorkers> | undefined;
+  let workflow: ReturnType<typeof createWorkflow> | undefined;
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
+      // Seal Chord admission before suspending Pi's conversations.
+      const stopped = host?.close(context);
       try {
+        const outcomes = await Promise.allSettled([
+          stopped,
+          harness ? harness.close(context) : storage?.close(context),
+        ]);
+        for (const outcome of outcomes)
+          if (outcome.status === "rejected") throw outcome.reason;
         if (harness) {
-          try {
-            await harness.close(context);
-          } finally {
-            const end = await harness.closed;
-            if (end.kind === "failed") throw end.error;
-          }
-        } else await storage?.close(context);
+          const end = await harness.closed;
+          if (end.kind === "failed") throw end.error;
+        }
       } finally {
-        release();
+        try {
+          await store?.close(context);
+        } finally {
+          release();
+        }
       }
     })());
   try {
@@ -150,56 +187,125 @@ export async function open(path: string, options: OpenOptions = {}) {
       },
     );
     if (existing) assertSingleLink(existing.nlink);
-    // Validate existing databases through a read-only transaction before opening a writer.
+    // Reject historical layouts through a read-only snapshot before opening a writer.
     const stored = existing?.size
-      ? await inspectSession(canonical, (_session, _root, value) => value)
+      ? await inspect(canonical, (value) => value.definition)
       : undefined;
     if (stored && requested && !isDeepStrictEqual(stored, requested))
       throw new Error("Research task and settings are frozen");
     const definition = stored ?? requested;
     if (!definition) throw new Error("Campaign is not initialized");
-    storage = await openOwnedStorage(canonical);
-    const workflow = createWorkflow({
-      source: options.source ?? codexExec(),
-    });
-    const registry = createRegistry();
-    registry.install(workflow.extension);
-    harness = await Harness.open(
-      storage,
-      {
-        registry,
-        models: options.models ?? builtinModels(),
-        settings: {
-          compaction: { enabled: false },
-          retry: { enabled: true, maxRetries: 8 },
-          restartLimit: Infinity,
-          generation: roleGenerationPolicy,
-          progress: { persistWithinMs: 0 },
-          toolExecution: "sequential",
-          contextRetentionMs: 0,
-          documentRetentionMs: 0,
+    store = await openOwnedStore(canonical);
+    storage = await StoreStorage.open(store, "pi", context);
+    const roles = options.execute
+      ? createRoleRuntime(() => readNotebook(data.value.notebook))
+      : undefined;
+    if (roles) {
+      const registry = createRegistry();
+      registry.install(roles.extension);
+      harness = await Harness.open(
+        storage,
+        {
+          registry,
+          models: options.models ?? builtinModels(),
+          settings: {
+            compaction: { enabled: false },
+            retry: { enabled: true, maxRetries: 8 },
+            restartLimit: Infinity,
+            generation: roleGenerationPolicy,
+            progress: { persistWithinMs: 0 },
+            toolExecution: "sequential",
+            contextRetentionMs: 0,
+            documentRetentionMs: 0,
+          },
+          onReport: report,
         },
-        onReport: (error) => console.error("Pi report:", error),
-      },
+        context,
+      );
+      void harness.closed.then(close).catch(() => {});
+      root = await harness.root(context);
+    }
+    host = createHost({ store, onError: report });
+    await host.load(
+      [
+        {
+          name: "xean",
+          facet: defineFacet((h) => {
+            h.serve(ResearchType, (_, self) => {
+              data = self.state(ResearchState);
+              if (options.execute) {
+                workers = createWorkers(
+                  self,
+                  data,
+                  definition,
+                  {
+                    call: (origin, attempt, key, descriptor, profile, ctx) =>
+                      roles!.call(
+                        harness!,
+                        origin,
+                        attempt,
+                        key,
+                        descriptor,
+                        profile,
+                        ctx,
+                        report,
+                      ),
+                  },
+                  options.source ?? codexExec(),
+                );
+                workflow = createWorkflow(self, data, workers);
+              }
+              return {};
+            });
+          }),
+        },
+      ],
       context,
     );
-    void harness.closed.then(close).catch(() => {});
-    const root = await harness.root(context, {
-      init: async (tx, root) => {
-        Object.assign(await tx.doc(DefinitionDoc, root), definition);
-        await initializeNotebook(tx, root, `${canonical}.notes.sqlite`);
-        if (options.startCampaign !== false)
-          await workflow.initialize(tx, root);
-      },
-    });
+    if (!data.value.definition) {
+      await data.change((draft) => {
+        draft.definition = definition;
+        draft.notebook = initializeNotebook(`${canonical}.notes.sqlite`);
+        draft.campaign =
+          options.startCampaign === false ? null : initialCampaign();
+      }, context);
+    }
+    const active = () => {
+      if (!workers) throw new Error("Open with execute:true to run workers");
+      return workers;
+    };
     return {
-      harness,
-      root,
-      workers: workflow.workers,
+      get harness() {
+        if (!harness) throw new Error("Open with execute:true to use Pi");
+        return harness;
+      },
+      get root() {
+        if (!root) throw new Error("Open with execute:true to use Pi");
+        return root;
+      },
       close,
-      resume: async () => {
-        await root.commit((tx) => workflow.resume(tx, root.id), context);
-        harness!.resume();
+      snapshot: () => copy(data.value),
+      get state() {
+        return copy(data.value);
+      },
+      change: <T>(fn: (draft: ResearchData) => T) => data.change(fn, context),
+      start: (request: WorkerRequest) => active().start(request),
+      startGroup: (requests: WorkerRequest[]) => active().startGroup(requests),
+      get running() {
+        return active().running;
+      },
+      get history() {
+        return copy(data.value.history);
+      },
+      wait: () => {
+        if (!workflow)
+          throw new Error("Open with execute:true to run a campaign");
+        return workflow.wait();
+      },
+      resume: () => {
+        if (!workflow)
+          throw new Error("Open with execute:true to resume a campaign");
+        return workflow.resume();
       },
     };
   } catch (error) {
@@ -208,63 +314,51 @@ export async function open(path: string, options: OpenOptions = {}) {
   }
 }
 
-/** Read one SQLite transaction through Pi without recovering work or calling models. */
-async function inspectSession<T>(
+/** Read Chord state and Pi receipts on one snapshot without activating either runtime. */
+export async function inspect<T>(
   path: string,
-  read: (
-    session: Session,
-    root: ConversationId,
-    definition: Definition,
-  ) => T | Promise<T>,
+  read: (data: ResearchData, session: Session) => T | Promise<T>,
 ): Promise<T> {
   path = await canonicalPath(path, false);
   assertSingleLink((await stat(path)).nlink);
-  using database = openReadDatabase(path);
-  database.exec("BEGIN");
-  const storage = await SqliteStorage.open(
-    new NodeSqliteDatabase(database, { readOnly: true }),
-    {
-      readOnly: true,
-    },
-  );
-  const session = createSession(storage, { documentRetentionMs: 0 });
+  const database = openReadDatabase(path);
+  let store: Store | undefined;
+  let session: Session | undefined;
   try {
-    const definition = validateDefinition(
-      await session.snapshot(DefinitionDoc, ROOT_CONVERSATION_ID, context),
-    );
-    const notebook = await session.snapshot(
-      Notebook,
-      ROOT_CONVERSATION_ID,
-      context,
-    );
-    if (!notebook?.path)
-      throw new Error(
-        "Campaign requires an external notebook; fresh campaigns only",
-      );
-    if (notebook.path !== `${path}.notes.sqlite`)
+    store = await openStore(sqliteBackend(database), context);
+    const record = await findDocument(database, {
+      owner: ResearchType.name,
+      namespace: "chord",
+      kind: ResearchState.name,
+    });
+    if (
+      !record ||
+      record.version !== ResearchState.version ||
+      record.fingerprint !== ResearchState.fingerprint
+    )
+      throw new Error("Not a current xean campaign; fresh campaigns only");
+    const data = (await loadDocument(database, record)).value as ResearchData;
+    validateDefinition(data.definition);
+    if (data.notebook.path !== `${path}.notes.sqlite`)
       throw new Error("Notebook path does not match campaign");
-    readNotebook({ ...notebook, publications: [] });
-    return await read(session, ROOT_CONVERSATION_ID, definition);
+    readNotebook({ ...data.notebook, publications: [] });
+    readonlyNotebook(data.notebook);
+    const storage = await StoreStorage.open(store, "pi", context);
+    session = createSession(storage, { documentRetentionMs: 0 });
+    return await read(data, session);
   } finally {
-    await session.close(context);
+    try {
+      await session?.close(context);
+    } finally {
+      if (store) await store.close(context);
+      else await database.close();
+    }
   }
 }
 
-export function inspect<T>(
-  path: string,
-  read: (tx: Tx, root: ConversationId) => T | Promise<T>,
-): Promise<T> {
-  return inspectSession(path, (session, root) =>
-    session.commit((tx) => {
-      readonlyNotebook(tx);
-      return read(tx, root);
-    }, context),
-  );
-}
-
 export function exportAccepted(path: string): Promise<string> {
-  return inspect(path, async (tx, root) => {
-    const status = await readStatus(tx, root);
+  return inspect(path, (data) => {
+    const status = readStatus(data);
     if (
       status.status !== "terminal" ||
       status.outcome !== "accepted" ||
@@ -272,7 +366,7 @@ export function exportAccepted(path: string): Promise<string> {
     )
       throw new Error("No accepted argument");
     return acceptedArgument(
-      project(readNotebook(await tx.doc(Notebook, root))).notes,
+      project(readNotebook(data.notebook)).notes,
       status.accepted,
     );
   });

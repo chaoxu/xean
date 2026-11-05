@@ -17,19 +17,16 @@ const owner = await open(path, {
     settings: await Bun.file(settingsPath).json(),
   },
   startCampaign: false,
+  execute: true,
   models: await cliModels(),
 });
 
 async function run(request: WorkerRequest) {
-  const id = await owner.root.commit(
-    (tx) => owner.workers.create(tx, owner.root.id, request),
-    context,
-  );
-  console.log(JSON.stringify({ worker: request.kind, taskId: id }));
-  const settled = await owner.harness.waitForTask(id, context);
-  const outcome = settled.state.outcome;
-  if (outcome.status !== "completed")
-    throw new Error(`Worker ${id}: ${JSON.stringify(outcome)}`);
+  const run = await owner.start(request);
+  console.log(JSON.stringify({ worker: request.kind, jobId: run.id }));
+  const outcome = await run.outcome(context);
+  if (outcome.kind !== "done")
+    throw new Error(`Worker ${run.id}: ${JSON.stringify(outcome)}`);
   return outcome.result;
 }
 

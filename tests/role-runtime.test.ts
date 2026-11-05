@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -18,14 +18,9 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import {
   createRegistry,
-  defineExtension,
-  defineTask,
   Harness,
   MemoryStorage,
   ToolResultEntry,
-  ROOT_CONVERSATION_ID,
-  type EntryId,
-  type TaskId,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
@@ -43,12 +38,7 @@ import {
 import { resolveCall, type CallDescriptor } from "../src/policy/prompts.ts";
 import type { PiRoleProfile } from "../src/policy/settings.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
-import {
-  Notebook,
-  initializeNotebook,
-  appendNotes,
-  project,
-} from "../src/state.ts";
+import { project, type NotebookState } from "../src/state.ts";
 import provenance from "../vendor/pi/provenance.json";
 import historical from "./fixtures/v100-contracts.json";
 import {
@@ -59,11 +49,6 @@ import {
 } from "./worker-fixture.ts";
 
 const context = BACKGROUND_CONTEXT;
-const notebookDirectories: string[] = [];
-afterEach(async () => {
-  for (const directory of notebookDirectories.splice(0))
-    await rm(directory, { recursive: true, force: true });
-});
 const descriptor: CallDescriptor = {
   kind: "explorer",
   input: {
@@ -125,55 +110,20 @@ function fixture(
         return stream(model, transcript, options);
       });
   }
-  const role = createRoleRuntime();
-  const Invoke = defineTask<
-    {
-      descriptor: CallDescriptor;
-      previousTasks: TaskId[];
-      profile: PiRoleProfile;
-    },
-    { phase: "run" },
-    JsonValue,
-    object
-  >({
-    name: "test.role",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      async run(task, runtime, ctx) {
-        const result = await role.run(
-          runtime,
-          "role",
-          task.input.descriptor,
-          task.input.profile,
-          ctx,
-          task.input.previousTasks,
-        );
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: { status: "completed", result },
-          }),
-          ctx,
-        );
-      },
-    },
-    async abort(_task, runtime, ctx) {
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        ctx,
-      );
-    },
-  });
+  const book: NotebookState = {
+    notes: [],
+    checks: [],
+    guidance: [],
+    inputs: [],
+  };
+  const role = createRoleRuntime(() => book);
+  let nextOrigin = 0;
   return {
     provider,
+    book,
     async open(directory?: string) {
-      const notebookDirectory =
-        directory ?? (await mkdtemp(join(tmpdir(), "xean-role-notes-")));
-      if (!directory) notebookDirectories.push(notebookDirectory);
       const registry = createRegistry();
       registry.install(role.extension);
-      registry.install(defineExtension({ name: "test", tasks: [Invoke] }));
       const harness = await Harness.open(
         directory
           ? await openNodeJsonlStorage(directory, context, { fsync: true })
@@ -191,29 +141,30 @@ function fixture(
         },
         context,
       );
-      const root = await harness.root(context, {
-        init: (tx, id) =>
-          initializeNotebook(tx, id, join(notebookDirectory, "notes.sqlite")),
-      });
+      await harness.root(context);
       return {
         harness,
-        async invoke(
-          previousTasks: TaskId[] = [],
+        invoke(
           input = descriptor,
-          profile: PiRoleProfile = {
-            provider: "test",
-            model: "math",
-            reasoning: "max",
-          },
+          options: {
+            origin?: string;
+            attempt?: number;
+            profile?: PiRoleProfile;
+          } = {},
         ) {
-          return root.commit(
-            (tx) =>
-              tx.createTask(
-                Invoke,
-                { descriptor: input, previousTasks, profile },
-                { ownership: { kind: "conversation" } },
-              ),
+          return role.call(
+            harness,
+            options.origin ?? `work-${++nextOrigin}`,
+            options.attempt ?? 0,
+            "role",
+            input,
+            options.profile ?? {
+              provider: "test",
+              model: "math",
+              reasoning: "max",
+            },
             context,
+            () => {},
           );
         },
       };
@@ -305,9 +256,7 @@ test("Responses Explorer nulls normalize, invalid summaries and support fail, an
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke(), context)).state.outcome,
-    ).toMatchObject({ status: "completed", result: { value: expected } });
+    expect(await invoke()).toMatchObject({ value: expected });
     expect(fixture_.provider.state.callCount).toBe(3);
     await harness.commit(async (tx) => {
       const conversations = await tx.scanConversations({}, 128);
@@ -350,12 +299,8 @@ test("Explorer prompt, submission contract and notebook reader reach Pi; the fir
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    const id = await invoke();
-    const outcome = (await harness.waitForTask(id, context)).state.outcome;
-    expect(outcome).toMatchObject({
-      status: "completed",
-      result: { value, fresh: true },
-    });
+    const outcome = await invoke();
+    expect(outcome).toMatchObject({ value, fresh: true });
     expect(fixture_.provider.state.callCount).toBe(1);
     const call = await resolveCall(descriptor);
     expect(getCurrentSystemPrompt(input!.messages)).toBe(call.system);
@@ -372,9 +317,8 @@ test("Explorer prompt, submission contract and notebook reader reach Pi; the fir
         constrainedSampling: historical.contracts.explorer.constrainedSampling,
       },
     ]);
-    if (outcome.status !== "completed") throw new Error("Role failed");
     const receipt = await harness.commit(
-      (tx) => tx.entry((outcome.result as { call: EntryId }).call),
+      (tx) => tx.entry(outcome.call),
       context,
     );
     expect(ToolResultEntry.is(receipt!)).toBe(true);
@@ -409,7 +353,7 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
     },
   ];
   const checks = (["PASS", "FAIL", "INCONCLUSIVE"] as const).map((verdict) => ({
-    candidate: 1,
+    candidate: "reader",
     call: 1,
     values: [
       {
@@ -524,24 +468,12 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    const root = await harness.root(context);
-    await root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, ROOT_CONVERSATION_ID);
-      ref.checks = checks;
-      appendNotes(
-        tx,
-        ref,
-        [...sources, { id: "n3", text: "UNINDEXED_BODY", support: [] }],
-        "reader-fixture",
-      );
-    }, context);
-    expect(
-      (await harness.waitForTask(await invoke([], input), context)).state
-        .outcome,
-    ).toMatchObject({
-      status: "completed",
-      result: { value: result, fresh: true },
-    });
+    fixture_.book.checks = checks;
+    fixture_.book.notes = [
+      ...sources,
+      { id: "n3", text: "UNINDEXED_BODY", support: [] },
+    ];
+    expect(await invoke(input)).toMatchObject({ value: result, fresh: true });
     expect(fixture_.provider.state.callCount).toBe(5);
   } finally {
     await harness.close(context);
@@ -628,15 +560,9 @@ test("Selection disables provider constraints while retaining its prompt, schema
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke([], input), context)).state
-        .outcome,
-    ).toMatchObject({ status: "completed", result: { value: coordination } });
+    expect(await invoke(input)).toMatchObject({ value: coordination });
     expect(fixture_.provider.state.callCount).toBe(2);
-    expect(
-      (await harness.waitForTask(await invoke([], input), context)).state
-        .outcome.status,
-    ).toBe("completed");
+    expect(await invoke(input)).toMatchObject({ value: coordination });
     expect(fixture_.provider.state.callCount).toBe(3);
   } finally {
     await harness.close(context);
@@ -694,18 +620,8 @@ test("selection reads an admitted note through its own fresh conversation", asyn
   ]);
   const { harness, invoke } = await driver.open();
   try {
-    await harness.commit(async (tx) => {
-      appendNotes(
-        tx,
-        await tx.doc(Notebook, ROOT_CONVERSATION_ID),
-        [source],
-        "selection-input",
-      );
-    }, context);
-    expect(
-      (await harness.waitForTask(await invoke([], input), context)).state
-        .outcome,
-    ).toMatchObject({ status: "completed", result: { value: selected } });
+    driver.book.notes = [source];
+    expect(await invoke(input)).toMatchObject({ value: selected });
   } finally {
     await harness.close(context);
   }
@@ -726,9 +642,7 @@ test("output-length recovery preserves the exact v1 continuation message", async
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke(), context)).state.outcome.status,
-    ).toBe("completed");
+    expect(await invoke()).toMatchObject({ value });
     expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -755,9 +669,7 @@ test("provider-error recovery adds no user instruction and retains the raw failu
   ]);
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke(), context)).state.outcome.status,
-    ).toBe("completed");
+    expect(await invoke()).toMatchObject({ value });
     const failures = await harness.commit(async (tx) => {
       const conversations = await tx.scanConversations({}, 128);
       const entries = await Promise.all(
@@ -834,9 +746,7 @@ test("failed text and tool drafts are excluded while completed signed reasoning 
   );
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke(), context)).state.outcome.status,
-    ).toBe("completed");
+    expect(await invoke()).toMatchObject({ value });
     expect(fixture_.provider.state.callCount).toBe(3);
   } finally {
     await harness.close(context);
@@ -869,9 +779,11 @@ test("native retry classification retains v1 gateway codes and terminal authenti
     );
     const { harness, invoke } = await fixture_.open();
     try {
-      const result = (await harness.waitForTask(await invoke(), context)).state
-        .outcome;
-      expect(result.status === "completed", failure).toBe(!fatal);
+      const completed = await invoke().then(
+        () => true,
+        () => false,
+      );
+      expect(completed, failure).toBe(!fatal);
       expect(fixture_.provider.state.callCount, failure).toBe(fatal ? 1 : 2);
     } finally {
       await harness.close(context);
@@ -909,11 +821,7 @@ test("native retry recognizes v1 diagnostic-only and Responses message-limit fai
     );
     const { harness, invoke } = await fixture_.open();
     try {
-      expect(
-        (await harness.waitForTask(await invoke(), context)).state.outcome
-          .status,
-        kind,
-      ).toBe("completed");
+      expect(await invoke(), kind).toMatchObject({ value });
       expect(fixture_.provider.state.callCount, kind).toBe(2);
     } finally {
       await harness.close(context);
@@ -949,16 +857,16 @@ test("two successful submissions fail closed and a replacement starts a fresh co
   ]);
   const { harness, invoke } = await driver.open();
   try {
-    const first = await invoke();
+    await expect(invoke(descriptor, { origin: "ambiguous" })).rejects.toThrow(
+      "submit_notes requires exactly one submission",
+    );
+    await expect(invoke(descriptor, { origin: "ambiguous" })).rejects.toThrow(
+      "submit_notes requires exactly one submission",
+    );
+    expect(driver.provider.state.callCount).toBe(1);
     expect(
-      (await harness.waitForTask(first, context)).state.outcome,
-    ).toMatchObject({
-      status: "faulted",
-      error: { message: "submit_notes requires exactly one submission" },
-    });
-    expect(
-      (await harness.waitForTask(await invoke([first]), context)).state.outcome,
-    ).toMatchObject({ status: "completed", result: { value, fresh: true } });
+      await invoke(descriptor, { origin: "ambiguous", attempt: 1 }),
+    ).toMatchObject({ value, fresh: true });
     expect(driver.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -975,9 +883,11 @@ test("schema repairs allow response thirty-two and block the next request", asyn
     ]);
     const { harness, invoke } = await fixture_.open();
     try {
-      const result = (await harness.waitForTask(await invoke(), context)).state
-        .outcome;
-      expect(result.status === "completed").toBe(count < 32);
+      const completed = await invoke().then(
+        () => true,
+        () => false,
+      );
+      expect(completed).toBe(count < 32);
       expect(fixture_.provider.state.callCount).toBe(Math.min(count + 1, 32));
     } finally {
       await harness.close(context);
@@ -1027,16 +937,19 @@ test.each(["explorer", "selection"] as const)(
           if (end.kind === "listener_error") closed.reject(end.error);
         },
       });
-      const id = await first.invoke([], input);
-      void harness.waitForTask(id, context).catch(() => {});
+      void first.invoke(input, { origin: "recovery" }).catch(() => {});
       await closed.promise;
-      harness = (await driver.open(directory)).harness;
-      expect(
-        (await harness.waitForTask(id, context)).state.outcome,
-      ).toMatchObject({
-        status: "completed",
-        result: { value: result, fresh: false },
+      const second = await driver.open(directory);
+      harness = second.harness;
+      expect(await second.invoke(input, { origin: "recovery" })).toMatchObject({
+        value: result,
+        fresh: false,
       });
+      const conversations = await harness.commit(
+        (tx) => tx.scanConversations({}, 128),
+        context,
+      );
+      expect(conversations.items).toHaveLength(2);
       expect(driver.provider.state.callCount).toBe(1);
     } finally {
       await harness?.close(context);
@@ -1045,33 +958,31 @@ test.each(["explorer", "selection"] as const)(
   },
 );
 
-test("a replacement worker reuses only matching completed native role receipts", async () => {
+test("a logical origin reuses its completed receipt and rejects changed Explorer input or profile", async () => {
   const fixture_ = fixture([submitted(), submitted()]);
   const { harness, invoke } = await fixture_.open();
   try {
-    const first = await invoke();
-    const original = (await harness.waitForTask(first, context)).state.outcome;
-    const second = (await harness.waitForTask(await invoke([first]), context))
-      .state.outcome;
-    expect(second).toMatchObject({
-      status: "completed",
-      result: { value, fresh: false },
+    const original = await invoke(descriptor, { origin: "original" });
+    const replayed = await invoke(descriptor, {
+      origin: "original",
+      attempt: 1,
     });
-    expect(
-      original.status === "completed" &&
-        second.status === "completed" &&
-        (original.result as { call: number }).call ===
-          (second.result as { call: number }).call,
-    ).toBe(true);
+    expect(replayed).toEqual({ ...original, fresh: false });
     expect(fixture_.provider.state.callCount).toBe(1);
     const changed: CallDescriptor = {
       ...descriptor,
       input: { ...descriptor.input, explorerGuidance: "Try another proof." },
     };
-    expect(
-      (await harness.waitForTask(await invoke([first], changed), context)).state
-        .outcome,
-    ).toMatchObject({ status: "completed", result: { fresh: true } });
+    await expect(
+      invoke(changed, { origin: "original", attempt: 1 }),
+    ).rejects.toThrow("Recovered role arguments do not match");
+    await expect(
+      invoke(descriptor, {
+        origin: "original",
+        profile: { provider: "test", model: "other", reasoning: "max" },
+      }),
+    ).rejects.toThrow("Recovered role arguments do not match");
+    expect(await invoke(changed)).toMatchObject({ value, fresh: true });
     expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -1092,9 +1003,7 @@ test("OpenAI payload retains required serial tools and the v1 instructions place
   });
   const { harness, invoke } = await fixture_.open();
   try {
-    expect(
-      (await harness.waitForTask(await invoke(), context)).state.outcome.status,
-    ).toBe("completed");
+    expect(await invoke()).toMatchObject({ value });
   } finally {
     await harness.close(context);
   }
@@ -1155,10 +1064,7 @@ test("frozen verification reuses its original assignment and receipt after later
   );
   const { harness, invoke } = await driver.open();
   try {
-    const first = await invoke([], input);
-    expect(
-      (await harness.waitForTask(first, context)).state.outcome.status,
-    ).toBe("faulted");
+    await expect(invoke(input, { origin: "verification" })).rejects.toThrow();
     const changed: CallDescriptor = {
       ...input,
       input: {
@@ -1177,20 +1083,18 @@ test("frozen verification reuses its original assignment and receipt after later
         })),
       },
     };
-    const second = await invoke([first], changed);
-    const completed = (await harness.waitForTask(second, context)).state
-      .outcome;
-    expect(completed.status).toBe("completed");
-    const recovered = (
-      await harness.waitForTask(await invoke([first, second], changed), context)
-    ).state.outcome;
-    expect(recovered).toMatchObject({
-      status: "completed",
-      result: { value: result, fresh: false },
+    await expect(invoke(changed, { origin: "verification" })).rejects.toThrow();
+    expect(driver.provider.state.callCount).toBe(1);
+    const completed = await invoke(changed, {
+      origin: "verification",
+      attempt: 1,
     });
-    expect((recovered.result as { call: number }).call).toBe(
-      (completed.result as { call: number }).call,
-    );
+    expect(completed).toMatchObject({ value: result, fresh: true });
+    const recovered = await invoke(changed, {
+      origin: "verification",
+      attempt: 2,
+    });
+    expect(recovered).toEqual({ ...completed, fresh: false });
     expect(driver.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -1244,9 +1148,7 @@ test.each([
         return complete({ descriptor, transcript, signal: undefined });
       },
     );
-    expect((await run.run({ kind: "explorer" })).outcome.status).toBe(
-      "completed",
-    );
+    expect((await run.run({ kind: "explorer" })).outcome.kind).toBe("done");
     const closed = Promise.withResolvers<void>();
     let closing = false;
     if (interruption !== "comparison failure")
@@ -1279,10 +1181,10 @@ test.each([
           if (end.kind === "listener_error") closed.reject(end.error);
         },
       });
-    const first = await run.create({ kind: "verifier" });
+    const first = await run.start({ kind: "verifier" });
     const pending = run.wait(first).catch(() => undefined);
     if (interruption === "comparison failure")
-      expect((await pending)?.state.outcome.status).toBe("faulted");
+      expect((await pending)?.kind).toBe("failed");
     else {
       await closed.promise;
       await pending;
@@ -1296,12 +1198,11 @@ test.each([
       (request) => request.descriptor.kind === "reconstruction",
     )!.descriptor;
     const count = run.provider.state.callCount;
-    await run.reopen();
-    await run.owner.root.commit(async (tx) => {
-      const ref = await tx.doc(Notebook, run.owner.root.id);
-      ref.checks.push({
-        candidate: 999,
-        call: 999,
+    await run.reopen(false);
+    await run.owner.change((draft) => {
+      draft.notebook.checks.push({
+        candidate: "another-attempt",
+        call: "another-call",
         values: [
           {
             note: before.notes[0]!.id,
@@ -1317,12 +1218,13 @@ test.each([
           },
         ],
       });
-    }, context);
+    });
+    await run.reopen(true);
     if (interruption === "comparison failure")
       expect(
-        (await run.run({ kind: "retry", task: first })).outcome.status,
-      ).toBe("completed");
-    else expect((await run.wait(first)).state.outcome.status).toBe("completed");
+        (await run.run({ kind: "retry", job: first.id })).outcome.kind,
+      ).toBe("done");
+    else expect((await run.finished(first.id)).status).toBe("completed");
     const final = await run.book();
     const own = final.checks.filter((check) => check.candidate === candidate);
     expect(own).toHaveLength(4);

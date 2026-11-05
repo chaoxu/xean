@@ -1,23 +1,23 @@
 # Working on `xean`
 
-Read README.md and the pinned Pi implementation before changing the design.
+Read README.md and the pinned Chord and Pi implementations before changing the design.
 
 Write the project name in lowercase monospace: `xean` in Markdown or
 `\texttt{xean}` in LaTeX. In headings and at sentence starts, capitalization is
 allowed only when the format cannot render monospace.
 
-- Start from Pi's Tasks, Conversations, Entries, Documents, outcomes, and commits.
-  Before implementing behavior, check whether Pi supplies it or a small change
-  in application behavior would let us use Pi directly.
-- Keep this a small Pi extension. Do not add a separate kernel, Store, scheduling
+- Use Chord jobs, state, transactions, and reactions for research control. Use
+  Pi conversations, tools, receipts, and recovery for model calls. Before adding
+  behavior, check these native implementations and prefer direct integration.
+- Keep this a small Chord and Pi application. Do not add a separate kernel, Store, scheduling
   loop, task cache, lifecycle APIs, provider runtime, or compatibility code.
 - Do not write custom parsers. Use native structured output and standard readers.
-- Prefer application integration and native configuration to Pi patches. Patch
-  Pi only when the required behavior belongs inside Pi, such as an adapter
+- Prefer application integration and native configuration to dependency patches. Patch
+  Chord or Pi only when the required behavior belongs there, such as an adapter
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value.
-- Run Explorers and Verifiers under one Pi owner and a shared `maxWorkers` cap.
+- Run Explorers and Verifiers under one database owner and a shared `maxWorkers` cap.
   Refill on any completion, offering eligible unclaimed verification before new
   exploration. Count completed and in-flight Explorers against `maxExplorerTurns`.
   Freeze running role inputs and preserve immutable publication references.
@@ -47,13 +47,14 @@ allowed only when the format cannot render monospace.
   requires all admitted workers to settle and the latest projection still to
   accept the candidate. Failed work remains `call-failure` until explicit resume,
   even if another worker provisionally accepted a note.
-- Use Pi's native task waits and recovery. Keep execution records in Pi's SQLite
+- Use native Chord runs, watches, and recovery for workers, including `maxWorkers: 1`.
+  Keep Chord state and Pi call receipts in the shared campaign SQLite
   database and mathematical note texts in the notebook database. Treat note IDs
   as opaque and preserve exact publication references. Keep notes immutable.
   Do not add a separate scheduler, queue, HTTP activity service, or heartbeat.
 - Have a separate agent review each substantial design change specifically for
-  native Pi alternatives and unnecessary application machinery. Resolve findings
-  against Pi's implementation before declaring the change complete.
+  native Chord and Pi alternatives and unnecessary application machinery. Resolve
+  findings against their implementations before declaring the change complete.
 - Use Bun and the package commands. For a release, run `bun run check` and
   `bun run pack`, which includes the distribution checks. Use
   `bun run check:distribution` when no retained archive is needed. Internal Fleet

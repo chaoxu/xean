@@ -1,27 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  defineEntry,
-  type ConversationId,
-  type Tx,
-} from "@earendil-works/pi-durable";
 import { z } from "zod";
 import { nonblank, submittedNotes } from "./policy/contracts.ts";
-import { definition, Notebook, project, readNotebook } from "./state.ts";
+import { definition, project, readNotebook } from "./state.ts";
+import type { ResearchData } from "./records.ts";
 
-const InputEntry = defineEntry<{ id: string }>("xean.note-input");
-
-/** Queue caller notes with a stable native identity before their publication. */
-export async function submitNotes(
-  tx: Tx,
-  root: ConversationId,
+/** Queue caller notes with a stable identity before their publication. */
+export function submitNotes(
+  data: ResearchData,
   idValue: string,
   input: z.input<typeof submittedNotes>,
 ) {
   const id = nonblank.parse(idValue),
     { notes } = submittedNotes.parse(input);
-  await definition(tx, root);
-  const ref = await tx.doc(Notebook, root);
-  const book = readNotebook(ref);
+  definition(data);
+  const book = readNotebook(data.notebook);
   const existing = book.inputs.find((value) => value.id === id);
   if (existing) {
     if (!isDeepStrictEqual(existing.notes, notes))
@@ -38,28 +30,26 @@ export async function submitNotes(
       throw new Error(
         "submitted support must name distinct existing notes that are not dead",
       );
-  const entry = await tx.appendEntry(InputEntry, root, { data: { id } });
-  book.inputs.push({ id, namespace: `i${entry.id}`, notes, consumed: false });
+  book.inputs.push({
+    id,
+    namespace: `i${crypto.randomUUID()}`,
+    notes,
+    consumed: false,
+  });
   return { id, notes };
 }
 
 /** Queue advice once without changing a frozen Explorer request or terminal result. */
-export async function guide(
-  tx: Tx,
-  root: ConversationId,
-  idValue: string,
-  textValue: string,
-) {
+export function guide(data: ResearchData, idValue: string, textValue: string) {
   const id = nonblank.parse(idValue),
     text = nonblank.parse(textValue);
-  await definition(tx, root);
-  const book = await tx.doc(Notebook, root);
-  const existing = book.guidance.find((value) => value.id === id);
+  definition(data);
+  const existing = data.notebook.guidance.find((value) => value.id === id);
   if (existing) {
     if (existing.text !== text)
       throw new Error(`guidance id already has different text: ${id}`);
     return { id, text };
   }
-  book.guidance.push({ id, text });
+  data.notebook.guidance.push({ id, text });
   return { id, text };
 }

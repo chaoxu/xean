@@ -1,5 +1,4 @@
 diff --git a/dist/sqlite/node.d.ts b/dist/sqlite/node.d.ts
-index b9f8322..93855f1 100644
 --- a/dist/sqlite/node.d.ts
 +++ b/dist/sqlite/node.d.ts
 @@ -1,6 +1,17 @@
@@ -22,7 +21,7 @@ index b9f8322..93855f1 100644
  /** Node SQLite connection settings for a database file. */
  export type NodeSqliteDatabaseOptions = {
      /** SQLite WAL auto-checkpoint threshold. SQLite and this adapter default to 1,000 pages; 0 disables it. */
-@@ -15,9 +26,9 @@ export type NodeSqliteDatabaseOptions = {
+@@ -15,9 +26,9 @@
   * cannot grow it without bound.
   */
  declare abstract class NodeSqliteExecutor implements SqliteExecutor {
@@ -35,7 +34,7 @@ index b9f8322..93855f1 100644
      exec(sql: string): Promise<void>;
      run(sql: string, ...params: SqliteValue[]): Promise<void>;
      runCounted(sql: string, ...params: SqliteValue[]): Promise<number>;
-@@ -26,11 +37,12 @@ declare abstract class NodeSqliteExecutor implements SqliteExecutor {
+@@ -26,11 +37,12 @@
      protected abstract runOperation<T>(operation: () => T): Promise<T>;
      private statement;
  }
@@ -51,10 +50,9 @@ index b9f8322..93855f1 100644
      close(): Promise<void>;
      protected runOperation<T>(operation: () => T): Promise<T>;
 diff --git a/dist/sqlite/node.js b/dist/sqlite/node.js
-index 4c031cf..d8c215c 100644
 --- a/dist/sqlite/node.js
 +++ b/dist/sqlite/node.js
-@@ -81,7 +81,7 @@ class NodeSqliteExecutor {
+@@ -81,7 +81,7 @@
          return this.runOperation(() => Number(this.statement(sql).run(...params).changes));
      }
      get(sql, ...params) {
@@ -63,7 +61,7 @@ index 4c031cf..d8c215c 100644
      }
      all(sql, ...params) {
          return this.runOperation(() => this.statement(sql).all(...params));
-@@ -97,7 +97,8 @@ class NodeSqliteExecutor {
+@@ -97,7 +97,8 @@
              }
              return statement;
          }
@@ -73,7 +71,7 @@ index 4c031cf..d8c215c 100644
          statements.set(sql, statement);
          // A Map iterates in insertion order: its first key is the least recently used statement.
          if (statements.size > STATEMENT_CACHE_LIMIT)
-@@ -117,12 +118,13 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
+@@ -117,27 +118,32 @@
          return operation();
      }
  }
@@ -89,7 +87,29 @@ index 4c031cf..d8c215c 100644
      }
      transaction(callback) {
          return this.access.runAsync(async () => {
-@@ -153,7 +155,8 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor {
+-            this.database.exec("BEGIN IMMEDIATE");
++            const outer = this.readOnly && (this.database.isTransaction ?? this.database.inTransaction);
++            if (!outer)
++                this.database.exec(this.readOnly ? "BEGIN" : "BEGIN IMMEDIATE");
+             const scope = { active: true };
+             try {
+                 const result = await callback(new NodeSqliteTransaction(this.database, this.statements, scope));
+                 scope.active = false;
+-                this.database.exec("COMMIT");
++                if (!outer)
++                    this.database.exec("COMMIT");
+                 return result;
+             }
+             catch (error) {
+                 scope.active = false;
+                 try {
+-                    this.database.exec("ROLLBACK");
++                    if (!outer)
++                        this.database.exec("ROLLBACK");
+                 }
+                 catch (rollbackError) {
+                     throw new AggregateError([error, rollbackError], "SQLite transaction failed and rollback failed");
+@@ -153,7 +159,8 @@
              this.closed = true;
              this.statements.clear();
              try {

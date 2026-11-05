@@ -12,15 +12,12 @@ import {
   GenerationTask,
   hook,
   ProviderDoc,
-  ROOT_CONVERSATION_ID,
   ToolResultEntry,
   type ConversationHandle,
   type ConversationId,
   type Cursor,
   type EntryId,
   type Harness,
-  type TaskId,
-  type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { createHash } from "node:crypto";
@@ -38,9 +35,8 @@ import {
   type RoleCall,
 } from "./policy/prompts.ts";
 import type { PiRoleProfile } from "./policy/settings.ts";
-import { Notebook, project, readNotebook } from "./state.ts";
+import { project, type NotebookState } from "./state.ts";
 
-type Runtime = TaskRuntime<any, any, any, any>;
 export const roleGenerationPolicy = {
   maxResponses: 32,
   maxLengthContinuations: 8,
@@ -63,7 +59,10 @@ export const Assignment = defineDoc({
   fork: "initial",
   initial: (): Assignment => ({}),
 });
-const Stage = defineDocFamily<{ conversation?: number }, null>({
+const Stage = defineDocFamily<
+  { conversation?: number; attempt?: number },
+  null
+>({
   kind: "xean.role.stage",
   version: 1,
   scope: "session",
@@ -112,7 +111,7 @@ async function receipt(
 }
 
 /** Native tools rebuild contextual Zod validation from durable call arguments. */
-export function createRoleRuntime() {
+export function createRoleRuntime(readBook: () => NotebookState) {
   const reader = defineTool({
     name: "read_notes",
     description:
@@ -144,9 +143,7 @@ export function createRoleRuntime() {
       )
         throw new Error("Notebook reads require Explorer or selection");
       const input = assignment.descriptor.input;
-      const book = await api.snapshot(Notebook, ROOT_CONVERSATION_ID, context);
-      if (!book) throw new Error("Campaign notebook is missing");
-      const snapshot = readNotebook(book);
+      const snapshot = readBook();
       const notes = level === "full" ? snapshot.notes : project(snapshot).notes;
       const selected = ids.map((id) =>
         input.notes.some((note) => note.id === id)
@@ -318,17 +315,16 @@ export function createRoleRuntime() {
     ],
   });
 
-  async function invoke(
-    host: Runtime | Harness,
-    ref: number,
+  async function call(
+    harness: Harness,
+    origin: string,
+    attempt: number,
     key: string,
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
     context: Context,
     report: (error: unknown) => void,
-    previousTasks: readonly number[] = [],
   ): Promise<Receipt> {
-    const owned = "taskId" in host;
     const requested = copyJson(
       { descriptor, profile },
       { omitUndefinedProperties: true },
@@ -336,79 +332,44 @@ export function createRoleRuntime() {
     const strict =
       descriptor.kind === "explorer" || descriptor.kind === "selection";
     let assignment = requested;
-    let frozen = false,
-      fresh = true;
+    let fresh = true;
     let conversationId: ConversationId | undefined;
     let conversation: ConversationHandle | undefined;
     let sessionId: string | undefined;
-    let recovered: Receipt | undefined;
     try {
       // The reference and conversation are created together, before model submission.
-      await host.commit(async (tx): Promise<undefined> => {
-        for (const owner of [ref, ...previousTasks]) {
-          const current = owner === ref;
-          if (!current) {
-            const prior = await tx.task(owner as TaskId);
-            if (
-              prior?.state.status !== "terminal" ||
-              !["completed", "faulted", "aborted"].includes(
-                prior.state.outcome.status,
-              )
-            )
-              continue;
-          }
-          const stage = await tx.doc(
-            Stage,
-            JSON.stringify([owned ? "task" : "work", owner, key]),
-            null,
-          );
-          if (stage.conversation === undefined) continue;
+      await harness.commit(async (tx) => {
+        const stage = await tx.doc(Stage, JSON.stringify([origin, key]), null);
+        if (stage.conversation !== undefined) {
           const id = stage.conversation as ConversationId;
           const saved = (await tx.doc(Assignment, id)) as Required<Assignment>;
-          if ((!owned || strict) && !isDeepStrictEqual(saved, requested)) {
-            if (current)
-              throw new Error(
-                "Recovered role arguments do not match the durable assignment",
-              );
-            continue;
-          }
-          const result = await receipt(
-            tx,
-            id,
-            resolveCall(saved.descriptor),
-            !current,
-          );
-          if (current || result || !frozen) {
-            assignment = copyJson(saved) as Required<Assignment>;
-            frozen = true;
-          }
-          if (current) {
+          if (strict && !isDeepStrictEqual(saved, requested))
+            throw new Error(
+              "Recovered role arguments do not match the durable assignment",
+            );
+          assignment = copyJson(saved) as Required<Assignment>;
+          const submission = await tx.submissionByRequest(id, key);
+          const terminal =
+            submission?.status === "done" ||
+            submission?.status === "unanswered";
+          const retry = terminal && attempt > stage.attempt!;
+          const result = terminal
+            ? await receipt(tx, id, resolveCall(saved.descriptor), retry)
+            : undefined;
+          if (result || !retry) {
             conversationId = id;
-            fresh = strict
-              ? result === undefined
-              : (await tx.submissionByRequest(id, key)) === undefined;
-            return;
-          }
-          if (result) {
-            recovered = result;
+            fresh = submission === undefined;
+            stage.attempt = Math.max(stage.attempt!, attempt);
             return;
           }
         }
         const call = resolveCall(assignment.descriptor);
         conversationId = (
           await tx.createConversation({
-            ownership: owned
-              ? { kind: "task", taskId: host.taskId }
-              : { kind: "ownerless" },
+            ownership: { kind: "ownerless" },
           })
         ).id;
-        (
-          await tx.doc(
-            Stage,
-            JSON.stringify([owned ? "task" : "work", ref, key]),
-            null,
-          )
-        ).conversation = conversationId;
+        Object.assign(stage, { conversation: conversationId, attempt });
         Object.assign(await tx.doc(Assignment, conversationId), assignment);
         await configure(tx, conversationId, {
           model: {
@@ -424,11 +385,11 @@ export function createRoleRuntime() {
           instructions: call.system,
         });
       }, context);
-      if (recovered) return recovered;
       const call = resolveCall(assignment.descriptor);
-      sessionId = (await host.snapshot(ProviderDoc, conversationId!, context))
-        ?.sessionId;
-      conversation = await host.conversation(conversationId!, context);
+      sessionId = (
+        await harness.snapshot(ProviderDoc, conversationId!, context)
+      )?.sessionId;
+      conversation = await harness.conversation(conversationId!, context);
       if (!conversation) throw new Error("Role conversation is missing");
       const submission = await conversation.submit(
         { type: "input", requestId: key, content: call.prompt },
@@ -437,7 +398,7 @@ export function createRoleRuntime() {
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
       let result: Receipt | undefined;
-      await host.commit(async (tx): Promise<undefined> => {
+      await harness.commit(async (tx) => {
         result = await receipt(tx, conversationId!, call);
       }, context);
       if (result) return { ...result, fresh };
@@ -448,8 +409,8 @@ export function createRoleRuntime() {
       throw new Error(`${call.role} returned no ${call.tool} submission`);
     } catch (error) {
       try {
-        // Task ownership cancels its scope; a suspended Chord wait leaves native recovery intact.
-        if (owned || !context.abortSignal?.aborted)
+        // Coordinated shutdown suspends native generation instead of cancelling its submission.
+        if (!context.abortSignal?.aborted)
           await conversation?.abort(BACKGROUND_CONTEXT);
       } catch (cleanupError) {
         if (!context.abortSignal?.aborted) report(cleanupError);
@@ -463,34 +424,5 @@ export function createRoleRuntime() {
       }
     }
   }
-  return {
-    extension,
-    run: (
-      runtime: Runtime,
-      key: string,
-      descriptor: CallDescriptor,
-      profile: PiRoleProfile,
-      context: Context,
-      previousTasks: readonly number[] = [],
-    ) =>
-      invoke(
-        runtime,
-        runtime.taskId,
-        key,
-        descriptor,
-        profile,
-        context,
-        (error) => runtime.report(error),
-        previousTasks,
-      ),
-    call: (
-      harness: Harness,
-      ref: number,
-      key: string,
-      descriptor: CallDescriptor,
-      profile: PiRoleProfile,
-      context: Context,
-      report: (error: unknown) => void,
-    ) => invoke(harness, ref, key, descriptor, profile, context, report),
-  };
+  return { extension, call };
 }

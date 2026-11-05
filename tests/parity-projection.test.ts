@@ -18,7 +18,7 @@ const check = (
   verifier: Verdict["verifier"],
   verdict: Verdict["verdict"] = "PASS",
 ): Check => ({
-  candidate,
+  candidate: String(candidate),
   call: candidate,
   values: [{ note, verifier, verdict, report: "Check report." }],
 });
@@ -54,7 +54,7 @@ test("a locally checked child becomes verified when its dependency later passes,
     { checked: true, verified: true, dead: false },
   ]);
   expect(project(value).accepted).toEqual(["B"]);
-  expect(value.checks.filter(({ candidate }) => candidate === 20)).toEqual(
+  expect(value.checks.filter(({ candidate }) => candidate === "20")).toEqual(
     child,
   );
 });

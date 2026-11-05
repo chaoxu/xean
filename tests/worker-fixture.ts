@@ -11,12 +11,12 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { ProviderDoc, type TaskId } from "@earendil-works/pi-durable";
+import { ProviderDoc } from "@earendil-works/pi-durable";
 import { inspect, open, readNotes, solveSettings } from "../src/index.ts";
 import { Assignment } from "../src/role-runtime.ts";
-import { Notebook, readNotebook } from "../src/state.ts";
+import { readNotebook } from "../src/state.ts";
 import type { CallDescriptor } from "../src/policy/prompts.ts";
-import type { WorkerRequest } from "../src/workers.ts";
+import type { WorkerRequest, SourceExecutor } from "../src/workers.ts";
 import { reconstructionStatementIds } from "../src/policy/contracts.ts";
 
 export { context };
@@ -101,7 +101,11 @@ afterEach(async () => {
 
 export async function fixture(
   respond: Respond = complete,
-  options: { automatic?: boolean; settings?: Record<string, unknown> } = {},
+  options: {
+    automatic?: boolean;
+    settings?: Record<string, unknown>;
+    source?: SourceExecutor;
+  } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "xean-worker-contract-"));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
@@ -113,6 +117,8 @@ export async function fixture(
   const models = createModels();
   models.setProvider(provider.provider);
   const requests: Request[] = [];
+  const reports: unknown[] = [];
+  let ready = Promise.withResolvers<void>();
   let owner: Awaited<ReturnType<typeof open>>;
   provider.setResponses(
     Array.from(
@@ -122,6 +128,7 @@ export async function fixture(
           transcript: TranscriptContext,
           options: { sessionId?: string; signal?: AbortSignal } | undefined,
         ) => {
+          await ready.promise;
           const descriptor = await owner.root.commit(async (tx) => {
             const conversations = await tx.scanConversations({}, 256);
             for (const conversation of conversations.items) {
@@ -169,31 +176,49 @@ export async function fixture(
       }),
     },
     startCampaign: options.automatic ?? false,
+    execute: true,
     models,
+    source: options.source,
+    report: (error) => reports.push(error),
   });
+  ready.resolve();
   cleanup.push(() => owner.close());
   return {
     path,
     requests,
     provider,
+    reports,
     get owner() {
       return owner;
     },
-    create(request: WorkerRequest) {
-      return owner.root.commit(
-        (tx) => owner.workers.create(tx, owner.root.id, request),
-        context,
-      );
+    start(request: WorkerRequest) {
+      return owner.start(request);
+    },
+    startGroup(requests: WorkerRequest[]) {
+      return owner.startGroup(requests);
     },
     async run(request: WorkerRequest) {
-      const id = await this.create(request);
-      return {
-        id,
-        outcome: (await owner.harness.waitForTask(id, context)).state.outcome,
-      };
+      const job = await owner.start(request);
+      const outcome = await job.outcome(context);
+      return { id: job.id, origin: outcome.args.origin ?? job.id, outcome };
     },
-    wait(id: TaskId) {
-      return owner.harness.waitForTask(id, context);
+    wait(job: Awaited<ReturnType<typeof owner.start>>) {
+      return job.outcome(context);
+    },
+    async finished(id: string) {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const row = owner.history.find((row) => row.id === id);
+        if (row) return row;
+        if (Date.now() > deadline) throw new Error("Job did not settle");
+        await Bun.sleep(5);
+      }
+    },
+    history() {
+      return owner.history;
+    },
+    running() {
+      return owner.running.value;
     },
     notes() {
       return inspect(path, readNotes);
@@ -201,24 +226,38 @@ export async function fixture(
     book() {
       return inspect(
         path,
-        async (tx, root) =>
-          JSON.parse(
-            JSON.stringify(readNotebook(await tx.doc(Notebook, root))),
-          ) as ReturnType<typeof readNotebook>,
+        (data) =>
+          JSON.parse(JSON.stringify(readNotebook(data.notebook))) as ReturnType<
+            typeof readNotebook
+          >,
+      );
+    },
+    data() {
+      return inspect(
+        path,
+        (data) => JSON.parse(JSON.stringify(data)) as typeof data,
       );
     },
     tasks() {
-      return inspect(path, async (tx, root) =>
+      return inspect(path, async (_data, session) =>
         JSON.parse(
           JSON.stringify(
-            (await tx.scanTasks({ conversationId: root }, 256)).items,
+            (await session.commit((tx) => tx.scanTasks({}, 256), context))
+              .items,
           ),
         ),
       );
     },
-    async reopen() {
+    async reopen(execute = true) {
       await owner.close();
-      owner = await open(path, { models });
+      ready = Promise.withResolvers<void>();
+      owner = await open(path, {
+        models,
+        execute,
+        source: options.source,
+        report: (error) => reports.push(error),
+      });
+      ready.resolve();
       return owner;
     },
   };

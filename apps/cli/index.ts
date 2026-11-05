@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { version } from "../../package.json";
 import {
   open,
@@ -42,12 +41,7 @@ program
         },
       });
       try {
-        await print(
-          await owner.root.commit(
-            (tx) => readStatus(tx, owner.root.id),
-            context,
-          ),
-        );
+        await print(readStatus(owner.snapshot()));
       } finally {
         await owner.close();
       }
@@ -58,11 +52,12 @@ for (const command of ["run", "resume"] as const) {
     .command(`${command} <campaign>`)
     .description(
       command === "run"
-        ? "Run or recover the current native campaign task"
+        ? "Run or recover the current campaign"
         : "Explicitly resume a stopped campaign with its recorded progress",
     )
     .action(async (campaign: string) => {
       const owner = await open(resolve(campaign), {
+        execute: true,
         models: await cliModels(),
       });
       let interrupted = false;
@@ -74,7 +69,7 @@ for (const command of ["run", "resume"] as const) {
       process.once("SIGTERM", stop);
       try {
         if (command === "resume") await owner.resume();
-        if (!interrupted) await owner.root.waitForIdle(context);
+        if (!interrupted) await owner.wait();
       } catch (error) {
         if (!interrupted) throw error;
       } finally {
@@ -103,12 +98,10 @@ for (const command of ["submit", "guide"] as const) {
             : await Bun.file(input).text();
         const owner = await open(resolve(campaign));
         try {
-          const receipt = await owner.root.commit(
-            async (tx) =>
-              command === "submit"
-                ? submitNotes(tx, owner.root.id, options.id, value)
-                : guide(tx, owner.root.id, options.id, value),
-            context,
+          const receipt = await owner.change((data) =>
+            command === "submit"
+              ? submitNotes(data, options.id, value)
+              : guide(data, options.id, value),
           );
           await print(receipt);
         } finally {

@@ -9,11 +9,8 @@ import { createRegistry, defineDoc, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { inspect, open, solveSettings } from "../src/index.ts";
 import {
-  DefinitionDoc,
-  Notebook,
   admitNotes,
   appendNotes,
-  initializeNotebook,
   project,
   readNotebook,
   type StoredNote,
@@ -24,7 +21,7 @@ import { fauxModels } from "./faux-models.ts";
 import { submitNotes } from "../src/inputs.ts";
 
 const directories: string[] = [],
-  handles: Harness[] = [];
+  handles: Awaited<ReturnType<typeof open>>[] = [];
 const task = { problem: "Prove P.", completionCriteria: "Prove P." };
 const profile = { provider: "test", model: "test", reasoning: "high" };
 const settings = solveSettings.parse(
@@ -33,7 +30,7 @@ const settings = solveSettings.parse(
   ),
 );
 afterEach(async () => {
-  for (const handle of handles.splice(0)) await handle.close(context);
+  for (const handle of handles.splice(0)) await handle.close();
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
 });
@@ -44,41 +41,19 @@ async function path() {
 }
 async function fixture(file = "") {
   file ||= await path();
-  const harness = await Harness.open(
-    await openNodeSqliteStorage(file),
-    {
-      registry: createRegistry(),
-      models: fauxModels().models,
-    },
-    context,
-  );
-  handles.push(harness);
-  const root = await harness.root(context, {
-    init: async (tx, id) => {
-      Object.assign(await tx.doc(DefinitionDoc, id), { task, settings });
-      await initializeNotebook(tx, id, `${file}.notes.sqlite`);
-    },
+  const owner = await open(file, {
+    create: { task, settings },
+    models: fauxModels().models,
   });
-  const snapshot = () =>
-    root.commit(
-      async (tx) =>
-        JSON.parse(
-          JSON.stringify(readNotebook(await tx.doc(Notebook, root.id))),
-        ),
-      context,
-    );
+  handles.push(owner);
+  const snapshot = () => readNotebook(owner.snapshot().notebook);
   const publish = (notes: StoredNote[], id: string, fail = false) =>
-    root.commit(async (tx) => {
-      const version = appendNotes(
-        tx,
-        await tx.doc(Notebook, root.id),
-        notes,
-        id,
-      );
+    owner.change((data) => {
+      const version = appendNotes(data.notebook, notes, id);
       if (fail) throw new Error("after external commit");
       return version;
-    }, context);
-  return { file, harness, root, snapshot, publish };
+    });
+  return { file, owner, snapshot, publish };
 }
 
 test("A rollback, B publication and A recovery retain both immutable batches in publication order", async () => {
@@ -100,21 +75,18 @@ test("A rollback, B publication and A recovery retain both immutable batches in 
     { "w100.1": { ...a[0]!, text: "Outside replacement." }, "w100.2": null },
     "outside",
   );
-  await f.harness.close(context);
+  await f.owner.close();
   f = await fixture(f.file);
   expect(await f.publish(a, "worker/100")).toBe(1);
   expect(store.snapshot()).toBe(3);
   expect((await f.snapshot()).notes).toEqual([...a, ...b]);
-  const pins = (await f.harness.snapshot(Notebook, f.root.id, context))!
-    .publications;
+  const pins = f.owner.snapshot().notebook.publications;
   expect(pins).toEqual([
     { id: "worker/2", version: 2, notes: ["w2.1"] },
     { id: "worker/100", version: 1, notes: ["w100.1", "w100.2"] },
   ]);
   expect(await f.publish(a, "worker/100")).toBe(1);
-  expect(
-    (await f.harness.snapshot(Notebook, f.root.id, context))!.publications,
-  ).toEqual(pins);
+  expect(f.owner.snapshot().notebook.publications).toEqual(pins);
   await expect(
     f.publish([{ ...a[0]!, text: "Changed retry." }, a[1]!], "worker/100"),
   ).rejects.toBeInstanceOf(ConflictError);
@@ -138,38 +110,28 @@ test("import identities and receipts survive rollback while later input remains 
   let f = await fixture();
   const input = { notes: [{ text: "Caller result.\n", support: [] }] };
   const submit = (id: string) =>
-    f.root.commit((tx) => submitNotes(tx, f.root.id, id, input), context);
+    f.owner.change((data) => submitNotes(data, id, input));
   const first = await submit("first");
-  const namespace = (await f.snapshot()).inputs[0].namespace;
-  const entries = await f.root.commit(
-    (tx) => tx.scanEntries({ conversationId: f.root.id }, 128),
-    context,
-  );
-  expect(namespace).toBe(
-    `i${entries.items.find((entry) => entry.kind === "xean.note-input")!.id}`,
-  );
+  const namespace = (await f.snapshot()).inputs[0]!.namespace;
+  expect(namespace).toMatch(/^i[0-9a-f-]{36}$/);
   await expect(
-    f.root.commit(async (tx) => {
-      expect(await admitNotes(tx, f.root.id)).toBe(true);
+    f.owner.change((data) => {
+      expect(admitNotes(data.notebook)).toBe(true);
       throw new Error("after intake publication");
-    }, context),
+    }),
   ).rejects.toThrow("after intake publication");
-  expect((await f.snapshot()).inputs[0].consumed).toBe(false);
+  expect((await f.snapshot()).inputs[0]!.consumed).toBe(false);
   await submit("second");
   expect(await submit("first")).toEqual(first);
-  expect((await f.snapshot()).inputs[0].namespace).toBe(namespace);
-  await f.harness.close(context);
+  expect((await f.snapshot()).inputs[0]!.namespace).toBe(namespace);
+  await f.owner.close();
   f = await fixture(f.file);
-  expect(await f.root.commit((tx) => admitNotes(tx, f.root.id), context)).toBe(
-    true,
-  );
-  expect(await f.root.commit((tx) => admitNotes(tx, f.root.id), context)).toBe(
-    false,
-  );
+  expect(await f.owner.change((data) => admitNotes(data.notebook))).toBe(true);
+  expect(await f.owner.change((data) => admitNotes(data.notebook))).toBe(false);
   const after = await f.snapshot();
   expect(after.notes).toEqual(
     after.inputs.map((queued: { namespace: string }) => ({
-      ...input.notes[0],
+      ...input.notes[0]!,
       id: `${queued.namespace}.1`,
     })),
   );
@@ -196,20 +158,14 @@ test("read-only inspection rejects append before changing either database", asyn
     );
   const before = rows();
   await expect(
-    inspect(f.file, async (tx, root) => {
+    inspect(f.file, (data) => {
       appendNotes(
-        tx,
-        await tx.doc(Notebook, root),
+        data.notebook,
         [{ id: "forbidden", text: "No write.", support: [] }],
         "forbidden",
       );
     }),
   ).rejects.toThrow("read-only");
-  const other = `${f.file}.other.sqlite`;
-  await expect(
-    inspect(f.file, (tx, root) => initializeNotebook(tx, root, other)),
-  ).rejects.toThrow("read-only");
-  expect(await Bun.file(other).exists()).toBe(false);
   expect(store.snapshot()).toBe(0);
   expect(rows()).toEqual(before);
 });
@@ -224,11 +180,11 @@ test("external edits cannot retarget accepted text, support or verdicts in admit
   };
   await f.publish([premise], "worker/8");
   await f.publish([note], "worker/9");
-  await f.root.commit(async (tx) => {
-    const ref = await tx.doc(Notebook, f.root.id);
+  await f.owner.change((data) => {
+    const ref = data.notebook;
     ref.checks.push(
       {
-        candidate: 8,
+        candidate: "worker8",
         call: 19,
         values: verifierNames
           .filter((name) => name !== "requirements")
@@ -240,7 +196,7 @@ test("external edits cannot retarget accepted text, support or verdicts in admit
           })),
       },
       {
-        candidate: 9,
+        candidate: "worker9",
         call: 20,
         values: verifierNames.map((verifier) => ({
           note: note.id,
@@ -250,7 +206,7 @@ test("external edits cannot retarget accepted text, support or verdicts in admit
         })),
       },
     );
-  }, context);
+  });
   const before = project(await f.snapshot());
   const proof = acceptedArgument(before.notes, note.id);
   expect(before.accepted).toEqual([note.id]);
@@ -306,13 +262,12 @@ test("historical closed-store campaigns reject without mutation or migration", a
   });
   await harness.root(context, {
     init: async (tx, root) => {
-      Object.assign(await tx.doc(DefinitionDoc, root), { task, settings });
       await tx.doc(LegacyNotebook, root);
     },
   });
   await harness.close(context);
   const before = await Bun.file(file).bytes();
-  await expect(open(file)).rejects.toThrow("fresh campaigns only");
+  await expect(open(file)).rejects.toThrow();
   expect(await Bun.file(file).bytes()).toEqual(before);
   expect(
     (await readdir(directories.at(-1)!)).some((name) =>

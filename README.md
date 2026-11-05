@@ -9,8 +9,9 @@ review of the result.
 Inside `xean`, Explorers choose mathematical directions and append notes with
 summaries. Verifiers select work and check sources, correctness, task requirements,
 and blind reconstruction. Explorers and Verifiers can run together under a shared
-worker limit. Each completion frees capacity for more work. Pi Durable manages
-execution and recovery. A valid Explorer submission ends its turn.
+worker limit. Each completion frees capacity for more work. Chord manages research
+jobs, claims, and campaign state. Pi Durable supplies model conversations, tools,
+receipts, and call recovery. A valid Explorer submission ends its turn.
 
 The design keeps research policy small and aims to reduce repeated reasoning
 costs. Explorer works from prepared notes and the model's learned mathematical
@@ -102,8 +103,7 @@ bun run xean run .xean/demo.sqlite
 ```
 
 `inspect` shows queued `inputs` until execution admits them at its next intake
-boundary. `xean` assigns opaque note IDs then. Generated notes use IDs such as
-`w42.1`, and imported notes use IDs such as `i17.1`. Treat these as references,
+boundary. `xean` assigns opaque note IDs then. Treat these as references,
 not sequence numbers. Caller-supplied `support` can name only
 existing notes that are not dead, excluding new notes in the same submission.
 Repeating an ID and identical content is idempotent. Reusing the ID with different
@@ -165,8 +165,9 @@ below. OpenAI models have been exercised. Other Pi providers remain unqualified.
 
 `maxWorkers` is a positive integer, defaulting to `1`. Set `"maxWorkers": 2`
 before `init` to allow two Explorer or Verifier invocations in total, including
-Verifiers still selecting work. A Verifier's checking task occupies its existing
-slot. The limit applies to automatic campaigns and manual worker calls.
+Verifiers still selecting work. A Verifier's selection and checks share that slot.
+The limit applies to automatic campaigns and manual worker calls. A limit of `1`
+uses the same job and controller path.
 
 After any worker completes, the campaign fills available slots with eligible,
 unclaimed verification work first, then new Explorer turns. `maxExplorerTurns`
@@ -274,6 +275,9 @@ workers settle. Failed work remains `call-failure` until explicitly resumed, eve
 if another worker provisionally establishes an accepted note. Resume preserves
 frozen inputs and recorded receipts.
 
+Native jobs blocked by incompatible versions or repeated finish failures require
+repair before model-call recovery or `resume`.
+
 The independent `@chaoxu/notebook-store` package is bundled and installs with
 `xean`. A campaign at `campaign.sqlite` creates `campaign.sqlite.notes.sqlite`.
 Both databases are required for recovery. Close all writers before backing up
@@ -310,22 +314,25 @@ blind-reconstruction policy qualification despite its internal `accepted` outcom
 
 ## Library and development
 
-Library entry points include `open`, `inspect`, and `readReport`. Callers using
-saved Pi credentials supply authenticated `models` to `open`. Always close the
-owner after use. Pi owns execution and recovery.
+Library entry points include `open`, `inspect`, and `readReport`. `open` is passive
+by default (`execute: false`). It can initialize or change state without starting
+research jobs or recovering model calls. Supply `execute: true` to run work and
+authenticated `models` when using saved Pi credentials. Always close the owner.
+For automatic campaigns, `await owner.wait()` returns the campaign result.
+`await owner.resume()` retries a `call-failure` before waiting again.
 
-The library also exposes independently callable workers. Create a fresh root
-with `open(path, {create, startCampaign: false, models})`, then create a worker
-inside `owner.root.commit` with `owner.workers.create(tx, owner.root.id, request)`.
+For manual workers, create a fresh owner with
+`open(path, {create, execute: true, startCampaign: false, models})`.
+Call `await owner.start(request)` or `await owner.startGroup(requests)`.
+They return a native Chord `Run` or an array of runs, respectively, with string IDs. Wait for
+settlement with `await run.outcome(context)` and check the outcome's `kind`.
 Requests select `explorer` or `verifier`. Explorer publishes its notes and
 summaries. A Verifier selects work for checks. Pass `verify` in a Verifier
 request to supply an explicit selection. Each invocation processes at most one
 batch within `window`. A default Verifier may instead complete with result
 `{status: "no-work", verify: []}` when no selected work remains, or
 `{status: "busy", verify: []}` when its selection conflicts with competing work.
-These results add no checks. Wait on the returned native task ID with
-`owner.harness.waitForTask(id, context)`. Use `inspect(path, readNotes)` to read
-the admitted notes. `createWorkers` exposes the extension for native Pi hosts.
+These results add no checks. Use `inspect(path, readNotes)` to read admitted notes.
 
 Default Verifiers created together receive separate subsets of target notes,
 frozen at admission. With `verifyOnSolution`, selection views may also include
@@ -345,28 +352,26 @@ bun examples/workers.ts task.json settings.json .xean/workers.sqlite
 This interface uses the existing database owner. Manual Explorers and Verifiers
 may overlap within `maxWorkers`. An automatic campaign owns admission while it
 runs or awaits recovery. `startCampaign: false` only omits initial campaign creation.
-Reopening preserves existing tasks. Waiting on the same task ID recovers
-unfinished work. For a faulted or aborted worker, create
-`{kind: "retry", task: id}`. A retry preserves the frozen input and its exact
-publication references. If an aborted Verifier's verification child has already
-completed, retry can return that child's existing task ID. Running roles keep
-their note IDs and texts frozen. New roles see later publications, while reads
-can update verification status for already-known notes.
+Reopening with `execute: true` recovers unfinished jobs under their original IDs.
+For a failed manual worker, call `owner.start({kind: "retry", job: id})`.
+A retry preserves frozen inputs, publication references, and recorded receipts.
+Running roles keep their note IDs and texts frozen. New roles see later
+publications, while reads can update verification status for already-known notes.
 
-Pi stores worker inputs, checkpoints, and outcomes in the campaign SQLite
-file. Other agents can read those records without starting work:
+`owner.running` is Chord's native `Watchable` of unsettled jobs. Read its current
+value through `owner.running.value` or subscribe through its watch interface.
+`owner.history` contains terminal job receipts. Chord state and Pi conversations
+share the campaign SQLite file. Read persisted state without starting work:
 
 ```ts
-const page = await inspect(path, (tx, root) =>
-  tx.scanTasks({ conversationId: root }, 128),
-);
-const worker = await inspect(path, (tx) => tx.task(id));
+const history = await inspect(path, (data) => data.history);
+const notes = await inspect(path, readNotes);
 ```
 
-Pass `page.next` as the third argument to `scanTasks` for the next page.
-Stored status reports the last committed state. A `running` record can remain
-after its process dies. Mathematical note texts stay in the separate notebook
-database.
+The `inspect` callback receives `(data, session)`: Chord research state and a Pi
+session for reading conversations and receipts. Stored status reports the last
+committed state, not process liveness. Mathematical note texts stay in the
+separate notebook database.
 
 Fresh Explorer workers admit notes queued through `submitNotes`. A Verifier
 without an explicit selection admits queued notes when no worker is active.
@@ -375,10 +380,10 @@ For manual exploration, pass advice as `{kind: "explorer", guidance: "..."}`.
 The `guide` queue is consumed by the automatic campaign controller.
 
 Campaign `status`, `inspect`, `resume`, and `export` commands require the automatic
-campaign task. The default CLI runs the complete research loop with mixed workers.
+campaign state. The default CLI runs the complete research loop with mixed workers.
 Independent processes writing a shared notebook remain outside this interface.
 
-Released Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
+Released Chord and Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
 retained patches recorded in [provenance](vendor/pi/provenance.json).
 
 ```sh

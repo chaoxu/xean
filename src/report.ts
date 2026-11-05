@@ -2,43 +2,31 @@ import {
   UsageDoc,
   type ConversationId,
   type Cursor,
+  type Session,
   type Tx,
   type UsageState,
 } from "@earendil-works/pi-durable";
-import { definition, Notebook, project, readNotebook } from "./state.ts";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { definition, project, readNotebook } from "./state.ts";
+import { copy, type ResearchData } from "./records.ts";
 import { pick, type Note } from "./policy/contracts.ts";
 import { noteOrder, supportClosure } from "./policy/support.ts";
+import { turns } from "./workflow.ts";
 
-import {
-  lastCampaign,
-  type CampaignResult,
-  type CampaignState,
-} from "./workflow.ts";
-
-/** Read the admitted notes without requiring an automatic campaign task. */
-export async function readNotes(tx: Tx, root: ConversationId) {
-  return project(readNotebook(await tx.doc(Notebook, root))).notes;
+export function readNotes(data: ResearchData) {
+  return project(readNotebook(data.notebook)).notes;
 }
 
-/** Status comes from the latest native campaign task, not a second run table. */
-export async function readStatus(tx: Tx, root: ConversationId) {
-  const campaign = await lastCampaign(tx, root);
-  if (!campaign) throw new Error("Campaign task is missing");
-  const state = campaign.state;
-  const result = state.outcome?.result as CampaignResult | undefined;
-  const checkpoint = state.checkpoint as CampaignState | undefined;
+/** Campaign state and settled worker history are authoritative in Chord. */
+export function readStatus(data: ResearchData) {
+  const campaign = data.campaign;
+  if (!campaign) throw new Error("Campaign is not initialized");
   return {
-    taskId: campaign.id,
-    status: state.status,
-    outcome:
-      result?.outcome ?? (state.outcome ? state.outcome.status : "running"),
-    turns: result?.turns ?? checkpoint?.turns ?? 0,
-    accepted: result?.accepted ?? null,
-    error:
-      result?.error ??
-      state.outcome?.error?.message ??
-      state.outcome?.reason ??
-      null,
+    status: campaign.status,
+    outcome: campaign.outcome ?? "running",
+    turns: turns(data),
+    accepted: campaign.accepted ?? null,
+    error: campaign.error ?? null,
   };
 }
 
@@ -55,24 +43,21 @@ export async function readUsage(tx: Tx) {
     }
     cursor = page.next;
   } while (cursor);
-  return JSON.parse(JSON.stringify(conversations)) as typeof conversations;
+  return copy(conversations);
 }
 
-export async function readReport(tx: Tx, root: ConversationId) {
-  const value = await definition(tx, root);
-  const status = await readStatus(tx, root);
-  const notebook = readNotebook(await tx.doc(Notebook, root));
-  // Detach Pi's transaction overlays before the read-only Session closes.
-  const result = {
-    ...value,
-    status,
+export async function readReport(data: ResearchData, session: Session) {
+  const notebook = readNotebook(data.notebook);
+  return copy({
+    ...definition(data),
+    status: readStatus(data),
     ...project(notebook),
     checks: notebook.checks,
     guidance: notebook.guidance,
     inputs: notebook.inputs,
-    usage: await readUsage(tx),
-  };
-  return JSON.parse(JSON.stringify(result)) as typeof result;
+    sources: data.sources,
+    usage: await session.commit(readUsage, context),
+  });
 }
 
 /** Append-only support makes the accepted argument stable after its terminal result. */

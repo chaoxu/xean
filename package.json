@@ -1,7 +1,7 @@
 {
   "name": "xean",
   "version": "5.0.0-dev.4",
-  "description": "Mathematical research on native Pi Durable with conditional note verification",
+  "description": "Mathematical research with Chord jobs, Pi execution, and conditional note verification",
   "license": "MIT",
   "private": true,
   "type": "module",

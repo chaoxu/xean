@@ -5,7 +5,14 @@ import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ProviderDoc } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { findDocument, loadDocument } from "@earendil-works/chord/next";
+import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
+import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
+import {
+  ResearchState,
+  ResearchType,
+  type ResearchData,
+} from "../src/records.ts";
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -70,6 +77,7 @@ async function fixture(
   const path = join(directory, "research.sqlite"),
     requests: CodexRequest[] = [];
   let owner: Awaited<ReturnType<typeof open>>;
+  let ready = Promise.withResolvers<void>();
   let noteId: string | undefined;
   const relabel = (value: JsonValue): JsonValue =>
     JSON.parse(JSON.stringify(value), (_key, item: unknown) =>
@@ -87,6 +95,7 @@ async function fixture(
     push: (...values: (JsonValue | Error)[]) =>
       native.provider.appendResponses(
         values.map((value) => async (transcript, options) => {
+          await ready.promise;
           if (!noteId) {
             noteId = await owner.root.commit(async (tx) => {
               const { items } = await tx.scanConversations({}, 128);
@@ -140,10 +149,13 @@ async function fixture(
   });
   owner = await open(path, {
     create: { task, settings },
+    execute: true,
+    report: () => {},
     source,
     models: native.models,
   });
   owners.push(owner);
+  ready.resolve();
   return {
     path,
     requests,
@@ -156,37 +168,30 @@ async function fixture(
       return owner;
     },
     async settle() {
-      await owner.root.waitForIdle(BACKGROUND_CONTEXT);
+      await owner.wait();
       return inspect(path, readReport);
     },
-    async resume(storageFailure?: string) {
-      if (storageFailure) {
-        owners.splice(owners.indexOf(owner), 1);
-        await expect(owner.close()).rejects.toThrow(storageFailure);
-      } else await owner.close();
-      owner = await open(path, { source, models: native.models });
+    async resume(storageFailure = false) {
+      owners.splice(owners.indexOf(owner), 1);
+      if (storageFailure) await owner.close().catch(() => {});
+      else await owner.close();
+      ready = Promise.withResolvers<void>();
+      owner = await open(path, {
+        source,
+        models: native.models,
+        execute: true,
+        report: () => {},
+      });
       owners.push(owner);
+      ready.resolve();
       await owner.resume();
     },
     async receipts() {
-      return inspect(path, async (tx, root) => {
-        const entries = await tx.scanEntries(
-          { conversationId: root, order: "ascending" },
-          128,
-        );
-        return JSON.parse(
-          JSON.stringify(
-            entries.items.filter(
-              (entry) =>
-                entry.kind === "xean.role-result" &&
-                (entry.data as { key?: string }).key === `source/${noteId}`,
-            ),
-          ),
-        ) as {
-          id: number;
-          data: { value: CodexResult; descriptor: CodexRequest };
-        }[];
-      });
+      return inspect(path, (data) =>
+        structuredClone(
+          data.sources.filter((receipt) => receipt.key === `source/${noteId}`),
+        ),
+      );
     },
   };
 }
@@ -195,39 +200,68 @@ test.each(["before", "after"] as const)(
   "Codex receipt and check recover atomically from failure %s their storage commit",
   async (boundary) => {
     const message = `Interrupted ${boundary} source commit`;
-    const original = SqliteStorage.prototype.commit;
+    const original = NodeSqliteDatabase.prototype.transaction;
+    const fault = Promise.withResolvers<void>();
     let interrupted = false;
-    const commit = spyOn(SqliteStorage.prototype, "commit").mockImplementation(
-      async function (this: SqliteStorage, batches, receive, context) {
-        const sourceBatch = batches.find((batch) =>
-          batch.some(
-            (write) =>
-              write.type === "entry" && write.value.kind === "xean.role-result",
-          ),
-        );
-        if (interrupted || !sourceBatch)
-          return original.call(this, batches, receive, context);
-        interrupted = true;
-        expect(
-          sourceBatch.some((write) => write.type === "document.change"),
-        ).toBe(true);
-        if (boundary === "after")
-          await original.call(this, batches, receive, context);
+    const commit = spyOn(
+      NodeSqliteDatabase.prototype,
+      "transaction",
+    ).mockImplementation(async function <T>(
+      this: NodeSqliteDatabase,
+      callback: (tx: SqliteExecutor) => Promise<T>,
+    ): Promise<T> {
+      let sourceCommit = false;
+      const result = (await original.call(this, async (tx) => {
+        const run = tx.run.bind(tx);
+        tx.run = async (sql, ...params) => {
+          if (
+            !interrupted &&
+            params.some(
+              (value) =>
+                typeof value === "string" && value.includes("Opaque Codex log"),
+            )
+          )
+            sourceCommit = true;
+          return run(sql, ...params);
+        };
+        const result = await callback(tx);
+        if (sourceCommit) {
+          const document = await findDocument(tx, {
+            owner: ResearchType.name,
+            namespace: "chord",
+            kind: ResearchState.name,
+          });
+          const stored = (await loadDocument(tx, document!))
+            .value as ResearchData;
+          expect(stored.sources).toHaveLength(1);
+          expect(stored.notebook.checks).toHaveLength(1);
+          expect(stored.notebook.checks[0]!.call).toBe(stored.sources[0]!.id);
+          interrupted = true;
+          if (boundary === "before") {
+            fault.resolve();
+            throw new Error(message);
+          }
+        }
+        return result;
+      })) as T;
+      if (sourceCommit) {
+        fault.resolve();
         throw new Error(message);
-      },
-    );
+      }
+      return result;
+    });
     try {
       const output = sourceResult();
       const drive = await fixture(
         boundary === "before" ? [output, sourceResult()] : [output],
         [...initial],
       );
-      const idle = drive.owner.root.waitForIdle(BACKGROUND_CONTEXT);
-      void idle.catch(() => {});
-      expect(await drive.owner.harness.closed).toMatchObject({
-        kind: "failed",
-      });
-      await expect(idle).rejects.toThrow();
+      const settled = drive.owner.wait();
+      void settled.catch(() => {});
+      await fault.promise;
+      await expect(settled).rejects.toThrow(
+        "Campaign owner closed before settlement",
+      );
       commit.mockRestore();
       const stored = await inspect(drive.path, readReport);
       const receipts = await drive.receipts();
@@ -236,10 +270,11 @@ test.each(["before", "after"] as const)(
       expect(receipts).toHaveLength(stored.checks.length);
       if (boundary === "after") {
         expect(stored.checks[0]?.call).toBe(receipts[0]?.id);
-        expect(receipts[0]?.data.value).toEqual(output);
+        expect(receipts[0]?.output).toEqual(output);
+        expect(receipts[0]?.request).toEqual(drive.requests[0]);
       }
       drive.replies.push(...remaining);
-      await drive.resume(message);
+      await drive.resume(true);
       const report = await drive.settle();
       expect(report.status).toMatchObject({
         outcome: "accepted",
@@ -247,6 +282,8 @@ test.each(["before", "after"] as const)(
         turns: 1,
       });
       expect(drive.requests).toHaveLength(boundary === "before" ? 2 : 1);
+      if (boundary === "before")
+        expect(drive.requests[1]).toEqual(drive.requests[0]);
       expect(await drive.receipts()).toHaveLength(1);
       if (boundary === "after") {
         expect(report.checks[0]).toEqual(stored.checks[0]);
@@ -270,7 +307,7 @@ test("Codex source rejects citations with search disabled and retains the result
   expect(report.accepted).toEqual([]);
   expect(drive.requests).toHaveLength(1);
   expect(drive.requests[0]?.search).toBe(false);
-  expect((await drive.receipts()).map(({ data }) => data.value)).toEqual([
+  expect((await drive.receipts()).map(({ output }) => output)).toEqual([
     output,
   ]);
 });
@@ -283,7 +320,7 @@ test("Codex output must contain exactly the requested verdict IDs", async () => 
   const report = await drive.settle();
   expect(report.status.outcome).toBe("call-failure");
   expect(report.checks).toEqual([]);
-  expect((await drive.receipts())[0]?.data.value).toEqual(output);
+  expect((await drive.receipts())[0]?.output).toEqual(output);
 });
 
 test("a completed failed Codex execution remains evidence while resume makes a fresh source call", async () => {
@@ -302,7 +339,7 @@ test("a completed failed Codex execution remains evidence while resume makes a f
   });
   expect(failed.checks).toEqual([]);
   const saved = (await drive.receipts())[0]!;
-  expect(saved.data.value).toEqual(failure);
+  expect(saved.output).toEqual(failure);
   drive.outputs.push(sourceResult());
   drive.replies.push(...remaining);
   await drive.resume();
@@ -316,6 +353,6 @@ test("a completed failed Codex execution remains evidence while resume makes a f
   const receipts = await drive.receipts();
   expect(receipts).toHaveLength(2);
   expect(receipts[0]).toEqual(saved);
-  expect(receipts[1]?.data.value.state).toBe("succeeded");
+  expect(receipts[1]?.output.state).toBe("succeeded");
   expect(report.checks[0]?.call).toBe(receipts[1]?.id);
 });

@@ -1,299 +1,258 @@
 import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { SingletonHandle, StoreSelf } from "@earendil-works/chord/next";
+import { admitNotes, project, readNotebook } from "./state.ts";
 import {
-  defineExtension,
-  defineTask,
-  type ConversationId,
-  type TaskId,
-  type TaskRuntime,
-  type Tx,
-} from "@earendil-works/pi-durable";
-import {
-  Notebook,
-  admitNotes,
-  definition,
-  project,
-  readNotebook,
-} from "./state.ts";
-import {
-  campaignKind,
-  completed,
-  createWorkers,
-  nominatedSupport,
-  readWorkers,
-  workerKind,
-  type NativeTask,
-  type SourceExecutor,
-  type WorkerRequest,
-  type WorkerTask,
-} from "./workers.ts";
-
-type Runtime = TaskRuntime<any, any, any, any>;
-export { campaignKind } from "./workers.ts";
+  copy,
+  type Campaign,
+  type ResearchData,
+  type WorkerArgs,
+  type WorkerRecord,
+  type WorkerState,
+} from "./records.ts";
+import type { createWorkers, WorkerRequest } from "./workers.ts";
 export type { SourceExecutor } from "./workers.ts";
-export type CampaignState = ({ phase: "run" } | { phase: "retry" }) & {
-  turns: number;
-  guidanceThrough: number;
-  children: number[];
-  publicationCount: number;
-  afterWorkerId: number;
-};
+
+type Workers = ReturnType<typeof createWorkers>;
 export type CampaignResult = {
   outcome: "accepted" | "turn-limit" | "call-failure";
   turns: number;
   accepted?: string;
   error?: string;
-  resume?: CampaignState;
 };
+export const initialCampaign = (): Campaign => ({
+  status: "pending",
+  guidanceThrough: 0,
+  publicationCount: -1,
+  epoch: 0,
+});
+export const turns = (data: ResearchData) =>
+  new Set(
+    data.history
+      .filter(
+        (row) =>
+          row.args.campaign &&
+          row.args.work.kind === "explorer" &&
+          row.status === "completed",
+      )
+      .map((row) => row.origin),
+  ).size;
+const origin = (row: { id: string; args: WorkerArgs }) =>
+  row.args.origin ?? row.id;
+const latest = (history: WorkerRecord[]) => [
+  ...new Map(history.map((row) => [row.origin, row])).values(),
+];
 
-/** Account for a completed job once, retaining unfinished and failed identities. */
-function reconcile(state: CampaignState, records: readonly NativeTask[]) {
-  const active: WorkerTask[] = [],
-    failed: WorkerTask[] = [];
-  for (const id of state.children) {
-    const child = records.find((task) => task.id === id) as
-      WorkerTask | undefined;
-    if (!child) throw new Error("Worker " + id + " is missing");
-    if (child.state.status !== "terminal") active.push(child);
-    else if (child.state.outcome.status !== "completed") failed.push(child);
-    else if (child.input.kind === "explorer") state.turns++;
-  }
-  state.children = [...active, ...failed].map(({ id }) => id);
-  return { active, failed };
-}
-
-/** Retries keep the publication frontier of their original public invocation. */
-function admissionId(job: WorkerTask, records: readonly NativeTask[]): number {
-  const previous = job.input.previousTasks?.[0] ?? job.owner;
-  const parent = records.find((task) => task.id === previous);
-  return parent?.kind === workerKind
-    ? admissionId(parent as WorkerTask, records)
-    : job.id;
-}
-
-/** Completed selections consume actual batches; empty selections consume their offer. */
+/** A selection consumes its actual batch; a declined offer waits for new knowledge. */
 function consumed(
-  records: readonly NativeTask[],
-  after: number,
+  records: readonly {
+    args: WorkerArgs;
+    state: WorkerState;
+    result?: WorkerRecord["result"];
+  }[],
+  epoch: number,
   nominated: ReadonlySet<string>,
 ) {
   const ids = new Set<string>();
-  for (const record of records) {
-    if (record.kind !== workerKind) continue;
-    const job = record as WorkerTask;
-    if (job.input.kind === "explorer" || admissionId(job, records) <= after)
-      continue;
-    if (job.input.kind === "verify") {
-      for (const entry of job.input.input.verify) ids.add(entry.note);
-    } else if (
-      job.input.kind === "verifier" &&
-      job.state.outcome?.status === "completed" &&
-      (job.state.outcome.result as { status?: string })?.status === "no-work"
-    ) {
-      for (const id of job.input.verify?.map((entry) => entry.note) ??
-        job.input.input.notes.map((note) => note.id))
-        if (
-          !nominated.has(id) ||
-          job.input.input.nominatedSupport?.includes(id)
-        )
+  for (const row of records) {
+    if (row.args.epoch !== epoch) continue;
+    const { work } = row.args;
+    const claim =
+      row.state.claim ?? (work.kind === "verify" ? work.input : undefined);
+    if (claim) for (const entry of claim.verify) ids.add(entry.note);
+    else if (work.kind === "selector" && row.result?.status === "no-work")
+      for (const id of work.verify?.map(({ note }) => note) ??
+        work.input.notes.map(({ id }) => id))
+        if (!nominated.has(id) || work.input.nominatedSupport?.includes(id))
           ids.add(id);
-    }
   }
   return ids;
 }
 
-const abort = async (_task: unknown, runtime: Runtime, context: Context) => {
-  await runtime.commit(async (tx, task) => {
-    const state = { ...task.state.checkpoint } as CampaignState;
-    // Pi settles ordinary descendants before invoking their owner's abort handler.
-    reconcile(state, (await readWorkers(tx, task.conversationId)).records);
-    return {
-      status: "terminal",
-      outcome: {
-        status: "aborted",
-        result: {
-          outcome: "call-failure",
-          turns: state.turns,
-          error: "Campaign aborted",
-          resume: state,
-        },
-      },
-    };
-  }, context);
-};
-
-export async function lastCampaign(tx: Tx, root: ConversationId) {
-  return (
-    await tx.scanTasks(
-      { conversationId: root, kind: campaignKind, order: "descending" },
-      1,
-    )
-  ).items[0];
-}
-
-/** Refill shared capacity after any native worker completion. */
-export function createWorkflow(options: { source?: SourceExecutor } = {}) {
-  const workers = createWorkers(options);
-  const Campaign = defineTask<
-    { resume?: CampaignState },
-    CampaignState,
-    CampaignResult
-  >({
-    name: campaignKind,
-    version: 1,
-    initial: ({ resume }) =>
-      resume
-        ? { ...resume, phase: resume.children.length ? "retry" : "run" }
-        : {
-            phase: "run",
-            turns: 0,
-            guidanceThrough: 0,
-            children: [],
-            publicationCount: -1,
-            afterWorkerId: 0,
-          },
-    abort,
-    phases: {
-      async retry(task, runtime, context) {
-        await runtime.commit(async (tx) => {
-          const state = { ...task.state.checkpoint };
-          state.children = await workers.createGroup(
-            tx,
-            task.conversationId,
-            state.children.map((task) => ({ kind: "retry", task })),
-            task.id,
-          );
-          return { status: "running", checkpoint: { ...state, phase: "run" } };
-        }, context);
-      },
-      async run(task, runtime, context) {
-        await runtime.commit(async (tx) => {
-          const state = { ...task.state.checkpoint };
-          const history = await readWorkers(tx, task.conversationId);
-          const { active, failed } = reconcile(state, history.records);
-          const config = await definition(tx, task.conversationId);
-          await admitNotes(tx, task.conversationId);
-          const ref = await tx.doc(Notebook, task.conversationId);
-          const book = readNotebook(ref),
-            { notes, accepted } = project(book);
-          if (state.publicationCount !== ref.publications.length) {
-            state.publicationCount = ref.publications.length;
-            state.afterWorkerId = history.jobs.at(-1)?.id ?? 0;
+/** Chord delivers completion changes serially; this callback only decides research policy. */
+export function createWorkflow(
+  self: StoreSelf,
+  data: SingletonHandle<ResearchData>,
+  workers: Workers,
+) {
+  const blocked = () =>
+    workers.running.value.filter((row) => row.phase === "blocked");
+  const wake = self.derive([data, workers.running], ([value, running]) => ({
+    campaign: value.campaign,
+    settled: value.history.length,
+    blocked: running.filter((row) => row.phase === "blocked"),
+  }));
+  self.on(wake, async (_, ctx) => {
+    try {
+      await self.tx(async (tx) => {
+        const saved = await tx.draft(data);
+        const campaign = saved.campaign;
+        if (!saved.definition || !campaign || campaign.status === "terminal")
+          return;
+        campaign.status = "running";
+        const unavailableJobs = blocked();
+        if (unavailableJobs.length) {
+          campaign.error = unavailableJobs
+            .map(({ id, reason }) => `Worker ${id} blocked: ${reason}`)
+            .join("\n");
+          if (workers.running.value.length === unavailableJobs.length) {
+            campaign.status = "terminal";
+            campaign.outcome = "call-failure";
           }
-          // Never freeze acceptance before admitted workers and adverse receipts settle.
-          if (failed.length || accepted.length) {
-            if (active.length)
-              return {
-                status: "waiting",
-                on: active.map(({ id }) => id),
-                policy: "anySettled",
-                checkpoint: state,
-              };
-            if (failed.length)
-              return completed<CampaignResult>({
-                outcome: "call-failure",
-                turns: state.turns,
-                error: failed
-                  .map(
-                    (child) =>
-                      child.state.outcome?.error?.message ??
-                      "Worker " + child.id + " did not complete",
-                  )
-                  .join("\n"),
-                resume: state,
-              });
-            return completed<CampaignResult>({
-              outcome: "accepted",
-              turns: state.turns,
-              accepted: accepted[0]!,
-            });
+          return;
+        }
+        const view = workers.views();
+        const active = view.active;
+        const liveOrigins = new Set(active.map(origin));
+        const failed = latest(saved.history).filter(
+          (row) =>
+            row.args.campaign &&
+            row.status === "failed" &&
+            !liveOrigins.has(row.origin),
+        );
+        const { settings } = saved.definition;
+        admitNotes(saved.notebook);
+        const book = readNotebook(saved.notebook),
+          { notes, accepted } = project(book);
+        if (campaign.publicationCount !== saved.notebook.publications.length) {
+          campaign.publicationCount = saved.notebook.publications.length;
+          campaign.epoch++;
+        }
+        if (failed.length || campaign.error || accepted.length) {
+          if (active.length) return;
+          campaign.status = "terminal";
+          if (failed.length || campaign.error) {
+            campaign.outcome = "call-failure";
+            campaign.error ??= failed
+              .map((row) => row.error ?? `Worker ${row.id} failed`)
+              .join("\n");
+          } else {
+            campaign.outcome = "accepted";
+            campaign.accepted = accepted[0]!;
           }
-          const unavailable = consumed(
-            history.records,
-            state.afterWorkerId,
-            new Set(
-              config.settings.verifyOnSolution
-                ? nominatedSupport(history.records, notes)
-                : [],
-            ),
-          );
-          for (const id of [...history.claimed, ...history.offered])
-            unavailable.add(id);
-          const eligible = notes
-            .filter((note) => !note.dead && !unavailable.has(note.id))
-            .map((note) => note.id);
-          const free = config.settings.maxWorkers - active.length;
-          const verifying = Math.min(free, eligible.length);
-          const exploring = Math.min(
+          return;
+        }
+        const nominated = new Set(
+          settings.verifyOnSolution ? view.nominatedSupport(notes) : [],
+        );
+        const unavailable = consumed(
+          [...saved.history, ...active],
+          campaign.epoch,
+          nominated,
+        );
+        for (const id of [...view.claimed, ...view.offered])
+          unavailable.add(id);
+        const eligible = notes
+          .filter((note) => !note.dead && !unavailable.has(note.id))
+          .map(({ id }) => id);
+        const free = settings.maxWorkers - active.length;
+        const verifying = Math.min(free, eligible.length);
+        const exploring = Math.max(
+          0,
+          Math.min(
             free - verifying,
-            config.settings.maxExplorerTurns -
-              state.turns -
-              active.filter((job) => job.input.kind === "explorer").length,
-          );
-          const guidance = book.guidance
-            .slice(state.guidanceThrough)
-            .map((entry) => entry.text)
-            .join("\n\n");
-          const requests: WorkerRequest[] = [
-            ...Array.from({ length: verifying }, () => ({
-              kind: "verifier" as const,
-            })),
-            ...Array.from({ length: exploring }, () => ({
-              kind: "explorer" as const,
-              guidance,
-            })),
-          ];
-          if (exploring) state.guidanceThrough = book.guidance.length;
-          if (requests.length)
-            state.children = [
-              ...state.children,
-              ...(await workers.createGroup(
-                tx,
-                task.conversationId,
-                requests,
-                task.id,
-                eligible,
-              )),
-            ];
-          if (!state.children.length)
-            return completed<CampaignResult>({
-              outcome: "turn-limit",
-              turns: state.turns,
-            });
-          return {
-            status: "waiting",
-            on: state.children as TaskId[],
-            policy: "anySettled",
-            checkpoint: state,
-          };
-        }, context);
-      },
-    },
-  });
-  const extension = defineExtension({
-    ...workers.extension,
-    tasks: [...workers.extension.tasks!, Campaign],
+            settings.maxExplorerTurns -
+              turns(saved) -
+              active.filter((row) => row.args.work.kind === "explorer").length,
+          ),
+        );
+        const guidance = book.guidance
+          .slice(campaign.guidanceThrough)
+          .map(({ text }) => text)
+          .join("\n\n");
+        const requests: WorkerRequest[] = [
+          ...Array.from({ length: verifying }, () => ({
+            kind: "verifier" as const,
+          })),
+          ...Array.from({ length: exploring }, () => ({
+            kind: "explorer" as const,
+            guidance,
+          })),
+        ];
+        if (exploring) campaign.guidanceThrough = book.guidance.length;
+        if (requests.length)
+          await workers.admit(tx, requests, {
+            campaign: true,
+            epoch: campaign.epoch,
+            eligible,
+          });
+        else if (!active.length) {
+          campaign.status = "terminal";
+          campaign.outcome = "turn-limit";
+        }
+      }, ctx);
+    } catch (error) {
+      if (ctx.abortSignal?.aborted) return;
+      await data.change((saved) => {
+        if (!saved.campaign) return;
+        saved.campaign.error =
+          error instanceof Error ? error.message : String(error);
+        if (!workers.running.value.length) {
+          saved.campaign.status = "terminal";
+          saved.campaign.outcome = "call-failure";
+        }
+      }, ctx);
+    }
   });
   return {
-    extension,
-    workers,
-    initialize: (tx: Tx, root: ConversationId) =>
-      tx.createTask(
-        Campaign,
-        {},
-        { conversationId: root, ownership: { kind: "conversation" } },
-      ),
-    async resume(tx: Tx, root: ConversationId) {
-      const previous = await lastCampaign(tx, root);
-      if (previous && previous.state.status !== "terminal") return previous.id;
-      const result = previous?.state.outcome?.result as
-        CampaignResult | undefined;
-      if (!result?.resume)
-        throw new Error("Campaign has no failed work to resume");
-      return tx.createTask(
-        Campaign,
-        { resume: result.resume },
-        { conversationId: root, ownership: { kind: "conversation" } },
-      );
+    async wait(ctx: Context = context): Promise<CampaignResult> {
+      const watch = await data.watch(ctx);
+      const result = Promise.withResolvers<CampaignResult>();
+      const check = (value: ResearchData) => {
+        const campaign = value.campaign;
+        if (!campaign) throw new Error("Campaign is not initialized");
+        if (campaign.status === "terminal") {
+          result.resolve(
+            copy({
+              outcome: campaign.outcome!,
+              turns: turns(value),
+              ...(campaign.accepted ? { accepted: campaign.accepted } : {}),
+              ...(campaign.error ? { error: campaign.error } : {}),
+            }),
+          );
+          void watch.stop();
+          return true;
+        }
+        return false;
+      };
+      try {
+        if (check(watch.value)) return await result.promise;
+        watch.start(async (event) => {
+          if (event.kind === "value") check(event.value);
+          else result.reject(event.error);
+        });
+        void watch.closed.then((end) => {
+          if (end.kind !== "stopped")
+            result.reject(new Error("Campaign owner closed before settlement"));
+        });
+        return await result.promise;
+      } finally {
+        await watch.stop();
+      }
     },
+    resume: () =>
+      self.tx(async (tx) => {
+        const saved = await tx.draft(data),
+          campaign = saved.campaign;
+        if (!campaign) throw new Error("Campaign is not initialized");
+        if (campaign.status !== "terminal") return;
+        if (campaign.outcome !== "call-failure")
+          throw new Error("Campaign has no failed work to resume");
+        if (blocked().length)
+          throw new Error("Blocked native jobs require repair before resume");
+        const failed = latest(saved.history).filter(
+          (row) => row.args.campaign && row.status === "failed",
+        );
+        campaign.status = "running";
+        delete campaign.outcome;
+        delete campaign.error;
+        delete campaign.accepted;
+        if (failed.length)
+          await workers.admit(
+            tx,
+            failed.map((row) => ({ kind: "retry", job: row.id })),
+            { campaign: true, epoch: campaign.epoch },
+          );
+      }, context),
   };
 }
