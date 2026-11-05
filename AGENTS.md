@@ -64,6 +64,8 @@ allowed only when the format cannot render monospace.
   with small standalone-role inputs before a full campaign smoke or golden run.
 - Use `gpt-6-luna` by default for new smoke tests. Preserve explicitly selected
   models and historical run records.
+- Do not impose wall-clock time budgets on `gpt-6-astra` campaigns or cancel them
+  solely because of elapsed run time.
 - Use `xean status` for routine monitoring and read transcripts on demand.
   Keep monitoring storage bounded instead of archiving cumulative snapshots.
 - Preserve historical runs and their pinned runtimes. No compatibility,
