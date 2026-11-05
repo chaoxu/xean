@@ -1,81 +1,80 @@
 # Chord jobs spike for `xean`
 
-Chord owns Explorer and Verifier jobs in this prototype. Pi owns individual
-model calls, frozen inputs, and receipts. The existing note store, prompts,
-verification sequence, and acceptance projection are reused.
+Chord manages Explorer and Verifier jobs. Pi Durable executes their model
+conversations and tools. `xean` supplies research policy, prompts, note
+publication, and verification. Pi has its own task scheduler, so using Chord jobs
+is an application boundary rather than a prerequisite for concurrent agents.
 
-Run these commands from this worktree with Bun 1.4.2:
+`openJobs(directory, definition, models)` opens both runtimes over one Chord
+store. Pi uses its native `StoreStorage` adapter. The caller chooses which work
+to start through `jobs.pi.prepare(kind)` and `jobs.start(ref)`, and closes the
+owner with `jobs.close()`. Set `maxWorkers: 1` for sequential execution, or a
+larger value for overlapping Explorers and Verifiers.
+
+## Native ownership
+
+Chord enforces shared worker capacity and deduplicates unsettled starts. Each
+Verifier stores its selected plan in native job state. A serialized state change
+checks other running and finishing jobs before claiming the selected notes.
+Chord removes that state when the job settles, together with its completion
+history transaction. A blocked job prevents fresh claims because Chord hides its
+state from the running view. The application retains completion history because
+Chord deletes settled job records.
+
+Pi stores frozen work inputs and model receipts. A native document maps each
+work reference and stage key to a conversation. That reference, the conversation,
+and its configuration are created in one Pi transaction. Reusing a stage checks
+its arguments, then Pi's submission request ID handles replay and recovery.
+There is no custom Pi task around each model stage. The existing task-based
+workers share this role invocation code, including their explicit retry behavior.
+
+The directory contains `execution.sqlite`, the existing `notes.sqlite`, and an
+ownership lock. Closing seals Chord jobs and suspends Pi execution before closing
+the shared store and releasing the lock. Mathematical notes remain immutable.
+
+## Running the checks
+
+Use Bun 1.4.2 from this worktree:
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
 bun node_modules/typescript/bin/tsc -p experiments/chord-jobs/tsconfig.json
 bun test ./experiments/chord-jobs/jobs.test.ts
 bun experiments/chord-jobs/chord-probe.ts
+bun run check
 ```
 
-The tests use real Chord and Pi SQLite storage with simulated model responses.
-They make no provider calls. The files in this directory are excluded from the
-package and leave the production CLI unchanged.
-
-## Ownership
-
-`pi.prepare(kind)` stores a frozen work input and returns its reference.
-`jobs.start(ref)` starts or rejoins the corresponding unsettled Chord job.
-A single job definition gives both roles a shared `maxWorkers` limit. The caller
-chooses when to start another Explorer or Verifier.
-
-Chord commits selected-note claims atomically and retains the selected plan for
-recovery. Pi finds each model stage by its work reference and stage key, reuses
-completed receipts, and resumes pending calls. Publication is idempotent under
-the work reference. Chord releases claims and records completion in its finish
-transaction.
-
-The prototype uses separate Chord and Pi execution databases, the existing
-notebook database, and a SQLite ownership lock covering both runtimes. Proof
-text stays in the existing notebook and Pi input records. Chord retains claim
-IDs, selected checks, and completion metadata. Successful native Chord jobs are
-removed, so the application records the history needed after completion.
-
-## Verified behavior
-
-Six integration tests cover shared capacity and mixed roles, conflicting claims,
-reopening during a proof call, publication before job settlement, invalidated
-selection, and ownership cleanup. They pass with 55 assertions. The publication
-and recovery tests confirm that completed model stages and note publications
-are reused. A separate native Chord probe checks persisted job IDs, deduplication,
-watches, and finish behavior.
-
-These are execution-contract tests. They establish neither mathematical quality
-nor model latency. The existing Astra campaign uses its original runtime and is
-independent of this prototype.
+Integration tests exercise sequential and concurrent execution, conflicting
+claims, recovery during a proof call, replay after publication, invalidated
+selection, and ownership cleanup. They use Chord and Pi SQLite storage with
+simulated model responses and make no provider calls. The native probe separately
+checks job IDs, deduplication, watches, and completion behavior.
 
 ## Scope and comparison
 
-| Implementation                               | Formatted lines |
-| -------------------------------------------- | --------------: |
-| Chord worker lifecycle and claims, `jobs.ts` |             273 |
-| Pi integration and host setup, `pi.ts`       |             308 |
-| Total prototype implementation               |             581 |
-| Existing `src/workers.ts`                    |             589 |
-| Existing automatic controller, unported      |             299 |
+| Runtime code                        | Initial spike | Revised spike |
+| ----------------------------------- | ------------: | ------------: |
+| Experimental job and Pi integration |           581 |           497 |
+| Shared role caller                  |           455 |           499 |
+| Total formatted lines               |         1,036 |           996 |
 
-The prototype retains the verification window for each invocation. It omits the
-automatic controller, explicit retry after a job has settled as failed, deferred
-verification, caller input and guidance handling, and Codex source execution.
-Deferred verification, imported inputs, and Codex source profiles are rejected.
-Settled work references cannot be started again.
+The net reduction is 40 runtime lines. The structural change removes custom
+model-stage tasks, a separate claim registry, and a second execution database.
+The automatic campaign controller remains unported. The experiment also omits
+settled-job retries, deferred verification, caller intake and guidance, and
+Codex source execution. Native terminal call failures remain failed on reopen.
 
-A fresh selection checks current Pi note status before the Chord claim
-transaction. These are separate transactions. Note invalidation can occur
-between them, and the latest projection still determines verified and accepted status.
-Already claimed plans retain their frozen inputs during recovery.
+The Pi freshness read and Chord claim are separate transactions even within the
+shared store. A note can become invalid between them, allowing redundant local
+verification. The latest projection determines verified and accepted status.
+Claimed plans keep their frozen inputs during recovery.
 
-The tested interruption is a clean close at a deliberately held boundary.
-Abrupt process death, storage failures, and Chord finish failures remain
-unqualified.
+Recovery tests cover clean close and reopen at held boundaries. Abrupt process
+death, storage failures, Chord finish failures, and cancellation of an individual
+job remain unqualified. These tests establish neither mathematical quality nor
+model latency.
 
-Chord's capacity, start, finish, and watch APIs make the worker lifecycle clearer.
-The integration between stores and retained completion history consume most of
-the code saved. This prototype demonstrates feasibility, without establishing a
-smaller replacement for the current worker implementation. Keep it on the spike
-branch while deciding whether broader use of Chord would justify that integration.
+Use fresh databases. The shared role caller now requires native stage references,
+so this branch does not migrate existing campaigns. Historical runs and the
+Astra campaign retain their original runtimes. The experimental job API is not
+wired into the CLI or included in the package.

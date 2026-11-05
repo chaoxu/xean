@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
@@ -10,7 +10,11 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { ProviderDoc } from "@earendil-works/pi-durable";
+import {
+  GenerationTask,
+  ProviderDoc,
+  type ConversationId,
+} from "@earendil-works/pi-durable";
 import { Assignment } from "../../src/role-runtime.ts";
 import { Notebook } from "../../src/state.ts";
 import type { CallDescriptor } from "../../src/policy/prompts.ts";
@@ -26,7 +30,8 @@ import {
   type Respond,
 } from "../../tests/worker-fixture.ts";
 import { openJobs } from "./jobs.ts";
-import { openPi, type Pi } from "./pi.ts";
+import * as piModule from "./pi.ts";
+import type { Pi } from "./pi.ts";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -49,10 +54,13 @@ async function until<T>(
 const stage = ({ descriptor }: Request) =>
   descriptor.kind === "verifier" ? descriptor.name : descriptor.kind;
 
-async function fixture(respond: Respond = complete) {
+async function fixture(respond: Respond = complete, maxWorkers = 2) {
   const directory = await mkdtemp(join(tmpdir(), "xean-chord-contract-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
-  const definition = { task: problem, settings: defaultSettings() };
+  const definition = {
+    task: problem,
+    settings: { ...defaultSettings(), maxWorkers },
+  };
   const provider = fauxProvider({
     provider: "test",
     models: [{ id: "math", reasoning: true }],
@@ -60,22 +68,27 @@ async function fixture(respond: Respond = complete) {
   const models = createModels();
   models.setProvider(provider.provider);
   let pi: Pi;
-  const requests: Request[] = [];
+  let ready = gate();
+  const requests: (Request & { conversationId: ConversationId })[] = [];
   provider.setResponses(
     Array.from({ length: 128 }, () => async (transcript, options) => {
-      const descriptor = await pi.root.commit(async (tx) => {
+      await ready.promise;
+      const assignment = await pi.root.commit(async (tx) => {
         const conversations = await tx.scanConversations({}, 256);
         for (const conversation of conversations.items) {
           const provider = await tx.doc(ProviderDoc, conversation.id);
           if (provider.sessionId !== options?.sessionId) continue;
           const assignment = await tx.doc(Assignment, conversation.id);
           if (assignment.descriptor)
-            return copy(assignment.descriptor) as CallDescriptor;
+            return {
+              descriptor: copy(assignment.descriptor) as CallDescriptor,
+              conversationId: conversation.id,
+            };
         }
         throw new Error("Missing native role assignment");
       }, context);
       const request = {
-        descriptor,
+        ...assignment,
         transcript: structuredClone(transcript),
         signal: options?.signal,
       };
@@ -96,8 +109,9 @@ async function fixture(respond: Respond = complete) {
       );
     }),
   );
-  pi = await openPi(directory, definition, models);
-  let jobs = await openJobs(join(directory, "jobs.sqlite"), pi);
+  let jobs = await openJobs(directory, definition, models);
+  pi = jobs.pi;
+  ready.resolve();
   let watch = await jobs.running.watch(context);
   const sizes: number[] = [];
   const observe = () => {
@@ -121,10 +135,26 @@ async function fixture(respond: Respond = complete) {
     directory,
     definition,
     models,
+    provider,
     requests,
     sizes,
     finished(ref: number) {
       return until(() => jobs.history().find((row) => row.ref === ref));
+    },
+    assignments() {
+      return pi.root.commit(async (tx) => {
+        const records = [];
+        for (const conversation of (await tx.scanConversations({}, 256))
+          .items) {
+          const assignment = await tx.doc(Assignment, conversation.id);
+          if (assignment.descriptor)
+            records.push({
+              conversationId: conversation.id,
+              descriptor: copy(assignment.descriptor),
+            });
+        }
+        return records;
+      }, context);
     },
     tasks() {
       return pi.root.commit(
@@ -141,9 +171,22 @@ async function fixture(respond: Respond = complete) {
     async reopen(beforeJobs?: (next: Pi) => void) {
       watch.stop();
       await jobs.close();
-      pi = await openPi(directory, definition, models);
-      beforeJobs?.(pi);
-      jobs = await openJobs(join(directory, "jobs.sqlite"), pi);
+      ready = gate();
+      const initialize = piModule.openPi;
+      const hook = beforeJobs
+        ? spyOn(piModule, "openPi").mockImplementation(async (...args) => {
+            const next = await initialize(...args);
+            beforeJobs(next);
+            return next;
+          })
+        : undefined;
+      try {
+        jobs = await openJobs(directory, definition, models);
+        pi = jobs.pi;
+      } finally {
+        hook?.mockRestore();
+        ready.resolve();
+      }
       watch = await jobs.running.watch(context);
       observe();
     },
@@ -223,7 +266,10 @@ test("Chord refills a shared slot with verification while another Explorer is he
   expect(Math.max(...run.sizes)).toBe(2);
   expect(
     (await run.tasks()).every(
-      (task) => task.kind !== "xean.worker" && task.kind !== "xean.campaign",
+      (task) =>
+        !["xean.worker", "xean.campaign", "xean.chord-call"].includes(
+          task.kind,
+        ),
     ),
   ).toBe(true);
 });
@@ -281,14 +327,15 @@ test("overlapping selector batches claim atomically without reserving the losing
   releaseChecks.resolve();
   expect((await run.finished(bc)).status).toBe("done");
   expect((await run.finished(onlyD)).status).toBe("done");
-  const loserCalls = (await run.tasks()).filter(
-    (task) => (task.input as { ref?: number }).ref === cd,
+  const loserCalls = (await run.assignments()).filter(
+    ({ descriptor }) =>
+      descriptor.kind !== "explorer" &&
+      descriptor.input.notes.map((note) => note.id).join(",") ===
+        [c, d].join(","),
   );
-  expect(
-    loserCalls.map(
-      (task) => (task.input as { descriptor: CallDescriptor }).descriptor.kind,
-    ),
-  ).toEqual(["selection"]);
+  expect(loserCalls.map(({ descriptor }) => descriptor.kind)).toEqual([
+    "selection",
+  ]);
   expect((await run.pi.book()).accepted.sort()).toEqual([b, c, d].sort());
 });
 
@@ -316,11 +363,15 @@ test("close and reopen keep the Chord job and pending Pi proof, reusing all comp
   const job = await run.jobs.start(verifier);
   await proofPending.promise;
   const before = await run.tasks();
+  const proofConversation = run.requests.find(
+    (request) => request.descriptor.kind === "proof",
+  )!.conversationId;
   const original = before.find(
     (task) =>
-      (task.input as { descriptor?: CallDescriptor }).descriptor?.kind ===
-      "proof",
+      task.conversationId === proofConversation &&
+      task.kind === GenerationTask.definition.name,
   )!;
+  const originalClaims = run.jobs.claims();
   expect(original.state.status).not.toBe("terminal");
   expect(run.requests.map(stage)).toEqual([
     "explorer",
@@ -337,10 +388,16 @@ test("close and reopen keep the Chord job and pending Pi proof, reusing all comp
   await run.reopen();
   await recoveredProof.promise;
   expect(run.jobs.running.value.map((entry) => entry.id)).toEqual([job.id]);
+  expect(run.jobs.claims()).toEqual(originalClaims);
+  expect(
+    run.requests
+      .filter((request) => request.descriptor.kind === "proof")
+      .map((request) => request.conversationId),
+  ).toEqual([proofConversation, proofConversation]);
   const proofTasks = (await run.tasks()).filter(
     (task) =>
-      (task.input as { descriptor?: CallDescriptor }).descriptor?.kind ===
-      "proof",
+      task.conversationId === proofConversation &&
+      task.kind === GenerationTask.definition.name,
   );
   expect(proofTasks.map((task) => task.id)).toEqual([original.id]);
   expect(run.requests.map(stage)).toEqual([
@@ -380,7 +437,7 @@ test("publication before Chord settlement replays its completed Pi call without 
   const job = await run.jobs.start(explorer);
   await published.promise;
   const before = (await run.tasks()).filter(
-    (task) => task.kind === "xean.chord-call",
+    (task) => task.kind === GenerationTask.definition.name,
   );
   expect(before).toHaveLength(1);
   expect(before[0]!.state).toMatchObject({
@@ -404,7 +461,7 @@ test("publication before Chord settlement replays its completed Pi call without 
   expect(run.jobs.running.value.map((entry) => entry.id)).toEqual([job.id]);
   expect(
     (await run.tasks())
-      .filter((task) => task.kind === "xean.chord-call")
+      .filter((task) => task.kind === GenerationTask.definition.name)
       .map((task) => task.id),
   ).toEqual(before.map((task) => task.id));
   expect(run.requests.map(stage)).toEqual(["explorer"]);
@@ -450,14 +507,9 @@ test("a frozen selection invalidated before claiming does not start any check", 
     status: "no-work",
     ids: [],
   });
-  const staleCalls = (await run.tasks()).filter(
-    (task) => (task.input as { ref?: number }).ref === stale,
-  );
   expect(
-    staleCalls.map(
-      (task) => (task.input as { descriptor: CallDescriptor }).descriptor.kind,
-    ),
-  ).toEqual(["selection"]);
+    (await run.assignments()).map(({ descriptor }) => descriptor.kind),
+  ).toEqual(["explorer", "selection", "selection", "verifier"]);
   expect(
     run.requests.filter((request) => stage(request) === "source"),
   ).toHaveLength(1);
@@ -467,12 +519,12 @@ test("a frozen selection invalidated before claiming does not start any check", 
 test("exclusive ownership survives a competing open and is released after failed initialization", async () => {
   const run = await fixture();
   await expect(
-    openPi(run.directory, run.definition, run.models),
+    openJobs(run.directory, run.definition, run.models),
   ).rejects.toThrow("already has an owner");
   expect(await run.pi.book()).toMatchObject({ notes: [], checks: [] });
   await run.jobs.close();
   await expect(
-    openPi(
+    openJobs(
       run.directory,
       {
         ...run.definition,
@@ -489,4 +541,82 @@ test("exclusive ownership survives a competing open and is released after failed
   const ref = await run.pi.prepare("explorer");
   expect((await run.pi.work(ref)).kind).toBe("explorer");
   expect(run.requests).toEqual([]);
+  const files = await readdir(run.directory);
+  expect(files).toContain("execution.sqlite");
+  expect(files).toContain("notes.sqlite");
+  expect(files).not.toContain("pi.sqlite");
+  expect(files).not.toContain("jobs.sqlite");
+});
+
+test("maxWorkers 1 completes Explorer then Verifier with native sequential capacity", async () => {
+  const exploring = gate(),
+    releaseExplorer = gate();
+  const run = await fixture(async (request) => {
+    if (request.descriptor.kind === "explorer") {
+      exploring.resolve();
+      await Promise.race([releaseExplorer.promise, abortable(request.signal)]);
+    }
+    return complete(request);
+  }, 1);
+  const explorer = await run.pi.prepare("explorer");
+  await run.jobs.start(explorer);
+  await exploring.promise;
+  const excess = await run.pi.prepare("explorer");
+  await expect(run.jobs.start(excess)).rejects.toThrow(
+    /busy|concurrency|limit/i,
+  );
+  expect(run.jobs.running.value).toHaveLength(1);
+  releaseExplorer.resolve();
+  expect((await run.finished(explorer)).status).toBe("done");
+  const verifier = await run.pi.prepare("verifier");
+  await run.jobs.start(verifier);
+  expect((await run.finished(verifier)).status).toBe("done");
+  expect((await run.pi.book()).accepted).toEqual([`w${explorer}.1`]);
+  expect(Math.max(...run.sizes)).toBe(1);
+  expect(
+    run.requests.filter((request) => request.descriptor.kind === "explorer"),
+  ).toHaveLength(1);
+});
+
+test("terminal Pi failure survives interrupted Chord settlement without another model attempt", async () => {
+  const failed = gate();
+  const run = await fixture(() => new Error("401 upstream_unavailable"));
+  const firstPi = run.pi;
+  const call = firstPi.call.bind(firstPi);
+  const interrupted = spyOn(firstPi, "call").mockImplementation(
+    async (...args) => {
+      try {
+        return await call(...args);
+      } catch (error) {
+        failed.resolve();
+        await firstPi.harness.closed;
+        throw error;
+      }
+    },
+  );
+  const ref = await firstPi.prepare("explorer");
+  await run.jobs.start(ref);
+  await failed.promise;
+  expect(run.provider.state.callCount).toBe(1);
+  expect(run.jobs.history()).toEqual([]);
+  const conversationId = run.requests[0]!.conversationId;
+  const original = await firstPi.root.commit(
+    async (tx) =>
+      copy(await tx.submissionByRequest(conversationId, "explorer")),
+    context,
+  );
+  expect(original?.status).toBe("unanswered");
+  await run.jobs.close();
+  interrupted.mockRestore();
+  await run.reopen();
+  expect(await run.finished(ref)).toMatchObject({ status: "failed", ids: [] });
+  expect(run.provider.state.callCount).toBe(1);
+  expect(
+    await run.pi.root.commit(
+      async (tx) =>
+        copy(await tx.submissionByRequest(conversationId, "explorer")),
+      context,
+    ),
+  ).toEqual(original);
+  expect((await run.pi.book()).notes).toEqual([]);
 });

@@ -6,6 +6,7 @@ import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import {
   configure,
   defineDoc,
+  defineDocFamily,
   defineExtension,
   defineTool,
   GenerationTask,
@@ -17,6 +18,7 @@ import {
   type ConversationId,
   type Cursor,
   type EntryId,
+  type Harness,
   type TaskId,
   type TaskRuntime,
   type Tx,
@@ -61,6 +63,14 @@ export const Assignment = defineDoc({
   history: "latest",
   fork: "initial",
   initial: (): Assignment => ({}),
+});
+const Stage = defineDocFamily<{ conversation?: number }, null>({
+  kind: "xean.role.stage",
+  version: 1,
+  scope: "session",
+  family: true,
+  checkpointWhen: () => false,
+  initial: () => ({}),
 });
 type Receipt = { call: EntryId; value: JsonValue; fresh: boolean };
 async function receipt(
@@ -309,14 +319,17 @@ export function createRoleRuntime() {
     ],
   });
 
-  async function run(
-    runtime: Runtime,
+  async function invoke(
+    host: Runtime | Harness,
+    ref: number,
     key: string,
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
     context: Context,
+    report: (error: unknown) => void,
     previousTasks: readonly number[] = [],
   ): Promise<Receipt> {
+    const owned = "taskId" in host;
     const requested = copyJson(
       { key, descriptor, profile },
       { omitUndefinedProperties: true },
@@ -331,10 +344,10 @@ export function createRoleRuntime() {
     let sessionId: string | undefined;
     let recovered: Receipt | undefined;
     try {
-      // Ownership and Assignment.key identify a stage, including a crash before submission.
-      await runtime.commit(async (tx) => {
-        for (const owner of [runtime.taskId, ...previousTasks]) {
-          const current = owner === runtime.taskId;
+      // The reference and conversation are created together, before model submission.
+      await host.commit(async (tx): Promise<undefined> => {
+        for (const owner of [ref, ...previousTasks]) {
+          const current = owner === ref;
           if (!current) {
             const prior = await tx.task(owner as TaskId);
             if (
@@ -345,80 +358,80 @@ export function createRoleRuntime() {
             )
               continue;
           }
-          let cursor: Cursor | undefined;
-          do {
-            const page = await tx.scanConversations(
-              { ownerTaskId: owner as TaskId },
-              128,
-              cursor,
-            );
-            for (const child of page.items) {
-              const saved = await tx.doc(Assignment, child.id);
-              if (saved.key !== key || !saved.descriptor || !saved.profile)
-                continue;
-              if (strict && !isDeepStrictEqual(saved, requested)) {
-                if (current)
-                  throw new Error(
-                    "Recovered role arguments do not match the durable assignment",
-                  );
-                continue;
-              }
-              const result = await receipt(
-                tx,
-                child.id,
-                resolveCall(saved.descriptor),
-                !current,
+          const stage = await tx.doc(
+            Stage,
+            JSON.stringify([owned ? "task" : "work", owner, key]),
+            null,
+          );
+          if (stage.conversation === undefined) continue;
+          const id = stage.conversation as ConversationId;
+          const saved = await tx.doc(Assignment, id);
+          if (saved.key !== key || !saved.descriptor || !saved.profile)
+            continue;
+          if ((!owned || strict) && !isDeepStrictEqual(saved, requested)) {
+            if (current)
+              throw new Error(
+                "Recovered role arguments do not match the durable assignment",
               );
-              if (current || result || !frozen) {
-                assignment = copyJson(saved) as Required<Assignment>;
-                frozen = true;
-              }
-              if (current) {
-                conversationId = child.id;
-                fresh = strict
-                  ? result === undefined
-                  : (await tx.submissionByRequest(child.id, key)) === undefined;
-                return;
-              }
-              if (result) {
-                recovered = result;
-                return;
-              }
-            }
-            cursor = page.next;
-          } while (cursor);
+            continue;
+          }
+          const result = await receipt(
+            tx,
+            id,
+            resolveCall(saved.descriptor),
+            !current,
+          );
+          if (current || result || !frozen) {
+            assignment = copyJson(saved) as Required<Assignment>;
+            frozen = true;
+          }
+          if (current) {
+            conversationId = id;
+            fresh = strict
+              ? result === undefined
+              : (await tx.submissionByRequest(id, key)) === undefined;
+            return;
+          }
+          if (result) {
+            recovered = result;
+            return;
+          }
         }
+        const call = resolveCall(assignment.descriptor);
+        conversationId = (
+          await tx.createConversation({
+            ownership: owned
+              ? { kind: "task", taskId: host.taskId }
+              : { kind: "ownerless" },
+          })
+        ).id;
+        (
+          await tx.doc(
+            Stage,
+            JSON.stringify([owned ? "task" : "work", ref, key]),
+            null,
+          )
+        ).conversation = conversationId;
+        Object.assign(await tx.doc(Assignment, conversationId), assignment);
+        await configure(tx, conversationId, {
+          model: {
+            provider: assignment.profile.provider,
+            modelId: assignment.profile.model,
+          },
+          thinkingLevel: assignment.profile.reasoning,
+          extensions: [extension],
+          tools: [
+            tools.find((tool) => tool.name === call.tool)!,
+            ...(["explorer", "selection"].includes(call.role) ? [reader] : []),
+          ],
+          instructions: call.system,
+        });
       }, context);
       if (recovered) return recovered;
       const call = resolveCall(assignment.descriptor);
-      if (conversationId === undefined)
-        await runtime.commit(async (tx) => {
-          conversationId = (
-            await tx.createConversation({
-              ownership: { kind: "task", taskId: runtime.taskId },
-            })
-          ).id;
-          Object.assign(await tx.doc(Assignment, conversationId), assignment);
-          await configure(tx, conversationId, {
-            model: {
-              provider: assignment.profile.provider,
-              modelId: assignment.profile.model,
-            },
-            thinkingLevel: assignment.profile.reasoning,
-            extensions: [extension],
-            tools: [
-              tools.find((tool) => tool.name === call.tool)!,
-              ...(["explorer", "selection"].includes(call.role)
-                ? [reader]
-                : []),
-            ],
-            instructions: call.system,
-          });
-        }, context);
-      sessionId = (
-        await runtime.snapshot(ProviderDoc, conversationId!, context)
-      )?.sessionId;
-      conversation = await runtime.conversation(conversationId!, context);
+      sessionId = (await host.snapshot(ProviderDoc, conversationId!, context))
+        ?.sessionId;
+      conversation = await host.conversation(conversationId!, context);
       if (!conversation) throw new Error("Role conversation is missing");
       const submission = await conversation.submit(
         { type: "input", requestId: key, content: call.prompt },
@@ -427,7 +440,7 @@ export function createRoleRuntime() {
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
       let result: Receipt | undefined;
-      await runtime.commit(async (tx) => {
+      await host.commit(async (tx): Promise<undefined> => {
         result = await receipt(tx, conversationId!, call);
       }, context);
       if (result) return { ...result, fresh };
@@ -438,18 +451,49 @@ export function createRoleRuntime() {
       throw new Error(`${call.role} returned no ${call.tool} submission`);
     } catch (error) {
       try {
-        await conversation?.abort(BACKGROUND_CONTEXT);
+        // Task ownership cancels its scope; a suspended Chord wait leaves native recovery intact.
+        if (owned || !context.abortSignal?.aborted)
+          await conversation?.abort(BACKGROUND_CONTEXT);
       } catch (cleanupError) {
-        if (!context.abortSignal?.aborted) runtime.report(cleanupError);
+        if (!context.abortSignal?.aborted) report(cleanupError);
       }
       throw error;
     } finally {
       try {
         if (sessionId) cleanupSessionResources(sessionId);
       } catch (cleanupError) {
-        if (!context.abortSignal?.aborted) runtime.report(cleanupError);
+        if (!context.abortSignal?.aborted) report(cleanupError);
       }
     }
   }
-  return { extension, run };
+  return {
+    extension,
+    run: (
+      runtime: Runtime,
+      key: string,
+      descriptor: CallDescriptor,
+      profile: PiRoleProfile,
+      context: Context,
+      previousTasks: readonly number[] = [],
+    ) =>
+      invoke(
+        runtime,
+        runtime.taskId,
+        key,
+        descriptor,
+        profile,
+        context,
+        (error) => runtime.report(error),
+        previousTasks,
+      ),
+    call: (
+      harness: Harness,
+      ref: number,
+      key: string,
+      descriptor: CallDescriptor,
+      profile: PiRoleProfile,
+      context: Context,
+      report: (error: unknown) => void,
+    ) => invoke(harness, ref, key, descriptor, profile, context, report),
+  };
 }

@@ -1,21 +1,16 @@
 import assert from "node:assert/strict";
-import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord";
+import type { Context, JsonValue } from "@earendil-works/chord";
+import type { Store } from "@earendil-works/chord/next";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   createRegistry,
   defineEntry,
-  defineExtension,
-  defineTask,
   Harness,
   type EntryId,
-  type TaskId,
-  type TaskRecord,
 } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { StoreStorage } from "@earendil-works/pi-durable/storage/store";
 import {
   createRoleRuntime,
   roleGenerationPolicy,
@@ -42,87 +37,24 @@ import { directSupport } from "../../src/policy/support.ts";
 export type Work =
   | { kind: "explorer"; input: ExplorerInput }
   | { kind: "verifier"; input: SelectionInput };
-type Receipt = { call: number; value: JsonValue; fresh: boolean };
-type CallInput = {
-  ref: number;
-  key: string;
-  descriptor: CallDescriptor;
-  profile: PiRoleProfile;
-  previous: number[];
-};
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const WorkEntry = defineEntry<{ work: JsonValue }>("xean.chord-work");
-const callKind = "xean.chord-call";
 
 /** Pi owns only immutable work inputs and individual model calls, not Chord jobs. */
 export async function openPi(
+  store: Store,
   directory: string,
   definition: Definition,
   models: Models,
 ) {
-  directory = resolve(directory);
   definition = copy(definition);
-  await mkdir(directory, { recursive: true });
-  const ownership = new DatabaseSync(join(directory, "owner.sqlite"));
-  try {
-    ownership.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
-  } catch (error) {
-    ownership.close();
-    throw new Error("Chord spike directory already has an owner", {
-      cause: error,
-    });
-  }
-  let stopped: Promise<void> | undefined;
-  let released = false;
-  let stop = async () => {};
-  const close = async () => {
-    try {
-      await stop();
-    } finally {
-      if (!released) {
-        released = true;
-        ownership.close();
-      }
-    }
-  };
+  const storage = await StoreStorage.open(store, "pi", context);
+  let close = () => storage.close(context);
   try {
     const errors: unknown[] = [];
     const roles = createRoleRuntime();
-    const Call = defineTask<CallInput, { phase: "run" }, Receipt>({
-      name: callKind,
-      version: 1,
-      initial: () => ({ phase: "run" }),
-      abort: async (_task, runtime, ctx) => {
-        await runtime.commit(
-          () => ({ status: "terminal", outcome: { status: "aborted" } }),
-          ctx,
-        );
-      },
-      phases: {
-        async run(task, runtime, ctx) {
-          const input = task.input;
-          const value = await roles.run(
-            runtime,
-            input.key,
-            input.descriptor,
-            input.profile,
-            ctx,
-            input.previous,
-          );
-          await runtime.commit(
-            () => ({
-              status: "terminal",
-              outcome: { status: "completed", result: value },
-            }),
-            ctx,
-          );
-        },
-      },
-    });
     const registry = createRegistry();
-    registry.install(defineExtension({ ...roles.extension, tasks: [Call] }));
-    const storage = await openNodeSqliteStorage(join(directory, "pi.sqlite"));
-    stop = () => (stopped ??= storage.close(context));
+    registry.install(roles.extension);
     const harness = await Harness.open(
       storage,
       {
@@ -142,7 +74,7 @@ export async function openPi(
       },
       context,
     );
-    stop = () => (stopped ??= harness.close(context));
+    close = () => harness.close(context);
     const root = await harness.root(context, {
       init: async (tx, id) => {
         Object.assign(await tx.doc(DefinitionDoc, id), copy(definition));
@@ -169,7 +101,6 @@ export async function openPi(
       errors,
       book,
       close,
-      stop,
       async prepare(kind: Work["kind"], ids?: string[]) {
         return root.commit(async (tx) => {
           let { notes } = project(
@@ -214,71 +145,22 @@ export async function openPi(
           return value;
         }, context);
       },
-      async call(
+      call(
         ref: number,
         key: string,
         descriptor: CallDescriptor,
         profile: PiRoleProfile,
-      ): Promise<Receipt> {
-        let id!: TaskId<Receipt>,
-          replay = false;
-        await root.commit(async (tx) => {
-          let cursor,
-            prior: TaskRecord<CallInput, { phase: "run" }, Receipt> | undefined;
-          do {
-            const page = await tx.scanTasks(
-              { conversationId: root.id, kind: callKind },
-              128,
-              cursor,
-            );
-            for (const record of page.items) {
-              const input = record.input as CallInput;
-              if (input.ref === ref && input.key === key)
-                prior = record as typeof prior;
-            }
-            cursor = page.next;
-          } while (cursor);
-          if (prior) {
-            assert.deepEqual(
-              prior.input.descriptor,
-              descriptor,
-              "Stage descriptor changed on replay",
-            );
-            assert.deepEqual(
-              prior.input.profile,
-              profile,
-              "Stage profile changed on replay",
-            );
-            if (
-              prior.state.status !== "terminal" ||
-              prior.state.outcome.status === "completed"
-            ) {
-              id = prior.id;
-              replay = prior.state.status === "terminal";
-              return;
-            }
-          }
-          id = await tx.createTask(
-            Call,
-            {
-              ref,
-              key,
-              descriptor: copy(descriptor),
-              profile: copy(profile),
-              previous: prior ? [...prior.input.previous, prior.id] : [],
-            },
-            { conversationId: root.id, ownership: { kind: "conversation" } },
-          );
-        }, context);
-        const task = await harness.waitForTask(id, context);
-        if (task.state.outcome.status !== "completed")
-          throw new Error(
-            task.state.outcome.error?.message ?? "Pi role did not complete",
-          );
-        return {
-          ...task.state.outcome.result,
-          ...(replay ? { fresh: false } : {}),
-        };
+        ctx: Context,
+      ) {
+        return roles.call(
+          harness,
+          ref,
+          key,
+          descriptor,
+          profile,
+          ctx,
+          (error) => errors.push(error),
+        );
       },
       publish: (ref: number, notes: StoredNote[]) =>
         root.commit(async (tx) => {
