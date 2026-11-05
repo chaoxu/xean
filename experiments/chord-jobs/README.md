@@ -51,6 +51,21 @@ claims, recovery during a proof call, replay after publication, invalidated
 selection, and ownership cleanup. They use Chord and Pi SQLite storage with
 simulated model responses and make no provider calls.
 
+Live `gpt-6-luna`/`low` smoke runs at `11c2ba0` proved that every real
+`x >= 1` satisfies `x² >= x`:
+
+| Case       | Research jobs                | Peak workers | Provider requests | Settled time |
+| ---------- | ---------------------------- | -----------: | ----------------: | -----------: |
+| Sequential | Explorer, Verifier           |            1 |                 8 |       54.7 s |
+| Mixed      | Two Explorers, two Verifiers |            2 |                17 |       95.5 s |
+
+Independent review passed the proofs, blind reconstruction inputs, check
+receipts, and observed execution contracts. The mixed run recorded 3.54 seconds
+of overlap between Explorer and source-check requests as observed by the host.
+Pi's native retry recovered from a provider overload. Both runs reopened without
+new calls. The mixed notes repeat
+the same elementary argument. These timings describe unequal workloads.
+
 ## Scope and comparison
 
 | Runtime code                        | Initial spike | Revised spike |
