@@ -250,7 +250,7 @@ test("Responses Explorer nulls normalize, invalid summaries and support fail, an
         "must contain non-whitespace text",
       );
       expect(JSON.stringify(errors[1])).toContain(
-        "support must name distinct notes that are not dead",
+        "Note w1.1 must name distinct support IDs",
       );
     }),
   ]);
@@ -332,7 +332,7 @@ test("Explorer prompt, submission contract and notebook reader reach Pi; the fir
   }
 });
 
-test("Explorer reads only indexed notes, repairs unavailable IDs and preserves large batched texts", async () => {
+test("Explorer reads existing unindexed notes, repairs unknown IDs and preserves large batched texts", async () => {
   const sources = [
     {
       id: "n1",
@@ -422,15 +422,12 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
       return read(["n3"], "full");
     },
     (transcript) => {
-      expect(resultText(transcript)).toContain(
-        "Unknown or unavailable note: n3",
-      );
+      expect(JSON.parse(resultText(transcript))).toEqual(["UNINDEXED_BODY"]);
       expect(
-        transcript.messages
-          .filter((message) => message.role === "toolResult")
-          .at(-1)!.isError,
-      ).toBe(true);
-      expect(JSON.stringify(transcript)).not.toContain("UNINDEXED_BODY");
+        transcript.messages.findLast(
+          (message) => message.role === "toolResult",
+        )!.isError,
+      ).toBe(false);
       return read(["n1", "n2"], "detailed");
     },
     (transcript) => {
@@ -569,25 +566,30 @@ test("Selection disables provider constraints while retaining its prompt, schema
   }
 });
 
-test("selection reads an admitted note through its own fresh conversation", async () => {
+test("selection reads a busy dependency outside its offer but cannot select it", async () => {
   const source = { id: "given.1", text: "Exact supplied proof.", support: [] };
+  const target = {
+    id: "candidate.1",
+    text: "Use the supplied proof.",
+    support: [source.id],
+  };
   const input: CallDescriptor = {
     kind: "selection",
     input: {
       task: descriptor.input.task,
       notes: [
         {
-          ...source,
+          ...target,
           verdicts: [],
           checked: false,
           verified: false,
           dead: false,
         },
       ],
-      claimed: [],
+      claimed: [source.id],
     },
   };
-  const selected = { verify: [{ note: source.id, verifiers: ["source"] }] };
+  const selected = { verify: [{ note: target.id, verifiers: ["source"] }] };
   const driver = fixture([
     (transcript) => {
       expect(
@@ -613,6 +615,21 @@ test("selection reads an admitted note through its own fresh conversation", asyn
         content: [{ type: "text", text: JSON.stringify([source.text]) }],
       });
       return fauxAssistantMessage(
+        [
+          fauxToolCall("select_verification", {
+            verify: [{ note: source.id, verifiers: ["source"] }],
+          }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    },
+    (transcript) => {
+      expect(
+        transcript.messages.findLast(
+          (message) => message.role === "toolResult",
+        ),
+      ).toMatchObject({ toolName: "select_verification", isError: true });
+      return fauxAssistantMessage(
         [fauxToolCall("select_verification", selected)],
         { stopReason: "toolUse" },
       );
@@ -620,8 +637,52 @@ test("selection reads an admitted note through its own fresh conversation", asyn
   ]);
   const { harness, invoke } = await driver.open();
   try {
-    driver.book.notes = [source];
+    driver.book.notes = [source, target];
     expect(await invoke(input)).toMatchObject({ value: selected });
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("a blind proof cannot invoke the notebook reader", async () => {
+  const hidden = { id: "n1", text: "PRIVATE_NOTE_ARGUMENT", support: [] };
+  const input: CallDescriptor = {
+    kind: "proof",
+    input: {
+      task: descriptor.input.task,
+      notes: project({ notes: [hidden], checks: [], inputs: [], guidance: [] })
+        .notes,
+      support: [],
+    },
+    statement: { statements: [{ note: hidden.id, statement: "1 = 1." }] },
+  };
+  const driver = fixture([
+    fauxAssistantMessage(
+      [fauxToolCall("read_notes", { ids: [hidden.id], level: "full" })],
+      { stopReason: "toolUse" },
+    ),
+    (transcript) => {
+      expect(
+        getCurrentTools(transcript.messages).map(({ name }) => name),
+      ).toEqual(["submit_proof"]);
+      expect(
+        transcript.messages.findLast(
+          (message) => message.role === "toolResult",
+        ),
+      ).toMatchObject({ toolName: "read_notes", isError: true });
+      expect(JSON.stringify(transcript.messages)).not.toContain(hidden.text);
+      return fauxAssistantMessage(
+        [fauxToolCall("submit_proof", { proof: "Reflexivity." })],
+        { stopReason: "toolUse" },
+      );
+    },
+  ]);
+  driver.book.notes = [hidden];
+  const { harness, invoke } = await driver.open();
+  try {
+    expect(await invoke(input)).toMatchObject({
+      value: { proof: "Reflexivity." },
+    });
   } finally {
     await harness.close(context);
   }

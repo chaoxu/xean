@@ -75,6 +75,7 @@ export function createWorkflow(
   self: StoreSelf,
   data: SingletonHandle<ResearchData>,
   workers: Workers,
+  abortRoles: (origins: ReadonlySet<string>, ctx: Context) => Promise<void>,
 ) {
   const blocked = () =>
     workers.running.value.filter((row) => row.phase === "blocked");
@@ -82,10 +83,15 @@ export function createWorkflow(
     campaign: value.campaign,
     settled: value.history.length,
     blocked: running.filter((row) => row.phase === "blocked"),
+    claimed: running.flatMap((row) =>
+      row.phase === "blocked"
+        ? []
+        : (claimOf(row)?.verify.map(({ note }) => note) ?? []),
+    ),
   }));
   self.on(wake, async (_, ctx) => {
-    try {
-      await self.tx(async (tx) => {
+    const advance = (cleaned = false) =>
+      self.tx(async (tx) => {
         const saved = await tx.draft(data);
         const campaign = saved.campaign;
         if (!saved.definition || !campaign || campaign.status === "terminal")
@@ -120,18 +126,36 @@ export function createWorkflow(
           campaign.epoch++;
         }
         if (failed.length || campaign.error || accepted.length) {
-          if (active.length) return;
-          campaign.status = "terminal";
-          const failedClaims = new Set(
-            failed.flatMap(
+          const unresolved = new Set([
+            ...view.claimed,
+            ...view.offered,
+            ...failed.flatMap(
               (row) => claimOf(row)?.verify.map(({ note }) => note) ?? [],
             ),
-          );
+          ]);
           const candidate = accepted.find((id) =>
             [id, ...supportClosure([pick(notes, id)], notes)].every(
-              (note) => !failedClaims.has(note),
+              (note) => !unresolved.has(note),
             ),
           );
+          if (
+            candidate &&
+            !campaign.error &&
+            active.every((row) => row.args.campaign)
+          ) {
+            if (!cleaned)
+              return {
+                jobs: active.map(({ id }) => id),
+                origins: new Set([
+                  ...saved.history
+                    .filter((row) => row.args.campaign)
+                    .map((row) => row.origin),
+                  ...active.map(origin),
+                ]),
+              };
+          }
+          if (active.length) return;
+          campaign.status = "terminal";
           if (!candidate || campaign.error) {
             campaign.outcome = "call-failure";
             campaign.error ??= failed
@@ -192,6 +216,17 @@ export function createWorkflow(
           campaign.outcome = "turn-limit";
         }
       }, ctx);
+    try {
+      const completion = await advance();
+      if (completion) {
+        if (blocked().length)
+          throw new Error("Blocked native jobs require recovery");
+        await Promise.all(
+          completion.jobs.map((id) => workers.job.abort(id, ctx)),
+        );
+        await abortRoles(completion.origins, ctx);
+        await advance(true);
+      }
     } catch (error) {
       if (ctx.abortSignal?.aborted) return;
       await data.change((saved) => {

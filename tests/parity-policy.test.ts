@@ -86,6 +86,25 @@ test("Explorer can append notes using live prior support but cannot edit or choo
         notes: [{ summary: "A claim.", text: "Invalid support.", support }],
       }).success,
     ).toBe(false);
+  const siblingSchema = explorerResultFor([note("n1")], "w4");
+  const siblings = [[], ["w4.2"], ["w4.2", "w4.3"]].map((support) => ({
+    summary: "Claim.",
+    text: "Argument.",
+    support,
+  }));
+  const invalid = siblingSchema.safeParse({ notes: siblings });
+  if (invalid.success) throw new Error("Self-support was accepted");
+  expect(invalid.error.issues.map(({ path }) => path)).toEqual([
+    ["notes", 1, "support"],
+    ["notes", 2, "support"],
+  ]);
+  expect(invalid.error.issues[0]!.message).toContain("Note w4.2");
+  expect(invalid.error.issues[0]!.message).toContain("from: n1, w4.1.");
+  expect(invalid.error.issues[1]!.message).toContain("Note w4.3");
+  expect(invalid.error.issues[1]!.message).toContain("from: n1, w4.1, w4.2.");
+  siblings[1]!.support = ["w4.1"];
+  siblings[2]!.support = ["w4.1", "w4.2"];
+  expect(siblingSchema.parse({ notes: siblings }).notes).toHaveLength(3);
   expect(
     schema.safeParse({
       notes: [{ id: "n1", text: "Replace proof.", support: [] }],

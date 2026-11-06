@@ -165,12 +165,14 @@ Ctrl-C closes the CLI owner while preserving recorded progress. `run` recovers
 unfinished native work. After `call-failure`, inspect the error and use `resume`.
 Accepted and turn-limit campaigns remain terminal. New admission pauses while a
 candidate is provisionally accepted or a worker has failed. Final acceptance
-requires all admitted workers to settle and the latest checks still to establish
-a candidate whose note and entire support chain have no unresolved failed
-verification claim. Controller errors or the absence of such a candidate after
-worker failure produce `call-failure` until resumed. If later checks invalidate
-provisional acceptance and no worker has failed, admission may resume before
-other workers settle.
+waits for verification claims and pending selections involving the candidate or
+its support chain, and for manually started workers. Once the latest checks
+establish a candidate whose note and support chain have no unresolved failed
+verification claim, the campaign cancels unrelated campaign work through Chord
+and Pi. It waits for cleanup and rechecks acceptance before reporting `accepted`.
+Controller errors or the absence of such a candidate after worker failure produce
+`call-failure` until resumed. If later checks invalidate provisional acceptance
+and no worker has failed, admission may resume before other workers settle.
 
 With the CLI owner closed, `guide` queues advice for the next fresh Explorer call,
 and `submit` queues additional notes. Neither changes an already frozen call.

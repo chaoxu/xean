@@ -18,6 +18,7 @@ import {
   type Cursor,
   type EntryId,
   type Harness,
+  type Storage,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { createHash } from "node:crypto";
@@ -70,6 +71,53 @@ const Stage = defineDocFamily<
   checkpointWhen: () => false,
   initial: () => ({}),
 });
+
+/** Stop only the native conversations referenced by these settled workers. */
+export async function abortRoles(
+  harness: Harness,
+  storage: Storage,
+  origins: ReadonlySet<string>,
+  context: Context,
+) {
+  const conversations = new Set<ConversationId>();
+  let cursor: Cursor | undefined;
+  do {
+    const page = await storage.scanDocuments(
+      {
+        scope: { kind: "session" },
+        kind: Stage.definition.kind,
+        at: "current",
+      },
+      128,
+      cursor,
+      context,
+    );
+    for (const entry of page.items) {
+      const [origin] = JSON.parse(entry.key!) as [string, string];
+      if (!origins.has(origin)) continue;
+      const stage = await harness.snapshot(Stage, entry.key!, context);
+      if (stage?.conversation !== undefined)
+        conversations.add(stage.conversation as ConversationId);
+    }
+    cursor = page.next;
+  } while (cursor);
+  // Mark paused tasks before Conversation.abort enables native scheduling on reopen.
+  for (const submission of (await harness.inspect(context)).submissions)
+    if (conversations.has(submission.conversationId))
+      await harness.abortSubmission(submission.id, context);
+  await Promise.all(
+    (await harness.inspect(context)).tasks
+      .filter(({ record }) => conversations.has(record.conversationId))
+      .map(({ record }) => harness.abortTask(record.id, context)),
+  );
+  await Promise.all(
+    [...conversations].map(async (id) => {
+      const conversation = await harness.conversation(id, context);
+      if (!conversation) throw new Error("Role conversation is missing");
+      await conversation.abort(context, { background: true });
+    }),
+  );
+}
 type Receipt = { call: EntryId; value: JsonValue };
 async function receipt(
   tx: Tx,
@@ -141,14 +189,9 @@ export function createRoleRuntime(readBook: () => NotebookState) {
         assignment?.descriptor?.kind !== "selection"
       )
         throw new Error("Notebook reads require Explorer or selection");
-      const input = assignment.descriptor.input;
       const snapshot = readBook();
       const notes = level === "full" ? snapshot.notes : project(snapshot).notes;
-      const selected = ids.map((id) =>
-        input.notes.some((note) => note.id === id)
-          ? notes.find((note) => note.id === id)
-          : undefined,
-      );
+      const selected = ids.map((id) => notes.find((note) => note.id === id));
       const missing = selected.indexOf(undefined);
       if (missing !== -1) {
         api.output(`Unknown or unavailable note: ${ids[missing]}`);

@@ -22,6 +22,9 @@ allowed only when the format cannot render monospace.
   Refill on any completion, offering eligible unclaimed verification before new
   exploration. Count completed and in-flight Explorers against `maxExplorerTurns`.
   Freeze running role inputs and preserve immutable publication references.
+  Allow Explorer and Verifier selection to read admitted notes beyond their initial
+  index. Keep support and selection validation bound to the frozen assignment.
+  Give verification checks no notebook reader.
   Reserve short note namespaces before generation and retain them across retries.
   Each Explorer appends a completed submission with summaries. Verifiers select
   work and check source, correctness, requirements, and reconstruction in that
@@ -46,11 +49,14 @@ allowed only when the format cannot render monospace.
   dependency proofs. Preserve dependency scope and require each selected proof
   to establish its conclusion from its own premises. Re-prove the whole statement
   batch after each correction until verdicts, a native error, or cancellation.
-  Pause new admission while
-  a candidate is provisionally accepted or a worker has failed. Final acceptance
-  requires all admitted workers to settle and the latest projection still to
-  accept a candidate whose note and entire support chain have no unresolved failed
-  verification claim. Controller errors and blocked jobs still prevent acceptance.
+  Pause new admission while a candidate is provisionally accepted or a worker has
+  failed. Wait for verification claims and pending selections involving the
+  candidate or its support chain, and for manually started workers. Once the latest
+  checks establish a candidate whose note and support chain have no unresolved
+  failed verification claim, cancel unrelated campaign work through native Chord
+  and Pi APIs. Join cleanup and recheck acceptance before committing the terminal
+  result. Preserve unrelated Pi conversations. Controller errors and blocked jobs
+  still prevent acceptance.
 - Use native Chord runs, watches, and recovery for workers, including `maxWorkers: 1`.
   Keep Chord state and Pi call receipts in the shared campaign SQLite
   database and mathematical note texts in the notebook database. Treat note IDs

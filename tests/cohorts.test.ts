@@ -2,7 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import type { Respond } from "./worker-fixture.ts";
 import * as verification from "../src/verification.ts";
-import { project } from "../src/state.ts";
+import * as roleRuntime from "../src/role-runtime.ts";
+import { project, readNotebook } from "../src/state.ts";
 import { initialCampaign } from "../src/workflow.ts";
 import { inspect, readStatus } from "../src/index.ts";
 import {
@@ -11,6 +12,8 @@ import {
   abortable,
   note,
   context,
+  profile,
+  problem,
 } from "./worker-fixture.ts";
 import { verifierNames } from "../src/policy/contracts.ts";
 const all = [...verifierNames];
@@ -35,14 +38,21 @@ async function observed<T>(
 }
 const pause = () => Promise.withResolvers<void>();
 
-test("an accepted proof waits for an unrelated failed peer to settle", async () => {
-  const release = pause(),
-    checked = pause();
-  let unrelated = "";
+test("acceptance cancels unrelated work and joins Pi cleanup without touching outside roles", async () => {
+  const cancelled = pause(),
+    releaseCleanup = pause(),
+    outsideStarted = pause(),
+    releaseOutside = pause();
+  let unrelated = "",
+    outsideSignal: AbortSignal | undefined;
   const run = await fixture(
     async (request): Promise<Awaited<ReturnType<Respond>>> => {
       const d = request.descriptor;
-      if (d.kind === "explorer") {
+      if (d.kind === "explorer" && d.input.namespace === "outside") {
+        outsideSignal = request.signal;
+        outsideStarted.resolve();
+        await Promise.race([releaseOutside.promise, abortable(request.signal)]);
+      } else if (d.kind === "explorer") {
         unrelated = `${d.input.namespace}.2`;
         return {
           notes: [note("Complete proof."), note("Unrelated argument.")],
@@ -53,37 +63,73 @@ test("an accepted proof waits for an unrelated failed peer to settle", async () 
         d.name === "source" &&
         d.judged.includes(unrelated)
       ) {
-        await Promise.race([release.promise, abortable(request.signal)]);
-        return new Error("401 unrelated Verifier failed");
+        await abortable(request.signal);
+        cancelled.resolve();
+        await releaseCleanup.promise;
       }
-      if (d.kind === "reconstruction") checked.resolve();
       return complete(request);
     },
-    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 1 } },
+    { settings: { maxWorkers: 2, maxExplorerTurns: 1 } },
   );
+  const outside = roleRuntime
+    .createRoleRuntime(() => readNotebook(run.owner.state.notebook))
+    .call(
+      run.owner.harness,
+      "outside-campaign",
+      0,
+      "role",
+      {
+        kind: "explorer",
+        input: {
+          task: problem,
+          namespace: "outside",
+          notes: [],
+          explorerGuidance: "",
+        },
+      },
+      { ...profile, reasoning: "high" },
+      context,
+      () => {},
+    );
+  await outsideStarted.promise;
+  const outsideTask = (await run.tasks()).find(
+    (task: { kind: string }) => task.kind === "pi.generation",
+  )!;
+  await run.owner.change((data) => {
+    data.campaign = initialCampaign();
+  });
   const done = run.owner.wait();
   try {
-    await observed(checked.promise, "candidate reconstruction");
-    await observed(
-      (async () => {
-        while (!project(await run.book()).accepted.length) await Bun.sleep(5);
-      })(),
-      "accepted projection",
-    );
-    expect(run.running()).toHaveLength(1);
+    await observed(cancelled.promise, "unrelated provider cancellation");
+    expect(project(await run.book()).accepted).toHaveLength(1);
     expect(await inspect(run.path, readStatus)).toMatchObject({
       outcome: "running",
       accepted: null,
     });
-    release.resolve();
-    expect(await done).toMatchObject({ outcome: "accepted", turns: 1 });
+    expect(outsideSignal?.aborted).toBe(false);
+    releaseCleanup.resolve();
+    expect(await observed(done, "joined campaign cleanup")).toMatchObject({
+      outcome: "accepted",
+      turns: 1,
+    });
     expect(run.running()).toHaveLength(0);
-    expect(
-      run.history().filter((row) => row.status === "failed"),
-    ).toMatchObject([{ state: { claim: { verify: [{ note: unrelated }] } } }]);
+    const live = (await run.tasks()).filter(
+      (task: { state: { status: string } }) => task.state.status !== "terminal",
+    );
+    expect(live.map((task: { id: number }) => task.id)).toEqual([
+      outsideTask.id,
+    ]);
+    expect(outsideSignal?.aborted).toBe(false);
+    releaseOutside.resolve();
+    await outside;
+    const calls = run.provider.state.callCount;
+    await run.reopen();
+    expect((await run.owner.wait()).outcome).toBe("accepted");
+    expect(run.provider.state.callCount).toBe(calls);
   } finally {
-    release.resolve();
-    await done;
+    releaseCleanup.resolve();
+    releaseOutside.resolve();
+    await outside;
   }
 });
 
@@ -156,62 +202,83 @@ test("verification refills capacity while another Explorer remains running", asy
     turns: 2,
     status: "terminal",
   });
-  expect((await run.book()).checks).toHaveLength(8);
+  const accepted = (await inspect(run.path, readStatus)).accepted;
+  const checks = (await run.book()).checks.filter((check) =>
+    check.values.some((value) => value.note === accepted),
+  );
+  expect(
+    checks.flatMap((check) =>
+      check.values
+        .filter((value) => value.note === accepted)
+        .map((value) => value.verifier),
+    ),
+  ).toEqual(all);
+  expect(new Set(checks.map((check) => check.candidate)).size).toBe(1);
+  expect(run.running()).toHaveLength(0);
 });
 
-test("a hung Explorer prevents final acceptance and recovers on active reopen", async () => {
-  const started = pause(),
-    checked = pause();
-  let explorers = 0,
-    hold = true,
-    hung = "";
+test("reopen finishes Pi cleanup after every campaign job was already aborted", async () => {
+  const beforeCleanup = pause();
+  let explorers = 0;
   const run = await fixture(
-    async (request): Promise<Awaited<ReturnType<Respond>>> => {
-      const d = request.descriptor;
-      if (
-        d.kind === "explorer" &&
-        (++explorers === 2 || d.input.namespace === hung)
-      ) {
-        hung = d.input.namespace;
-        started.resolve();
-        if (hold) await abortable(request.signal);
-      }
-      if (d.kind === "reconstruction") checked.resolve();
+    async (request) => {
+      if (request.descriptor.kind === "explorer" && ++explorers === 2)
+        await abortable(request.signal);
       return complete(request);
     },
     { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 2 } },
   );
+  const interception = spyOn(roleRuntime, "abortRoles").mockImplementation(
+    async (...args) => {
+      beforeCleanup.resolve();
+      await abortable(args[3].abortSignal);
+      throw new Error("Owner closed before Pi cleanup");
+    },
+  );
   const pending = run.owner.wait().catch(() => undefined);
-  await observed(started.promise, "hung Explorer");
-  await observed(checked.promise, "first proof checked");
-  while (!run.history().some((row) => row.args.work.kind !== "explorer"))
-    await Bun.sleep(5);
-  expect(project(await run.book()).accepted).toHaveLength(1);
-  expect(await inspect(run.path, readStatus)).toMatchObject({
-    outcome: "running",
-    accepted: null,
-  });
-  const calls = run.provider.state.callCount;
-  await run.owner.close();
-  await pending;
+  try {
+    await observed(
+      beforeCleanup.promise,
+      "retired Chord jobs before Pi cleanup",
+    );
+    await observed(
+      (async () => {
+        while (run.running().length) await Bun.sleep(5);
+      })(),
+      "native abort retirement",
+    );
+    expect(run.running()).toHaveLength(0);
+    expect(
+      (await run.tasks()).some(
+        (task: { state: { status: string } }) =>
+          task.state.status !== "terminal",
+      ),
+    ).toBe(true);
+    await run.owner.close();
+    await pending;
+  } finally {
+    interception.mockRestore();
+  }
+  const calls = run.provider.state.callCount,
+    checks = (await run.book()).checks;
   expect((await inspect(run.path, readStatus)).status).not.toBe("terminal");
-  hold = false;
   await run.reopen();
-  await run.owner.wait();
-  expect(await inspect(run.path, readStatus)).toMatchObject({
+  expect(await observed(run.owner.wait(), "recovered cleanup")).toMatchObject({
     outcome: "accepted",
+    turns: 1,
   });
-  expect(run.provider.state.callCount).toBe(calls + 1);
+  expect(run.provider.state.callCount).toBe(calls);
+  expect((await run.book()).checks).toEqual(checks);
   expect(
-    run.requests.filter(
-      ({ descriptor }) =>
-        descriptor.kind === "explorer" && descriptor.input.namespace === hung,
+    (await run.tasks()).every(
+      (task: { state: { status: string } }) => task.state.status === "terminal",
     ),
-  ).toHaveLength(2);
+  ).toBe(true);
 });
 
 test("provisional acceptance waits for an unpublished adverse receipt and explicit resume", async () => {
-  const accepted = pause();
+  const accepted = pause(),
+    releaseSelection = pause();
   let ancestor = "",
     root = "",
     explorers = 0,
@@ -227,12 +294,18 @@ test("provisional acceptance waits for an unpublished adverse receipt and explic
         root = `${d.input.namespace}.1`;
         return { notes: [note("Final candidate.", [ancestor])] };
       }
-      if (d.kind === "selection")
+      if (d.kind === "selection") {
+        if (root && d.input.notes.some((note) => note.id === ancestor))
+          await Promise.race([
+            releaseSelection.promise,
+            abortable(request.signal),
+          ]);
         return {
           verify: root
             ? d.input.notes.map((note) => ({ note: note.id, verifiers: all }))
             : [],
         };
+      }
       if (
         root &&
         d.kind === "verifier" &&
@@ -287,8 +360,32 @@ test("provisional acceptance waits for an unpublished adverse receipt and explic
     await run.owner.change((data) => {
       data.campaign = initialCampaign();
     });
+    await observed(accepted.promise, "provisionally accepted descendant");
+    await observed(
+      (async () => {
+        while (
+          !run
+            .history()
+            .some(
+              (row) =>
+                row.status === "completed" &&
+                row.state.claim?.verify.some((entry) => entry.note === root),
+            )
+        )
+          await Bun.sleep(5);
+      })(),
+      "accepted worker settlement",
+    );
+    expect(run.running()).toHaveLength(1);
+    const selector = run.running()[0]!;
+    if (selector.phase === "blocked")
+      throw new Error("Unexpected blocked selector");
+    expect(selector.state.claim).toBeUndefined();
+    expect((await inspect(run.path, readStatus)).outcome).toBe("running");
+    releaseSelection.resolve();
     await run.owner.wait();
   } finally {
+    releaseSelection.resolve();
     accepted.resolve();
     interception.mockRestore();
   }

@@ -155,7 +155,7 @@ export function explorerResultFor(
         entry.support,
         ctx,
         ["notes", position, "support"],
-        "support must name distinct notes that are not dead",
+        `Note ${noteIdAfter(namespace, position)} must name distinct support IDs from: ${[...allowed].join(", ") || "(none)"}. It cannot support itself or use a later note in this submission.`,
       );
       allowed.add(noteIdAfter(namespace, position));
     }

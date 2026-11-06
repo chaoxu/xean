@@ -50,7 +50,11 @@ import {
 } from "./records.ts";
 import { acceptedArgument, readStatus } from "./report.ts";
 import { codexExec } from "./source-runtime.ts";
-import { createRoleRuntime, roleGenerationPolicy } from "./role-runtime.ts";
+import {
+  abortRoles,
+  createRoleRuntime,
+  roleGenerationPolicy,
+} from "./role-runtime.ts";
 
 export class ResearchOwnedError extends Error {
   constructor() {
@@ -253,7 +257,9 @@ export async function open(path: string, options: OpenOptions = {}) {
                   },
                   options.source ?? codexExec(),
                 );
-                workflow = createWorkflow(self, data, workers);
+                workflow = createWorkflow(self, data, workers, (origins, ctx) =>
+                  abortRoles(harness!, storage!, origins, ctx),
+                );
               }
               return {};
             });

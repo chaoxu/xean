@@ -159,6 +159,11 @@ FAIL and INCONCLUSIVE reports remain. Full evidence stays
 available through `inspect`. `full` returns only text strings in requested order.
 Notes without sufficient summaries remain available through full reads.
 
+Explorer and Verifier selection can read any admitted note in the shared notebook,
+including notes outside their initial index. Their frozen assignments still
+determine permitted support IDs and verification selections. Verification checks,
+including blind reconstruction, have no notebook reader.
+
 ## Verification and models
 
 Settings select provider, model, and reasoning level for `explorer`, `source`,
@@ -271,13 +276,16 @@ resume skips that ambiguous result to make a fresh call. Reconstruction re-prove
 the whole statement batch after each correction, continuing until comparison
 returns verdicts, a call fails, or the run is cancelled.
 The campaign pauses new admission while a candidate is provisionally accepted
-or a worker has failed. After all admitted workers settle, it accepts the first
-candidate established by the latest checks whose note and entire support chain
-have no unresolved failed verification claim. Controller errors or the absence
-of such a candidate after worker failure produce `call-failure` until explicitly
-resumed. If later checks invalidate provisional acceptance and no worker has
-failed, normal admission can resume before other workers settle. Resume preserves
-frozen inputs and recorded receipts.
+or a worker has failed. Verification claims and pending selections involving the
+candidate or its support chain must settle, as must manually started workers.
+Once the latest checks establish a candidate whose note and support chain have
+no unresolved failed verification claim, the campaign cancels unrelated campaign
+work through Chord and Pi. It waits for cleanup and rechecks acceptance before
+reporting `accepted`. Controller errors or the absence of such a candidate after
+worker failure produce `call-failure` until explicitly resumed. If later checks
+invalidate provisional acceptance and no worker has failed, normal admission can
+resume before other workers settle. Resume preserves frozen inputs and recorded
+receipts.
 
 Native jobs blocked by incompatible versions or repeated finish failures require
 repair before model-call recovery or `resume`.
