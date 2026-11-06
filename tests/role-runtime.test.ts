@@ -688,27 +688,136 @@ test("a blind proof cannot invoke the notebook reader", async () => {
   }
 });
 
-test("output-length recovery preserves the exact v1 continuation message", async () => {
-  const fixture_ = fixture([
-    fauxAssistantMessage("A partial argument.", { stopReason: "length" }),
+test("message-limit recovery permits reading and admits only an explicit valid submission", async () => {
+  const source = { id: "n1", text: "Equality is reflexive.", support: [] };
+  const input: CallDescriptor = {
+    ...descriptor,
+    input: {
+      ...descriptor.input,
+      notes: project({ notes: [source], checks: [], guidance: [], inputs: [] })
+        .notes,
+    },
+  };
+  const interrupted = fauxAssistantMessage(
+    JSON.stringify({
+      notes: [
+        { text: "UNSUBMITTED_DRAFT", summary: "Partial result.", support: [] },
+      ],
+    }),
+    { stopReason: "length" },
+  );
+  interrupted.rawStopReason = "incomplete.max_messages";
+  const corrected = { notes: [{ ...value.notes[0]!, support: [source.id] }] };
+  const driver = fixture([
+    interrupted,
+    (transcript) => {
+      const reminder = transcript.messages
+        .filter((message) => message.role === "user")
+        .at(-1)!.content;
+      expect(reminder).toContain(roleGenerationPolicy.continuationPrompt);
+      expect(reminder).toContain(
+        "Ordinary assistant text does not submit the result.",
+      );
+      expect(reminder).toContain("call submit_notes with complete arguments");
+      expect(
+        getCurrentTools(transcript.messages).map(({ name }) => name),
+      ).toEqual(["submit_notes", "read_notes"]);
+      return fauxAssistantMessage(
+        [fauxToolCall("read_notes", { ids: [source.id], level: "full" })],
+        { stopReason: "toolUse" },
+      );
+    },
     (transcript) => {
       expect(
-        transcript.messages.filter((message) => message.role === "user").at(-1)
-          ?.content,
-      ).toBe(
-        "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work.",
+        transcript.messages.findLast(
+          (message) => message.role === "toolResult",
+        ),
+      ).toMatchObject({
+        toolName: "read_notes",
+        isError: false,
+        content: [{ type: "text", text: JSON.stringify([source.text]) }],
+      });
+      return submitted({
+        notes: [{ ...corrected.notes[0]!, support: ["w1.1"] }],
+      });
+    },
+    (transcript) => {
+      const error = transcript.messages.findLast(
+        (message) => message.role === "toolResult",
       );
-      return submitted();
+      expect(error).toMatchObject({ toolName: "submit_notes", isError: true });
+      expect(JSON.stringify(error)).toContain(
+        "Note w1.1 must name distinct support IDs from: n1.",
+      );
+      return submitted(corrected);
     },
   ]);
-  const { harness, invoke } = await fixture_.open();
+  driver.book.notes = [source];
+  const { harness, invoke } = await driver.open();
   try {
-    expect(await invoke()).toMatchObject({ value });
-    expect(fixture_.provider.state.callCount).toBe(2);
+    const receipt = await invoke(input, { origin: "length-recovery" });
+    expect(receipt.value).toEqual(corrected);
+    expect(await invoke(input, { origin: "length-recovery" })).toEqual(receipt);
+    expect(driver.provider.state.callCount).toBe(4);
+    const entries = await harness.commit(async (tx) => {
+      const conversations = await tx.scanConversations({}, 128);
+      return (
+        await Promise.all(
+          conversations.items.map(({ id }) =>
+            tx.scanEntries({ conversationId: id }, 128),
+          ),
+        )
+      ).flatMap(({ items }) => items);
+    }, context);
+    const submissions = entries.filter(
+      (entry) =>
+        ToolResultEntry.is(entry) &&
+        entry.model?.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === "submit_notes" &&
+            !message.isError,
+        ),
+    );
+    expect(submissions.map(({ id }) => id)).toEqual([receipt.call]);
+    expect(entries.flatMap((entry) => entry.model ?? [])).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        rawStopReason: "incomplete.max_messages",
+        content: interrupted.content,
+      }),
+    );
   } finally {
     await harness.close(context);
   }
 });
+
+test.each(["stop", "length"] as const)(
+  "plain %s responses cannot admit JSON or run an unbounded reminder loop",
+  async (stopReason) => {
+    const response = fauxAssistantMessage(JSON.stringify(value), {
+      stopReason,
+    });
+    if (stopReason === "length")
+      response.rawStopReason = "incomplete.max_messages";
+    const count = stopReason === "stop" ? 1 : 9;
+    const driver = fixture([
+      ...Array.from({ length: count }, () => response),
+      submitted(),
+    ]);
+    const { harness, invoke } = await driver.open();
+    try {
+      await expect(invoke()).rejects.toThrow(
+        stopReason === "stop"
+          ? "returned no submit_notes submission"
+          : "exhausted 8 output-length continuations",
+      );
+      expect(driver.provider.state.callCount).toBe(count);
+    } finally {
+      await harness.close(context);
+    }
+  },
+);
 
 test("provider-error recovery adds no user instruction and retains the raw failure", async () => {
   const failure =

@@ -266,9 +266,19 @@ export function createRoleRuntime(readBook: () => NotebookState) {
     tools: [...tools, reader],
     hooks: [
       hook(GenerationTask, {
-        onYield(answer) {
-          if (answer.stopReason === "length")
-            return { continue: roleGenerationPolicy.continuationPrompt };
+        async onYield(answer, api, context) {
+          if (answer.stopReason !== "length") return;
+          const assignment = await api.snapshot(
+            Assignment,
+            api.conversationId,
+            context,
+          );
+          if (!assignment?.descriptor)
+            throw new Error("Missing role assignment");
+          const tool = resolveCall(assignment.descriptor).tool;
+          return {
+            continue: `${roleGenerationPolicy.continuationPrompt} Ordinary assistant text does not submit the result. Continue the remaining work, using any available reading tools as needed. When ready, call ${tool} with complete arguments to submit it.`,
+          };
         },
         async beforeRequest({ messages, stream }, api, context) {
           const assignment = await api.snapshot(
