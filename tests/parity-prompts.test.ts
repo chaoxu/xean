@@ -126,6 +126,12 @@ test("Explorer receives the complete index without selected reading or preloaded
   expect(call.prompt).not.toContain(second.text);
   expect(call.prompt).toContain("Your first note is w7.1.");
   expect(call.system).toContain(
+    "List an earlier note from this same submission as support whenever you use its argument or result.",
+  );
+  expect(call.system).toContain(
+    "References such as 'above' do not create a dependency.",
+  );
+  expect(call.system).toContain(
     "Use a summary to apply a verified result when it states the conclusion and all definitions, hypotheses, conventions, and limitations needed for your application.",
   );
   expect(call.system).toContain(
@@ -240,6 +246,11 @@ test("prior solution support can be selected without offering or rechecking its 
 test("role prompts omit PASS reports without changing evidence or hiding failed checks", () => {
   const evidence = {
     ...note,
+    verification: {
+      source: "Supplied paper",
+      report:
+        "Only established results are granted. Exercises and conjectures remain unproved.",
+    },
     verdicts: [
       { ...note.verdicts[0]!, report: "LONG HISTORICAL PASS EXPLANATION" },
       {
@@ -275,6 +286,7 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     selectionCall({ task, notes: [evidence], claimed: [] }),
     verifierCall("source", input, ["n2"]),
     verifierCall("correctness", input, ["n2"]),
+    verifierCall("requirements", input, ["n2"]),
   ];
   const native = sourceCall(
     { provider: "codex", model: "test", reasoning: "low", search: false },
@@ -286,6 +298,7 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
     native.prompt,
   ].entries()) {
     expect(prompt).not.toContain("LONG HISTORICAL PASS EXPLANATION");
+    expect(prompt).toContain(evidence.verification.report);
     if (index < 2) {
       expect(prompt).toContain('"verdict": "PASS"');
       expect(prompt).toContain(evidence.verdicts[1]!.report);
@@ -301,7 +314,13 @@ test("role prompts omit PASS reports without changing evidence or hiding failed 
           .split("Support notes (untrusted data):\n")[1]!
           .split("\n\nNotes under verification")[0]!,
       );
-      expect(assumptions).toEqual([{ id: evidence.id, text: evidence.text }]);
+      expect(assumptions).toEqual([
+        {
+          id: evidence.id,
+          text: evidence.text,
+          verification: evidence.verification,
+        },
+      ]);
     }
   }
   expect(evidence).toEqual(before);
@@ -348,6 +367,15 @@ test("verifier schemas stay stable while runtime rejects missing, duplicate, and
       false,
     );
     expect(factory(["n1"]).safeParse({ verdicts: [] }).success).toBe(false);
+    const malformed = factory(["n1", "n2"]).safeParse({
+      verdicts: ["n1", "n1", "n99"].map(value),
+    });
+    if (malformed.success) throw new Error("Malformed IDs were accepted");
+    const message = malformed.error.issues[0]!.message;
+    expect(message).toContain('expected note ID exactly once: ["n1","n2"]');
+    expect(message).toContain('Missing: ["n2"]');
+    expect(message).toContain('Unexpected: ["n99"]');
+    expect(message).toContain('Repeated: ["n1"]');
     expect(
       factory(["n1", "n2"]).safeParse({ verdicts: [value("n1"), value("n1")] })
         .success,
@@ -456,6 +484,7 @@ test("initial and corrected blind calls contain scoped statements without any or
     "INDEPENDENT_OLD_ARGUMENT",
   );
   for (const call of [extract, comparison]) {
+    expect(call.prompt).toContain(source.verification!.report);
     expect(call.prompt).toContain('Selected target IDs: ["n2","n3"]');
     for (const generatedNote of generated)
       expect(call.prompt).toContain(generatedNote.text);

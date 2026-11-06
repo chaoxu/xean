@@ -71,11 +71,17 @@ export type RoleCalls = {
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
     context: Context,
-  ): Promise<{ call: number; value: JsonValue; fresh: boolean }>;
+  ): Promise<{ call: number; value: JsonValue }>;
 };
 const fullVerification = ({ verifiers }: Verification) =>
   verifiers.includes("requirements") && verifiers.includes("reconstruction");
-const claimOf = ({ args, state }: { args: WorkerArgs; state: WorkerState }) =>
+export const claimOf = ({
+  args,
+  state,
+}: {
+  args: WorkerArgs;
+  state: WorkerState;
+}) =>
   state.claim ?? (args.work.kind === "verify" ? args.work.input : undefined);
 const offeredBy = (work: Extract<WorkInput, { kind: "selector" }>) =>
   work.verify?.map(({ note }) => note) ?? work.input.notes.map(({ id }) => id);
@@ -185,7 +191,7 @@ export function createWorkers(
         profile: PiRoleProfile,
       ) => calls.call(origin, args.attempt, key, descriptor, profile, ctx);
       if (work.kind === "explorer") {
-        const input = { ...work.input, namespace: `w${origin}` };
+        const input = work.input;
         const answer = await call(
           "role",
           { kind: "explorer", input },
@@ -465,6 +471,7 @@ export function createWorkers(
               kind: "explorer",
               profile: definition.settings.explorer,
               input: {
+                namespace: `w${draft.nextNoteNamespace++}`,
                 task: definition.task,
                 explorerGuidance: request.guidance ?? "",
                 notes: notes.map(

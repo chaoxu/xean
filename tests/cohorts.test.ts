@@ -35,6 +35,58 @@ async function observed<T>(
 }
 const pause = () => Promise.withResolvers<void>();
 
+test("an accepted proof waits for an unrelated failed peer to settle", async () => {
+  const release = pause(),
+    checked = pause();
+  let unrelated = "";
+  const run = await fixture(
+    async (request): Promise<Awaited<ReturnType<Respond>>> => {
+      const d = request.descriptor;
+      if (d.kind === "explorer") {
+        unrelated = `${d.input.namespace}.2`;
+        return {
+          notes: [note("Complete proof."), note("Unrelated argument.")],
+        };
+      }
+      if (
+        d.kind === "verifier" &&
+        d.name === "source" &&
+        d.judged.includes(unrelated)
+      ) {
+        await Promise.race([release.promise, abortable(request.signal)]);
+        return new Error("401 unrelated Verifier failed");
+      }
+      if (d.kind === "reconstruction") checked.resolve();
+      return complete(request);
+    },
+    { automatic: true, settings: { maxWorkers: 2, maxExplorerTurns: 1 } },
+  );
+  const done = run.owner.wait();
+  try {
+    await observed(checked.promise, "candidate reconstruction");
+    await observed(
+      (async () => {
+        while (!project(await run.book()).accepted.length) await Bun.sleep(5);
+      })(),
+      "accepted projection",
+    );
+    expect(run.running()).toHaveLength(1);
+    expect(await inspect(run.path, readStatus)).toMatchObject({
+      outcome: "running",
+      accepted: null,
+    });
+    release.resolve();
+    expect(await done).toMatchObject({ outcome: "accepted", turns: 1 });
+    expect(run.running()).toHaveLength(0);
+    expect(
+      run.history().filter((row) => row.status === "failed"),
+    ).toMatchObject([{ state: { claim: { verify: [{ note: unrelated }] } } }]);
+  } finally {
+    release.resolve();
+    await done;
+  }
+});
+
 test("verification refills capacity while another Explorer remains running", async () => {
   const exploring = pause(),
     firstSource = pause(),

@@ -305,10 +305,9 @@ function verdictsOver<T extends z.ZodType<{ note: string }>>(
   // requires exactly the requested note IDs, once each, before recording.
   return z
     .strictObject({ verdicts: z.array(entry) })
-    .refine((value) => exactIds(value.verdicts, judged), {
-      message: "one verdict per note under verification",
-      path: ["verdicts"],
-    });
+    .superRefine((value, ctx) =>
+      exactIds(value.verdicts, judged, ctx, "verdicts"),
+    );
 }
 
 export function verdictsFor(judged: readonly string[]) {
@@ -322,23 +321,33 @@ export const statement = z.strictObject({
 });
 export type Statement = z.output<typeof statement>;
 
-const exactIds = (
+function exactIds(
   entries: readonly { note: string }[],
   expected: readonly string[],
-) => {
-  const ids = new Set(entries.map(({ note }) => note));
-  return (
-    entries.length === expected.length &&
-    ids.size === entries.length &&
-    expected.every((id) => ids.has(id))
-  );
-};
+  ctx: z.RefinementCtx,
+  field: string,
+) {
+  const ids = entries.map(({ note }) => note);
+  const missing = expected.filter((id) => !ids.includes(id));
+  const unexpected = ids.filter((id) => !expected.includes(id));
+  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (
+    ids.length !== expected.length ||
+    missing.length ||
+    unexpected.length ||
+    repeated.length
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: [field],
+      message: `Return each expected note ID exactly once: ${JSON.stringify(expected)}. Missing: ${JSON.stringify(missing)}. Unexpected: ${JSON.stringify(unexpected)}. Repeated: ${JSON.stringify(repeated)}.`,
+    });
+}
 
 export function statementsFor(judged: readonly string[]) {
-  return statement.refine((value) => exactIds(value.statements, judged), {
-    message: "one statement per note under reconstruction",
-    path: ["statements"],
-  });
+  return statement.superRefine((value, ctx) =>
+    exactIds(value.statements, judged, ctx, "statements"),
+  );
 }
 
 /** Full-batch verdicts, or a complete replacement statement array without verdicts. */
@@ -359,13 +368,15 @@ export function reconstructionResultFor(
   roots: readonly string[],
   statements: readonly string[] = roots,
 ) {
-  return reconstructionResult.refine(
-    (value) =>
-      value.statements.length
-        ? exactIds(value.statements, statements)
-        : exactIds(value.verdicts, roots),
-    `Return verdicts only for selected target IDs: ${roots.join(", ")}. Statement corrections must cover IDs: ${statements.join(", ")}.`,
-  );
+  return reconstructionResult.superRefine((value, ctx) => {
+    const field = value.statements.length ? "statements" : "verdicts";
+    exactIds(
+      value[field],
+      field === "statements" ? statements : roots,
+      ctx,
+      field,
+    );
+  });
 }
 
 /** Separately scoped conditional proofs for the selected statement batch. */

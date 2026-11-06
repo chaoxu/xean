@@ -300,7 +300,7 @@ test("Explorer prompt, submission contract and notebook reader reach Pi; the fir
   const { harness, invoke } = await fixture_.open();
   try {
     const outcome = await invoke();
-    expect(outcome).toMatchObject({ value, fresh: true });
+    expect(outcome).toMatchObject({ value });
     expect(fixture_.provider.state.callCount).toBe(1);
     const call = await resolveCall(descriptor);
     expect(getCurrentSystemPrompt(input!.messages)).toBe(call.system);
@@ -441,7 +441,7 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
         ),
       ).toEqual(["First exact conditions.", null]);
       expect(readNotes.every((entry: object) => !("text" in entry))).toBe(true);
-      expect(readNotes[0].verification).toEqual({ source: "Given premise" });
+      expect(readNotes[0].verification).toEqual(sources[0]!.verification);
       expect(readNotes[1].verdicts[0]).toEqual({
         verifier: "requirements",
         note: "n2",
@@ -473,7 +473,7 @@ test("Explorer reads only indexed notes, repairs unavailable IDs and preserves l
       ...sources,
       { id: "n3", text: "UNINDEXED_BODY", support: [] },
     ];
-    expect(await invoke(input)).toMatchObject({ value: result, fresh: true });
+    expect(await invoke(input)).toMatchObject({ value: result });
     expect(fixture_.provider.state.callCount).toBe(5);
   } finally {
     await harness.close(context);
@@ -866,7 +866,7 @@ test("two successful submissions fail closed and a replacement starts a fresh co
     expect(driver.provider.state.callCount).toBe(1);
     expect(
       await invoke(descriptor, { origin: "ambiguous", attempt: 1 }),
-    ).toMatchObject({ value, fresh: true });
+    ).toMatchObject({ value });
     expect(driver.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -943,7 +943,6 @@ test.each(["explorer", "selection"] as const)(
       harness = second.harness;
       expect(await second.invoke(input, { origin: "recovery" })).toMatchObject({
         value: result,
-        fresh: false,
       });
       const conversations = await harness.commit(
         (tx) => tx.scanConversations({}, 128),
@@ -967,7 +966,7 @@ test("a logical origin reuses its completed receipt and rejects changed Explorer
       origin: "original",
       attempt: 1,
     });
-    expect(replayed).toEqual({ ...original, fresh: false });
+    expect(replayed).toEqual(original);
     expect(fixture_.provider.state.callCount).toBe(1);
     const changed: CallDescriptor = {
       ...descriptor,
@@ -982,7 +981,7 @@ test("a logical origin reuses its completed receipt and rejects changed Explorer
         profile: { provider: "test", model: "other", reasoning: "max" },
       }),
     ).rejects.toThrow("Recovered role arguments do not match");
-    expect(await invoke(changed)).toMatchObject({ value, fresh: true });
+    expect(await invoke(changed)).toMatchObject({ value });
     expect(fixture_.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);
@@ -1089,12 +1088,12 @@ test("frozen verification reuses its original assignment and receipt after later
       origin: "verification",
       attempt: 1,
     });
-    expect(completed).toMatchObject({ value: result, fresh: true });
+    expect(completed).toMatchObject({ value: result });
     const recovered = await invoke(changed, {
       origin: "verification",
       attempt: 2,
     });
-    expect(recovered).toEqual({ ...completed, fresh: false });
+    expect(recovered).toEqual(completed);
     expect(driver.provider.state.callCount).toBe(2);
   } finally {
     await harness.close(context);

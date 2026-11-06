@@ -135,10 +135,6 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
   );
   const extra = conditional.schema.safeParse({ statements: [], verdicts });
   expect(extra.success).toBe(false);
-  if (!extra.success)
-    expect(extra.error.issues[0]!.message).toBe(
-      `Return verdicts only for selected target IDs: ${target.id}. Statement corrections must cover IDs: ${target.id}, ${support.id}.`,
-    );
   expect(compare.schema.safeParse({ statements: [], verdicts }).success).toBe(
     true,
   );
@@ -170,6 +166,23 @@ test("batch reconstruction requires exact statement and verdict IDs and an atomi
       compare.schema.safeParse({ statements: [], verdicts: ids.map(verdict) })
         .success,
     ).toBe(false);
+  }
+  const malformed = [support.id, support.id, "n99"].map((note) => ({
+    note,
+    statement: "Claim.",
+  }));
+  for (const result of [
+    extract.schema.safeParse({ statements: malformed }),
+    compare.schema.safeParse({ statements: malformed, verdicts: [] }),
+  ]) {
+    if (result.success) throw new Error("Malformed IDs were accepted");
+    const message = result.error.issues[0]!.message;
+    expect(message).toContain(
+      `expected note ID exactly once: ${JSON.stringify([support.id, target.id])}`,
+    );
+    expect(message).toContain(`Missing: ["${target.id}"]`);
+    expect(message).toContain('Unexpected: ["n99"]');
+    expect(message).toContain(`Repeated: ["${support.id}"]`);
   }
   expect(extract.schema.safeParse({ ...value, extra: true }).success).toBe(
     false,

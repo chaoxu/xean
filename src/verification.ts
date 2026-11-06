@@ -27,7 +27,7 @@ export interface VerificationDependencies {
     key: string,
     descriptor: CallDescriptor,
     profile: PiRoleProfile,
-  ): Promise<{ call: number; value: JsonValue; fresh: boolean }>;
+  ): Promise<{ call: number; value: JsonValue }>;
   /** Validate and atomically publish the source result and its verdicts. */
   source?(
     key: string,
@@ -53,7 +53,6 @@ async function reconstruct(
   const statementIds = reconstructionStatementIds(input);
   let value = statementsFor(statementIds).parse(statement.value);
   let previous: number | undefined;
-  let corrections = 0;
   for (;;) {
     const suffix = previous ?? "initial";
     const answer = await dependencies.call(
@@ -78,12 +77,6 @@ async function reconstruct(
     if (parsed.statements.length > 0) {
       value = { statements: parsed.statements };
       previous = result.call;
-      // Replayed corrections remain available without spending the fresh-call allowance.
-      if (result.fresh && corrections++ >= 1) {
-        throw new Error(
-          "reconstruction statement remains unresolved; resume verification to use its latest correction",
-        );
-      }
       continue;
     }
     return { call: result.call, verdicts: parsed.verdicts };

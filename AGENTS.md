@@ -16,11 +16,13 @@ allowed only when the format cannot render monospace.
   Chord or Pi only when the required behavior belongs there, such as an adapter
   discarding provider errors or usage before application code can observe them.
 - Keep mathematical content authoritative in one place and retain references
-  where Pi already stores the value.
+  where Pi already stores the value. Preserve full external attestation reports
+  in model-visible note views while omitting internal PASS explanations.
 - Run Explorers and Verifiers under one database owner and a shared `maxWorkers` cap.
   Refill on any completion, offering eligible unclaimed verification before new
   exploration. Count completed and in-flight Explorers against `maxExplorerTurns`.
   Freeze running role inputs and preserve immutable publication references.
+  Reserve short note namespaces before generation and retain them across retries.
   Each Explorer appends a completed submission with summaries. Verifiers select
   work and check source, correctness, requirements, and reconstruction in that
   order. Explorer continuation is off.
@@ -42,11 +44,13 @@ allowed only when the format cannot render monospace.
 - Extract selected statements and direct dependency statements together. Blind
   reconstruction receives scoped statements without original candidate or
   dependency proofs. Preserve dependency scope and require each selected proof
-  to establish its conclusion from its own premises. Pause new admission while
+  to establish its conclusion from its own premises. Re-prove the whole statement
+  batch after each correction until verdicts, a native error, or cancellation.
+  Pause new admission while
   a candidate is provisionally accepted or a worker has failed. Final acceptance
   requires all admitted workers to settle and the latest projection still to
-  accept the candidate. Failed work remains `call-failure` until explicit resume,
-  even if another worker provisionally accepted a note.
+  accept a candidate whose note and entire support chain have no unresolved failed
+  verification claim. Controller errors and blocked jobs still prevent acceptance.
 - Use native Chord runs, watches, and recovery for workers, including `maxWorkers: 1`.
   Keep Chord state and Pi call receipts in the shared campaign SQLite
   database and mathematical note texts in the notebook database. Treat note IDs

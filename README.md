@@ -103,8 +103,9 @@ bun run xean run .xean/demo.sqlite
 ```
 
 `inspect` shows queued `inputs` until execution admits them at its next intake
-boundary. `xean` assigns opaque note IDs then. Treat these as references,
-not sequence numbers. Caller-supplied `support` can name only
+boundary. `xean` assigns short note IDs such as `i1.1` and `w2.1`, which remain
+stable through recovery. Treat them as opaque references. Caller-supplied
+`support` can name only
 existing notes that are not dead, excluding new notes in the same submission.
 Repeating an ID and identical content is idempotent. Reusing the ID with different
 content fails. Submission does not start models or reopen a terminal result.
@@ -124,8 +125,9 @@ as a premise, the caller may add:
 }
 ```
 
-This attestation supplies local trust for `checked`, unless the note has an
-invalidating FAIL. Its dependencies must still verify before it becomes
+This attestation grants only the scope stated in `report` and supplies local trust
+for `checked`, unless the note has an invalidating FAIL. Its dependencies must
+still verify before it becomes
 `verified`. A candidate still requires all four checks in one attempt. Admit
 results only at their exact scope, retain conjectures and gaps as such, and check
 applications. `checked` and `verified` are derived, not submitted fields.
@@ -151,8 +153,9 @@ The correctness verifier checks their fidelity against the full text.
 Explorer starts with the summary index. It can apply a verified result from a
 sufficient summary and must cite the note as support. `read_notes({ids, level})`
 reads up to 20 IDs per call. `detailed` returns statements and verification state,
-with `null` for a missing detailed summary. PASS and external-attestation report
-prose is omitted, while FAIL and INCONCLUSIVE reports remain. Full evidence stays
+with `null` for a missing detailed summary. External attestation reports remain
+visible to preserve their scope. Internal PASS explanations are omitted, while
+FAIL and INCONCLUSIVE reports remain. Full evidence stays
 available through `inspect`. `full` returns only text strings in requested order.
 Notes without sufficient summaries remain available through full reads.
 
@@ -264,15 +267,16 @@ bun run xean resume .xean/demo.sqlite
 ```
 
 `turn-limit` stays stopped. Multiple valid role submissions fail the call, and
-resume skips that ambiguous result to make a fresh call. Reconstruction can correct its
-statement batch and retry automatically once. A repeated fresh correction stops
-with `call-failure`, and explicit `resume` uses the latest corrected batch.
+resume skips that ambiguous result to make a fresh call. Reconstruction re-proves
+the whole statement batch after each correction, continuing until comparison
+returns verdicts, a call fails, or the run is cancelled.
 The campaign pauses new admission while a candidate is provisionally accepted
-or a worker has failed. Final acceptance waits for all admitted workers to settle
-and requires the latest checks still to establish the candidate. If later checks
-invalidate it and no worker has failed, normal admission can resume before other
-workers settle. Failed work remains `call-failure` until explicitly resumed, even
-if another worker provisionally establishes an accepted note. Resume preserves
+or a worker has failed. After all admitted workers settle, it accepts the first
+candidate established by the latest checks whose note and entire support chain
+have no unresolved failed verification claim. Controller errors or the absence
+of such a candidate after worker failure produce `call-failure` until explicitly
+resumed. If later checks invalidate provisional acceptance and no worker has
+failed, normal admission can resume before other workers settle. Resume preserves
 frozen inputs and recorded receipts.
 
 Native jobs blocked by incompatible versions or repeated finish failures require

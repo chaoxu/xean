@@ -70,7 +70,7 @@ const Stage = defineDocFamily<
   checkpointWhen: () => false,
   initial: () => ({}),
 });
-type Receipt = { call: EntryId; value: JsonValue; fresh: boolean };
+type Receipt = { call: EntryId; value: JsonValue };
 async function receipt(
   tx: Tx,
   conversationId: ConversationId,
@@ -101,7 +101,6 @@ async function receipt(
         found = {
           call: entry.id,
           value: call.schema.parse(message.details) as JsonValue,
-          fresh: false,
         };
       }
     }
@@ -332,7 +331,6 @@ export function createRoleRuntime(readBook: () => NotebookState) {
     const strict =
       descriptor.kind === "explorer" || descriptor.kind === "selection";
     let assignment = requested;
-    let fresh = true;
     let conversationId: ConversationId | undefined;
     let conversation: ConversationHandle | undefined;
     let sessionId: string | undefined;
@@ -358,7 +356,6 @@ export function createRoleRuntime(readBook: () => NotebookState) {
             : undefined;
           if (result || !retry) {
             conversationId = id;
-            fresh = submission === undefined;
             stage.attempt = Math.max(stage.attempt!, attempt);
             return;
           }
@@ -401,7 +398,7 @@ export function createRoleRuntime(readBook: () => NotebookState) {
       await harness.commit(async (tx) => {
         result = await receipt(tx, conversationId!, call);
       }, context);
-      if (result) return { ...result, fresh };
+      if (result) return result;
       if (settled.status !== "done")
         throw new Error(
           `${call.role} failed: ${settled.detail ?? settled.reason}`,

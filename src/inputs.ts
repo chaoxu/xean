@@ -32,7 +32,7 @@ export function submitNotes(
       );
   book.inputs.push({
     id,
-    namespace: `i${crypto.randomUUID()}`,
+    namespace: `i${data.nextNoteNamespace++}`,
     notes,
     consumed: false,
   });

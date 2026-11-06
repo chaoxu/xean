@@ -63,14 +63,14 @@ function scripted(replies: (JsonValue | Error)[]) {
   const deps: VerificationDependencies = {
     async call(key, descriptor) {
       const saved = receipts.get(key);
-      if (saved) return { ...saved, fresh: false };
+      if (saved) return saved;
       calls.push(structuredClone(descriptor));
       const value = replies.shift();
       if (value instanceof Error) throw value;
       if (value === undefined) throw new Error(`Unexpected call ${key}`);
       const result = { call: calls.length, value };
       receipts.set(key, result);
-      return { ...result, fresh: true };
+      return result;
     },
     async recorded() {
       return structuredClone(recorded);
@@ -277,17 +277,23 @@ test("a corrected statement array replaces both targets and assumptions before a
   expect(drive.recorded).toHaveLength(4);
 });
 
-test("two fresh corrections stop automatic retries and resume replays the latest full statement array", async () => {
+test("three fresh corrections continue and recovery replays the latest full statement array", async () => {
   const batch = {
     ...input([note("B", ["A"])]),
     support: [note("A")],
   };
   const pass = checks(verdict("B"));
   const first = statements("A", "B");
-  const latest = {
+  const second = {
     statements: first.statements.map((entry) => ({
       ...entry,
       statement: `Precise ${entry.note}, second try.`,
+    })),
+  };
+  const latest = {
+    statements: second.statements.map((entry) => ({
+      ...entry,
+      statement: `Precise ${entry.note}, third correction.`,
     })),
   };
   const drive = scripted([
@@ -298,10 +304,13 @@ test("two fresh corrections stop automatic retries and resume replays the latest
     proof,
     correction(first),
     proof,
+    correction(second),
+    proof,
     correction(latest),
+    new Error("Provider interrupted after the third correction"),
   ]);
   await expect(verify(batch, settings, drive.deps)).rejects.toThrow(
-    "remains unresolved",
+    "Provider interrupted after the third correction",
   );
   expect(drive.recorded).toHaveLength(3);
   const boundary = drive.calls.length;

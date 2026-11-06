@@ -10,7 +10,9 @@ import {
   type WorkerRecord,
   type WorkerState,
 } from "./records.ts";
-import type { createWorkers, WorkerRequest } from "./workers.ts";
+import { claimOf, type createWorkers, type WorkerRequest } from "./workers.ts";
+import { pick } from "./policy/contracts.ts";
+import { supportClosure } from "./policy/support.ts";
 export type { SourceExecutor } from "./workers.ts";
 
 type Workers = ReturnType<typeof createWorkers>;
@@ -57,8 +59,7 @@ function consumed(
   for (const row of records) {
     if (row.args.epoch !== epoch) continue;
     const { work } = row.args;
-    const claim =
-      row.state.claim ?? (work.kind === "verify" ? work.input : undefined);
+    const claim = claimOf(row);
     if (claim) for (const entry of claim.verify) ids.add(entry.note);
     else if (work.kind === "selector" && row.result?.status === "no-work")
       for (const id of work.verify?.map(({ note }) => note) ??
@@ -121,14 +122,24 @@ export function createWorkflow(
         if (failed.length || campaign.error || accepted.length) {
           if (active.length) return;
           campaign.status = "terminal";
-          if (failed.length || campaign.error) {
+          const failedClaims = new Set(
+            failed.flatMap(
+              (row) => claimOf(row)?.verify.map(({ note }) => note) ?? [],
+            ),
+          );
+          const candidate = accepted.find((id) =>
+            [id, ...supportClosure([pick(notes, id)], notes)].every(
+              (note) => !failedClaims.has(note),
+            ),
+          );
+          if (!candidate || campaign.error) {
             campaign.outcome = "call-failure";
             campaign.error ??= failed
               .map((row) => row.error ?? `Worker ${row.id} failed`)
               .join("\n");
           } else {
             campaign.outcome = "accepted";
-            campaign.accepted = accepted[0]!;
+            campaign.accepted = candidate;
           }
           return;
         }

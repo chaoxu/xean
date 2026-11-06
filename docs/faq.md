@@ -166,9 +166,11 @@ unfinished native work. After `call-failure`, inspect the error and use `resume`
 Accepted and turn-limit campaigns remain terminal. New admission pauses while a
 candidate is provisionally accepted or a worker has failed. Final acceptance
 requires all admitted workers to settle and the latest checks still to establish
-the candidate. If it is invalidated and no worker has failed, admission may resume
-before other workers settle. Failed work stays `call-failure` until resumed, even
-if another worker provisionally establishes an accepted note.
+a candidate whose note and entire support chain have no unresolved failed
+verification claim. Controller errors or the absence of such a candidate after
+worker failure produce `call-failure` until resumed. If later checks invalidate
+provisional acceptance and no worker has failed, admission may resume before
+other workers settle.
 
 With the CLI owner closed, `guide` queues advice for the next fresh Explorer call,
 and `submit` queues additional notes. Neither changes an already frozen call.

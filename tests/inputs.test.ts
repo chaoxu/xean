@@ -51,7 +51,7 @@ test("caller admission keeps exact text and a stable namespace across retries", 
   expect(snapshot().inputs).toEqual([
     {
       id: "one",
-      namespace: expect.stringMatching(/^i[0-9a-f-]{36}$/),
+      namespace: "i1",
       ...supplied,
       consumed: false,
     },

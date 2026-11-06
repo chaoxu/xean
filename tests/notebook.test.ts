@@ -113,7 +113,7 @@ test("import identities and receipts survive rollback while later input remains 
     f.owner.change((data) => submitNotes(data, id, input));
   const first = await submit("first");
   const namespace = (await f.snapshot()).inputs[0]!.namespace;
-  expect(namespace).toMatch(/^i[0-9a-f-]{36}$/);
+  expect(namespace).toMatch(/^i[1-9]\d*$/);
   await expect(
     f.owner.change((data) => {
       expect(admitNotes(data.notebook)).toBe(true);

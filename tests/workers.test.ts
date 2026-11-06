@@ -5,6 +5,16 @@ import { Notebook as NoteStore } from "@chaoxu/notebook-store";
 import { acceptedArgument, project, submitNotes } from "../src/index.ts";
 import { fixture, complete, note, abortable } from "./worker-fixture.ts";
 
+function explorerNoteId(
+  run: Awaited<ReturnType<typeof fixture>>,
+  job: { id: string },
+) {
+  const work = run.history().find((row) => row.id === job.id)?.args.work;
+  if (work?.kind !== "explorer")
+    throw new Error("Missing frozen Explorer input");
+  return `${work.input.namespace}.1`;
+}
+
 test("independent Explorer and Verifier publish knowledge without a campaign or Coordinator", async () => {
   const run = await fixture();
   const explored = await run.run({
@@ -12,7 +22,7 @@ test("independent Explorer and Verifier publish knowledge without a campaign or 
     guidance: "Prove P directly.",
   });
   expect(explored.outcome.kind).toBe("done");
-  const id = `w${explored.id}.1`;
+  const id = explorerNoteId(run, explored);
   expect(await run.notes()).toMatchObject([
     { id, summary: "Complete proof of P.", verified: false },
   ]);
@@ -79,6 +89,9 @@ test.each([false, true])(
         };
       },
     );
+    await run.owner.change((data) =>
+      submitNotes(data, "seed", { notes: [note("Imported premise.")] }),
+    );
     const ids = await Promise.all([
       run.start({ kind: "explorer" }),
       run.start({ kind: "explorer" }),
@@ -86,13 +99,16 @@ test.each([false, true])(
     const pending = ids.map((id) => run.wait(id));
     await arrived.promise;
     expect(new Set(namespaces).size).toBe(2);
+    expect([...namespaces].sort()).toEqual(["w2", "w3"]);
     const first = reverse ? 1 : 0;
     releases[first]!.resolve();
     await pending[first];
     releases[1 - first]!.resolve();
     expect((await pending[1 - first])!.kind).toBe("done");
     const notes = await run.notes();
-    expect(notes).toHaveLength(4);
+    expect(notes).toHaveLength(5);
+    expect(notes[0]!.id).toBe("i1.1");
+    expect(new Set(notes.map(({ id }) => id)).size).toBe(notes.length);
     for (const namespace of namespaces) {
       expect(notes.find((n) => n.id === `${namespace}.2`)).toMatchObject({
         text: `Consequence cites ${namespace}.1 verbatim.`,
@@ -142,7 +158,7 @@ test("inspection and passive reopen observe suspended native work without execut
     live.args,
   );
   expect(run.provider.state.callCount).toBe(count + 1);
-  expect((await run.notes())[0]!.id).toBe(`w${job.id}.1`);
+  expect((await run.notes())[0]!.id).toBe(explorerNoteId(run, job));
 });
 
 test("retry retains Explorer namespace and input despite unrelated publication and queued caller notes", async () => {
@@ -166,8 +182,23 @@ test("retry retains Explorer namespace and input despite unrelated publication a
   const retry = await run.run({ kind: "retry", job: first.id });
   expect(retry.outcome.kind).toBe("done");
   expect(run.requests.at(-1)!.descriptor).toEqual(run.requests[0]!.descriptor);
-  expect((await run.notes()).some((n) => n.id === `w${first.id}.1`)).toBe(true);
+  expect(
+    (await run.notes()).some((n) => n.id === explorerNoteId(run, first)),
+  ).toBe(true);
   expect((await run.book()).inputs[0]!.consumed).toBe(false);
+  expect(explorerNoteId(run, first)).toBe("w1.1");
+  await run.reopen();
+  await run.owner.change((data) =>
+    submitNotes(data, "caller", { notes: [note("Queued literature.")] }),
+  );
+  const fresh = await run.run({ kind: "explorer" });
+  expect(explorerNoteId(run, fresh)).toBe("w4.1");
+  expect((await run.notes()).map(({ id }) => id).sort()).toEqual([
+    "i3.1",
+    "w1.1",
+    "w2.1",
+    "w4.1",
+  ]);
 });
 
 test("completed statement and proof receipts survive a failed comparison and explicit retry", async () => {
@@ -224,7 +255,7 @@ test("explicit duplicate verification claims still produce one busy result", asy
   const explored = await run.run({ kind: "explorer" });
   const verify = [
     {
-      note: `w${explored.id}.1`,
+      note: explorerNoteId(run, explored),
       verifiers: [
         "source",
         "correctness",
@@ -404,7 +435,7 @@ test("retry keeps the selector's original note view after unrelated notes are pu
   )!.descriptor;
   if (before.kind !== "selection") throw new Error("Missing selection");
   expect(before.input.notes.map((note) => note.id)).toEqual([
-    `w${firstNote.id}.1`,
+    explorerNoteId(run, firstNote),
   ]);
   const added = await run.run({ kind: "explorer" });
   expect((await run.run({ kind: "retry", job: first.id })).outcome.kind).toBe(
@@ -415,9 +446,9 @@ test("retry keeps the selector's original note view after unrelated notes are pu
   );
   expect(selections).toHaveLength(2);
   expect(selections[1]!.descriptor).toEqual(before);
-  expect(before.input.notes.some((note) => note.id === `w${added.id}.1`)).toBe(
-    false,
-  );
+  expect(
+    before.input.notes.some((note) => note.id === explorerNoteId(run, added)),
+  ).toBe(false);
 });
 
 test("queued caller literature gets stable admission IDs before fresh exploration", async () => {
@@ -437,7 +468,7 @@ test("queued caller literature gets stable admission IDs before fresh exploratio
 test("current adverse evidence invalidates a root even when another check finishes later", async () => {
   const run = await fixture();
   const explored = await run.run({ kind: "explorer" });
-  const target = `w${explored.id}.1`;
+  const target = explorerNoteId(run, explored);
   await run.run({ kind: "verifier" });
   const previous = await run.book();
   expect(project(previous).accepted).toEqual([target]);
@@ -492,13 +523,13 @@ test("another publisher can finish between an append and its Chord rollback reco
   const second = await run.run({ kind: "explorer", guidance: "B" });
   expect(second.outcome.kind).toBe("done");
   expect((await run.notes()).map((note) => note.id)).toEqual([
-    `w${second.id}.1`,
+    explorerNoteId(run, second),
   ]);
   using store = new NoteStore(`${run.path}.notes.sqlite`);
   expect(store.snapshot()).toBe(2);
   store.commit(
     2,
-    { [`w${first!.id}.1`]: { text: "External edit." } },
+    { [explorerNoteId(run, first!)]: { text: "External edit." } },
     "external",
   );
   const count = run.provider.state.callCount;
@@ -509,10 +540,12 @@ test("another publisher can finish between an append and its Chord rollback reco
   expect(run.provider.state.callCount).toBe(count);
   expect(store.snapshot()).toBe(3);
   expect((await run.notes()).map(({ id, text }) => ({ id, text }))).toEqual([
-    { id: `w${first!.id}.1`, text: "Proof A." },
-    { id: `w${second.id}.1`, text: "Proof B." },
+    { id: explorerNoteId(run, first!), text: "Proof A." },
+    { id: explorerNoteId(run, second), text: "Proof B." },
   ]);
-  expect(store.read().notes[`w${first!.id}.1`]!.text).toBe("External edit.");
+  expect(store.read().notes[explorerNoteId(run, first!)]!.text).toBe(
+    "External edit.",
+  );
 });
 
 test.each(["pending", "failed"] as const)(
@@ -754,7 +787,7 @@ test("solution-only selection defers a local lemma checklist until a full root i
         kind: "verifier",
         verify: [
           {
-            note: `w${explored.id}.1`,
+            note: explorerNoteId(run, explored),
             verifiers: [
               "source",
               "correctness",
@@ -766,7 +799,9 @@ test("solution-only selection defers a local lemma checklist until a full root i
       })
     ).outcome.kind,
   ).toBe("done");
-  expect(project(await run.book()).accepted).toEqual([`w${explored.id}.1`]);
+  expect(project(await run.book()).accepted).toEqual([
+    explorerNoteId(run, explored),
+  ]);
 });
 
 test("overlapping selected sets conflict atomically without reserving their nonoverlapping notes", async () => {
@@ -869,13 +904,13 @@ test("one native admission can start an Explorer and Verifier over the same froz
     await both.promise;
     expect(liveCalls).toBe(2);
     expect((await run.notes()).map((note) => note.id)).toEqual([
-      `w${seed.id}.1`,
+      explorerNoteId(run, seed),
     ]);
     const selection = run.requests.find(
       ({ descriptor }) => descriptor.kind === "selection",
     )!.descriptor;
     expect(selection.input.notes.map((note) => note.id)).toEqual([
-      `w${seed.id}.1`,
+      explorerNoteId(run, seed),
     ]);
   } finally {
     release.resolve();
@@ -883,10 +918,12 @@ test("one native admission can start an Explorer and Verifier over the same froz
       expect(task.kind).toBe("done");
   }
   expect((await run.notes()).map((note) => note.id)).toEqual([
-    `w${seed.id}.1`,
-    `w${ids[0]!.id}.1`,
+    explorerNoteId(run, seed),
+    explorerNoteId(run, ids[0]!),
   ]);
-  expect(project(await run.book()).accepted).toEqual([`w${seed.id}.1`]);
+  expect(project(await run.book()).accepted).toEqual([
+    explorerNoteId(run, seed),
+  ]);
 });
 
 test("pending proof resumes the same Chord job and native generation without repeating earlier roles", async () => {
@@ -1010,7 +1047,7 @@ test("a selection invalidated while its model is running finishes without checki
     return complete(request);
   });
   const explorer = await run.run({ kind: "explorer" }),
-    id = `w${explorer.id}.1`;
+    id = explorerNoteId(run, explorer);
   const stale = await run.start({ kind: "verifier" });
   await selecting.promise;
   await run.run({

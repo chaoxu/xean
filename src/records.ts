@@ -1,6 +1,7 @@
 import {
   arr,
   defineState,
+  int,
   local,
   obj,
   unknown,
@@ -19,7 +20,7 @@ import type { Definition, NotebookReference } from "./state.ts";
 export type WorkInput =
   | {
       kind: "explorer";
-      input: Omit<ExplorerInput, "namespace">;
+      input: ExplorerInput;
       profile: PiRoleProfile;
     }
   | {
@@ -69,6 +70,7 @@ export type SourceRecord = {
   output: CodexResult;
 };
 export type ResearchData = {
+  nextNoteNamespace: number;
   definition: Definition | null;
   notebook: NotebookReference;
   campaign: Campaign | null;
@@ -83,6 +85,7 @@ export const ResearchType = local("xean.research", {
 export const ResearchState = defineState("xean.research.data", {
   version: 1,
   schema: obj({
+    nextNoteNamespace: int({ min: 1 }),
     definition: unknown() as Schema<Definition | null>,
     notebook: unknown() as Schema<NotebookReference>,
     campaign: unknown() as Schema<Campaign | null>,
@@ -90,6 +93,7 @@ export const ResearchState = defineState("xean.research.data", {
     sources: arr(unknown() as Schema<SourceRecord>),
   }),
   initial: (): ResearchData => ({
+    nextNoteNamespace: 1,
     definition: null,
     notebook: {
       path: "",

@@ -25,10 +25,13 @@ test("conditional root checks finish first and composed acceptance waits for the
     }
     return complete(request);
   });
-  const explored = await run.run({ kind: "explorer" });
-  const [l, m, root, unrelated] = [1, 2, 3, 4].map(
-    (n) => `w${explored.id}.${n}`,
-  ) as [string, string, string, string];
+  await run.run({ kind: "explorer" });
+  const [l, m, root, unrelated] = [1, 2, 3, 4].map((n) => `w1.${n}`) as [
+    string,
+    string,
+    string,
+    string,
+  ];
   await run.run({ kind: "verifier", verify: [{ note: root, verifiers: all }] });
   const provisional = await run.book();
   expect(
@@ -101,10 +104,10 @@ test.each([
         };
       return complete(request);
     });
-    const explored = await run.run({ kind: "explorer" });
+    await run.run({ kind: "explorer" });
     await run.run({
       kind: "verifier",
-      verify: [{ note: `w${explored.id}.1`, verifiers: all }],
+      verify: [{ note: "w1.1", verifiers: all }],
     });
     const book = await run.book();
     expect(project(book).accepted).toEqual([]);
@@ -126,8 +129,8 @@ test.each([
 
 test("root acceptance never combines requirements and reconstruction from different attempts", async () => {
   const run = await fixture();
-  const explored = await run.run({ kind: "explorer" });
-  const root = `w${explored.id}.1`;
+  await run.run({ kind: "explorer" });
+  const root = "w1.1";
   await run.run({
     kind: "verifier",
     verify: [
@@ -166,8 +169,8 @@ test("an externally attested direct premise supplies a statement without leaking
       ],
     }),
   );
-  const explored = await run.run({ kind: "explorer" });
-  const root = `w${explored.id}.1`;
+  await run.run({ kind: "explorer" });
+  const root = "w2.1";
   const premise = (await run.notes()).find(
     (note) => note.verification !== undefined,
   )!.id;
