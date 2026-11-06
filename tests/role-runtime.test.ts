@@ -714,11 +714,10 @@ test("message-limit recovery permits reading and admits only an explicit valid s
       const reminder = transcript.messages
         .filter((message) => message.role === "user")
         .at(-1)!.content;
-      expect(reminder).toContain(roleGenerationPolicy.continuationPrompt);
+      expect(reminder).toBe(roleGenerationPolicy.continuationPrompt);
       expect(reminder).toContain(
-        "Ordinary assistant text does not submit the result.",
+        "If this task requires a submission tool, ordinary text does not submit the result. Call that tool when ready.",
       );
-      expect(reminder).toContain("call submit_notes with complete arguments");
       expect(
         getCurrentTools(transcript.messages).map(({ name }) => name),
       ).toEqual(["submit_notes", "read_notes"]);

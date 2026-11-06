@@ -44,7 +44,7 @@ export const roleGenerationPolicy = {
   maxRecoveries: 8,
   continueEmptyLength: true,
   continuationPrompt:
-    "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work.",
+    "The previous response was interrupted before completion. Continue exactly where you left off; do not restart or repeat completed work. If this task requires a submission tool, ordinary text does not submit the result. Call that tool when ready.",
   retryContent: "completed-reasoning" as const,
 };
 type Assignment = {
@@ -266,19 +266,9 @@ export function createRoleRuntime(readBook: () => NotebookState) {
     tools: [...tools, reader],
     hooks: [
       hook(GenerationTask, {
-        async onYield(answer, api, context) {
-          if (answer.stopReason !== "length") return;
-          const assignment = await api.snapshot(
-            Assignment,
-            api.conversationId,
-            context,
-          );
-          if (!assignment?.descriptor)
+        onYield(answer) {
+          if (answer.stopReason === "length")
             return { continue: roleGenerationPolicy.continuationPrompt };
-          const tool = resolveCall(assignment.descriptor).tool;
-          return {
-            continue: `${roleGenerationPolicy.continuationPrompt} Ordinary assistant text does not submit the result. Continue the remaining work, using any available reading tools as needed. When ready, call ${tool} with complete arguments to submit it.`,
-          };
         },
         async beforeRequest({ messages, stream }, api, context) {
           const assignment = await api.snapshot(
