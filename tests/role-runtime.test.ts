@@ -792,6 +792,38 @@ test("message-limit recovery permits reading and admits only an explicit valid s
   }
 });
 
+test("unassigned native conversations retain generic length continuation", async () => {
+  const driver = fixture([
+    fauxAssistantMessage("Partial raw answer.", { stopReason: "length" }),
+    (transcript) => {
+      expect(
+        transcript.messages.filter((message) => message.role === "user").at(-1)
+          ?.content,
+      ).toBe(roleGenerationPolicy.continuationPrompt);
+      expect(getCurrentTools(transcript.messages)).toEqual([]);
+      return fauxAssistantMessage("Complete raw answer.", {
+        stopReason: "stop",
+      });
+    },
+  ]);
+  const { harness } = await driver.open();
+  try {
+    const root = await harness.root(context);
+    await root.configure(
+      { model: { provider: "test", modelId: "math" }, tools: [] },
+      context,
+    );
+    const submission = await root.submit(
+      { type: "input", content: "Answer directly." },
+      context,
+    );
+    expect(await submission.wait(context)).toMatchObject({ status: "done" });
+    expect(driver.provider.state.callCount).toBe(2);
+  } finally {
+    await harness.close(context);
+  }
+});
+
 test.each(["stop", "length"] as const)(
   "plain %s responses cannot admit JSON or run an unbounded reminder loop",
   async (stopReason) => {

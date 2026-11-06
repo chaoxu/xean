@@ -274,7 +274,7 @@ export function createRoleRuntime(readBook: () => NotebookState) {
             context,
           );
           if (!assignment?.descriptor)
-            throw new Error("Missing role assignment");
+            return { continue: roleGenerationPolicy.continuationPrompt };
           const tool = resolveCall(assignment.descriptor).tool;
           return {
             continue: `${roleGenerationPolicy.continuationPrompt} Ordinary assistant text does not submit the result. Continue the remaining work, using any available reading tools as needed. When ready, call ${tool} with complete arguments to submit it.`,
