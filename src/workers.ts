@@ -171,9 +171,9 @@ export function createWorkers(
         );
         return [
           ...new Set(
-            [...roots].flatMap((id) =>
-              supportClosure([pick(notes, id)], notes),
-            ),
+            [...roots]
+              .filter((id) => !pick(notes, id).dead)
+              .flatMap((id) => supportClosure([pick(notes, id)], notes)),
           ),
         ];
       },

@@ -833,6 +833,87 @@ test("deferred verification drains windowed support through its full ancestry wi
   expect(project(book).notes.every((note) => note.verified)).toBe(true);
 });
 
+test.each([
+  ["dead-only roots", false, "source", false],
+  ["a shared live root", true, "source", true],
+  ["requirements failure", false, "requirements", true],
+] as const)(
+  "deferred support eligibility follows %s after a new publication",
+  async (_label, shared, failedCheck, eligible) => {
+    const local = ["source", "correctness", "reconstruction"] as const;
+    let a = "",
+      b = "",
+      c = "",
+      explorations = 0;
+    const run = await fixture(
+      (request): ReturnType<Respond> => {
+        const d = request.descriptor;
+        if (d.kind === "explorer") {
+          if (++explorations > 1)
+            return { notes: [note("Unrelated new work.")] };
+          a = `${d.input.namespace}.1`;
+          b = `${d.input.namespace}.2`;
+          c = `${d.input.namespace}.3`;
+          return {
+            notes: [
+              note("Supporting lemma A."),
+              note("Candidate B assuming A.", [a]),
+              ...(shared ? [note("Candidate C assuming A.", [a])] : []),
+            ],
+          };
+        }
+        if (d.kind === "selection")
+          return { verify: [{ note: a, verifiers: [...local] }] };
+        if (d.kind === "verifier" && d.name === failedCheck)
+          return {
+            verdicts: d.judged.map((id) => ({
+              note: id,
+              verdict: id === b ? "FAIL" : "PASS",
+              report: "Checked the selected claim.",
+            })),
+          };
+        return complete(request);
+      },
+      { settings: { verifyOnSolution: true } },
+    );
+    await run.run({ kind: "explorer" });
+    const nomination = await run.run({
+      kind: "verifier",
+      verify: [b, ...(shared ? [c] : [])].map((id) => ({
+        note: id,
+        verifiers: all,
+      })),
+    });
+    expect(nomination.outcome.kind).toBe("done");
+    expect((await run.notes()).find((n) => n.id === b)!.dead).toBe(
+      failedCheck !== "requirements",
+    );
+    expect(
+      run
+        .history()
+        .find((row) => row.id === nomination.id)!
+        .state.claim!.notes.find((n) => n.id === b)!.dead,
+    ).toBe(false);
+    await run.run({ kind: "explorer" });
+    const next = await run.run({ kind: "verifier" });
+    expect(next.outcome).toMatchObject({
+      kind: "done",
+      result: { status: eligible ? "completed" : "no-work" },
+    });
+    const selection = run.requests.find(
+      ({ descriptor }) => descriptor.kind === "selection",
+    )!.descriptor;
+    if (selection.kind !== "selection") throw new Error("Missing selection");
+    expect(selection.input.nominatedSupport).toEqual(eligible ? [a] : []);
+    expect(
+      (await run.book()).checks
+        .flatMap((check) => check.values)
+        .filter((value) => value.note === a)
+        .map((value) => value.verifier),
+    ).toEqual(eligible ? [...local] : []);
+  },
+);
+
 test("a later solution nomination reoffers support declined earlier in the same publication", async () => {
   const declined = Promise.withResolvers<void>();
   let a = "",
