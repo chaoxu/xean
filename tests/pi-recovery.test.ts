@@ -55,6 +55,7 @@ function fixture(
   responses: FauxResponseStep[],
   generation: GenerationPolicy | undefined = policy,
   clock: Pick<HarnessOptions, "now" | "onWake"> & { baseDelayMs?: number } = {},
+  fetchFixture?: typeof fetch,
 ) {
   const provider = fauxProvider({
     api: "openai-responses",
@@ -68,6 +69,16 @@ function fixture(
   const stream = models.streamSimple.bind(models);
   models.streamSimple = (model, transcript, options) => {
     requests.push(structuredClone(transcript.messages));
+    if (fetchFixture)
+      return responsesStream(
+        {
+          ...model,
+          api: "openai-responses",
+          baseUrl: "https://fixture.invalid/v1",
+        },
+        normalizeContext(transcript),
+        { ...options, apiKey: "fixture", fetch: fetchFixture, maxRetries: 0 },
+      );
     return stream(model, transcript, options);
   };
   const tool = defineTool({
@@ -171,6 +182,122 @@ function fixture(
     },
   };
 }
+
+test.each([
+  {
+    name: "server identity",
+    type: "server_error",
+    code: "internal_server_error",
+    retry: true,
+  },
+  { name: "type only", type: "server_error", code: null, retry: true },
+  { name: "code only", type: null, code: "internal_server_error", retry: true },
+  {
+    name: "client error",
+    type: "invalid_request_error",
+    code: "unsupported_parameter",
+    retry: false,
+  },
+  {
+    name: "billing error",
+    type: "server_error",
+    code: "insufficient_quota",
+    retry: false,
+  },
+  {
+    name: "HTTP authentication error",
+    type: "authentication_error",
+    code: "invalid_api_key",
+    retry: false,
+    status: 401,
+  },
+  {
+    name: "response.failed",
+    type: null,
+    code: "internal_server_error",
+    retry: true,
+    failed: true,
+  },
+])(
+  "native Responses recovery preserves $name",
+  async ({ type, code, retry, status, failed }) => {
+    let calls = 0;
+    const error = {
+      type,
+      code,
+      message: retry ? "Request did not complete." : "Server error.",
+    };
+    const fetchFixture = Object.assign(
+      async () => {
+        calls++;
+        if (calls === 1 && status) return Response.json({ error }, { status });
+        const events =
+          calls === 1
+            ? [
+                failed
+                  ? {
+                      type: "response.failed",
+                      response: { status: "failed", output: [], error },
+                    }
+                  : { error },
+              ]
+            : [
+                {
+                  type: "response.output_item.done",
+                  output_index: 0,
+                  item: {
+                    type: "function_call",
+                    id: "fc_finish",
+                    call_id: "finish-call",
+                    name: "finish",
+                    arguments: '{"done":true}',
+                    status: "completed",
+                  },
+                },
+                {
+                  type: "response.completed",
+                  response: {
+                    id: "completed",
+                    status: "completed",
+                    output: [],
+                  },
+                },
+              ];
+        return new Response(
+          events
+            .map(
+              (event) =>
+                `${"error" in event ? "event: error\n" : ""}data: ${JSON.stringify(event)}\n\n`,
+            )
+            .join(""),
+          {
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const run = fixture([], policy, {}, fetchFixture);
+    const { result, raw } = await run.run();
+    expect(result.status).toBe(retry ? "done" : "unanswered");
+    expect(calls).toBe(retry ? 2 : 1);
+    expect(raw[0]!.providerError?.status).toBe(status);
+    expect(raw[0]!.providerError?.type).toBe(
+      failed ? undefined : (type ?? undefined),
+    );
+    expect(raw[0]!.providerError?.code).toBe(
+      failed ? undefined : (code ?? undefined),
+    );
+    if (retry)
+      expect(raw[1]!.content).toContainEqual(
+        expect.objectContaining({
+          type: "toolCall",
+          name: "finish",
+          arguments: { done: true },
+        }),
+      );
+  },
+);
 
 test("native Responses SSE parser treats max_output_tokens and max_messages as resumable limits", async () => {
   for (const reason of ["max_output_tokens", "max_messages"]) {

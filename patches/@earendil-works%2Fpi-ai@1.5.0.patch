@@ -307,16 +307,20 @@ index 3901bfc..3f22965 100644
              }
              return {
 diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
-index 7b3b0d7..1160b5e 100644
+index 7b3b0d7..b2ffd72 100644
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
-@@ -173,7 +173,9 @@ export const stream = (model, context, options) => {
+@@ -173,7 +173,13 @@ export const stream = (model, context, options) => {
          }
          catch (error) {
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 -            const errorMessage = formatProviderError(normalizeProviderError(error), `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
 +            const providerError = normalizeProviderError(error);
-+            output.providerError = { status: providerError.status };
++            output.providerError = {
++                status: providerError.status,
++                type: typeof error?.type === "string" ? error.type : undefined,
++                code: typeof error?.code === "string" ? error.code : undefined,
++            };
 +            const errorMessage = formatProviderError(providerError, `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
              // Sign in with ChatGPT shares the subscription's usage limit with other apps.
              // On ChatGPT Business plans, the workspace admin also sets a per-user limit.

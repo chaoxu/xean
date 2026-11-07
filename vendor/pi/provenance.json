@@ -16,13 +16,13 @@
     {
       "package": "@earendil-works/pi-ai",
       "path": "patches/@earendil-works%2Fpi-ai@1.5.0.patch",
-      "sha256": "1082a9b1bc9d0bb8c337976768d08f05442b55cc5e7cda49745d5311e3b1c748",
+      "sha256": "ecccfe7d53cda52c62854bdca46f9631fe1bf7d5af86324838e3ef130920fea5",
       "files": {
         "dist/api/anthropic-messages.js": "191b5d6d962873742ec4d832dc3ee48b6bc0270ad8762ce00adf65b19af75a65",
         "dist/api/google-generative-ai.js": "a11eb454589ff9c2d7a2c35d62a0a1bdaaf201a78e036972f8225003f2492f8b",
         "dist/api/openai-codex-responses.js": "5289d71504f750ccb16caca295ce85387aeff3fd47ab65601264f84c85a4261c",
         "dist/api/openai-responses-shared.js": "385582f6848e72294fa8cba04452ac5d8b81ffba9a53ee7070b29a6f7a34e38e",
-        "dist/api/openai-responses.js": "cffa980166d5893b1fceb1f9b59e668fb45068d09bc86c5a8ca7830d1392ff2a",
+        "dist/api/openai-responses.js": "2ac4deb8a8d162f2f6981398b021a1ec20f2cef5ebd889bab966a0e29676a8d5",
         "dist/providers/data/.manifest.json": "f7c2bca39fe42751ae80b214208ea635abc1d941fc71f7e153e7d9be2341e3ad",
         "dist/providers/data/azure.json": "e152e01a949bd0f3759d328171862661033ccb97a2eefb18a4a8fe345c82d13c",
         "dist/providers/data/openai.json": "5ace877272bc1596e3b95cefd630b29944f19a77e1bbc93c81ec36e328f7a0c4",
