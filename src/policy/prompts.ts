@@ -219,9 +219,7 @@ function reading(
   const notes = judged.map((id) => pick(input.notes, id));
   return {
     notes,
-    support: directSupport(notes, [...input.notes, ...input.support]).filter(
-      ({ id }) => !judged.includes(id),
-    ),
+    support: directSupport(notes, [...input.notes, ...input.support]),
   };
 }
 

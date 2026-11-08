@@ -27,8 +27,6 @@ export type CampaignResult = {
 export const initialCampaign = (): Campaign => ({
   status: "pending",
   guidanceThrough: 0,
-  publicationCount: -1,
-  epoch: 0,
 });
 export const turns = (data: ResearchData) =>
   new Set(
@@ -54,12 +52,12 @@ function consumed(
     state: WorkerState;
     result?: WorkerRecord["result"];
   }[],
-  epoch: number,
+  publicationCount: number,
   nominated: ReadonlySet<string>,
 ) {
   const ids = new Set<string>();
   for (const row of records) {
-    if (row.args.epoch !== epoch) continue;
+    if (row.args.epoch !== publicationCount) continue;
     const { work } = row.args;
     const claim = claimOf(row);
     if (claim) for (const entry of claim.verify) ids.add(entry.note);
@@ -123,10 +121,6 @@ export function createWorkflow(
         admitNotes(saved.notebook);
         const book = readNotebook(saved.notebook),
           { notes, accepted } = project(book);
-        if (campaign.publicationCount !== saved.notebook.publications.length) {
-          campaign.publicationCount = saved.notebook.publications.length;
-          campaign.epoch++;
-        }
         if (failed.length || campaign.error || accepted.length) {
           const unresolved = new Set([
             ...view.claimed,
@@ -174,7 +168,7 @@ export function createWorkflow(
         );
         const unavailable = consumed(
           [...saved.history, ...active],
-          campaign.epoch,
+          saved.notebook.publications.length,
           nominated,
         );
         for (const id of [...view.claimed, ...view.offered])
@@ -210,7 +204,6 @@ export function createWorkflow(
         if (requests.length)
           await workers.admit(tx, requests, {
             campaign: true,
-            epoch: campaign.epoch,
             eligible,
           });
         else if (!active.length) {
@@ -299,7 +292,7 @@ export function createWorkflow(
           await workers.admit(
             tx,
             failed.map((row) => ({ kind: "retry", job: row.id })),
-            { campaign: true, epoch: campaign.epoch },
+            { campaign: true },
           );
       }, context),
   };

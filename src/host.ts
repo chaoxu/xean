@@ -277,7 +277,7 @@ export async function open(path: string, options: OpenOptions = {}) {
         return root;
       },
       close,
-      snapshot: () => copy(data.value),
+      [Symbol.asyncDispose]: close,
       get state() {
         return copy(data.value);
       },

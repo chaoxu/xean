@@ -95,6 +95,10 @@ test("inspection returns detached snapshots, rejects mutation, and never runs pe
   ).rejects.toThrow();
   expect(await inspect(path, readReport)).toEqual(before);
   expect(native.provider.state.callCount).toBe(0);
+  await owner[Symbol.asyncDispose]();
+  owners.splice(owners.indexOf(owner), 1);
+  const replacement = await open(path);
+  await replacement.close();
 });
 
 test("old native Pi campaigns are rejected before any database rewrite", async () => {

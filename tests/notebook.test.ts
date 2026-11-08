@@ -43,7 +43,7 @@ async function fixture(file = "") {
     models: fauxModels().models,
   });
   handles.push(owner);
-  const snapshot = () => readNotebook(owner.snapshot().notebook);
+  const snapshot = () => readNotebook(owner.state.notebook);
   const publish = (notes: StoredNote[], id: string, fail = false) =>
     owner.change((data) => {
       const version = appendNotes(data.notebook, notes, id);
@@ -77,13 +77,13 @@ test("A rollback, B publication and A recovery retain both immutable batches in 
   expect(await f.publish(a, "worker/100")).toBe(1);
   expect(store.snapshot()).toBe(3);
   expect((await f.snapshot()).notes).toEqual([...a, ...b]);
-  const pins = f.owner.snapshot().notebook.publications;
+  const pins = f.owner.state.notebook.publications;
   expect(pins).toEqual([
     { id: "worker/2", version: 2, notes: ["w2.1"] },
     { id: "worker/100", version: 1, notes: ["w100.1", "w100.2"] },
   ]);
   expect(await f.publish(a, "worker/100")).toBe(1);
-  expect(f.owner.snapshot().notebook.publications).toEqual(pins);
+  expect(f.owner.state.notebook.publications).toEqual(pins);
   await expect(
     f.publish([{ ...a[0]!, text: "Changed retry." }, a[1]!], "worker/100"),
   ).rejects.toBeInstanceOf(ConflictError);

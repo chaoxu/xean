@@ -13,7 +13,6 @@ import type {
   Verification,
   VerifierInput,
 } from "./policy/contracts.ts";
-import type { PiRoleProfile, SolveSettings } from "./policy/settings.ts";
 import type { CodexRequest, CodexResult } from "./policy/source.ts";
 import type { Definition, NotebookReference } from "./state.ts";
 
@@ -21,15 +20,13 @@ export type WorkInput =
   | {
       kind: "explorer";
       input: ExplorerInput;
-      profile: PiRoleProfile;
     }
   | {
       kind: "selector";
       input: SelectionInput;
-      settings: SolveSettings;
       verify?: Verification[];
     }
-  | { kind: "verify"; input: VerifierInput; settings: SolveSettings };
+  | { kind: "verify"; input: VerifierInput };
 export type WorkerArgs = {
   campaign: boolean;
   epoch: number;
@@ -40,7 +37,6 @@ export type WorkerArgs = {
 export type WorkerState = { claim?: VerifierInput };
 export type WorkerResult = {
   status: "completed" | "busy" | "no-work";
-  verify: Verification[];
   notes?: string[];
 };
 export type WorkerRecord = {
@@ -58,8 +54,6 @@ export type Campaign = {
   error?: string;
   accepted?: string;
   guidanceThrough: number;
-  publicationCount: number;
-  epoch: number;
 };
 export type SourceRecord = {
   id: string;

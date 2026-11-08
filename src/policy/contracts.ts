@@ -10,7 +10,7 @@ export const applicationId = "xean-solve";
 
 export type RoleName = "explorer" | "selection" | "verifier";
 const establishingVerifiers = ["source", "correctness"] as const;
-const localVerifiers = ["source", "correctness", "reconstruction"] as const;
+const localVerifiers = [...establishingVerifiers, "reconstruction"] as const;
 /** The verifiers in the order they run; selection asks for a prefix of this order. */
 export const verifierNames = [
   ...establishingVerifiers,
@@ -257,13 +257,10 @@ export function judgedBy(
   const known = new Map(
     [...input.notes, ...input.support].map((note) => [note.id, note]),
   );
-  const preceding =
+  const preceding: readonly VerifierName[] =
     verifier === "reconstruction"
-      ? (["source", "correctness"] as readonly VerifierName[])
-      : (verifierNames.slice(
-          0,
-          verifierNames.indexOf(verifier),
-        ) as readonly VerifierName[]);
+      ? establishingVerifiers
+      : verifierNames.slice(0, verifierNames.indexOf(verifier));
   const passes = new Set<string>();
   const failures = new Set<string>();
   for (const value of recorded) {

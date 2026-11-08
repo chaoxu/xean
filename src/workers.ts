@@ -97,6 +97,7 @@ function claimFor(
   work: Extract<WorkInput, { kind: "selector" }>,
   selected: Verification[],
   notes: Note[],
+  window: number,
 ) {
   if (work.input.verifyOnSolution) {
     const roots = selected
@@ -109,15 +110,14 @@ function claimFor(
     ]);
     selected = selected.filter(({ note }) => related.has(note));
   }
-  const batch = verificationPrefix(selected, notes, work.settings.window);
+  const batch = verificationPrefix(selected, notes, window);
   if (!batch.length) return;
   const listed = batch.map(({ note }) => pick(notes, note));
-  const ids = new Set(listed.map(({ id }) => id));
   return {
     task: work.input.task,
     verify: batch,
     notes: listed,
-    support: directSupport(listed, notes).filter(({ id }) => !ids.has(id)),
+    support: directSupport(listed, notes),
   } satisfies VerifierInput;
 }
 
@@ -195,7 +195,7 @@ export function createWorkers(
         const answer = await call(
           "role",
           { kind: "explorer", input },
-          work.profile,
+          definition.settings.explorer,
         );
         const { notes } = explorerResultFor(input.notes, input.namespace).parse(
           answer.value,
@@ -209,7 +209,6 @@ export function createWorkers(
         }, ctx);
         return {
           status: "completed",
-          verify: [],
           notes: stored.map(({ id }) => id),
         };
       }
@@ -217,12 +216,11 @@ export function createWorkers(
       if (!claim) {
         let selected = work.kind === "selector" ? work.verify : undefined;
         if (work.kind === "selector" && selected === undefined) {
-          if (!work.input.notes.length)
-            return { status: "no-work", verify: [] };
+          if (!work.input.notes.length) return { status: "no-work" };
           const answer = await call(
             "selection",
             { kind: "selection", input: work.input },
-            work.settings.correctness,
+            definition.settings.correctness,
           );
           selected = selectionResultFor(work.input.notes).parse(
             answer.value,
@@ -245,7 +243,12 @@ export function createWorkers(
               verify: selected,
             });
             if (parsed.success)
-              candidate = claimFor(work, parsed.data.verify, notes);
+              candidate = claimFor(
+                work,
+                parsed.data.verify,
+                notes,
+                definition.settings.window,
+              );
           }
           if (!candidate) return "no-work" as const;
           if (candidate.verify.some(({ note }) => occupied.has(note)))
@@ -253,11 +256,10 @@ export function createWorkers(
           draft.claim = copy(candidate);
           return copy(candidate);
         }, ctx);
-        if (typeof acquired === "string")
-          return { status: acquired, verify: [] };
+        if (typeof acquired === "string") return { status: acquired };
         claim = acquired;
       }
-      await verify(claim, work.settings, {
+      await verify(claim, definition.settings, {
         call,
         recorded: async () =>
           data.value.notebook.checks
@@ -324,7 +326,7 @@ export function createWorkers(
           if (!value) throw error;
         },
       });
-      return { status: "completed", verify: claim.verify };
+      return { status: "completed" };
     },
     finish: async (outcome, tx) => {
       const draft = await tx.draft(data);
@@ -349,7 +351,7 @@ export function createWorkers(
   async function admit(
     tx: Tx,
     requests: readonly WorkerRequest[],
-    options: { campaign: boolean; epoch: number; eligible?: readonly string[] },
+    options: { campaign: boolean; eligible?: readonly string[] },
   ) {
     if (!requests.length) throw new Error("Worker group must be nonempty");
     const draft = await tx.draft(data);
@@ -390,7 +392,6 @@ export function createWorkers(
         work = {
           kind: "verify",
           input: prior.state.claim,
-          settings: work.settings,
         };
       if (work.kind === "verify")
         for (const { note } of work.input.verify) {
@@ -469,7 +470,6 @@ export function createWorkers(
         request.kind === "explorer"
           ? {
               kind: "explorer",
-              profile: definition.settings.explorer,
               input: {
                 namespace: `w${draft.nextNoteNamespace++}`,
                 task: definition.task,
@@ -481,7 +481,6 @@ export function createWorkers(
             }
           : {
               kind: "selector",
-              settings: definition.settings,
               input: {
                 task: definition.task,
                 notes:
@@ -503,7 +502,7 @@ export function createWorkers(
             };
       return copy({
         campaign: options.campaign,
-        epoch: options.epoch,
+        epoch: draft.notebook.publications.length,
         attempt: 0,
         work,
       });
@@ -515,7 +514,6 @@ export function createWorkers(
       (tx) =>
         admit(tx, requests, {
           campaign: false,
-          epoch: data.value.campaign?.epoch ?? 0,
         }),
       BACKGROUND_CONTEXT,
     );

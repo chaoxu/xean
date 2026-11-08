@@ -39,7 +39,7 @@ async function fixture(initialized = true) {
     });
   return {
     change: owner.change,
-    snapshot: () => readNotebook(owner.snapshot().notebook),
+    snapshot: () => readNotebook(owner.state.notebook),
   };
 }
 
@@ -212,8 +212,6 @@ test("terminal input remains pending without changing the completed result", asy
   expect(after.notes).toEqual(before.notes);
   expect(native.provider.state.callCount).toBe(2);
   expect(
-    owner
-      .snapshot()
-      .notebook.inputs.map(({ id, consumed }) => ({ id, consumed })),
+    owner.state.notebook.inputs.map(({ id, consumed }) => ({ id, consumed })),
   ).toEqual([{ id: "late", consumed: false }]);
 });

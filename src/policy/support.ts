@@ -44,13 +44,14 @@ export function supportClosure(
   return [...seen].filter((id) => !roots.has(id)).sort(order);
 }
 
-/** Immediate declared dependencies of selected roots, without transitive traversal. */
+/** Immediate declared dependencies outside the selected roots, in known-note order. */
 export function directSupport(
-  roots: readonly Pick<Note, "support">[],
+  roots: readonly Pick<Note, "id" | "support">[],
   known: readonly Note[],
 ): Note[] {
-  const selected = new Set(roots.flatMap(({ support }) => support));
-  return known.filter(({ id }) => selected.has(id));
+  const parents = new Set(roots.flatMap(({ support }) => support));
+  for (const { id } of roots) parents.delete(id);
+  return known.filter(({ id }) => parents.has(id));
 }
 
 /** Keep selected roots and their direct declared assumptions for one local check. */
@@ -59,14 +60,10 @@ export function reconstructionInput(
   roots: readonly string[],
 ): ReconstructionInput {
   const selected = new Set(roots);
-  const known = [...input.notes, ...input.support];
-  const assumptions = directSupport(
-    input.notes.filter(({ id }) => selected.has(id)),
-    known,
-  ).filter(({ id }) => !selected.has(id));
+  const notes = input.notes.filter(({ id }) => selected.has(id));
   return {
     task: input.task,
-    notes: input.notes.filter(({ id }) => selected.has(id)),
-    support: assumptions,
+    notes,
+    support: directSupport(notes, [...input.notes, ...input.support]),
   };
 }

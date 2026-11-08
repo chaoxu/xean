@@ -774,7 +774,7 @@ test("solution-only selection defers a local lemma checklist until a full root i
   const explored = await run.run({ kind: "explorer" });
   expect((await run.run({ kind: "verifier" })).outcome).toMatchObject({
     kind: "done",
-    result: { status: "no-work", verify: [] },
+    result: { status: "no-work" },
   });
   expect((await run.book()).checks).toEqual([]);
   expect(run.requests.map(({ descriptor }) => descriptor.kind)).toEqual([

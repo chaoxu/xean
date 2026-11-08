@@ -34,17 +34,13 @@ program
     ) => {
       const config = await Bun.file(settings).json();
       if (options.verifyOnSolution) config.verifyOnSolution = true;
-      const owner = await open(resolve(campaign), {
+      await using owner = await open(resolve(campaign), {
         create: {
           task: await Bun.file(task).json(),
           settings: config,
         },
       });
-      try {
-        await print(readStatus(owner.snapshot()));
-      } finally {
-        await owner.close();
-      }
+      await print(readStatus(owner.state));
     },
   );
 for (const command of ["run", "resume"] as const) {
@@ -96,17 +92,13 @@ for (const command of ["submit", "guide"] as const) {
           command === "submit"
             ? await Bun.file(input).json()
             : await Bun.file(input).text();
-        const owner = await open(resolve(campaign));
-        try {
-          const receipt = await owner.change((data) =>
-            command === "submit"
-              ? submitNotes(data, options.id, value)
-              : guide(data, options.id, value),
-          );
-          await print(receipt);
-        } finally {
-          await owner.close();
-        }
+        await using owner = await open(resolve(campaign));
+        const receipt = await owner.change((data) =>
+          command === "submit"
+            ? submitNotes(data, options.id, value)
+            : guide(data, options.id, value),
+        );
+        await print(receipt);
       },
     );
 }
