@@ -308,6 +308,37 @@ disconnect near 15 minutes ([#24](https://github.com/chaoxu/xean/issues/24)).
 external Codex source usage. Retained reasoning and failed-response usage remain
 incompletely measured, so recorded costs can be lower bounds.
 
+## Architecture and sources of truth
+
+`xean` implements research policy using Chord jobs and Pi model execution.
+Each kind of state has an authoritative record:
+
+| State                                            | Authority                                                                                                |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Task and settings                                | The campaign definition, frozen at initialization. Workers read it without storing settings in each job. |
+| Worker activity, claims, and campaign control    | Chord jobs and research state in the campaign database.                                                  |
+| Pi assignments, conversations, and call receipts | Pi Durable in the campaign database.                                                                     |
+| External Codex source receipts                   | Research state in the campaign database, including the request and raw output.                           |
+| Admitted mathematical content                    | Immutable notebook publications, referenced by revision and note IDs.                                    |
+| Note verification status                         | Derived from recorded checks, caller attestations, and declared support.                                 |
+
+Eligibility uses the admitted publication count. Each worker saves that count
+at admission as its `epoch` and retains it across retries. The controller compares
+it with the current publication count to decide whether earlier work remains
+consumed. Campaign state carries no separate publication counter.
+
+Frozen worker inputs and Pi assignments preserve the assigned inputs during
+recovery. These snapshots intentionally contain copied content. Terminal worker
+receipts stay in application history because Chord retires settled job records.
+Role calls await Pi's `waitForIdle` after submission settlement because Pi can
+still have tasks to finish.
+
+Shared policy helpers also prevent drift. `directSupport` in
+[support.ts](src/policy/support.ts) constructs direct dependencies outside the
+selected roots for verification and reconstruction. The verifier lists in
+[contracts.ts](src/policy/contracts.ts) define check order and prerequisites.
+Prefer these authorities and native Chord and Pi APIs when simplifying code.
+
 ## Qualification
 
 The 4.5.0 release's fresh campaigns on Pi 1.5.0 passed independent model review
@@ -329,7 +360,9 @@ blind-reconstruction policy qualification despite its internal `accepted` outcom
 Library entry points include `open`, `inspect`, and `readReport`. `open` is passive
 by default (`execute: false`). It can initialize or change state without starting
 research jobs or recovering model calls. Supply `execute: true` to run work and
-authenticated `models` when using saved Pi credentials. Always close the owner.
+authenticated `models` when using saved Pi credentials. Use
+`await using owner = await open(...)` for automatic cleanup, or call
+`await owner.close()` explicitly. `owner.state` returns a detached state snapshot.
 For automatic campaigns, `await owner.wait()` returns the campaign result.
 `await owner.resume()` retries a `call-failure` before waiting again.
 
@@ -342,8 +375,8 @@ Requests select `explorer` or `verifier`. Explorer publishes its notes and
 summaries. A Verifier selects work for checks. Pass `verify` in a Verifier
 request to supply an explicit selection. Each invocation processes at most one
 batch within `window`. A default Verifier may instead complete with result
-`{status: "no-work", verify: []}` when no selected work remains, or
-`{status: "busy", verify: []}` when its selection conflicts with competing work.
+`{status: "no-work"}` when no selected work remains, or
+`{status: "busy"}` when its selection conflicts with competing work.
 These results add no checks. Use `inspect(path, readNotes)` to read admitted notes.
 
 Default Verifiers created together receive separate subsets of target notes,

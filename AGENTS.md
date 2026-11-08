@@ -18,6 +18,8 @@ allowed only when the format cannot render monospace.
 - Keep mathematical content authoritative in one place and retain references
   where Pi already stores the value. Preserve full external attestation reports
   in model-visible note views while omitting internal PASS explanations.
+  Follow the README's [sources of truth](README.md#architecture-and-sources-of-truth)
+  when changing state ownership or removing apparent duplication.
 - Run Explorers and Verifiers under one database owner and a shared `maxWorkers` cap.
   Refill on any completion, offering eligible unclaimed verification before new
   exploration. Count completed and in-flight Explorers against `maxExplorerTurns`.
