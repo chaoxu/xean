@@ -6,6 +6,28 @@ uses the CLI or library to run and inspect a campaign. It handles literature
 discovery, computational experiments, scheduling across problems, and independent
 review of the result.
 
+Give this prompt to an agent with terminal and web access, replacing the bracketed
+text:
+
+```text
+Use xean (https://github.com/chaoxu/xean) to work on this problem:
+
+Problem: [state the exact problem, definitions, and assumptions]
+Completion criteria: [what a successful result must establish]
+
+Read the README and FAQ for the version you run. Handle installation and model
+configuration using my available credentials. Ask me only for essential missing
+problem details or authentication.
+
+Check current literature, including whether the exact problem is already settled.
+Prepare notes with exact statements, hypotheses, citations, and unresolved gaps.
+Initialize a fresh campaign and submit these notes before running it.
+
+Run the campaign, monitor its status, and use documented recovery when needed.
+If it is accepted, export the argument and arrange an independent proof review.
+Report the campaign outcome, useful results, remaining gaps, and artifact paths.
+```
+
 Inside `xean`, Explorers choose mathematical directions and append notes with
 summaries. Verifiers select work and check sources, correctness, task requirements,
 and blind reconstruction. Explorers and Verifiers can run together under a shared
@@ -21,7 +43,7 @@ settled, before preparing the notes.
 
 The [FAQ](docs/faq.md) explains the design philosophy, what notes contain, the
 division of work between agents, and the limits of the system. The instructions
-below describe the current CLI and library.
+below are CLI and library reference material for the controlling agent.
 
 ## Start a campaign
 
