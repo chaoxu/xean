@@ -2,7 +2,7 @@ import {
   BACKGROUND_CONTEXT,
   type Context,
 } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   bool,
   defineJob,
@@ -18,7 +18,7 @@ import {
   type SingletonHandle,
   type StoreSelf,
   type Tx,
-} from "@earendil-works/chord/next";
+} from "@earendil-works/chord";
 import {
   admitNotes,
   appendNotes,

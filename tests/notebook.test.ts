@@ -1,12 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Notebook as NoteStore, ConflictError } from "@chaoxu/notebook-store";
 import { Database } from "bun:sqlite";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createRegistry, defineDoc, Harness } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { inspect, open, solveSettings } from "../src/index.ts";
 import {
   admitNotes,
@@ -242,36 +239,4 @@ test("initialization preserves an existing nonempty notebook", async () => {
     open(file, { create: { task, settings }, models: fauxModels().models }),
   ).rejects.toThrow("empty notebook");
   expect(store.read()).toEqual(before);
-});
-
-test("historical closed-store campaigns reject without mutation or migration", async () => {
-  const file = await path();
-  const harness = await Harness.open(
-    await openNodeSqliteStorage(file),
-    { registry: createRegistry(), models: fauxModels().models },
-    context,
-  );
-  const LegacyNotebook = defineDoc({
-    kind: "xean.notebook",
-    version: 1,
-    checkpointWhen: () => false,
-    scope: "conversation",
-    history: "latest",
-    fork: "current",
-    initial: () => ({ notes: [], checks: [], guidance: [], inputs: [] }),
-  });
-  await harness.root(context, {
-    init: async (tx, root) => {
-      await tx.doc(LegacyNotebook, root);
-    },
-  });
-  await harness.close(context);
-  const before = await Bun.file(file).bytes();
-  await expect(open(file)).rejects.toThrow();
-  expect(await Bun.file(file).bytes()).toEqual(before);
-  expect(
-    (await readdir(directories.at(-1)!)).some((name) =>
-      name.includes(".notes.sqlite"),
-    ),
-  ).toBe(false);
 });

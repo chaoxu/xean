@@ -1,5 +1,8 @@
-import { copyJson, type Context, type JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
+import {
+  BACKGROUND_CONTEXT,
+  type Context,
+} from "@earendil-works/chord/context";
 import { cleanupSessionResources } from "@earendil-works/pi-ai";
 import { arr, lit, obj, str, union } from "@earendil-works/pi-schema";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";

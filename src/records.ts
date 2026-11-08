@@ -6,7 +6,7 @@ import {
   obj,
   unknown,
   type Schema,
-} from "@earendil-works/chord/next";
+} from "@earendil-works/chord";
 import type {
   ExplorerInput,
   SelectionInput,

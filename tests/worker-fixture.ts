@@ -2,7 +2,7 @@ import { afterEach } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels, type TranscriptContext } from "@earendil-works/pi-ai";
 import {

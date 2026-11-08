@@ -1,5 +1,5 @@
 diff --git a/dist/harness/agent.js b/dist/harness/agent.js
-index de65a5e..0566214 100644
+index dbae2ff..fcb0f53 100644
 --- a/dist/harness/agent.js
 +++ b/dist/harness/agent.js
 @@ -45,6 +45,7 @@ export function resolveSettings(settings) {
@@ -11,11 +11,11 @@ index de65a5e..0566214 100644
          // Field by field, so an explicitly undefined interval keeps its default.
          progress: {
 diff --git a/dist/harness/context.d.ts b/dist/harness/context.d.ts
-index e79adbf..a462f0f 100644
+index fa2cac3..477d7f4 100644
 --- a/dist/harness/context.d.ts
 +++ b/dist/harness/context.d.ts
 @@ -1,8 +1,11 @@
- import type { Context } from "@earendil-works/chord";
+ import type { Context } from "@earendil-works/chord/context";
 -import type { Message } from "@earendil-works/pi-ai";
 +import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
  import type { SessionImpl } from "../session/session.ts";
@@ -201,7 +201,7 @@ index b64a1ec..b2bfde5 100644
  /** Objects `freezeJson()` froze with everything in them. `Object.isFrozen()` holds for shallow freezes too. */
  const deeplyFrozen = new WeakSet();
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index ac42dfe..723cdc3 100644
+index 27e60bb..436cf1b 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -6,6 +6,7 @@ import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.j
@@ -312,16 +312,16 @@ index ac42dfe..723cdc3 100644
          return answer(runtime, message, context);
      }
      // The retry and compaction policies govern the next attempt, so they are read now rather than pinned at preparation.
-@@ -606,7 +628,7 @@ async function classify(runtime, request, message, context) {
-     const overflow = message.stopReason === "error" && isContextOverflow(message);
-     const compaction = compactionPolicy(settings, ref);
-     if (overflow && compacted === undefined && compaction.enabled) {
+@@ -608,7 +630,7 @@ async function classify(runtime, request, message, context) {
+         ? compactionPolicy(settings, ref, (await runtime.agent(context)).compaction)
+         : undefined;
+     if (compaction?.enabled === true) {
 -        const view = await runtime.context(conversationId, context, { at: cutoff });
 +        const view = await runtime.context(conversationId, context, { at: cutoff, projection: contextProjection(runtime.settings, runtime.models.getModel(ref.provider, ref.modelId)) });
          if (selectCut(view, compaction.keepRecentTokens) !== undefined) {
              const text = message.errorMessage ?? "Context overflow";
              await runtime.commit(async (tx) => {
-@@ -625,7 +647,7 @@ async function classify(runtime, request, message, context) {
+@@ -627,7 +649,7 @@ async function classify(runtime, request, message, context) {
      const retry = message.stopReason === "error" &&
          !overflow &&
          isRetryableAssistantError(message) &&
@@ -330,7 +330,7 @@ index ac42dfe..723cdc3 100644
          attempt <= policy.maxRetries;
      const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
      await runtime.commit(async (tx) => {
-@@ -643,7 +665,15 @@ async function classify(runtime, request, message, context) {
+@@ -645,7 +667,15 @@ async function classify(runtime, request, message, context) {
              };
              return { status: "sleeping", checkpoint, until };
          }
@@ -347,7 +347,7 @@ index ac42dfe..723cdc3 100644
          await endFailedRun(tx, runtime, live, failure, { status: "unanswered", reason: "model_error", detail: text });
          return {
              status: "terminal",
-@@ -928,6 +958,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
+@@ -930,6 +960,13 @@ async function finishToolRound(runtime, assistant, tools, context) {
   * REMINDER: every built-in writer of assistant entries goes through here, so the usage ledger stays complete.
   */
  async function appendAssistant(tx, conversationId, message) {
@@ -375,10 +375,10 @@ index e286f00..d8a3768 100644
      entries(query, limit, cursor, context) {
          const scan = conversationEntries(this.id, query);
 diff --git a/dist/harness/live.d.ts b/dist/harness/live.d.ts
-index a70aedb..d47bf84 100644
+index f5df477..1212786 100644
 --- a/dist/harness/live.d.ts
 +++ b/dist/harness/live.d.ts
-@@ -109,6 +109,9 @@ export type RunFailure = {
+@@ -110,6 +110,9 @@ export type RunFailure = {
  };
  /** Run control (spec §8.2). */
  export type LiveRun = {
@@ -389,7 +389,7 @@ index a70aedb..d47bf84 100644
      taskId: TaskId;
      /** The run's placed inputs, settled when it ends; `[]` once it answered and runs only its `afterRun` tasks. */
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index 365ea3a..3ddaf26 100644
+index ba3dabf..04423ed 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
 @@ -2607,7 +2607,7 @@ export class TaskScheduler {
@@ -402,10 +402,10 @@ index 365ea3a..3ddaf26 100644
                  // Checked again here, synchronously up to the install below: a commit published since the read returned
                  // was not seen by `#advanceContexts`, so a range that missed it must not be advanced.
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index eb64e47..489eb88 100644
+index 7f4a0ba..c597b3b 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -543,12 +543,26 @@ export type CompactionResult = {
+@@ -560,12 +560,26 @@ export type CompactionResult = {
      entryId?: EntryId;
      submissionId?: SubmissionId;
  };
@@ -432,7 +432,7 @@ index eb64e47..489eb88 100644
      readonly compaction?: CompactionSettings;
      readonly progress?: Partial<ProgressPolicy>;
      readonly toolExecution?: ToolExecutionMode;
-@@ -593,6 +607,7 @@ export type Settings = {
+@@ -610,6 +624,7 @@ export type Settings = {
      readonly extensions?: readonly Extension[];
      readonly stream: ConversationStreamOptions;
      readonly retry: ConversationRetryPolicy;
@@ -440,7 +440,7 @@ index eb64e47..489eb88 100644
      /** Harness-wide policy over the defaults; per-model overrides apply where the model is known. */
      readonly compaction: CompactionPolicy & Pick<CompactionSettings, "modelOverrides">;
      readonly progress: ProgressPolicy;
-@@ -785,6 +800,7 @@ export interface Conversation {
+@@ -802,6 +817,7 @@ export interface Conversation {
       */
      context(context: Context, options?: {
          readonly at?: EntryId;
@@ -448,7 +448,7 @@ index eb64e47..489eb88 100644
      }): Promise<ContextView>;
      /** Fork-aware history of this conversation, newest first unless `query.order` is `ascending`. */
      entries(query: Omit<EntryQuery, "conversationId">, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<EntryRecord, Cursor>>;
-@@ -891,8 +907,10 @@ export interface GenerationHooks {
+@@ -908,8 +924,10 @@ export interface GenerationHooks {
      /** Before every request attempt, including recovery; the result is used for that request only. */
      beforeRequest(request: {
          readonly messages: readonly Message[];
@@ -461,7 +461,7 @@ index eb64e47..489eb88 100644
      /**
       * After pi-ai builds the provider request body, before it is sent; the result replaces the body for that request only.
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 454e933..742e6f3 100644
+index 051d498..c5b5871 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -17,7 +17,7 @@ export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from ".
@@ -473,116 +473,11 @@ index 454e933..742e6f3 100644
  export { UsageDoc, type UsageState } from "./harness/usage.ts";
  export type { ConversationView, ConversationWindow } from "./harness/view.ts";
  export { createSession } from "./session/session.ts";
-diff --git a/dist/storage/sqlite/storage.d.ts b/dist/storage/sqlite/storage.d.ts
-index bdf2b1f..a5de7f0 100644
---- a/dist/storage/sqlite/storage.d.ts
-+++ b/dist/storage/sqlite/storage.d.ts
-@@ -3,6 +3,8 @@ import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
- import type { CommitResult, ConversationId, ConversationQuery, ConversationRecord, Cursor, DocumentAddress, DocumentId, DocumentPoint, DocumentQuery, DocumentRecord, EntryId, EntryQuery, EntryRecord, Id, Page, Seq, Storage, StorageWrite, StoredDocument, SubmissionId, SubmissionQuery, SubmissionRecord, TaskId, TaskQuery, TaskRecord } from "../../types.ts";
- type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
- export type SqliteStorageOptions = {
-+    /** Requires a caller-held read transaction; performs no migrations or writes. */
-+    readonly readOnly?: boolean;
-     /**
-      * Prefix for every table and index in the durable schema. It must be a SQLite identifier and must not use
-      * SQLite's reserved `sqlite_` prefix. Existing data is not migrated when this changes.
-@@ -18,6 +20,7 @@ export declare class SqliteStorage implements Storage {
-     private closing;
-     private admittedReads;
-     private readsDrained;
-+    private readonly readOnly;
-     private constructor();
-     /** Initialize storage over an owned SQLite database facade. */
-     static open(db: SqliteDatabase, options?: SqliteStorageOptions): Promise<SqliteStorage>;
-diff --git a/dist/storage/sqlite/storage.js b/dist/storage/sqlite/storage.js
-index 890f142..0059cab 100644
---- a/dist/storage/sqlite/storage.js
-+++ b/dist/storage/sqlite/storage.js
-@@ -2,7 +2,7 @@ import { apply } from "@earendil-works/chord/delta";
- import { StorageRequestError } from "../../errors.js";
- import { idFromNumber, seqFromNumber } from "../../ids.js";
- import { nextCursor, scanStart } from "../scan.js";
--import { applySqliteMigrationsForSchema } from "./migrations.js";
-+import { applySqliteMigrationsForSchema, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.js";
- import { createSqliteSchema } from "./schema.js";
- const parseJson = (value) => JSON.parse(value);
- const encodeJson = (value) => JSON.stringify(value);
-@@ -101,20 +101,25 @@ export class SqliteStorage {
-     closing;
-     admittedReads = 0;
-     readsDrained;
--    constructor(db, schema, nextId) {
-+    constructor(db, schema, nextId, readOnly) {
-+        this.readOnly = readOnly;
-         this.db = db;
-         this.schema = schema;
-         this.nextId = nextId;
-     }
--    /** Initialize storage over an owned SQLite database facade. */
-+    /** readOnly requires the caller to hold a SQLite read transaction until close. */
-     static async open(db, options = {}) {
-         try {
-             const schema = createSqliteSchema(options.prefix);
--            await applySqliteMigrationsForSchema(db, schema);
-+            if (options.readOnly) {
-+                const version = await db.get(`SELECT version FROM ${schema.tables.durableSchema} WHERE singleton = 1`);
-+                if (version?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
-+                    throw new Error("Unsupported durable SQLite schema version");
-+            } else await applySqliteMigrationsForSchema(db, schema);
-             const metadata = await db.get(`SELECT next_id, next_seq FROM ${schema.tables.durableMetadata} WHERE singleton = 1`);
-             if (metadata === undefined)
-                 throw new Error("Durable SQLite metadata is missing");
--            return new SqliteStorage(db, schema, Number(metadata.next_id));
-+            return new SqliteStorage(db, schema, Number(metadata.next_id), options.readOnly ?? false);
-         }
-         catch (error) {
-             try {
-@@ -132,7 +137,7 @@ export class SqliteStorage {
-      * before it. No savepoints, which Durable Objects do not allow: the checks run before the writes instead.
-      */
-     async commit(batches, receive, _context) {
--        this.assertOpen();
-+        this.assertOpen(true);
-         const seqs = [];
-         let refused;
-         let candidateNextId = this.nextId;
-@@ -193,7 +198,7 @@ export class SqliteStorage {
-         await this.applyDocumentActions(executor, documentActions, seq);
-     }
-     async mintId() {
--        this.assertOpen();
-+        this.assertOpen(true);
-         if (!Number.isSafeInteger(this.nextId))
-             throw new Error("ID space is exhausted");
-         return idFromNumber(this.nextId++);
-@@ -434,6 +439,8 @@ export class SqliteStorage {
-     }
-     async document(id, at, _context) {
-         this.assertOpen();
-+        if (this.readOnly)
-+            return this.admitRead(() => this.materializeDocument(this.db, id, at));
-         // The record and revision queries must observe one committed state; a commit between them can replace the base.
-         return this.db.transaction((transaction) => this.materializeDocument(transaction, id, at));
-     }
-@@ -739,9 +746,11 @@ export class SqliteStorage {
-             }
-         }
-     }
--    assertOpen() {
-+    assertOpen(write = false) {
-         if (this.closed)
-             throw new Error("SqliteStorage is closed");
-+        if (write && this.readOnly)
-+            throw new Error("SqliteStorage is read-only");
-     }
- }
- //# sourceMappingURL=storage.js.map
-\ No newline at end of file
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b43143c..e75ed74 100644
+index 783d564..be71c3b 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -3,7 +3,7 @@ import type { Op } from "@earendil-works/chord/delta";
+@@ -5,7 +5,7 @@ import type { WatchCall, WatchEnd, WatchHandle } from "@earendil-works/chord/wat
  import type { Message, Models } from "@earendil-works/pi-ai";
  import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
  import type { ExecutionEnv } from "./env/index.ts";
@@ -591,7 +486,7 @@ index b43143c..e75ed74 100644
  /** JSON object used as the root of every durable document. */
  export type JsonObject = {
      [key: string]: JsonValue;
-@@ -289,6 +289,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
+@@ -291,6 +291,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
      /** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
      context(conversationId: ConversationId, context: Context, options?: {
          readonly at?: EntryId;

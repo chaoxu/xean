@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   verifierNames,
   type Note,

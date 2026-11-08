@@ -2,7 +2,6 @@ import { lstatSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Database } from "bun:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -14,8 +13,12 @@ import {
   sqliteBackend,
   type SingletonHandle,
   type Store,
-} from "@earendil-works/chord/next";
-import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
+} from "@earendil-works/chord";
+import {
+  NodeSqliteDatabase,
+  openNodeSqliteDatabase,
+} from "@earendil-works/chord/sqlite/node";
+import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
@@ -114,25 +117,9 @@ function assertSingleLink(nlink: number) {
     throw new Error("Hard-linked research database paths are unsupported");
 }
 
-/** Reject SQL writes and missing files while allowing SQLite to maintain WAL sidecars. */
-function openReadDatabase(path: string) {
-  const database = new Database(path, {
-    create: false,
-    readwrite: true,
-    strict: true,
-  });
-  try {
-    database.exec("PRAGMA query_only = ON; BEGIN");
-    return new NodeSqliteDatabase(database, { readOnly: true });
-  } catch (error) {
-    database.close();
-    throw error;
-  }
-}
-
 async function openOwnedStore(path: string) {
   const database = new NodeSqliteDatabase(
-    new Database(path, { create: true, strict: true }),
+    new DatabaseSync(path, { timeout: 0 }),
   );
   try {
     await database.exec(
@@ -327,12 +314,27 @@ export async function inspect<T>(
 ): Promise<T> {
   path = await canonicalPath(path, false);
   assertSingleLink((await stat(path)).nlink);
-  const database = openReadDatabase(path);
-  let store: Store | undefined;
-  let session: Session | undefined;
-  try {
-    store = await openStore(sqliteBackend(database), context);
-    const record = await findDocument(database, {
+  await using connection = new AsyncDisposableStack();
+  const database = await openNodeSqliteDatabase(path, {
+    mode: "read-only",
+    busyTimeoutMs: 0,
+  });
+  connection.defer(() => database.close());
+  return await database.transaction(async (transaction) => {
+    await using snapshot = new AsyncDisposableStack();
+    // Chord and Pi borrow this snapshot; the outer transaction owns its lifetime.
+    const store = await openStore(
+      sqliteBackend(
+        Object.assign(transaction, {
+          transaction: <R>(read: (tx: SqliteExecutor) => Promise<R>) =>
+            read(transaction),
+          close: async () => {},
+        }),
+      ),
+      context,
+    );
+    snapshot.defer(() => store.close(context));
+    const record = await findDocument(transaction, {
       owner: ResearchType.name,
       namespace: "chord",
       kind: ResearchState.name,
@@ -343,23 +345,18 @@ export async function inspect<T>(
       record.fingerprint !== ResearchState.fingerprint
     )
       throw new Error("Not a current xean campaign; fresh campaigns only");
-    const data = (await loadDocument(database, record)).value as ResearchData;
+    const data = (await loadDocument(transaction, record))
+      .value as ResearchData;
     validateDefinition(data.definition);
     if (data.notebook.path !== `${path}.notes.sqlite`)
       throw new Error("Notebook path does not match campaign");
     readNotebook({ ...data.notebook, publications: [] });
     readonlyNotebook(data.notebook);
     const storage = await StoreStorage.open(store, "pi", context);
-    session = createSession(storage, { documentRetentionMs: 0 });
+    const session = createSession(storage, { documentRetentionMs: 0 });
+    snapshot.defer(() => session.close(context));
     return await read(data, session);
-  } finally {
-    try {
-      await session?.close(context);
-    } finally {
-      if (store) await store.close(context);
-      else await database.close();
-    }
-  }
+  });
 }
 
 export function exportAccepted(path: string): Promise<string> {

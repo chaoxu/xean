@@ -1,6 +1,8 @@
-import type { Context } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import type { SingletonHandle, StoreSelf } from "@earendil-works/chord/next";
+import {
+  BACKGROUND_CONTEXT as context,
+  type Context,
+} from "@earendil-works/chord/context";
+import type { SingletonHandle, StoreSelf } from "@earendil-works/chord";
 import { admitNotes, project, readNotebook } from "./state.ts";
 import {
   copy,

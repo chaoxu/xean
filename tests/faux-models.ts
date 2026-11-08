@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createModels, type TranscriptContext } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,

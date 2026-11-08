@@ -1,55 +1,118 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
-  "version": "1.5.0",
+  "commit": "6e2222a8dda06e3d69fad46d630f152f5873567a",
+  "version": "1.5.0-dev.6e2222a8",
   "patches": [
     {
-      "package": "@earendil-works/chord",
-      "path": "patches/@earendil-works%2Fchord@1.5.0.patch",
-      "sha256": "5cf5eca97d5c39329d1222d3fb5dec153512169ba79e1c251fc0f0c4522f8c72",
-      "files": {
-        "dist/sqlite/node.d.ts": "a00ab44908e614240c20208a9d3016718190c3e0915213ce277cd1d931bb613f",
-        "dist/sqlite/node.js": "588e93b12dcccdd2017c67be3da0d6bbe996611647ee01568f65af4a2bcd6460"
-      },
-      "reason": "Support Bun synchronous SQLite bindings, database-owned statement cleanup, and read-only snapshot transactions and closure without WAL writes."
-    },
-    {
       "package": "@earendil-works/pi-ai",
-      "path": "patches/@earendil-works%2Fpi-ai@1.5.0.patch",
-      "sha256": "ecccfe7d53cda52c62854bdca46f9631fe1bf7d5af86324838e3ef130920fea5",
+      "path": "patches/@earendil-works%2Fpi-ai@1.5.0-dev.6e2222a8.patch",
+      "sha256": "55901fcfc65ae2673e7751b5d60ced5f7bf8755ee97b978b5d25ec1372dddf91",
       "files": {
-        "dist/api/anthropic-messages.js": "191b5d6d962873742ec4d832dc3ee48b6bc0270ad8762ce00adf65b19af75a65",
+        "dist/api/anthropic-messages.js": "17577ce827575ce5349fde78fd609d5fecd00e0cbe155aa0d4ef1d93bea1bab4",
         "dist/api/google-generative-ai.js": "a11eb454589ff9c2d7a2c35d62a0a1bdaaf201a78e036972f8225003f2492f8b",
-        "dist/api/openai-codex-responses.js": "5289d71504f750ccb16caca295ce85387aeff3fd47ab65601264f84c85a4261c",
+        "dist/api/openai-codex-responses.js": "ccb5dfd3640935610f9ca3bfdcf888177a66732eb12eb22fb95b4698641ce021",
         "dist/api/openai-responses-shared.js": "385582f6848e72294fa8cba04452ac5d8b81ffba9a53ee7070b29a6f7a34e38e",
-        "dist/api/openai-responses.js": "2ac4deb8a8d162f2f6981398b021a1ec20f2cef5ebd889bab966a0e29676a8d5",
-        "dist/providers/data/.manifest.json": "f7c2bca39fe42751ae80b214208ea635abc1d941fc71f7e153e7d9be2341e3ad",
-        "dist/providers/data/azure.json": "e152e01a949bd0f3759d328171862661033ccb97a2eefb18a4a8fe345c82d13c",
+        "dist/api/openai-responses.js": "fa96737ea9421dd4f41834fed57c372d7dae95bd47dccf1f59039ed0225a84dc",
+        "dist/providers/data/.manifest.json": "4ed4718566d5f2e4fa1e4f0ff354d1985963182b493f0323c1a43e35f9de3fd1",
         "dist/providers/data/openai.json": "5ace877272bc1596e3b95cefd630b29944f19a77e1bbc93c81ec36e328f7a0c4",
-        "dist/types.d.ts": "a6a38e948aa636d637bc4a9d0c8b3e9c992389f19c6b77785675ad45ba3bde3a",
-        "dist/utils/retry.js": "8f875c4eabbb85d779976a754dc59d7bb26c394d4dca97fb3a893a272df59273"
+        "dist/types.d.ts": "0afa28670a2996a5ac1bf585f5acd0283a7faeb8af6a4ad5fe57bd74ed555d5c",
+        "dist/utils/retry.js": "292560a88e31c8affc594117991de2be888f14bcf0d0ff1128aefd9d11f19fd6"
       },
-      "reason": "Preserve provider errors and usage, resumable provider limits, direct Codex failure and SSE handling, output-cap opt-in, gateway recovery classification, and the existing OpenAI/Azure context-capacity corrections."
+      "reason": "Preserve provider errors and usage, resumable provider limits, direct Codex failure and SSE handling, output-cap opt-in, gateway recovery classification, and OpenAI context-capacity corrections."
     },
     {
       "package": "@earendil-works/pi-durable",
-      "path": "patches/@earendil-works%2Fpi-durable@1.5.0.patch",
-      "sha256": "b89b8e53f96ac5f06155cad4f249f07f09b9d6a484eea2e3b2c9ee79508c3ffe",
+      "path": "patches/@earendil-works%2Fpi-durable@1.5.0-dev.6e2222a8.patch",
+      "sha256": "05de21f02741bd4ce07255576ba4f478b40f7b83667771400b89d0812a4da92a",
       "files": {
-        "dist/harness/agent.js": "19fcaabe028db2f498413c785abe13e5e5cadcca4fd6ff8a1388ccc1f9aecddf",
-        "dist/harness/context.d.ts": "d8f9f186aabddcb77b14c00cb2ee95ed735088d55c80401082afa5afc8a7916f",
+        "dist/harness/agent.js": "772a92476316561fd276b9f09530dad07acbafec2bc31d64af92acdc838ff059",
+        "dist/harness/context.d.ts": "d953c38b39f3a786b142bb72f84209c88dac7b47026e4aa5c0ba6e609da17c32",
         "dist/harness/context.js": "9c24afbce61dfe3ba1cf9ffca1f16e6fc35994687847f1c493c5bea890d80b48",
-        "dist/harness/generation.js": "df0a6eea46458b19dbf3810b5c2ce1c97893353286f1fb709d6d0b0ff3c7ef12",
+        "dist/harness/generation.js": "2d8694dc7acb182c0410a96333113c19de04b1ba937dca4ce56a4db0c3fa672d",
         "dist/harness/harness.js": "802592e1a2a880d29e1feb4068c69806084e9909e61cfee4928f66429e980742",
-        "dist/harness/live.d.ts": "cf31fd5014b32124d0d8c71a6d64ff944dc52ee7fbe83629769564f485b8baca",
-        "dist/harness/scheduler.js": "c2cd1170427f8e375106244f10e699e0af9b0a07c02bc2d579c93e4f7193e0da",
-        "dist/harness/types.d.ts": "359045a8ea54247362e0ebd30b27c50fb1d0a3aa752154e3497ca2dc7a3d66b3",
-        "dist/index.d.ts": "55d1b3298eda3dcd38ef3f92db07a0b5273354496dac8eeb00c2c0ffc3447750",
-        "dist/storage/sqlite/storage.d.ts": "d2d9d20a3769594b2ec88eafa10c50649b967b779329972190bed2f2b3892247",
-        "dist/storage/sqlite/storage.js": "51195f3823f430b3aa398dfc8705c6c326bb9dcc1d903c44573b92af3344a498",
-        "dist/types.d.ts": "47d50fe09e3d315a6a34424ad4c5499d38c725ad56eb0b27520bf740a3f8469d"
+        "dist/harness/live.d.ts": "716039ac6e24c56685eca73ac6986ee08050a18dfb9f92be559d9cd3d77b8855",
+        "dist/harness/scheduler.js": "685fc0dc199219c62378efc6f77cb4306edcf65c50bfd94d8eea2287c9ddaf40",
+        "dist/harness/types.d.ts": "9493ccc020a838b45edb5a1ec9406e325ac1894da4d051a551c7f5ef94a85635",
+        "dist/index.d.ts": "7a0c3e1a893be7cbcba2f07ad5e8716ea896835a08f65ee7b22f637d32943181",
+        "dist/types.d.ts": "1a65933a06382202de17443a384ce8e996d5ed0bc90f81a56e7377b7fb510031"
       },
-      "reason": "Preserve stream and context hooks, bounded response and recovery policies, completed-reasoning retry projection, and read-only SQLite inspection on the native schema."
+      "reason": "Preserve stream and context hooks, bounded response and recovery policies, and completed-reasoning retry projection."
     }
-  ]
+  ],
+  "distribution": {
+    "kind": "upstream CI preview",
+    "note": "Official upstream CI builds, repacked only to give every package a commit-specific development version and replace private preview dependency URLs with that version. Compiled code is unchanged before the retained patches.",
+    "ciRun": "https://github.com/earendil-works/pi/actions/runs/42427140421",
+    "artifactSha256": "6b9bf4188d5deb892674763a2fb496c04d0fa7f5b2a4174823d52cfc648753a1",
+    "archives": [
+      {
+        "package": "@earendil-works/pi-agent-core",
+        "path": "vendor/pi/pi-agent-core-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "138fd1668258ab170a913b965bbf6ed7aa7b638d12c851e95b1e01b29fbdc77f",
+        "upstreamSha256": "1ae64529d5c61c3f9ca2e7560e7f947e2ed7b44bb7a6b6e3600e30232c08ad13"
+      },
+      {
+        "package": "@earendil-works/pi-ai",
+        "path": "vendor/pi/pi-ai-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "51d2bd11e635f8041a9f7cb3b98a4740d677c2ffcff539849fe95fbe5c3ee6e1",
+        "upstreamSha256": "f78b2b9f196e31dd94e0cadf961c19a0ad547c52995416126716c192fb6dd203"
+      },
+      {
+        "package": "@earendil-works/chord",
+        "path": "vendor/pi/chord-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "44c7b1a5afe92ff8ded9ee8d2fa3cb4ce4daa4f6d855f0a3370092bb6850ba61",
+        "upstreamSha256": "a368a5fedec909e5d82c87d20785febadc2b30ef0d34654b933edff62ea7528e"
+      },
+      {
+        "package": "@earendil-works/pi-codemode",
+        "path": "vendor/pi/pi-codemode-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "ddd1721211ecc4491b5389dda8227a78aff63c1af2ef7977d5d922a67138e76d",
+        "upstreamSha256": "aa7128231e88b070159e195b49fffca8879da0d6850e581814d6ea230b421301"
+      },
+      {
+        "package": "@earendil-works/pi-coding-agent",
+        "path": "vendor/pi/pi-coding-agent-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "c47a2e620373c678b86faa3f38b89221dcdede0a62c16551760db8cabe4cac41",
+        "upstreamSha256": "5887bf0bf3ccd506ce4e23dc8751c26197954ec09695e0acc21e6f0199efddcf"
+      },
+      {
+        "package": "@earendil-works/pi-durable",
+        "path": "vendor/pi/pi-durable-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "9587aebc250aa0691711efa2daadb582410b4df2ca4a40b2b82b8a93ad73296e",
+        "upstreamSha256": "fc37fac1ecc635f189c0a7fff0d1b024f3c8de558c9d12b5fe8da574cf90da78"
+      },
+      {
+        "package": "@earendil-works/pi-mcp",
+        "path": "vendor/pi/pi-mcp-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "8ce09c716f62d29e6cca8562c43044d435533398169c1ae23adaeaddb84a7428",
+        "upstreamSha256": "998c14cb5b3b0197965788063eba08cab42cfd21221b63450cb277b12c0dcd02"
+      },
+      {
+        "package": "@earendil-works/pi-schema",
+        "path": "vendor/pi/pi-schema-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "0407ad76ad3f9daaade2811a4b2614316a3f55b97dcf05d9fa4fae23149cc67e",
+        "upstreamSha256": "57b65efe5a7936d1885a5e87b687625abf280a41b34b3babfbc83ab14b596aee"
+      },
+      {
+        "package": "@earendil-works/pi-telemetry",
+        "path": "vendor/pi/pi-telemetry-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "a7c51a75439bd5af7d0f5d46b77a06e33b635904011b69e20edeeb9c40ef1f05",
+        "upstreamSha256": "083f2bd9083c3b217d66dd4cc389b4e9dab9c83dfae74008217bc103ea265c4b"
+      },
+      {
+        "package": "@earendil-works/pi-tui",
+        "path": "vendor/pi/pi-tui-6e2222a8dda06e3d69fad46d630f152f5873567a.tgz",
+        "sha256": "c26d32e79054398af9469e148585459e1d91bb8ae1cb8a5e162d7a6a7c0c2393",
+        "upstreamSha256": "2b5bf228cd44b235ab9547997edc21b86d2dff1d7c9fe64b2ba2a2b7009a6a6c"
+      }
+    ],
+    "metadataAdjustments": {
+      "version": "1.5.0-dev.6e2222a8",
+      "internalDependencies": "1.5.0-dev.6e2222a8",
+      "changedFiles": [
+        "package.json"
+      ],
+      "method": "Deterministic tar/gzip repacking of upstream CI archives. All other file contents are unchanged."
+    }
+  }
 }

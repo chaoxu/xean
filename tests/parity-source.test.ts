@@ -2,10 +2,10 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ProviderDoc } from "@earendil-works/pi-durable";
-import { findDocument, loadDocument } from "@earendil-works/chord/next";
+import { findDocument, loadDocument } from "@earendil-works/chord";
 import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import {

@@ -395,8 +395,10 @@ Campaign `status`, `inspect`, `resume`, and `export` commands require the automa
 campaign state. The default CLI runs the complete research loop with mixed workers.
 Independent processes writing a shared notebook remain outside this interface.
 
-Released Chord and Pi 1.5.0 packages are pinned in `package.json` and `bun.lock`, with
-retained patches recorded in [provenance](vendor/pi/provenance.json).
+Chord and Pi use vendored CI builds from [upstream commit
+`6e2222a8`](https://github.com/earendil-works/pi/commit/6e2222a8dda06e3d69fad46d630f152f5873567a).
+[Provenance](vendor/pi/provenance.json) records their hashes, package metadata
+adjustments, and retained patches.
 
 ```sh
 bun run check

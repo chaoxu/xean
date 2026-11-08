@@ -1,6 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { link, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+  link,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -91,7 +98,7 @@ test("inspection returns detached snapshots, rejects mutation, and never runs pe
 });
 
 test("old native Pi campaigns are rejected before any database rewrite", async () => {
-  const { path } = await fixture();
+  const { path, directory } = await fixture();
   const storage = await openNodeSqliteStorage(path);
   const harness = await Harness.open(
     storage,
@@ -118,6 +125,9 @@ test("old native Pi campaigns are rejected before any database rewrite", async (
   await expect(open(path)).rejects.toThrow();
   await expect(open(path, { create: { task, settings } })).rejects.toThrow();
   expect(await digest(path)).toBe(before);
+  expect(
+    (await readdir(directory)).some((name) => name.includes(".notes.sqlite")),
+  ).toBe(false);
 });
 
 test("prior Pi SQLite schemas are rejected without migration", async () => {

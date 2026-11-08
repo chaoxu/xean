@@ -1,5 +1,5 @@
 // Policy extracted without mathematical changes from Xean v1.0.0 (949a385).
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { z } from "zod";
 import { nonblank } from "./contracts";
 
