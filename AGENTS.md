@@ -75,8 +75,10 @@ allowed only when the format cannot render monospace.
   line counts.
 - Reproduce interface failures with local contract tests. Screen model behavior
   with small standalone-role inputs before a full campaign smoke or golden run.
-- Use `gpt-6-luna` by default for new smoke tests. Preserve explicitly selected
-  models and historical run records.
+- Use `gpt-6-astra` with `max` reasoning for qualification, regression
+  comparisons, and mathematical-quality tests. Use `gpt-6-luna` only for cheap,
+  nonqualifying smokes when appropriate. Preserve explicitly selected models
+  and historical run records.
 - Do not impose wall-clock time budgets on `gpt-6-astra` campaigns or cancel them
   solely because of elapsed run time.
 - Use `xean status` for routine monitoring and read transcripts on demand.
