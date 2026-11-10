@@ -456,8 +456,9 @@ campaign state. The default CLI runs the complete research loop with mixed worke
 Independent processes writing a shared notebook remain outside this interface.
 
 Chord and Pi use vendored CI builds from [upstream commit
-`e5d9ff91`](https://github.com/earendil-works/pi/commit/e5d9ff915c3b21719803e2f610a304ebac0a9642).
-This pin includes Pi Durable's scheduler fix for lost task wake-ups.
+`9642f39a`](https://github.com/earendil-works/pi/commit/9642f39a80407a3bd0b778184400117a861cb8c2).
+This pin includes Pi Durable's fixes for lost task wake-ups and provider resource
+cleanup when a harness closes.
 [Provenance](vendor/pi/provenance.json) records their hashes, package metadata
 adjustments, and retained patches.
 

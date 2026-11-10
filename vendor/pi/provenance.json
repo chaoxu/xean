@@ -1,19 +1,19 @@
 {
   "repository": "https://github.com/earendil-works/pi",
-  "commit": "e5d9ff915c3b21719803e2f610a304ebac0a9642",
-  "version": "1.5.0-dev.e5d9ff91",
+  "commit": "9642f39a80407a3bd0b778184400117a861cb8c2",
+  "version": "1.5.2-dev.9642f39a",
   "patches": [
     {
       "package": "@earendil-works/pi-ai",
-      "path": "patches/@earendil-works%2Fpi-ai@1.5.0-dev.e5d9ff91.patch",
-      "sha256": "e39543e5d0774e7a101f350026215e851f5f3534dccffe1ebdc2d0557b785fcf",
+      "path": "patches/@earendil-works%2Fpi-ai@1.5.2-dev.9642f39a.patch",
+      "sha256": "87a086850226051fabf183fa407facb9d4d079dbbbf5e6995eb5fafdd41838bf",
       "files": {
-        "dist/api/anthropic-messages.js": "4839f2e050d12cd95467fc4ee9a6ebd176cf367493de3c70c18cef308e033417",
+        "dist/api/anthropic-messages.js": "30e468694b429b78c088f58cdb7a76feedec17be92562569b062af800ad0c753",
         "dist/api/google-generative-ai.js": "a11eb454589ff9c2d7a2c35d62a0a1bdaaf201a78e036972f8225003f2492f8b",
         "dist/api/openai-codex-responses.js": "ccb5dfd3640935610f9ca3bfdcf888177a66732eb12eb22fb95b4698641ce021",
         "dist/api/openai-responses-shared.js": "385582f6848e72294fa8cba04452ac5d8b81ffba9a53ee7070b29a6f7a34e38e",
         "dist/api/openai-responses.js": "fa96737ea9421dd4f41834fed57c372d7dae95bd47dccf1f59039ed0225a84dc",
-        "dist/providers/data/.manifest.json": "6bbade47416d6e3bc60069780d5ad3e0e3d7528c740a3ccce63f49a18c03e8f2",
+        "dist/providers/data/.manifest.json": "7d88f0277c4d2221275e44341967e8ecfb1d256bc8389f5ac8ebfc39bd56f37c",
         "dist/providers/data/openai.json": "5ace877272bc1596e3b95cefd630b29944f19a77e1bbc93c81ec36e328f7a0c4",
         "dist/types.d.ts": "0afa28670a2996a5ac1bf585f5acd0283a7faeb8af6a4ad5fe57bd74ed555d5c",
         "dist/utils/retry.js": "292560a88e31c8affc594117991de2be888f14bcf0d0ff1128aefd9d11f19fd6"
@@ -22,16 +22,16 @@
     },
     {
       "package": "@earendil-works/pi-durable",
-      "path": "patches/@earendil-works%2Fpi-durable@1.5.0-dev.e5d9ff91.patch",
-      "sha256": "49fcc582a19f805cccc7029dae1740257ab83b6a5c0c7e808c61594f209f0a2a",
+      "path": "patches/@earendil-works%2Fpi-durable@1.5.2-dev.9642f39a.patch",
+      "sha256": "61d53ebf18b5a500a60766957c1b0c42c7904d5f8adf34632fc7d323f3671a6d",
       "files": {
         "dist/harness/agent.js": "772a92476316561fd276b9f09530dad07acbafec2bc31d64af92acdc838ff059",
         "dist/harness/context.d.ts": "d953c38b39f3a786b142bb72f84209c88dac7b47026e4aa5c0ba6e609da17c32",
         "dist/harness/context.js": "9c24afbce61dfe3ba1cf9ffca1f16e6fc35994687847f1c493c5bea890d80b48",
         "dist/harness/generation.js": "2d8694dc7acb182c0410a96333113c19de04b1ba937dca4ce56a4db0c3fa672d",
-        "dist/harness/harness.js": "802592e1a2a880d29e1feb4068c69806084e9909e61cfee4928f66429e980742",
+        "dist/harness/harness.js": "5a7bafeaa3d13491090e49ce6417937f5cc15a8b072cdacdda9582eba724dc8a",
         "dist/harness/live.d.ts": "716039ac6e24c56685eca73ac6986ee08050a18dfb9f92be559d9cd3d77b8855",
-        "dist/harness/scheduler.js": "f0f9b1eccc7f093c4d51be146126b427a0dbf7efd67917e830d13bf192a1eaf1",
+        "dist/harness/scheduler.js": "a19ccf3ce7e1b713c66c964ee974dc969bf0ba093209b85539679fb78ccd8f10",
         "dist/harness/types.d.ts": "9493ccc020a838b45edb5a1ec9406e325ac1894da4d051a551c7f5ef94a85635",
         "dist/index.d.ts": "7a0c3e1a893be7cbcba2f07ad5e8716ea896835a08f65ee7b22f637d32943181",
         "dist/types.d.ts": "1a65933a06382202de17443a384ce8e996d5ed0bc90f81a56e7377b7fb510031"
@@ -42,73 +42,73 @@
   "distribution": {
     "kind": "upstream CI preview",
     "note": "Official upstream CI builds, repacked only to give every package a commit-specific development version and replace private preview dependency URLs with that version. Compiled code is unchanged before the retained patches.",
-    "ciRun": "https://github.com/earendil-works/pi/actions/runs/42650530988",
-    "artifactSha256": "929a7f7fada2cd2258cbe1264da0e4ec414ab93a00a971dedea5dcb955b915e1",
+    "ciRun": "https://github.com/earendil-works/pi/actions/runs/42878694841",
+    "artifactSha256": "596ec0356c30ab561b770c27a1b37b82647152641b6dfcdd71b7848a95815114",
     "archives": [
       {
         "package": "@earendil-works/pi-agent-core",
-        "path": "vendor/pi/pi-agent-core-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "1f740d94f4e18ed2c8133fbb65e2a8950523f5944488b12c9c4a7c7d5f04e197",
-        "upstreamSha256": "ffa633166edff859b94211d789da1e21710e0ad5391f5bd81f77f2b27b1a516d"
+        "path": "vendor/pi/pi-agent-core-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "596a9c5e0212ddf2646d7b534365c0b8bef8a2ea393bd176698cec79c17e2d54",
+        "upstreamSha256": "1740868ca24af055b8111257e4d867a604ab1f180e1ba075ae209d3512d18040"
       },
       {
         "package": "@earendil-works/pi-ai",
-        "path": "vendor/pi/pi-ai-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "9794ca603364a30459811c4cdac31115b5ec52fe78d3ab8f0ea309454fd6adf0",
-        "upstreamSha256": "dc8fe427defcb54bf5348d9e63dd9322e6fba551d65e3cc66733f1b33c839d68"
+        "path": "vendor/pi/pi-ai-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "1b07c2a94eda6782af40e36839aa7b76c159dbca705571604fcf5d97c5444252",
+        "upstreamSha256": "e36a80e52268f2f0cffb60d7227c311514019a1d459f081d10a1eb31da21d72c"
       },
       {
         "package": "@earendil-works/chord",
-        "path": "vendor/pi/chord-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "2f5728abdeb45c996cccfd6bb82940a8fe10fa018566e3bcf616e74f0faabdca",
-        "upstreamSha256": "fb4a42dd4d6d36eea51c3dc92e37a0f75ab85bd1e35d29e984e0ad1bf9dff273"
+        "path": "vendor/pi/chord-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "4d6d9544506d35e5cab4b8ce87291841027e11345de4d19274f46150ad0abca3",
+        "upstreamSha256": "1be2664781621684bc0865fee45c9544bc6aa265da4a52876be7392dcb10e08a"
       },
       {
         "package": "@earendil-works/pi-codemode",
-        "path": "vendor/pi/pi-codemode-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "eb3633f1e2f8d406b50faa23d8cd69569c41cc7cc2c7d4c06500199f45cb5ca8",
-        "upstreamSha256": "a2b36a991dcbb2c5ad47b4b5110e2a2cbc2be5a4e4e94cf36090455181265684"
+        "path": "vendor/pi/pi-codemode-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "5c3e7279f7a5c3b0d52b2a4de9ace1f0e56fba7be894d0ba81c7f69b9ddf4500",
+        "upstreamSha256": "ac81bf4f4f01ede1a534d6d0fca1ab13afd66506c00904e9d5a07f590ae302e0"
       },
       {
         "package": "@earendil-works/pi-coding-agent",
-        "path": "vendor/pi/pi-coding-agent-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "d1d2e3e6cced64e443ecd0907f3a500a829d24ce29af43dd8ba4a3d4994edde5",
-        "upstreamSha256": "2843bbf6da1980f4d94564fe383a60d7ad31144f500eb80f3e1cccc6d08ccb3f"
+        "path": "vendor/pi/pi-coding-agent-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "a3d5f9c061355170d9d9c0cadc1829bce42d89c255663a2e0c3a3a3967c8eed2",
+        "upstreamSha256": "3d28504b8d26c32b23dc656a0420c211a7e15ad1e5f3f716e5192b7660490a1d"
       },
       {
         "package": "@earendil-works/pi-durable",
-        "path": "vendor/pi/pi-durable-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "0acbdf5643e0a0fecbc255176c72491c4f028a80153ba621f8015d614d7906d8",
-        "upstreamSha256": "9da1d9b6967d06c7f64d5ce1e10f79f9b9ff552359aefad0d5a95702d60f8cf9"
+        "path": "vendor/pi/pi-durable-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "6e7b2d31df40a2c178d31a15b355ee0c15c64ad58780dde8fbf6b9d10695aed1",
+        "upstreamSha256": "de1af3be0f477766f82af5b9505929482d370dd463b9e4d246892af447ee5f6a"
       },
       {
         "package": "@earendil-works/pi-mcp",
-        "path": "vendor/pi/pi-mcp-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "24a68441b397bdebf4f4af4dcf5e4df13d53ab5647816962325e82b34fdef305",
-        "upstreamSha256": "998c14cb5b3b0197965788063eba08cab42cfd21221b63450cb277b12c0dcd02"
+        "path": "vendor/pi/pi-mcp-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "79ac29bf0da387eeffd71e99652a7d4c1a53cee9d5c1d2addb1a4cb6d4ff1d4d",
+        "upstreamSha256": "dcf481306a6ad348f024dc0c0f9b9025020022341be386876c81cfa5baa8f0c2"
       },
       {
         "package": "@earendil-works/pi-schema",
-        "path": "vendor/pi/pi-schema-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "9173239a0c671d814791ef60df1039dbe88a0e83b84157e6ce386f2cc4acf15e",
-        "upstreamSha256": "57b65efe5a7936d1885a5e87b687625abf280a41b34b3babfbc83ab14b596aee"
+        "path": "vendor/pi/pi-schema-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "6c8a9d5bdfc7d585a07672dc202126657f26d02ad3994220389afaf56b066b6a",
+        "upstreamSha256": "b1882fb1fbb8273cc427421cbb2b5b12ae4d48de6cec537954e73d82a0f98147"
       },
       {
         "package": "@earendil-works/pi-telemetry",
-        "path": "vendor/pi/pi-telemetry-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "3073c6531744d01cb9f07da9acbd3b94619ff9bdbe2dd655745442de63550cd8",
-        "upstreamSha256": "083f2bd9083c3b217d66dd4cc389b4e9dab9c83dfae74008217bc103ea265c4b"
+        "path": "vendor/pi/pi-telemetry-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "2c769c1a5897d1affde382c2fde0138a3a533c43572259aaa97507ea3798d3a4",
+        "upstreamSha256": "0d29dbee830c74af7115035c7cb326c1e9da2f690a3f6f95620597092da9f9ee"
       },
       {
         "package": "@earendil-works/pi-tui",
-        "path": "vendor/pi/pi-tui-e5d9ff915c3b21719803e2f610a304ebac0a9642.tgz",
-        "sha256": "51d81d66a3c98a2878d356ef32822d42343898f852a774632a296460a06e912a",
-        "upstreamSha256": "f98e55637a7075433b5ea0da53329fcbe4ecd27fefe26f1b5d42189ebb746e4a"
+        "path": "vendor/pi/pi-tui-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
+        "sha256": "297561934eca4399fe93c527f00d5d1db1e4a99e0f229482ac5a91f0b185721e",
+        "upstreamSha256": "2fdd7609ee61e7c275a528e32d62093c2c298d3f9254ad3048451df2063e6bda"
       }
     ],
     "metadataAdjustments": {
-      "version": "1.5.0-dev.e5d9ff91",
-      "internalDependencies": "1.5.0-dev.e5d9ff91",
+      "version": "1.5.2-dev.9642f39a",
+      "internalDependencies": "1.5.2-dev.9642f39a",
       "changedFiles": [
         "package.json"
       ],

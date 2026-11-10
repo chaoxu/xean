@@ -362,10 +362,10 @@ index 27e60bb..436cf1b 100644
      return tx.appendEntry(AssistantEntry, conversationId, { model: [message] });
  }
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index e286f00..d8a3768 100644
+index 56a6594..2ebc75c 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
-@@ -59,7 +59,7 @@ class ConversationImpl {
+@@ -60,7 +60,7 @@ class ConversationImpl {
          return this.#host.harness.commitWith(change, context, { conversationId: this.id }, options);
      }
      context(context, options) {
@@ -389,10 +389,10 @@ index f5df477..1212786 100644
      taskId: TaskId;
      /** The run's placed inputs, settled when it ends; `[]` once it answered and runs only its `afterRun` tasks. */
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index df651a4..e2eee48 100644
+index 0ced88c..b70eeb6 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
-@@ -2636,7 +2636,7 @@ export class TaskScheduler {
+@@ -2638,7 +2638,7 @@ export class TaskScheduler {
              }),
              entries: (query, limit, cursor, context) => this.#read(invocation, () => this.#session.readOnLine((storage) => storage.scanEntries(conversationEntries(invocation.conversationId, query), limit, cursor, context))),
              context: (conversationId, context, options) => this.#read(invocation, async () => {
