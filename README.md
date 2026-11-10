@@ -369,13 +369,18 @@ for destroying rigidity, matroid t-connectivity, and First Proof P10. The
 comparison. This bounded validation does not establish general mathematical
 nonregression or formal certification.
 
-Before conditional verification, a `gpt-6-luna` live smoke at `d475f1c` showed
-overlapping requests within Explorer
-and explicitly assigned Verifier groups and produced correct elementary proofs.
-Independent review passed manual blind reconstruction but found that the automatic
-run's extraction model included the original proof method and its comparison model
-accepted it despite their existing instructions. The automatic run fails
-blind-reconstruction policy qualification despite its internal `accepted` outcome.
+Five matched Astra/max tests of statement extraction and comparison found no
+case where released `411f08a` passed and current `10114cd` failed. Both versions'
+comparison roles failed to reject a supplied statement containing steps from
+the original proof.
+
+Six fresh Astra/max campaigns on three elementary problems, each with one or
+three workers, all reached `accepted`. Independent Astra/max review found all
+six arguments sound and noted minor wording defects. Separate review found no
+leakage of proof methods in their accepted reconstruction inputs. Observed worker
+counts stayed within the configured caps, with no duplicate claims observed. Explorers
+repeated approaches. These samples do not establish general nonregression or
+certification.
 
 ## Library and development
 
