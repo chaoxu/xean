@@ -13,15 +13,14 @@ export function submitNotes(
   const id = nonblank.parse(idValue),
     { notes } = submittedNotes.parse(input);
   definition(data);
-  const book = readNotebook(data.notebook);
-  const existing = book.inputs.find((value) => value.id === id);
+  const existing = data.notebook.inputs.find((value) => value.id === id);
   if (existing) {
     if (!isDeepStrictEqual(existing.notes, notes))
       throw new Error(`notes id already has a different submission: ${id}`);
     return { id, notes };
   }
   const live = new Set(
-    project(book)
+    project(readNotebook(data.notebook))
       .notes.filter((note) => !note.dead)
       .map((note) => note.id),
   );
@@ -30,7 +29,7 @@ export function submitNotes(
       throw new Error(
         "submitted support must name distinct existing notes that are not dead",
       );
-  book.inputs.push({
+  data.notebook.inputs.push({
     id,
     namespace: `i${data.nextNoteNamespace++}`,
     notes,

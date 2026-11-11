@@ -20,7 +20,7 @@ problems, the caller selects and prepares each problem and runs separate campaig
 
 Broader decisions, such as which topic to investigate or whether a new result
 deserves a paper, stay with the controlling agent. The
-[qualification record](../README.md#qualification) describes the tested cases.
+[qualification record](../release-notes.md) describes the tested cases.
 It does not establish performance across arbitrary open problems.
 
 ## Why keep the system small?
@@ -190,7 +190,10 @@ packet for a fresh campaign and decides which premises it is admitting.
 Inside a campaign, Explorers and Verifiers may run together under `maxWorkers`.
 Each completion allows new admissions, prioritizing eligible verification work
 before another Explorer. Running roles retain their note IDs and texts, and new
-roles see later publications. The caller owns scheduling across problems. Keep
+roles see later publications. Claims prevent concurrent verification of the same
+selected note, but Explorers can repeat an approach under different note IDs.
+More workers permit more concurrency without guaranteeing faster solutions or
+less repeated reasoning. The caller owns scheduling across problems. Keep
 historical campaigns with their pinned runtimes and preserve both databases
 when backing up a campaign.
 

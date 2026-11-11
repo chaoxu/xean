@@ -440,10 +440,10 @@ export function createRoleRuntime(readBook: () => NotebookState) {
       );
       const settled = await submission.wait(context);
       await conversation.waitForIdle(context);
-      let result: Receipt | undefined;
-      await harness.commit(async (tx) => {
-        result = await receipt(tx, conversationId!, call);
-      }, context);
+      const result = await harness.commit(
+        (tx) => receipt(tx, conversationId!, call),
+        context,
+      );
       if (result) return result;
       if (settled.status !== "done")
         throw new Error(

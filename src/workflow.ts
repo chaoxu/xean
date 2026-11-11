@@ -5,7 +5,6 @@ import {
 import type { SingletonHandle, StoreSelf } from "@earendil-works/chord";
 import { admitNotes, project, readNotebook } from "./state.ts";
 import {
-  copy,
   type Campaign,
   type ResearchData,
   type WorkerArgs,
@@ -243,14 +242,12 @@ export function createWorkflow(
         const campaign = value.campaign;
         if (!campaign) throw new Error("Campaign is not initialized");
         if (campaign.status === "terminal") {
-          result.resolve(
-            copy({
-              outcome: campaign.outcome!,
-              turns: turns(value),
-              ...(campaign.accepted ? { accepted: campaign.accepted } : {}),
-              ...(campaign.error ? { error: campaign.error } : {}),
-            }),
-          );
+          result.resolve({
+            outcome: campaign.outcome!,
+            turns: turns(value),
+            ...(campaign.accepted ? { accepted: campaign.accepted } : {}),
+            ...(campaign.error ? { error: campaign.error } : {}),
+          });
           void watch.stop();
           return true;
         }

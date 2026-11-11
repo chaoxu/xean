@@ -47,8 +47,9 @@ below are CLI and library reference material for the controlling agent.
 
 ## Start a campaign
 
-This checkout is `5.0.0-dev.4` and requires fresh campaign databases. Use Bun
-1.4.2 or later on macOS or Linux. From an extracted archive or source checkout:
+This checkout is the unreleased `5.0.0-dev.4` and requires fresh campaign
+databases. Use Bun 1.4.2 or later on macOS or Linux. From an extracted archive or
+source checkout:
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -363,24 +364,13 @@ Prefer these authorities and native Chord and Pi APIs when simplifying code.
 
 ## Qualification
 
-The 4.5.0 release's fresh campaigns on Pi 1.5.0 passed independent model review
-for destroying rigidity, matroid t-connectivity, and First Proof P10. The
-[release notes](release-notes.md) distinguish these runs from the earlier 4.4.0
-comparison. This bounded validation does not establish general mathematical
-nonregression or formal certification.
-
-Five matched Astra/max tests of statement extraction and comparison found no
-case where released `411f08a` passed and current `10114cd` failed. Both versions'
-comparison roles failed to reject a supplied statement containing steps from
-the original proof.
-
-Six fresh Astra/max campaigns on three elementary problems, each with one or
-three workers, all reached `accepted`. Independent Astra/max review found all
-six arguments sound and noted minor wording defects. Separate review found no
-leakage of proof methods in their accepted reconstruction inputs. Observed worker
-counts stayed within the configured caps, with no duplicate claims observed. Explorers
-repeated approaches. These samples do not establish general nonregression or
-certification.
+Six elementary Astra/max campaigns at `10114cd` reached `accepted` and passed
+independent mathematical review, with minor wording defects noted. Separate
+role tests exposed a proof-method leakage case shared with released 4.5, and
+Explorers repeated approaches. The [release notes](release-notes.md) record
+these tests, the later P01 resource comparison, and historical 4.5 results with
+their distinct scopes. These samples establish neither general nonregression
+nor formal certification.
 
 ## Library and development
 
