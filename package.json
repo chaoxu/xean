@@ -1,6 +1,6 @@
 {
   "name": "xean",
-  "version": "5.0.0-dev.4",
+  "version": "5.0.0",
   "description": "Mathematical research with Chord jobs, Pi execution, and conditional note verification",
   "license": "MIT",
   "private": true,
@@ -48,7 +48,7 @@
     "@earendil-works/pi-durable": "file:vendor/pi/pi-durable-9642f39a80407a3bd0b778184400117a861cb8c2.tgz",
     "commander": "15.0.0",
     "execa": "10.0.1",
-    "zod": "4.5.4",
+    "zod": "4.6.6",
     "@earendil-works/pi-schema": "file:vendor/pi/pi-schema-9642f39a80407a3bd0b778184400117a861cb8c2.tgz"
   },
   "devDependencies": {

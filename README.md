@@ -47,9 +47,8 @@ below are CLI and library reference material for the controlling agent.
 
 ## Start a campaign
 
-This checkout is the unreleased `5.0.0-dev.4` and requires fresh campaign
-databases. Use Bun 1.4.2 or later on macOS or Linux. From an extracted archive or
-source checkout:
+This checkout is `5.0.0` and requires fresh campaign databases. Use Bun 1.4.2 or
+later on macOS or Linux. From an extracted archive or source checkout:
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -458,7 +457,7 @@ bun run pack
 ```
 
 `check` runs TypeScript, formatting, and tests. `pack` checks a clean installation
-and writes `dist/xean-5.0.0-dev.4.tgz`. `bun run check:distribution` checks packaging
+and writes `dist/xean-5.0.0.tgz`. `bun run check:distribution` checks packaging
 without retaining an archive.
 
 ## Citing `xean`

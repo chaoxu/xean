@@ -1,6 +1,6 @@
 # Release notes
 
-## `5.0.0-dev.4` (unreleased)
+## `5.0.0`
 
 `xean` uses Chord for research jobs, claims, and campaign control, and Pi Durable
 for model calls and recovery. A single database owner runs Explorers and Verifiers
@@ -19,6 +19,9 @@ The bundled Chord and Pi CI builds include upstream scheduler wake-up and provid
 shutdown fixes. [Provenance](vendor/pi/provenance.json) pins the archives, metadata
 adjustments, and retained patches. Use fresh campaign databases and keep historical
 campaigns with their original runtimes.
+
+Zod is updated to 4.6.6 for the upstream
+[collection-validation fix](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
 
 ### Qualification
 
